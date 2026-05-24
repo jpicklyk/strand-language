@@ -173,10 +173,35 @@ sealed class Node {
      * (external source, internal stream between machines, or output sink).
      * EventStream is purely declarative — no effects on the stream itself; the
      * runtime wiring drives flow.
+     *
+     * Layer 6 step 3 slice 3.1 adds two optional content fields:
+     *  * [bufferSize] — the per-stream channel capacity. Default 1024 (matches
+     *    [org.strand.runtime.MachineGroup.bufferCapacity]'s step-2 default).
+     *  * [overflowPolicy] — the per-stream policy applied when a producer tries
+     *    to send into a full channel. Default [OverflowPolicy.BlockProducer]
+     *    (matches step 2's behavior exactly). The other three variants are
+     *    [OverflowPolicy.DropNewest], [OverflowPolicy.DropOldest], and
+     *    [OverflowPolicy.Sample] — see Q-015's four canonical policies.
+     *
+     * Layer 6 step 3 slice 3.6 adds [consumerMode] for fan-out:
+     *  * [ConsumerMode.Single] (default) — at most one consumer machine. The
+     *    runtime allocates a `Channel<Value>` and rejects multi-consumer
+     *    topologies for this stream.
+     *  * [ConsumerMode.Broadcast] — any number of consumers. The runtime
+     *    wraps the stream in a `MutableSharedFlow<Value>`; each consumer
+     *    coroutine subscribes and sees every emitted event.
+     *
+     * All three fields are optional in the canonical encoding: when each
+     * equals its default the encoder omits it and the resulting hash matches
+     * the pre-step-3 EventStream encoding byte-for-byte (additive versioning
+     * per ADR-003). Pre-step-3 corpus programs hash unchanged.
      */
     data class EventStream(
         val eventType: NodeId,               // a Type
-        val streamKind: StreamKind
+        val streamKind: StreamKind,
+        val bufferSize: Int? = null,
+        val overflowPolicy: OverflowPolicy? = null,
+        val consumerMode: ConsumerMode? = null,
     ) : Node()
 
     /**
@@ -592,4 +617,67 @@ enum class Primitive {
  */
 enum class StreamKind {
     External, Internal, Output
+}
+
+/**
+ * The four canonical backpressure policies an [Node.EventStream] may carry
+ * (Layer 6 step 3 slice 3.1, Q-015). Selects the runtime behavior when a
+ * producer attempts to send into a full channel.
+ *
+ *  * [BlockProducer] — suspend the producer until capacity is available
+ *    (matches step 2's behavior). The default when [Node.EventStream.overflowPolicy]
+ *    is null.
+ *  * [DropNewest] — discard the incoming event; the channel's state is
+ *    unchanged; the producer returns immediately. A drop counter ticks.
+ *  * [DropOldest] — drain one event from the head of the channel, then enqueue
+ *    the new one. Both an enqueue and a drop are recorded.
+ *  * [Sample] — drop events that arrive less than [Sample.intervalNanos]
+ *    nanoseconds after the most recently accepted event. Coarse rate-limiting.
+ *
+ * The canonical encoding tags these as small ints (0=Block, 1=DropNew,
+ * 2=DropOld, 3=Sample); [Sample] additionally carries its `intervalNanos`
+ * parameter. These ordinal positions are stable forever.
+ */
+sealed class OverflowPolicy {
+    object BlockProducer : OverflowPolicy() {
+        override fun toString(): String = "BlockProducer"
+    }
+    object DropNewest : OverflowPolicy() {
+        override fun toString(): String = "DropNewest"
+    }
+    object DropOldest : OverflowPolicy() {
+        override fun toString(): String = "DropOldest"
+    }
+    /**
+     * Coarse rate-limiting: drop incoming events that arrive sooner than
+     * [intervalNanos] nanoseconds after the previously accepted event. The
+     * clock source is wall-clock (`System.nanoTime`) — Sample streams break
+     * deterministic replay and should not appear on code paths the host
+     * wants to replay (see OQ-S3-c in the step-3 proposal).
+     */
+    data class Sample(val intervalNanos: Long) : OverflowPolicy() {
+        init { require(intervalNanos > 0) { "Sample.intervalNanos must be > 0, got $intervalNanos" } }
+    }
+}
+
+/**
+ * Fan-out mode for an [Node.EventStream] (Layer 6 step 3 slice 3.6).
+ *
+ *  * [Single] — at most one consumer machine may list the stream in its
+ *    `inputStreams`. The runtime allocates a `Channel<Value>` and a
+ *    `MachineGroupValidationError.InternalStreamMultipleConsumers` is raised
+ *    if the topology violates this constraint. This is the step-2 default
+ *    and remains the default when [Node.EventStream.consumerMode] is null.
+ *  * [Broadcast] — any number of consumers may subscribe. The runtime wraps
+ *    the stream in a `kotlinx.coroutines.flow.MutableSharedFlow<Value>` (the
+ *    modern replacement for the deprecated `BroadcastChannel`). Each
+ *    consumer machine's actor launches a collection coroutine bridging the
+ *    SharedFlow into a per-consumer Channel<Value>, so the actor's existing
+ *    `select`-based input loop is preserved unchanged.
+ *
+ * The canonical encoding tags these as small ints (0=Single, 1=Broadcast).
+ * These ordinal positions are stable forever.
+ */
+enum class ConsumerMode {
+    Single, Broadcast
 }

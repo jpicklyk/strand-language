@@ -69,6 +69,24 @@ internal class MachineInstance(
     val outputSinks: Map<NodeId, MutableList<Value>> = emptyMap(),
     val inputChannels: Map<NodeId, Channel<Value>> = emptyMap(),
     val outputChannels: Map<NodeId, Channel<Value>> = emptyMap(),
+    /**
+     * Per-output-stream send adapter wrapping each channel in
+     * [outputChannels] with the stream's declared
+     * [org.strand.core.OverflowPolicy] (Layer 6 step 3 slice 3.1). The actor
+     * sends through these instead of `outputChannels[id].send(...)` directly,
+     * which lets DropNewest / DropOldest / Sample non-block-producer
+     * semantics apply per the EventStream's declared policy. Empty in the
+     * step 1 sync `runMachine` path (which never sends through channels).
+     */
+    val outputDispatchers: Map<NodeId, OverflowDispatcher> = emptyMap(),
+    /**
+     * Per-output-stream [StreamBus] handle (Layer 6 step 3 slice 3.6). The
+     * actor calls `bus.producerHalted()` on each output bus when it exits
+     * so multi-producer fan-in streams stay open until every producer has
+     * halted (vs. the step-2 behavior of closing the channel directly).
+     * Empty in the step 1 sync `runMachine` path.
+     */
+    val outputBuses: Map<NodeId, StreamBus> = emptyMap(),
     val recorder: EventRecorder? = null,
     var halted: Boolean = false,
 )

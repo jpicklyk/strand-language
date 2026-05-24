@@ -65,6 +65,19 @@ import kotlinx.serialization.json.longOrNull
  *
  * References:
  *   NodeRef       { "type": "NodeRef", "target": <id> }
+ *
+ * State machines (excerpt — full schema in impl/CLAUDE.md):
+ *   EventStream  { "type": "EventStream", "eventType": <id>,
+ *                  "streamKind": "external|internal|output",
+ *                  "bufferSize": <int>?  (optional; default 1024 at runtime),
+ *                  "overflowPolicy": <policy>?  (optional; default BlockProducer) }
+ *
+ *   overflowPolicy may be either a shorthand string ("BlockProducer",
+ *   "DropNewest", "DropOldest") or an object form for the parameterized
+ *   variant: `{ "kind": "Sample", "intervalNanos": <long> }`. When omitted
+ *   (or for any of the three nullary variants), the canonical encoder gates
+ *   both `bufferSize` and `overflowPolicy` on non-default values so pre-step-3
+ *   EventStream hashes are byte-identical to the new form (additive versioning).
  */
 object JsonIngest {
 
@@ -352,7 +365,10 @@ object JsonIngest {
             )
             "EventStream" -> Node.EventStream(
                 eventType = obj.requireRef("eventType", ctx, resolve),
-                streamKind = parseStreamKind(obj.requireString("streamKind", ctx), ctx)
+                streamKind = parseStreamKind(obj.requireString("streamKind", ctx), ctx),
+                bufferSize = obj.optionalInt("bufferSize", ctx),
+                overflowPolicy = obj.optionalOverflowPolicy("overflowPolicy", ctx),
+                consumerMode = obj.optionalConsumerMode("consumerMode", ctx),
             )
             "Transition" -> Node.Transition(
                 guard = obj.optionalRef("guard", ctx, resolve),
@@ -397,6 +413,77 @@ object JsonIngest {
                     "(expected external, internal, or output)"
             )
         }
+
+    /**
+     * Parse an EventStream's optional `consumerMode` content field
+     * (Layer 6 step 3 slice 3.6). Accepts the two enum names
+     * `Single` / `Broadcast` (case-insensitive) as JSON strings.
+     */
+    internal fun parseConsumerMode(name: String, ctx: String): ConsumerMode =
+        when (name) {
+            "Single", "single" -> ConsumerMode.Single
+            "Broadcast", "broadcast" -> ConsumerMode.Broadcast
+            else -> throw IngestError(
+                "Unknown consumerMode '$name' in $ctx " +
+                    "(expected Single or Broadcast)"
+            )
+        }
+
+    /**
+     * Internal entry point used by the [optionalOverflowPolicy] file-private
+     * helper. Delegates to [parseOverflowPolicy] which is private to this
+     * object.
+     */
+    internal fun parseOverflowPolicyInternal(element: JsonElement, ctx: String): OverflowPolicy =
+        parseOverflowPolicy(element, ctx)
+
+    /**
+     * Parse an EventStream's optional `overflowPolicy` content field. Accepts
+     * either a string shorthand (one of `BlockProducer`, `DropNewest`,
+     * `DropOldest` — the three nullary variants) or an object
+     * `{ "kind": "Sample", "intervalNanos": <long> }` for the parameterized
+     * variant. Case-insensitive comparison on the shorthand names.
+     */
+    private fun parseOverflowPolicy(element: JsonElement, ctx: String): OverflowPolicy {
+        if (element is JsonPrimitive) {
+            val name = element.contentOrNull
+                ?: throw IngestError("overflowPolicy in $ctx must be a string or an object")
+            return when (name) {
+                "BlockProducer", "blockProducer", "block_producer", "block" -> OverflowPolicy.BlockProducer
+                "DropNewest", "dropNewest", "drop_newest", "dropNew" -> OverflowPolicy.DropNewest
+                "DropOldest", "dropOldest", "drop_oldest", "dropOld" -> OverflowPolicy.DropOldest
+                else -> throw IngestError(
+                    "Unknown overflowPolicy '$name' in $ctx " +
+                        "(expected BlockProducer, DropNewest, DropOldest, " +
+                        "or an object {kind:Sample, intervalNanos:...})"
+                )
+            }
+        }
+        val obj = element.requireObject("$ctx.overflowPolicy")
+        val kind = obj["kind"]?.jsonPrimitive?.contentOrNull
+            ?: throw IngestError("overflowPolicy object in $ctx missing 'kind' field")
+        return when (kind) {
+            "BlockProducer" -> OverflowPolicy.BlockProducer
+            "DropNewest" -> OverflowPolicy.DropNewest
+            "DropOldest" -> OverflowPolicy.DropOldest
+            "Sample" -> {
+                val interval = obj["intervalNanos"]?.jsonPrimitive?.longOrNull
+                    ?: throw IngestError(
+                        "overflowPolicy Sample in $ctx missing 'intervalNanos' Long"
+                    )
+                if (interval <= 0L) {
+                    throw IngestError(
+                        "overflowPolicy Sample in $ctx requires intervalNanos > 0, got $interval"
+                    )
+                }
+                OverflowPolicy.Sample(interval)
+            }
+            else -> throw IngestError(
+                "Unknown overflowPolicy.kind '$kind' in $ctx " +
+                    "(expected BlockProducer, DropNewest, DropOldest, or Sample)"
+            )
+        }
+    }
 
     private fun hexDecode(s: String, ctx: String): ByteArray {
         val clean = s.removePrefix("0x").removePrefix("0X")
@@ -490,6 +577,31 @@ private fun JsonObject.optionalRefList(
             ?: throw IngestError("Element $i of '$field' in $ctx must be a string id")
         resolve(s, "$ctx.$field[$i]")
     }
+}
+
+private fun JsonObject.optionalInt(field: String, ctx: String): Int? {
+    val v = this[field] ?: return null
+    if (v is JsonPrimitive && v.contentOrNull == null) return null
+    val long = v.jsonPrimitive.longOrNull
+        ?: throw IngestError("Optional field '$field' in $ctx must be an integer if present")
+    if (long < Int.MIN_VALUE.toLong() || long > Int.MAX_VALUE.toLong()) {
+        throw IngestError("Field '$field' in $ctx must fit in 32 bits, got $long")
+    }
+    return long.toInt()
+}
+
+private fun JsonObject.optionalOverflowPolicy(field: String, ctx: String): OverflowPolicy? {
+    val v = this[field] ?: return null
+    if (v is JsonPrimitive && v.contentOrNull == null) return null
+    return JsonIngest.parseOverflowPolicyInternal(v, "$ctx.$field")
+}
+
+private fun JsonObject.optionalConsumerMode(field: String, ctx: String): ConsumerMode? {
+    val v = this[field] ?: return null
+    if (v is JsonPrimitive && v.contentOrNull == null) return null
+    val name = v.jsonPrimitive.contentOrNull
+        ?: throw IngestError("Optional field '$field' in $ctx must be a string if present")
+    return JsonIngest.parseConsumerMode(name, "$ctx.$field")
 }
 
 private val JsonPrimitive.intOrNull: Int?

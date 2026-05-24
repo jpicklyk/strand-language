@@ -181,6 +181,50 @@ class AsyncCorpusTest {
     }
 
     @Test
+    fun `57-dropoldest-overflow surviving events on the bounded output are the newest`() = runTest {
+        val ctx = loadProgram("57-dropoldest-overflow")
+        val events = EventCodec.parseEventList(
+            loadResource("/corpus/57-dropoldest-overflow.events.json")
+        )
+
+        val runtime = StateMachineRuntime(ctx.finalized.store, ctx.finalized.hashToNodeId)
+        val group = MachineGroup(
+            store = ctx.finalized.store,
+            hashToNodeId = ctx.finalized.hashToNodeId,
+            machines = listOf(ctx.finalized.root),
+        )
+        val handle = runtime.runGroup(group, this)
+
+        val inputStreamId = ctx.ingest.nameMap.getValue("inputStream")
+        val outputStreamId = ctx.ingest.nameMap.getValue("outputStream")
+        val input = handle.externalInputs.getValue(inputStreamId)
+        val output = handle.externalOutputs.getValue(outputStreamId)
+
+        // Push all 6 events without draining the output. Counter starts at 0
+        // and accumulates: states are 1, 3, 6, 10, 15, 21. The output channel
+        // has bufferSize=2 with DropOldest policy, so after the 6 emissions
+        // settle the channel contains the two newest values: 15 and 21.
+        for (event in events) input.send(event)
+        input.close()
+        handle.await()
+
+        val drained = mutableListOf<Value>()
+        while (true) {
+            val r = output.tryReceive()
+            if (r.isSuccess) drained += r.getOrThrow() else break
+        }
+        // The exact contents are at most 2 (channel capacity). With DropOldest
+        // and the producer reliably outpacing the unread consumer here, the
+        // two most-recent emissions are what survive.
+        assertEquals(
+            listOf<Value>(Value.IntV(15), Value.IntV(21)),
+            drained,
+        ) {
+            "DropOldest with capacity 2 over 6 emissions [1,3,6,10,15,21] should leave [15, 21]; got $drained"
+        }
+    }
+
+    @Test
     fun `49-async-tagged-output-list emits to multiple output streams per event`() = runTest {
         val ctx = loadProgram("49-async-tagged-output-list")
         val routedEvents = parseRoutedEvents(

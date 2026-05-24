@@ -16,6 +16,7 @@ Proposals here are **drafts**, not accepted decisions. They have not been promot
 |------|-------|----------|-------|
 | [`llm-authoring-layer.md`](llm-authoring-layer.md) | Four-layer emission stack for efficient LLM-emitted Strand: compact text projection + grammar-constrained decoding + bidirectional elaboration + existing verifier | [Q-034](../open-questions.md#Q-034) | Medium-Large |
 | [`state-machines-runtime-step-3.md`](state-machines-runtime-step-3.md) | Layer 6 step 3: per-stream overflow policies (Q-015); real supervision via E-030/E-031; snapshot/replay-from-log; runtime metrics; implicit Send/Receive verifier enforcement via well-known-EffectCategory registry; multi-producer fan-in and broadcast fan-out | [Q-008](../open-questions.md#Q-008) (part), [Q-015](../open-questions.md#Q-015), implicit Send/Receive | Large (six independently-shippable slices) |
+| [`bytecode-vm-step-1.md`](bytecode-vm-step-1.md) | Q-017 step 1 — Kotlin reference bytecode VM. 28-opcode stack-based instruction set; uniform-boxed value representation; stack-based calling convention with closure captures; JVM-leaning GC; node-by-node lowering. Path B recommendation (Kotlin-first; Rust port deferred to a separate step 2). | [Q-017](../open-questions.md#Q-017) | Large (~4-6 weeks for step 1 alone) |
 
 The four Wave-3 implementation proposals (Q-030 effect handlers, Q-031 refinement-lattice capability matching, Q-032 state machines runtime step 1, Q-035 schema + invariant step 1) have all landed and live in `implemented/`.
 

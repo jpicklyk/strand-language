@@ -1,8 +1,10 @@
 package org.strand.hashing
 
+import org.strand.core.ConsumerMode
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
+import org.strand.core.OverflowPolicy
 import org.strand.core.RawNodeStore
 import org.strand.core.StoredNode
 
@@ -705,13 +707,64 @@ internal class CanonicalEncoder(
     }
 
     private fun encodeEventStream(node: Node.EventStream, stack: BinderStack): ByteArray {
-        // [tag=28, eventType-hash, streamKind-uint].
+        // [tag=28, eventType-hash, streamKind-uint,
+        //  optional bufferSize-uint, optional overflowPolicy-tag (+ Sample param),
+        //  optional consumerMode-uint]
         // streamKind ordinal: 0=External, 1=Internal, 2=Output. The order
         // is the enum declaration order in core/Node.kt — stable forever.
-        return encodeWithTag(CategoryTag.EventStream, listOf(
+        //
+        // Slice 3.1 / 3.6 additive-versioning rule: when bufferSize == null,
+        // overflowPolicy is null or BlockProducer (the default), AND
+        // consumerMode is null or Single (the default), the encoder emits no
+        // additional fields and the bytes are byte-identical to the
+        // pre-step-3 encoding. Pre-step-3 corpus EventStream hashes are
+        // therefore unchanged.
+        //
+        // When at least one of the three new fields is set to a non-default
+        // value, ALL THREE are emitted (with sentinels for fields left at
+        // default) so the encoding remains unambiguous. The ordering is
+        // bufferSize, overflowPolicy, consumerMode. The policy carries its
+        // own tag (0=Block, 1=DropNew, 2=DropOld, 3=Sample), with the Sample
+        // variant trailed by its intervalNanos parameter. ConsumerMode
+        // ordinal: 0=Single, 1=Broadcast — stable forever.
+        val baseFields = mutableListOf(
             CanonicalCbor.encodeBytes(hash(node.eventType, stack)),
             CanonicalCbor.encodeUint(node.streamKind.ordinal.toLong()),
-        ))
+        )
+        val hasNonDefaultBuffer = node.bufferSize != null
+        val hasNonDefaultPolicy = node.overflowPolicy != null &&
+            node.overflowPolicy !is OverflowPolicy.BlockProducer
+        val hasNonDefaultMode = node.consumerMode != null &&
+            node.consumerMode != ConsumerMode.Single
+        if (!hasNonDefaultBuffer && !hasNonDefaultPolicy && !hasNonDefaultMode) {
+            return encodeWithTag(CategoryTag.EventStream, baseFields)
+        }
+        // Slice 3.1 / 3.6 fields: bufferSize (sentinel 0 for unset / default),
+        // policy tag + optional Sample param, then consumerMode (sentinel 0 =
+        // Single). Using 0 as "unset" for bufferSize is safe because a real
+        // bufferSize of 0 makes no semantic sense (no events could be queued);
+        // the verifier could reject it as MalformedOverflowPolicy for future
+        // tightening.
+        val bufferEncoded = CanonicalCbor.encodeUint((node.bufferSize ?: 0).toLong())
+        val policyFields = encodeOverflowPolicy(node.overflowPolicy ?: OverflowPolicy.BlockProducer)
+        val modeEncoded = CanonicalCbor.encodeUint((node.consumerMode ?: ConsumerMode.Single).ordinal.toLong())
+        return encodeWithTag(CategoryTag.EventStream, baseFields + bufferEncoded + policyFields + modeEncoded)
+    }
+
+    /**
+     * Encode an [OverflowPolicy] as a small tag (0=Block, 1=DropNew,
+     * 2=DropOld, 3=Sample) followed by any per-variant parameters. The
+     * Sample variant emits its `intervalNanos` parameter as a CBOR uint;
+     * the other three variants are bare tags.
+     */
+    private fun encodeOverflowPolicy(policy: OverflowPolicy): List<ByteArray> = when (policy) {
+        OverflowPolicy.BlockProducer -> listOf(CanonicalCbor.encodeUint(0L))
+        OverflowPolicy.DropNewest -> listOf(CanonicalCbor.encodeUint(1L))
+        OverflowPolicy.DropOldest -> listOf(CanonicalCbor.encodeUint(2L))
+        is OverflowPolicy.Sample -> listOf(
+            CanonicalCbor.encodeUint(3L),
+            CanonicalCbor.encodeUint(policy.intervalNanos),
+        )
     }
 
     private fun encodeTransition(node: Node.Transition, stack: BinderStack): ByteArray {

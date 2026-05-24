@@ -160,6 +160,97 @@ class HasherTest {
         assertNotEquals(intStream, boolStream)
     }
 
+    /**
+     * Layer 6 step 3 slice 3.1 additive-versioning invariant: an EventStream
+     * whose new optional fields are all at their defaults (null `bufferSize`,
+     * null or BlockProducer `overflowPolicy`) MUST hash byte-identically to
+     * the pre-slice-3.1 form. This is what keeps the existing 9 state-machine
+     * corpus programs hash-stable across the layer 6 step 3 boundary.
+     */
+    @Test
+    fun `EventStream with default slice 3-1 fields hashes identically to pre-slice form`() {
+        val storeBefore = NodeStore()
+        val tBefore = storeBefore.add(Node.PrimitiveType(Primitive.Int))
+        val sBefore = storeBefore.add(Node.EventStream(
+            eventType = tBefore,
+            streamKind = org.strand.core.StreamKind.External,
+        ))
+        val hashBefore = Hasher(storeBefore).hashRoot(sBefore)
+
+        // Explicit BlockProducer (the default) — must hash same as null.
+        val storeBlockExplicit = NodeStore()
+        val tBE = storeBlockExplicit.add(Node.PrimitiveType(Primitive.Int))
+        val sBE = storeBlockExplicit.add(Node.EventStream(
+            eventType = tBE,
+            streamKind = org.strand.core.StreamKind.External,
+            bufferSize = null,
+            overflowPolicy = null,
+        ))
+        val hashBlockExplicit = Hasher(storeBlockExplicit).hashRoot(sBE)
+        assertEquals(hashBefore, hashBlockExplicit) {
+            "Default-fields EventStream must hash identically to bare two-arg form"
+        }
+    }
+
+    @Test
+    fun `EventStream with non-default bufferSize hashes differently`() {
+        val storeA = NodeStore()
+        val tA = storeA.add(Node.PrimitiveType(Primitive.Int))
+        val sA = storeA.add(Node.EventStream(
+            eventType = tA,
+            streamKind = org.strand.core.StreamKind.External,
+            bufferSize = null,
+        ))
+        val storeB = NodeStore()
+        val tB = storeB.add(Node.PrimitiveType(Primitive.Int))
+        val sB = storeB.add(Node.EventStream(
+            eventType = tB,
+            streamKind = org.strand.core.StreamKind.External,
+            bufferSize = 64,
+        ))
+        assertNotEquals(Hasher(storeA).hashRoot(sA), Hasher(storeB).hashRoot(sB))
+    }
+
+    @Test
+    fun `EventStream with each non-default overflowPolicy hashes distinctly`() {
+        val streams = listOf(
+            null,  // default = BlockProducer
+            org.strand.core.OverflowPolicy.BlockProducer,
+            org.strand.core.OverflowPolicy.DropNewest,
+            org.strand.core.OverflowPolicy.DropOldest,
+            org.strand.core.OverflowPolicy.Sample(100L),
+            org.strand.core.OverflowPolicy.Sample(200L),
+        )
+        val hashes = streams.map { policy ->
+            val store = NodeStore()
+            val t = store.add(Node.PrimitiveType(Primitive.Int))
+            val s = store.add(Node.EventStream(
+                eventType = t,
+                streamKind = org.strand.core.StreamKind.External,
+                overflowPolicy = policy,
+            ))
+            Hasher(store).hashRoot(s)
+        }
+        // null and BlockProducer hash IDENTICALLY (the default is preserved).
+        assertEquals(hashes[0], hashes[1]) {
+            "null and BlockProducer overflowPolicy should hash identically (slice 3.1 additive-versioning)"
+        }
+        // All other variants hash distinctly from each other and from the default.
+        val nonDefault = hashes.drop(2)
+        val defaultHash = hashes[0]
+        for (h in nonDefault) {
+            assertNotEquals(defaultHash, h)
+        }
+        // Pairwise distinct among the non-default policies.
+        for (i in nonDefault.indices) {
+            for (j in (i + 1) until nonDefault.size) {
+                assertNotEquals(nonDefault[i], nonDefault[j]) {
+                    "policies at indices $i and $j should hash differently"
+                }
+            }
+        }
+    }
+
     @Test
     fun `Transition with and without guard hash differently`() {
         // A guard-less Transition (always taken) MUST hash distinctly from

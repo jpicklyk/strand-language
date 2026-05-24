@@ -426,6 +426,23 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * An EventStream's optional `bufferSize` or `overflowPolicy` content
+     * field is malformed. Layer 6 step 3 slice 3.1 specifies a small set of
+     * well-formedness rules over the new fields:
+     *
+     *  * `bufferSize`, if set, must be > 0 (a zero-capacity channel cannot
+     *    hold any pending event).
+     *  * `overflowPolicy = Sample(n)` requires n > 0 (the JSON ingest and
+     *    [org.strand.core.OverflowPolicy.Sample]'s `init` block both reject
+     *    n <= 0, so this case typically never reaches the verifier — present
+     *    for defense-in-depth).
+     */
+    data class MalformedOverflowPolicy(
+        override val at: NodeId,
+        val detail: String,
+    ) : VerifyError()
+
+    /**
      * A StateMachine declares zero input streams. Every state machine must
      * have at least one input stream (the runtime needs *something* to
      * drive transitions). Multi-input machines are well-formed as of

@@ -1706,6 +1706,27 @@ class Verifier(
             // none, since the EventStream's eventType field type is
             // type-position by construction).
             val eventType = resolveType(streamNode.eventType, typeParams)
+            // Slice 3.1: well-formedness on the optional bufferSize /
+            // overflowPolicy fields. JSON ingest and the OverflowPolicy.Sample
+            // `init` block already reject negative or zero Sample intervals;
+            // this check covers any code path that constructs an EventStream
+            // programmatically and the bufferSize <= 0 case.
+            val bufferSize = streamNode.bufferSize
+            if (bufferSize != null && bufferSize <= 0) {
+                report(VerifyError.MalformedOverflowPolicy(
+                    at = streamId,
+                    detail = "bufferSize must be > 0, got $bufferSize",
+                ))
+                throw VerifyAbort()
+            }
+            val policy = streamNode.overflowPolicy
+            if (policy is org.strand.core.OverflowPolicy.Sample && policy.intervalNanos <= 0) {
+                report(VerifyError.MalformedOverflowPolicy(
+                    at = streamId,
+                    detail = "Sample.intervalNanos must be > 0, got ${policy.intervalNanos}",
+                ))
+                throw VerifyAbort()
+            }
             return streamNode to eventType
         }
 

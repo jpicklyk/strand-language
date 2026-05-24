@@ -163,11 +163,11 @@ When a worker references a node by hash that requires fetching from a different 
 
 ### Q-017: Bytecode VM specification {#Q-017}
 
-**Status:** Open (architecture and constraints specified; instruction set design remains)
+**Status:** Proposed (step 1 — Kotlin reference VM — specified in `proposals/bytecode-vm-step-1.md`, 2026-05-24; step 2 — Rust production VM per ADR-008 — to be drafted as a separate proposal when step 1 lands)
 **Concerns:** [`decisions/ADR-008-compilation-target.md`](decisions/ADR-008-compilation-target.md), [`design/node-algebra.md`](design/node-algebra.md)
-**Partial resolution:** The VM is a stack-based bytecode with first-class effect/capability operations, content-addressed identity for nodes and references, support for state machines and event streams, and replay determinism. The full instruction set, value representation, calling convention, and GC algorithm are deferred to implementation (Milestone 2.3 in [`research-plan.md`](research-plan.md)).
+**Resolution:** Two-step shipping strategy. Step 1 ships a Kotlin reference bytecode VM (`:bytecode` + `:vm` Gradle modules) that runs every corpus program with bytewise-equivalent behavior to the tree-walking interpreter. Step 2 ports the same design to Rust per ADR-008 and tunes for performance. The instruction set (28 opcodes), uniform-boxed value representation, stack-based calling convention with closure captures, JVM-leaning GC, and node-by-node lowering scheme are fully specified for step 1; step 2 inherits the test suite as its correctness specification. Path B (Kotlin-first) chosen over Path A (Rust-first) because iteration speed dominates: design validation happens at week 4-6 instead of month 4-6, surfacing any design surprises (the project has had several) cheaply. ~70% of step 1's work transfers to step 2 (instruction set, lowering, test corpus, verifier integration); ~30% is Kotlin-specific (op-dispatch loop, GC). Effect/capability bytecode operations (`CAP_PUSH`/`CAP_POP`/`HANDLER_PUSH`/`HANDLER_POP`) are first-class per ADR-008; types, schemas, and recursive types are erased pre-bytecode; state machines remain runtime objects consuming bytecode for their transition functions. Detailed proposal in [`proposals/bytecode-vm-step-1.md`](proposals/bytecode-vm-step-1.md).
 
-The decision to use a bytecode VM as the initial execution target requires a bytecode specification: instruction set, value representation, calling convention, garbage collection model. None of this has been specified.
+The decision to use a bytecode VM as the initial execution target requires a bytecode specification: instruction set, value representation, calling convention, garbage collection model. The step 1 specification closes the deferred half; step 2 carries the design into Rust for production performance.
 
 ### Q-018: MLIR dialect design {#Q-018}
 

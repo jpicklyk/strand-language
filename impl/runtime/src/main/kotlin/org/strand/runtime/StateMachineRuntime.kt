@@ -3,7 +3,10 @@ package org.strand.runtime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.launch
+import org.strand.core.ConsumerMode
 import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
@@ -123,38 +126,102 @@ class StateMachineRuntime(
      * scheduling; production callers pass a scope on `Dispatchers.Default`.
      */
     fun runGroup(group: MachineGroup, scope: CoroutineScope): MachineGroupHandle {
-        // Pass 0: validate topology (single-producer / single-consumer on
-        // internal streams; external/output streams are host-driven). Fails
-        // fast before allocating any channels or coroutines.
+        // Pass 0: validate topology. Slice 3.6 relaxations: multi-producer
+        // fan-in always allowed; multi-consumer allowed when the stream's
+        // consumerMode is Broadcast. Fails fast before allocating any
+        // channels or coroutines.
         group.validateTopology()
-        // Pass 1: allocate one Channel<Value> per unique stream NodeId.
+        // Pass 1: allocate one StreamBus per unique stream NodeId. Direct
+        // buses (the pre-slice-3.6 default) wrap a single Channel<Value>;
+        // broadcast buses wrap a producer-facing Channel<Value> bridged into
+        // a MutableSharedFlow plus per-consumer dedicated channels (allocated
+        // lazily in [StreamBus.Broadcast.consumerChannel]).
+        //
+        // Slice 3.1: each producer-facing channel's capacity is the
+        // EventStream's own `bufferSize` content field when set; otherwise
+        // the group's [MachineGroup.bufferCapacity] (default 1024).
         // Content-addressing pins structurally-equal streams to the same
         // NodeId, so two machines that reference the same stream share a
-        // channel automatically — that IS the wiring.
-        val streamChannels: Map<NodeId, Channel<Value>> = group.uniqueStreams()
-            .associateWith { Channel(capacity = group.bufferCapacity) }
+        // bus automatically — that IS the wiring.
+        val streamBuses: Map<NodeId, StreamBus> = group.uniqueStreams()
+            .associateWith { streamId ->
+                val streamNode = group.store.get(streamId) as Node.EventStream
+                val capacity = streamNode.bufferSize ?: group.bufferCapacity
+                val producerChannel = Channel<Value>(capacity = capacity)
+                // Producer count for the bus's "all producers halted → close
+                // channel" lifecycle (slice 3.6 multi-producer fan-in
+                // support). Counts only machines in the group whose
+                // outputStreams contains this stream; external-input streams
+                // have producer count 0 and never auto-close (the host owns
+                // closure via the externalInputs SendChannel).
+                val producerCount = group.machines.count { mid ->
+                    (group.store.get(mid) as Node.StateMachine).outputStreams.contains(streamId)
+                }
+                when (group.consumerModeOf(streamId)) {
+                    ConsumerMode.Single -> StreamBus.Direct(
+                        producerChannel = producerChannel,
+                        producerCount = producerCount,
+                    )
+                    ConsumerMode.Broadcast -> StreamBus.Broadcast(
+                        producerChannel = producerChannel,
+                        producerCount = producerCount,
+                        perConsumerBufferCapacity = capacity,
+                    )
+                }
+            }
+
+        // Pass 1b (slice 3.1): allocate one OverflowDispatcher per stream
+        // that any machine sends INTO. The dispatcher wraps the producer-
+        // facing channel (the bus's `producerChannel`); consumer-side reads
+        // go through their bus.consumerChannel(...) unchanged. The dispatcher
+        // carries the EventStream's declared `overflowPolicy` (defaulting to
+        // BlockProducer for absent / null policies).
+        val streamDispatchers: Map<NodeId, OverflowDispatcher> = streamBuses.mapValues { (id, bus) ->
+            val streamNode = group.store.get(id) as Node.EventStream
+            val policy = streamNode.overflowPolicy ?: org.strand.core.OverflowPolicy.BlockProducer
+            OverflowDispatcher(bus.producerChannel, policy)
+        }
 
         // Pass 2: build one MachineInstance per machine, pointing each
-        // instance's inputChannels / outputChannels at the shared channel
-        // table.
+        // instance's inputChannels at the bus's consumerChannel(machineId)
+        // and outputChannels at the bus's producerChannel. For Direct buses
+        // both sides resolve to the same channel; for Broadcast, each
+        // consumer machine's call to consumerChannel(...) allocates a
+        // dedicated per-consumer Channel<Value> on the bus — done BEFORE
+        // the broadcast pumps launch so the pump sees every consumer
+        // channel at startup.
         val groupInterpreter = Interpreter(group.store, group.hashToNodeId)
         val instances = group.machines.map { machineId ->
-            buildActorInstance(machineId, streamChannels, group, groupInterpreter)
+            buildActorInstance(machineId, streamBuses, streamDispatchers, group, groupInterpreter, scope)
+        }
+
+        // Pass 2b (slice 3.6): launch one pump coroutine per Broadcast bus.
+        // Each pump drains the bus's producer-facing channel and forwards
+        // every value into every per-consumer Channel<Value> allocated in
+        // Pass 2. When the producer channel closes, the pump finishes
+        // draining and closes every per-consumer channel so each consumer
+        // actor sees EOF on its input.
+        val pumpJobs: List<Job> = streamBuses.values.mapNotNull { bus ->
+            when (bus) {
+                is StreamBus.Direct -> null
+                is StreamBus.Broadcast -> scope.launch { runBroadcastPump(bus) }
+            }
         }
 
         // Pass 3: spawn one actor coroutine per instance.
-        val jobs: List<Job> = instances.map { instance ->
+        val actorJobs: List<Job> = instances.map { instance ->
             val actor = MachineActor(instance, groupInterpreter)
             scope.launch { actor.run() }
         }
 
-        // Host-facing channel handles. External inputs are SendChannel
-        // (host pushes events in); external outputs are ReceiveChannel
-        // (host drains events out).
-        val externalInputs = group.externalInputStreams()
-            .associateWith { streamChannels.getValue(it) }
-        val externalOutputs = group.externalOutputStreams()
-            .associateWith { streamChannels.getValue(it) }
+        // Host-facing channel handles. External inputs: host pushes events
+        // into the producer-facing channel. External outputs: host drains
+        // from the producer-facing channel (output streams have no machine
+        // consumer, so they remain pre-slice-3.6 plain Channel<Value>).
+        val externalInputs: Map<NodeId, SendChannel<Value>> = group.externalInputStreams()
+            .associateWith { streamId -> streamBuses.getValue(streamId).producerChannel }
+        val externalOutputs: Map<NodeId, ReceiveChannel<Value>> = group.externalOutputStreams()
+            .associateWith { streamId -> streamBuses.getValue(streamId).producerChannel }
 
         val instanceHandles = instances.associate { instance ->
             instance.instanceId to MachineInstanceHandle(instance)
@@ -164,8 +231,35 @@ class StateMachineRuntime(
             externalInputs = externalInputs,
             externalOutputs = externalOutputs,
             instances = instanceHandles,
-            jobs = jobs,
+            jobs = actorJobs + pumpJobs,
         )
+    }
+
+    /**
+     * Drain [bus]'s producer-facing channel and forward every value to
+     * every per-consumer channel (Layer 6 step 3 slice 3.6 broadcast
+     * fan-out). Runs as a dedicated coroutine, one per Broadcast bus.
+     * Completes when the producer channel is closed; at that point it
+     * closes every per-consumer channel so each consumer actor sees EOF
+     * on its input and halts normally.
+     *
+     * Per-consumer channels are allocated in Pass 2 of `runGroup` before
+     * this pump launches, so [StreamBus.Broadcast.perConsumerChannels] is
+     * complete at pump-start time. If a consumer subscribes late (no
+     * mechanism for this in slice 3.6, but defensive), it sees only events
+     * from its subscription point forward — the snapshot taken at every
+     * drain pass picks up new consumers on the next iteration.
+     */
+    private suspend fun runBroadcastPump(bus: StreamBus.Broadcast) {
+        try {
+            for (value in bus.producerChannel) {
+                for (channel in bus.perConsumerChannels()) {
+                    channel.send(value)
+                }
+            }
+        } finally {
+            bus.closeAllConsumerChannels()
+        }
     }
 
     /**
@@ -177,9 +271,11 @@ class StateMachineRuntime(
      */
     private fun buildActorInstance(
         machineId: NodeId,
-        streamChannels: Map<NodeId, Channel<Value>>,
+        streamBuses: Map<NodeId, StreamBus>,
+        streamDispatchers: Map<NodeId, OverflowDispatcher>,
         group: MachineGroup,
         actorInterpreter: Interpreter,
+        scope: CoroutineScope,
     ): MachineInstance {
         val node = group.store.get(machineId) as? Node.StateMachine
             ?: error(
@@ -189,8 +285,25 @@ class StateMachineRuntime(
             )
         val transitionFnValue = actorInterpreter.eval(node.transitionFn, group.capabilities)
         val initialStateValue = actorInterpreter.eval(node.initialState, group.capabilities)
-        val inputChannels = node.inputStreams.associateWith { streamChannels.getValue(it) }
-        val outputChannels = node.outputStreams.associateWith { streamChannels.getValue(it) }
+        // Input channels: for Direct buses, the lone consumer reads from
+        // the producer channel; for Broadcast buses, a fresh per-consumer
+        // channel is allocated and its collection coroutine launched on
+        // [scope]. The consumer key is the machineId — each machine
+        // appears at most once in a group, so this is a stable per-actor
+        // identifier.
+        val inputChannels = node.inputStreams.associateWith { streamId ->
+            streamBuses.getValue(streamId).consumerChannel(machineId, scope)
+        }
+        // Output channels: all producers (one or many under slice 3.6
+        // fan-in) write to the same producer-facing channel. The dispatcher
+        // wraps this channel with the EventStream's overflow policy.
+        val outputChannels = node.outputStreams.associateWith { streamId ->
+            streamBuses.getValue(streamId).producerChannel
+        }
+        val outputDispatchers = node.outputStreams.associateWith { streamDispatchers.getValue(it) }
+        val outputBuses = node.outputStreams.associateWith { streamId ->
+            streamBuses.getValue(streamId)
+        }
         val recorder = if (group.recordInputs) EventRecorder() else null
         return MachineInstance(
             instanceId = InstanceId.generate(),
@@ -200,6 +313,8 @@ class StateMachineRuntime(
             capabilities = group.capabilities,
             inputChannels = inputChannels,
             outputChannels = outputChannels,
+            outputDispatchers = outputDispatchers,
+            outputBuses = outputBuses,
             recorder = recorder,
             halted = false,
         )

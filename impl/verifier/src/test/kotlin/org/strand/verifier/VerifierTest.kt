@@ -1470,6 +1470,140 @@ class VerifierTest {
     }
 
     @Test
+    fun `EventStream with bufferSize zero is rejected as MalformedOverflowPolicy (slice 3-1)`() {
+        // Use a manually-crafted JSON that overrides the inputStream's
+        // bufferSize to 0. The verifier should fire MalformedOverflowPolicy
+        // when it reaches the stream during resolveEventStream.
+        val r = verify("""{
+          "version": 1, "root": "m",
+          "nodes": {
+            "boolT":   { "type": "PrimitiveType", "kind": "Bool" },
+            "unitT":   { "type": "PrimitiveType", "kind": "Unit" },
+            "emptyT":  { "type": "ProductType", "fields": [] },
+            "sft":     { "type": "ProductTypeField", "name": "state",   "fieldType": "boolT" },
+            "oft":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyT" },
+            "resT":    { "type": "ProductType", "fields": ["sft", "oft"] },
+            "notT":    { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
+            "notFn":   { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "notT" },
+            "sP":      { "type": "ParameterDecl", "name": "s", "paramType": "boolT" },
+            "eP":      { "type": "ParameterDecl", "name": "e", "paramType": "unitT" },
+            "sRef":    { "type": "VarRef", "binder": "sP" },
+            "neg":     { "type": "Application", "function": "notFn", "arguments": ["sRef"] },
+            "sV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "neg" },
+            "emptyV":  { "type": "ProductValue", "ofType": "emptyT", "fields": [] },
+            "oV":      { "type": "ProductFieldValue", "fieldName": "outputs", "value": "emptyV" },
+            "result":  { "type": "ProductValue", "ofType": "resT", "fields": ["sV", "oV"] },
+            "transitionLambda": { "type": "Lambda", "parameters": ["sP", "eP"], "body": "result" },
+            "initialState":     { "type": "BoolLit", "value": false },
+            "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+            "inputStream":      { "type": "EventStream", "eventType": "unitT", "streamKind": "external", "bufferSize": 0 },
+            "m": {
+              "type": "StateMachine",
+              "transitionFn": "transitionLambda",
+              "initialState": "initialState",
+              "inputStreams": ["inputStream"],
+              "outputStreams": [],
+              "effects": ["receiveFx"]
+            }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.MalformedOverflowPolicy }) {
+            "expected MalformedOverflowPolicy for bufferSize=0, got ${f.errors}"
+        }
+    }
+
+    @Test
+    fun `EventStream with valid bufferSize and DropNewest policy verifies cleanly (slice 3-1)`() {
+        // Adding the optional slice 3.1 fields with valid values must not
+        // disturb the normal verify path — proves the field is accepted
+        // through ingest, finalize, and the StateMachine inference.
+        val r = verify("""{
+          "version": 1, "root": "m",
+          "nodes": {
+            "boolT":   { "type": "PrimitiveType", "kind": "Bool" },
+            "unitT":   { "type": "PrimitiveType", "kind": "Unit" },
+            "emptyT":  { "type": "ProductType", "fields": [] },
+            "sft":     { "type": "ProductTypeField", "name": "state",   "fieldType": "boolT" },
+            "oft":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyT" },
+            "resT":    { "type": "ProductType", "fields": ["sft", "oft"] },
+            "notT":    { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
+            "notFn":   { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "notT" },
+            "sP":      { "type": "ParameterDecl", "name": "s", "paramType": "boolT" },
+            "eP":      { "type": "ParameterDecl", "name": "e", "paramType": "unitT" },
+            "sRef":    { "type": "VarRef", "binder": "sP" },
+            "neg":     { "type": "Application", "function": "notFn", "arguments": ["sRef"] },
+            "sV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "neg" },
+            "emptyV":  { "type": "ProductValue", "ofType": "emptyT", "fields": [] },
+            "oV":      { "type": "ProductFieldValue", "fieldName": "outputs", "value": "emptyV" },
+            "result":  { "type": "ProductValue", "ofType": "resT", "fields": ["sV", "oV"] },
+            "transitionLambda": { "type": "Lambda", "parameters": ["sP", "eP"], "body": "result" },
+            "initialState":     { "type": "BoolLit", "value": false },
+            "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+            "inputStream":      {
+              "type": "EventStream",
+              "eventType": "unitT",
+              "streamKind": "external",
+              "bufferSize": 16,
+              "overflowPolicy": "DropNewest"
+            },
+            "m": {
+              "type": "StateMachine",
+              "transitionFn": "transitionLambda",
+              "initialState": "initialState",
+              "inputStreams": ["inputStream"],
+              "outputStreams": [],
+              "effects": ["receiveFx"]
+            }
+          }
+        }""")
+        r as VerifyResult.Ok
+    }
+
+    @Test
+    fun `EventStream with Sample policy via object form verifies cleanly (slice 3-1)`() {
+        val r = verify("""{
+          "version": 1, "root": "m",
+          "nodes": {
+            "boolT":   { "type": "PrimitiveType", "kind": "Bool" },
+            "unitT":   { "type": "PrimitiveType", "kind": "Unit" },
+            "emptyT":  { "type": "ProductType", "fields": [] },
+            "sft":     { "type": "ProductTypeField", "name": "state",   "fieldType": "boolT" },
+            "oft":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyT" },
+            "resT":    { "type": "ProductType", "fields": ["sft", "oft"] },
+            "notT":    { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
+            "notFn":   { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "notT" },
+            "sP":      { "type": "ParameterDecl", "name": "s", "paramType": "boolT" },
+            "eP":      { "type": "ParameterDecl", "name": "e", "paramType": "unitT" },
+            "sRef":    { "type": "VarRef", "binder": "sP" },
+            "neg":     { "type": "Application", "function": "notFn", "arguments": ["sRef"] },
+            "sV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "neg" },
+            "emptyV":  { "type": "ProductValue", "ofType": "emptyT", "fields": [] },
+            "oV":      { "type": "ProductFieldValue", "fieldName": "outputs", "value": "emptyV" },
+            "result":  { "type": "ProductValue", "ofType": "resT", "fields": ["sV", "oV"] },
+            "transitionLambda": { "type": "Lambda", "parameters": ["sP", "eP"], "body": "result" },
+            "initialState":     { "type": "BoolLit", "value": false },
+            "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+            "inputStream":      {
+              "type": "EventStream",
+              "eventType": "unitT",
+              "streamKind": "external",
+              "overflowPolicy": { "kind": "Sample", "intervalNanos": 1000000 }
+            },
+            "m": {
+              "type": "StateMachine",
+              "transitionFn": "transitionLambda",
+              "initialState": "initialState",
+              "inputStreams": ["inputStream"],
+              "outputStreams": [],
+              "effects": ["receiveFx"]
+            }
+          }
+        }""")
+        r as VerifyResult.Ok
+    }
+
+    @Test
     fun `StateMachine with outputs but no Send declared is rejected as MissingImplicitEffect (slice 3-5)`() {
         // Default machine has no output streams; add one and declare only
         // receiveFx — the slice 3.5 check must report missing

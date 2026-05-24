@@ -69,9 +69,23 @@ internal class MachineActor(
             }
             instance.halted = true
         } finally {
-            // Close output channels so any downstream consumers see EOF.
-            for (channel in instance.outputChannels.values) {
-                channel.close()
+            // Signal halt on each output bus. The bus closes its producer
+            // channel only when all producers have halted (slice 3.6
+            // multi-producer fan-in support). Pre-slice-3.6 buses are
+            // single-producer Direct buses; the count drops from 1 to 0
+            // and the channel closes exactly as before.
+            //
+            // Legacy: when no buses are present (e.g., MachineGroupTest
+            // fixtures built without going through StateMachineRuntime.runGroup),
+            // fall back to closing the output channels directly.
+            if (instance.outputBuses.isNotEmpty()) {
+                for (bus in instance.outputBuses.values) {
+                    bus.producerHalted()
+                }
+            } else {
+                for (channel in instance.outputChannels.values) {
+                    channel.close()
+                }
             }
         }
     }
@@ -144,7 +158,7 @@ internal class MachineActor(
                 "Some" -> {
                     val payload = slotValue.payload
                         ?: error("Some output slot '$slotName' has null payload")
-                    instance.outputChannels.getValue(outputStreamId).send(payload)
+                    sendThroughDispatcher(outputStreamId, payload)
                 }
                 "None" -> Unit
                 else -> error(
@@ -204,6 +218,22 @@ internal class MachineActor(
         val outputStreamId = instance.node.outputStreams[index]
         val payload = tagged.payload
             ?: error("TaggedOutput case '$caseName' has null payload")
-        instance.outputChannels.getValue(outputStreamId).send(payload)
+        sendThroughDispatcher(outputStreamId, payload)
+    }
+
+    /**
+     * Send a payload through the output stream's [OverflowDispatcher] when
+     * one is present (the step-2 async path always supplies dispatchers;
+     * legacy call sites without dispatchers fall back to direct
+     * `channel.send`). The dispatcher applies the EventStream's declared
+     * overflow policy — Layer 6 step 3 slice 3.1.
+     */
+    private suspend fun sendThroughDispatcher(outputStreamId: NodeId, payload: Value) {
+        val dispatcher = instance.outputDispatchers[outputStreamId]
+        if (dispatcher != null) {
+            dispatcher.send(payload)
+        } else {
+            instance.outputChannels.getValue(outputStreamId).send(payload)
+        }
     }
 }

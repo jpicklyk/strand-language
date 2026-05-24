@@ -3,6 +3,7 @@ package org.strand.runtime
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
+import org.strand.core.ConsumerMode
 import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
@@ -22,8 +23,17 @@ import org.strand.interpreter.CapabilitySet
  * Stream wiring is computed once at `runGroup` startup from the topology:
  *
  *  * Every EventStream node referenced by any machine gets one
- *    `Channel<Value>` of the group's [bufferCapacity]; structurally-equal
- *    streams share a channel (content-addressing pins this).
+ *    `Channel<Value>` whose capacity is the EventStream's own `bufferSize`
+ *    field (Layer 6 step 3 slice 3.1) — falling back to the group's
+ *    [bufferCapacity] when the field is absent. Structurally-equal streams
+ *    share a channel (content-addressing pins this); when two such streams
+ *    disagree on `bufferSize` they will already have been hashed to distinct
+ *    nodes by the canonical encoder, so the share-by-hash invariant holds.
+ *  * Each output channel is wrapped in an [OverflowDispatcher] whose policy
+ *    is the EventStream's own `overflowPolicy` field (slice 3.1), defaulting
+ *    to [org.strand.core.OverflowPolicy.BlockProducer] when absent. Actors
+ *    send through the dispatcher; consumers read the underlying channel
+ *    unchanged.
  *  * `external` input streams expose a [SendChannel] for the host to push
  *    events into; the underlying channel feeds the receiving machine.
  *  * `output` streams expose a [ReceiveChannel] for the host to drain
@@ -34,7 +44,7 @@ import org.strand.interpreter.CapabilitySet
  *
  * Step 2 enforces single-producer and single-consumer on internal streams
  * (see verifier rules in the proposal); fan-in and fan-out are deferred to
- * step 3.
+ * step 3 slice 3.6.
  */
 data class MachineGroup(
     /** Canonical NodeStore (post-finalize) containing the machine definitions and all reachable nodes. */
@@ -107,19 +117,31 @@ data class MachineGroup(
      *
      *  * an `internal` stream listed as an input by some machine but as an
      *    output by no machine — the consumer would block forever;
-     *  * an `internal` stream listed as an output by more than one machine —
-     *    step 2 enforces single-producer fan-in (multi-producer is step 3);
      *  * an `internal` stream listed as an output but with no consumer —
      *    the producer would block on a full buffer forever;
-     *  * an `internal` stream with more than one consumer — step 2 enforces
-     *    single-consumer fan-out (multi-consumer broadcast is step 3).
+     *  * an `internal` stream whose [ConsumerMode] is [ConsumerMode.Single]
+     *    (the default) with more than one consumer — single-consumer fan-out
+     *    is enforced. Multi-consumer broadcast requires the stream's
+     *    `consumerMode` to be [ConsumerMode.Broadcast] (slice 3.6).
+     *
+     * Slice 3.6 (Layer 6 step 3) relaxations:
+     *  * Multi-producer fan-in on internal streams is now allowed
+     *    unconditionally — multiple producer machines may emit into the same
+     *    `internal` stream; the runtime merges their sends with
+     *    nondeterministic interleaving (per-producer FIFO).
+     *  * Multi-consumer fan-out is allowed when the stream's [ConsumerMode]
+     *    is [ConsumerMode.Broadcast]; the runtime wraps the stream in a
+     *    `MutableSharedFlow<Value>` and each consumer sees every emitted
+     *    event.
      *
      * External-input streams are owned by the host (host pushes events
      * through the [MachineGroupHandle]); external-output streams are also
      * host-owned (host drains the handle). Their producer/consumer rules
      * follow the same single-side pattern but apply to the machines in the
-     * group: an external-input stream is consumed by exactly one machine, an
-     * external-output stream is produced by exactly one machine.
+     * group: an external-input stream may have at most one machine consumer
+     * by default (relax with `consumerMode = Broadcast`); an external-output
+     * stream may be produced by any number of machines (fan-in into the
+     * host-drained sink).
      */
     internal fun validateTopology() {
         for (streamId in uniqueStreams()) {
@@ -130,23 +152,40 @@ data class MachineGroup(
                 (store.get(mid) as Node.StateMachine).inputStreams.contains(streamId)
             }
             val kind = streamKindOf(streamId)
+            val mode = consumerModeOf(streamId)
             when (kind) {
                 StreamKind.Internal -> {
                     if (producers.isEmpty()) throw MachineGroupValidationError.InternalStreamNoProducer(streamId)
-                    if (producers.size > 1) throw MachineGroupValidationError.InternalStreamMultipleProducers(streamId, producers)
+                    // Multi-producer fan-in is now allowed (slice 3.6).
                     if (consumers.isEmpty()) throw MachineGroupValidationError.InternalStreamNoConsumer(streamId)
-                    if (consumers.size > 1) throw MachineGroupValidationError.InternalStreamMultipleConsumers(streamId, consumers)
+                    if (consumers.size > 1 && mode == ConsumerMode.Single) {
+                        throw MachineGroupValidationError.InternalStreamMultipleConsumers(streamId, consumers)
+                    }
                 }
                 StreamKind.External -> {
                     if (producers.isNotEmpty()) throw MachineGroupValidationError.ExternalStreamCannotBeProduced(streamId, producers)
-                    if (consumers.size > 1) throw MachineGroupValidationError.InternalStreamMultipleConsumers(streamId, consumers)
+                    if (consumers.size > 1 && mode == ConsumerMode.Single) {
+                        throw MachineGroupValidationError.InternalStreamMultipleConsumers(streamId, consumers)
+                    }
                 }
                 StreamKind.Output -> {
                     if (consumers.isNotEmpty()) throw MachineGroupValidationError.OutputStreamCannotBeConsumed(streamId, consumers)
-                    if (producers.size > 1) throw MachineGroupValidationError.InternalStreamMultipleProducers(streamId, producers)
+                    // Multi-producer fan-in on output streams is allowed (slice 3.6).
                 }
             }
         }
+    }
+
+    /**
+     * Resolve the [ConsumerMode] of [streamId], defaulting to
+     * [ConsumerMode.Single] when the EventStream's `consumerMode` field is
+     * null (pre-slice-3.6 corpus programs). Slice 3.6 introduced this field
+     * with the additive-versioning rule.
+     */
+    internal fun consumerModeOf(streamId: NodeId): ConsumerMode {
+        val node = store.get(streamId) as? Node.EventStream
+            ?: error("Expected EventStream at $streamId, got ${store.get(streamId)::class.simpleName}")
+        return node.consumerMode ?: ConsumerMode.Single
     }
 }
 
@@ -160,8 +199,13 @@ data class MachineGroup(
 sealed class MachineGroupValidationError(message: String) : RuntimeException(message) {
     class InternalStreamNoProducer(val stream: NodeId) :
         MachineGroupValidationError("internal stream $stream has no producing machine in the group")
+    /**
+     * Retained as a sealed-hierarchy member but no longer raised by
+     * [MachineGroup.validateTopology] as of slice 3.6 — multi-producer
+     * fan-in on internal and output streams is now allowed unconditionally.
+     */
     class InternalStreamMultipleProducers(val stream: NodeId, val producers: List<NodeId>) :
-        MachineGroupValidationError("internal stream $stream has multiple producers $producers; step 2 enforces single-producer (fan-in deferred to step 3)")
+        MachineGroupValidationError("internal stream $stream has multiple producers $producers (retained for compatibility; slice 3.6 allows multi-producer fan-in)")
     class InternalStreamNoConsumer(val stream: NodeId) :
         MachineGroupValidationError("internal stream $stream has no consuming machine; producer would block forever")
     class InternalStreamMultipleConsumers(val stream: NodeId, val consumers: List<NodeId>) :
