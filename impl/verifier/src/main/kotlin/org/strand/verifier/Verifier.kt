@@ -1365,36 +1365,46 @@ class Verifier(
         /**
          * Type-check a StateMachine (N-027) per § 4 of the proposal.
          *
-         * Layer 6 step 1 well-formedness rules:
+         * Layer 6 step 2 well-formedness rules (step 1 in parentheses where
+         * the rule was tightened or extended):
          *
-         * 1. `inputStreams.size >= 1`, with step 1 limiting to exactly 1
-         *    (multi-stream merge is step 2). Surfaced as
-         *    [VerifyError.StateMachineRequiresInputStream] (zero) or
-         *    [VerifyError.StateMachineInputStreamCountUnsupported] (other
-         *    counts).
+         * 1. `inputStreams.size >= 1` (step 1 also required exactly 1; step 2
+         *    lifts that bound — multi-stream machines are now well-formed).
+         *    Zero input streams remains [VerifyError.StateMachineRequiresInputStream].
          * 2. Each entry of `inputStreams` and `outputStreams` resolves to an
          *    `EventStream` node.
-         * 3. `transitionFn` resolves to a Lambda (Fixpoint not supported in
-         *    step 1) whose type is `(State, Event) -> (State, OutputBatch)`.
-         * 4. The State half of the transition function's signature equals
-         *    the inferred type of `initialState`.
-         * 5. The Event half of the signature equals the single input
-         *    stream's `eventType`.
-         * 6. The OutputBatch half is a ProductType with one field per
-         *    declared output stream, named `output_i` positionally. Field
-         *    `output_i`'s type must be `Option<outputStreams[i].eventType>`
-         *    — a Sum with cases `Some(eventType)` and `None`. When
-         *    `outputStreams` is empty, the OutputBatch must be the empty
-         *    ProductType `{}` (a unit-like record).
+         * 3. `transitionFn` resolves to a Lambda (Fixpoint-wrapped transitions
+         *    are step 3) whose type is `(State, Event) -> (State, Outputs)`.
+         * 4. The State half of the transition signature equals the inferred
+         *    type of `initialState`.
+         * 5. The Event half equals the input streams' joined eventType.
+         *    For single-input machines this is `inputStreams[0].eventType`
+         *    (preserves corpus 41–45 unchanged). For multi-input machines
+         *    the verifier synthesizes the InputEvent sum
+         *    `stream_0(T_0) | stream_1(T_1) | ... | stream_{n-1}(T_{n-1})`
+         *    and requires structural equality — matches the runtime's
+         *    `MachineActor.wrapEvent` payload-wrapping convention.
+         * 6. The Outputs half can take either of two shapes (the runtime
+         *    dispatches based on the produced value, so either is accepted):
+         *    - **OutputBatch** (step-1 fixed-arity product): a ProductType
+         *      with field `output_i: Option<outputStreams[i].eventType>` at
+         *      each position. Empty `outputStreams` ⇒ the empty product `{}`.
+         *    - **Tagged-list** (step-2 recursive list): the recursive type
+         *      `μ. Cons({head: TaggedOutput, tail: <self>}) | Nil` where
+         *      `TaggedOutput = output_0(T_0) | ... | output_{n-1}(T_{n-1})`.
+         *      Strictly more expressive — a transition may emit zero, one,
+         *      or many events per step, to any combination of output streams.
          * 7. Declared effects cover the transition Lambda's effect closure.
-         *    (Implicit StateMachine.Send/Receive effects are deferred to
-         *    step 2 when the EffectCategories are introduced.)
+         *    The implicit StateMachine.Send/Receive effects (E-028/E-029)
+         *    remain deferred — the runtime performs send/receive at the
+         *    boundary, not the user code, so the existing coverage check is
+         *    sufficient.
          *
          * StateMachine is not an expression — it does not evaluate to a
-         * Value. We return a `Prim(Unit)` type as a placeholder so callers
-         * that look up the node's type in `nodeTypes` find something sensible;
-         * the runtime consumes the StateMachine via `runtime/`'s API, not
-         * via `Interpreter.eval`.
+         * Value. The verifier returns `Prim(Unit)` as a placeholder so
+         * callers that look up the node's type in `nodeTypes` find something
+         * sensible; the runtime consumes the StateMachine via `runtime/`'s
+         * API, not via `Interpreter.eval`.
          */
         private fun inferStateMachine(
             id: NodeId,
@@ -1402,15 +1412,10 @@ class Verifier(
             scope: Map<NodeId, TypeExpr>,
             typeParams: Set<NodeId>,
         ): TypeExpr {
-            // 1. inputStreams arity check.
+            // 1. inputStreams arity check. Step 2 lifts the step-1 ==1
+            //    bound; zero remains ill-formed.
             if (node.inputStreams.isEmpty()) {
                 report(VerifyError.StateMachineRequiresInputStream(at = id))
-                throw VerifyAbort()
-            }
-            if (node.inputStreams.size != 1) {
-                report(VerifyError.StateMachineInputStreamCountUnsupported(
-                    at = id, count = node.inputStreams.size
-                ))
                 throw VerifyAbort()
             }
 
@@ -1422,8 +1427,13 @@ class Verifier(
             val outputStreamNodes = node.outputStreams.mapIndexed { i, streamId ->
                 resolveEventStream(id, streamId, "StateMachine.outputStreams[$i]", typeParams)
             }
-            val eventType = inputStreamNodes[0].second   // (node, resolved eventType)
+            val inputEventTypes = inputStreamNodes.map { it.second }
             val outputEventTypes = outputStreamNodes.map { it.second }
+            val eventType: TypeExpr = if (inputEventTypes.size == 1) {
+                inputEventTypes[0]
+            } else {
+                synthesizeInputEventSum(inputEventTypes)
+            }
 
             // 3. transitionFn must be a Lambda.
             val transitionFnNode = store.getOrNull(node.transitionFn)
@@ -1452,31 +1462,45 @@ class Verifier(
             //    matches).
             val initialStateType = infer(node.initialState, scope, typeParams)
 
-            // 5. + 6. Build the expected transition signature
-            //         `(initialStateType, eventType) -> (initialStateType, OutputBatch)`
-            //    and structurally check it.
-            val expectedOutputBatch = expectedOutputBatchType(id, outputEventTypes)
-            val expectedResult = TypeExpr.Product(
+            // 5. + 6. Build both expected transition signatures. The runtime
+            //    accepts either OutputBatch (step-1 fixed-arity) or
+            //    tagged-list (step-2 recursive list) for the `outputs` field;
+            //    the verifier matches the structurally-equivalent shape and
+            //    accepts the transition if it conforms to either.
+            val expectedOutputBatchT = expectedOutputBatchType(id, outputEventTypes)
+            val expectedTaggedListT = synthesizeTaggedOutputListType(outputEventTypes)
+            val expectedResultOutputBatch = TypeExpr.Product(
                 origin = id,  // synthetic — origin is ignored by equality
                 fields = listOf(
                     TypeExpr.Product.Field("state", initialStateType),
-                    TypeExpr.Product.Field("outputs", expectedOutputBatch),
+                    TypeExpr.Product.Field("outputs", expectedOutputBatchT),
                 ),
             )
-            val expectedTransition = TypeExpr.Fun(
+            val expectedResultTaggedList = TypeExpr.Product(
+                origin = id,
+                fields = listOf(
+                    TypeExpr.Product.Field("state", initialStateType),
+                    TypeExpr.Product.Field("outputs", expectedTaggedListT),
+                ),
+            )
+            val expectedTransitionOutputBatch = TypeExpr.Fun(
                 parameters = listOf(initialStateType, eventType),
-                result = expectedResult,
+                result = expectedResultOutputBatch,
                 effects = transitionFnType.effects,
             )
-            if (transitionFnType != expectedTransition) {
-                // Pinpoint the failure: if the parameters match, the result
-                // is off (initialState mismatch or OutputBatch shape); if
-                // the first parameter is wrong, the initialState type
-                // disagrees with the State the transition fn expects.
+            val expectedTransitionTaggedList = TypeExpr.Fun(
+                parameters = listOf(initialStateType, eventType),
+                result = expectedResultTaggedList,
+                effects = transitionFnType.effects,
+            )
+            if (transitionFnType != expectedTransitionOutputBatch &&
+                transitionFnType != expectedTransitionTaggedList) {
+                // Pinpoint failures. First the cheaper checks: argument
+                // arity, then State parameter equality.
                 if (transitionFnType.parameters.size != 2) {
                     report(VerifyError.StateMachineTransitionFnShapeMismatch(
                         at = id,
-                        expected = expectedTransition,
+                        expected = expectedTransitionOutputBatch,
                         actual = transitionFnType,
                     ))
                     throw VerifyAbort()
@@ -1490,18 +1514,20 @@ class Verifier(
                     ))
                     throw VerifyAbort()
                 }
-                // Parameters OK but result is off: that means OutputBatch
-                // shape disagrees with the declared outputStreams. Pinpoint
-                // by checking which output_i field is wrong.
+                // Parameters OK; result shape diverges from both expected
+                // shapes. If the actual result is a Product whose `outputs`
+                // field is itself a Product (the OutputBatch attempt path),
+                // use the per-slot output_i diagnostic so the user can
+                // locate the wrong slot.
                 val tfResult = transitionFnType.result
                 if (tfResult is TypeExpr.Product) {
-                    val actualOutputBatch = tfResult.fields
+                    val actualOutputs = tfResult.fields
                         .firstOrNull { it.name == "outputs" }
                         ?.type
-                    if (actualOutputBatch is TypeExpr.Product) {
+                    if (actualOutputs is TypeExpr.Product) {
                         for ((i, expectedEvtType) in outputEventTypes.withIndex()) {
                             val slotName = "output_$i"
-                            val actualSlot = actualOutputBatch.fields
+                            val actualSlot = actualOutputs.fields
                                 .firstOrNull { it.name == slotName }
                                 ?.type
                             val expectedSlot = optionTypeOf(expectedEvtType)
@@ -1517,29 +1543,26 @@ class Verifier(
                         }
                     }
                 }
-                // Fall-through: the shape is wrong but we can't pinpoint
-                // further; report the overall mismatch.
+                // Fall-through: shape mismatch we cannot pinpoint further.
+                // Prefer the tagged-list expected for multi-input machines
+                // (those are most likely to be opting into the new shape);
+                // prefer OutputBatch for single-input (preserves the
+                // diagnostics step 1 corpus authors are used to).
+                val preferredExpected = if (inputEventTypes.size > 1)
+                    expectedTransitionTaggedList else expectedTransitionOutputBatch
                 report(VerifyError.StateMachineTransitionFnShapeMismatch(
                     at = id,
-                    expected = expectedTransition,
+                    expected = preferredExpected,
                     actual = transitionFnType,
                 ))
                 throw VerifyAbort()
             }
 
-            // 7. Effect-coverage check. Step 1: declared effects must cover
-            //    the transition Lambda's closure. The implicit
-            //    StateMachine.Send/Receive effects (E-028/E-029) are not yet
-            //    introduced in the verifier — they land in step 2 when the
-            //    EffectCategories are registered.
+            // 7. Effect-coverage check. Declared effects must cover the
+            //    transition Lambda's closure.
             val declaredEffects = validateEffectCategoryEdges(
                 id, node.effects, "StateMachine.effects"
             )
-            // The transition function's effects (a Lambda has empty closure
-            // at construction, but the closure of CALLING the Lambda — its
-            // declared effects — fires at runtime). Coverage requires the
-            // StateMachine's declared effects superset the transition fn's
-            // *declared* effects.
             val missing = transitionFnType.effects - declaredEffects
             if (missing.isNotEmpty()) {
                 report(VerifyError.StateMachineEffectCoverageViolation(
@@ -1548,14 +1571,102 @@ class Verifier(
                 throw VerifyAbort()
             }
 
+            // 8. Implicit Send/Receive check (Layer 6 step 3 slice 3.5).
+            //    The runtime performs StateMachine.Receive at every input
+            //    pull and StateMachine.Send at every output push; the
+            //    machine's `effects` list must acknowledge these by
+            //    declaring EffectCategory nodes with the well-known names.
+            //    The check looks at the categoryName of each declared
+            //    EffectCategory, not the NodeId — multiple machines may
+            //    share or duplicate the EffectCategory node.
+            val declaredNames: Set<String> = declaredEffects.mapNotNull { effectId ->
+                (store.getOrNull(effectId) as? Node.EffectCategory)?.categoryName
+            }.toSet()
+            val missingImplicit = mutableSetOf<String>()
+            if (WellKnownEffect.StateMachineReceive.categoryName !in declaredNames) {
+                missingImplicit += WellKnownEffect.StateMachineReceive.categoryName
+            }
+            if (node.outputStreams.isNotEmpty() &&
+                WellKnownEffect.StateMachineSend.categoryName !in declaredNames
+            ) {
+                missingImplicit += WellKnownEffect.StateMachineSend.categoryName
+            }
+            if (missingImplicit.isNotEmpty()) {
+                report(VerifyError.StateMachineMissingImplicitEffect(
+                    at = id, missing = missingImplicit
+                ))
+                throw VerifyAbort()
+            }
+
             // StateMachine is not an expression. We record a placeholder
             // type (Unit) so downstream nodeTypes lookups find something
             // sensible; closure is empty (the StateMachine node itself does
-            // not release effects — the runtime is the one driving the
-            // transition function, and capability checks fire at the
-            // runtime's `runMachine` boundary).
+            // not release effects — the runtime drives the transition
+            // function and capability checks fire at the runtime boundary).
             recordClosure(id, emptySet())
             return TypeExpr.Prim(Primitive.Unit)
+        }
+
+        /**
+         * Synthesize the InputEvent sum type for a multi-input machine.
+         * Cases are positionally indexed by input-stream position:
+         * `stream_0(T_0)`, `stream_1(T_1)`, ..., `stream_{n-1}(T_{n-1})`.
+         * Matches the runtime's [org.strand.runtime.MachineActor.wrapEvent]
+         * payload-wrapping convention.
+         *
+         * Origin is synthetic ([NodeId(-1)]); structural equality on
+         * [TypeExpr.Sum] ignores `origin`, so a user-declared sum with the
+         * same case set in the same order compares equal.
+         */
+        private fun synthesizeInputEventSum(inputEventTypes: List<TypeExpr>): TypeExpr.Sum =
+            TypeExpr.Sum(
+                origin = NodeId(-1),
+                cases = inputEventTypes.mapIndexed { i, t ->
+                    TypeExpr.Sum.Case("stream_$i", t)
+                }
+            )
+
+        /**
+         * Synthesize the tagged-output list type for a machine's outputs.
+         * Shape: `μ. Cons({head: TaggedOutput, tail: <self>}) | Nil` where
+         * `TaggedOutput = output_0(T_0) | output_1(T_1) | ... | output_{n-1}(T_{n-1})`.
+         *
+         * The case order `Cons | Nil` and the field order `head, tail` match
+         * the corpus 31/32 (recursive-list-head, recursive-list-sum)
+         * convention. The runtime's
+         * [org.strand.runtime.MachineActor.dispatchTaggedList] tolerates
+         * either case order (it dispatches by string name); the verifier
+         * uses strict structural equality, so the canonical order pinned
+         * here is what users must match.
+         *
+         * For machines with zero output streams, the TaggedOutput sum is
+         * empty (no cases) — `Cons` cannot be constructed, only `Nil` —
+         * which makes the tagged-list shape unusable in practice. Such
+         * machines should use the OutputBatch shape (an empty product `{}`)
+         * instead; both are accepted by §6.
+         */
+        private fun synthesizeTaggedOutputListType(outputEventTypes: List<TypeExpr>): TypeExpr.Recursive {
+            val taggedSum = TypeExpr.Sum(
+                origin = NodeId(-1),
+                cases = outputEventTypes.mapIndexed { i, t ->
+                    TypeExpr.Sum.Case("output_$i", t)
+                }
+            )
+            val consPayload = TypeExpr.Product(
+                origin = NodeId(-1),
+                fields = listOf(
+                    TypeExpr.Product.Field("head", taggedSum),
+                    TypeExpr.Product.Field("tail", TypeExpr.RecursiveSelf()),
+                )
+            )
+            val listBody = TypeExpr.Sum(
+                origin = NodeId(-1),
+                cases = listOf(
+                    TypeExpr.Sum.Case("Cons", consPayload),
+                    TypeExpr.Sum.Case("Nil", null),
+                )
+            )
+            return TypeExpr.Recursive(listBody)
         }
 
         /**

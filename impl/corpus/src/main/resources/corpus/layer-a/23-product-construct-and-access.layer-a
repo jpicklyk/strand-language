@@ -1,0 +1,15 @@
+# Layer A form of corpus/23-product-construct-and-access.json — first
+# product-value program: construct {x: 3, y: 4} then read field y → 4.
+# Demonstrates PV (ProductValue), PFV (ProductFieldValue), PFG
+# (ProductFieldGet).
+@v=1 root=getY
+intT PRM Int
+xField PRF "x" intT
+yField PRF "y" intT
+pointType PRD [xField yField]
+lit3 ILT 3
+lit4 ILT 4
+xValue PFV "x" lit3
+yValue PFV "y" lit4
+point PV pointType [xValue yValue]
+getY PFG point "y"

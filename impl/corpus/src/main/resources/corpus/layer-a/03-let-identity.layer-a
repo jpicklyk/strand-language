@@ -1,0 +1,13 @@
+# Layer A form of corpus/03-let-identity.json — let-bound polymorphic
+# identity instantiated at Bool inside the body.
+@v=1 root=outer
+T_a TPM "a"
+boolT PRM Bool
+x PRC "x" T_a
+x_use VAR x
+idInner LAM [x] x_use
+idLambda TAB [T_a] idInner
+id_use VAR outer
+argTrue BLT true
+callId APP id_use [argTrue] [boolT]
+outer LET "id" idLambda callId

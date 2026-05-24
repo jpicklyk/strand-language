@@ -1,0 +1,41 @@
+# Layer A form of corpus/52-non-empty-list-schema-pass.json — Schema
+# over a recursive list type. NonEmptyList wraps the listT with an
+# invariant that Matches on Cons (returns true) vs Nil (returns false).
+# Applied to Cons(1, Nil).
+@v=1 root=schemaClaim
+intT PRM Int
+boolT PRM Bool
+headFieldInner PRF "head" intT
+tailFieldInner PRF "tail" recSelf
+consProductInner PRD [headFieldInner tailFieldInner]
+consCase SCS "Cons" consProductInner
+nilCase SCS "Nil" _
+listBody SUM [consCase nilCase]
+recSelf RS
+listT RT listBody
+headFieldOuter PRF "head" intT
+tailFieldOuter PRF "tail" listT
+consProductOuter PRD [headFieldOuter tailFieldOuter]
+trueLit BLT true
+falseLit BLT false
+xsParam PRC "xs" listT
+xsRef VAR xsParam
+patConsWild PWC consProductOuter
+patCons PCN listT "Cons" patConsWild
+caseCons MC patCons trueLit
+patNil PCN listT "Nil"
+caseNil MC patNil falseLit
+isNonEmptyBody MAT xsRef [caseCons caseNil]
+isNonEmptyLam LAM [xsParam] isNonEmptyBody
+nonEmptyInvariant INV "non_empty" nonEmptyList isNonEmptyLam
+nonEmptyList SCH "NonEmptyList" listT [nonEmptyInvariant]
+nilVal SV listT "Nil" _
+one ILT 1
+h1 PFV "head" one
+t1 PFV "tail" nilVal
+p1 PV consProductOuter [h1 t1]
+oneItemList SV listT "Cons" p1
+pIn PRC "p" nonEmptyList
+pInRef VAR pIn
+identityOfNonEmpty LAM [pIn] pInRef
+schemaClaim APP identityOfNonEmpty [oneItemList]

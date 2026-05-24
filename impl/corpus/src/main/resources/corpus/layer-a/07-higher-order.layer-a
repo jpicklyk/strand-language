@@ -1,0 +1,32 @@
+# Layer A form of corpus/07-higher-order.json — rank-2 polymorphism
+# demonstration. A monomorphic function takes f: forall a. a -> a plus
+# Int + Bool, applies f at Bool and at Int. The inner identity is
+# genuinely polymorphic (its parameter type is a ForallType).
+@v=1 root=topApp
+T_a TPM "a"
+intT PRM Int
+boolT PRM Bool
+idFunType FNT [T_a] T_a
+idForallType FAL [T_a] idFunType
+f PRC "f" idForallType
+n PRC "n" intT
+b PRC "b" boolT
+fRef1 VAR f
+bRef VAR b
+callFB APP fRef1 [bRef] [boolT]
+fRef2 VAR f
+nRef VAR n
+callFN APP fRef2 [nRef] [intT]
+discardLet LET "_" callFB callFN
+innerB LAM [b] discardLet
+innerN LAM [n] innerB
+applyLambda LAM [f] innerN
+idX PRC "x" T_a
+idXRef VAR idX
+idInner LAM [idX] idXRef
+idLambda TAB [T_a] idInner
+argN ILT 99
+argB BLT true
+applyF APP applyLambda [idLambda] []
+applyFN APP applyF [argN] []
+topApp APP applyFN [argB] []

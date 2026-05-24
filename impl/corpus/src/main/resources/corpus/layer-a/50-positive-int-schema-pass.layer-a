@@ -1,0 +1,21 @@
+# Layer A form of corpus/50-positive-int-schema-pass.json — first Q-035
+# Schema demonstration. PositiveInt = Int + invariant `x > 0`. Applied
+# to IntLit(5) which the SchemaChecker statically evaluates as valid.
+# Demonstrates SCH (Schema) and INV (Invariant) codes.
+@v=1 root=schemaClaim
+intT PRM Int
+boolT PRM Bool
+zero ILT 0
+xParam PRC "x" intT
+xRef VAR xParam
+gtT FNT [intT intT] boolT
+gt FN "strand-builtin:Int.Gt" gtT
+gtBody APP gt [xRef zero]
+predLam LAM [xParam] gtBody
+positiveInvariant INV "x_positive" positiveInt predLam
+positiveInt SCH "PositiveInt" intT [positiveInvariant]
+five ILT 5
+pIn PRC "p" positiveInt
+pInRef VAR pIn
+identityOfPositiveInt LAM [pIn] pInRef
+schemaClaim APP identityOfPositiveInt [five]

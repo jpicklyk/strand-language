@@ -1,0 +1,19 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment overrides
+local.properties
+.env
+.env.local
+
+# Worktree scratch space (parallel agent isolation creates these)
+.worktrees/

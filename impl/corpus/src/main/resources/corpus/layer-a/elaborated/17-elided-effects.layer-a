@@ -1,0 +1,29 @@
+# Q-034 Layer C demonstration: corpus 17 with Lambda effects ELIDED.
+#
+# The canonical corpus/17-builtin-compose-pure-and-effectful.json has
+# no top-level Lambda — it's just a top-level Application of `add` to
+# `(now(), 1)`. To demonstrate Layer C effect-closure inference, we wrap
+# the same expression in a no-arg Lambda whose declared effects field
+# is omitted. The Elaborator should walk the body, see the
+# `Application(now, [])` whose callee declares `[timeFx]`, and fill in
+# `effects = [timeFx]` on the Lambda before the dag-json is emitted.
+#
+# This is a 1-way compilation: the elaborated dag-json verifies cleanly
+# but does NOT hash-equal a hand-authored equivalent that explicitly
+# declares effects (the Lambda would still have the same effects, but
+# the canonical form for this elided-effects program is whatever
+# elaboration produces).
+@v=1 root=app
+intT PRM Int
+timeFx EFC "Time.Now"
+nowT FNT [] intT
+now FN "strand-builtin:Time.Now" nowT [timeFx]
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+callNow APP now []
+one ILT 1
+addedExpr APP add [callNow one]
+# Lambda with NO effects argument — elaborator fills in [timeFx] based
+# on the body's closure (the Application of `now` releases [timeFx]).
+myLam LAM [] addedExpr
+app APP myLam []

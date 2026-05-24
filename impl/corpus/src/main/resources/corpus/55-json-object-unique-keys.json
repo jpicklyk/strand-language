@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "intT":              { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":             { "type": "PrimitiveType", "kind": "Bool" },
+    "stringT":           { "type": "PrimitiveType", "kind": "String" },
+
+    "jsonNullCase":      { "type": "SumTypeCase", "name": "JsonNull",   "caseType": null },
+    "jsonBoolCase":      { "type": "SumTypeCase", "name": "JsonBool",   "caseType": "boolT" },
+    "jsonNumberCase":    { "type": "SumTypeCase", "name": "JsonNumber", "caseType": "intT" },
+    "jsonStringCase":    { "type": "SumTypeCase", "name": "JsonString", "caseType": "stringT" },
+    "jsonValueT":        { "type": "SumType", "cases": ["jsonNullCase", "jsonBoolCase", "jsonNumberCase", "jsonStringCase"] },
+
+    "entryKeyField":     { "type": "ProductTypeField", "name": "key",   "fieldType": "stringT" },
+    "entryValueField":   { "type": "ProductTypeField", "name": "value", "fieldType": "jsonValueT" },
+    "jsonEntryT":        { "type": "ProductType", "fields": ["entryKeyField", "entryValueField"] },
+
+    "recSelf":           { "type": "RecursiveSelf" },
+    "entryHeadInner":    { "type": "ProductTypeField", "name": "head", "fieldType": "jsonEntryT" },
+    "entryTailInner":    { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "entryConsInner":    { "type": "ProductType", "fields": ["entryHeadInner", "entryTailInner"] },
+    "entryConsCase":     { "type": "SumTypeCase", "name": "Cons", "caseType": "entryConsInner" },
+    "entryNilCase":      { "type": "SumTypeCase", "name": "Nil",  "caseType": null },
+    "jsonObjectBody":    { "type": "SumType", "cases": ["entryConsCase", "entryNilCase"] },
+    "jsonObjectT":       { "type": "RecursiveType", "body": "jsonObjectBody" },
+
+    "entryHeadOuter":    { "type": "ProductTypeField", "name": "head", "fieldType": "jsonEntryT" },
+    "entryTailOuter":    { "type": "ProductTypeField", "name": "tail", "fieldType": "jsonObjectT" },
+    "entryConsOuter":    { "type": "ProductType", "fields": ["entryHeadOuter", "entryTailOuter"] },
+
+    "strEqT":            { "type": "FunctionType", "parameters": ["stringT", "stringT"], "result": "boolT" },
+    "strEq":             { "type": "ForeignNode", "target": "strand-builtin:String.Eq", "foreignType": "strEqT" },
+    "boolNotT":          { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
+    "boolNot":           { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "boolNotT" },
+    "boolAndT":          { "type": "FunctionType", "parameters": ["boolT", "boolT"], "result": "boolT" },
+    "boolAnd":           { "type": "ForeignNode", "target": "strand-builtin:Bool.And", "foreignType": "boolAndT" },
+    "boolOrT":           { "type": "FunctionType", "parameters": ["boolT", "boolT"], "result": "boolT" },
+    "boolOr":            { "type": "ForeignNode", "target": "strand-builtin:Bool.Or", "foreignType": "boolOrT" },
+
+    "containsT":         { "type": "FunctionType", "parameters": ["stringT", "jsonObjectT"], "result": "boolT" },
+    "containsRecurse":   { "type": "ParameterDecl", "name": "self", "paramType": "containsT" },
+    "containsK":         { "type": "ParameterDecl", "name": "k",    "paramType": "stringT" },
+    "containsXs":        { "type": "ParameterDecl", "name": "xs",   "paramType": "jsonObjectT" },
+    "containsRecRef":    { "type": "VarRef", "binder": "containsRecurse" },
+    "containsKRef":      { "type": "VarRef", "binder": "containsK" },
+    "containsXsRef":     { "type": "VarRef", "binder": "containsXs" },
+
+    "containsPHead":     { "type": "Pattern", "kind": "variable", "patternType": "entryConsOuter", "name": "p" },
+    "containsPCons":     { "type": "Pattern", "kind": "constructor", "patternType": "jsonObjectT", "caseName": "Cons", "payloadPattern": "containsPHead" },
+    "containsPHeadRef":  { "type": "VarRef", "binder": "containsPHead" },
+    "containsConsHead":  { "type": "ProductFieldGet", "target": "containsPHeadRef", "fieldName": "head" },
+    "containsConsTail":  { "type": "ProductFieldGet", "target": "containsPHeadRef", "fieldName": "tail" },
+    "containsHeadKey":   { "type": "ProductFieldGet", "target": "containsConsHead", "fieldName": "key" },
+    "containsKMatches":  { "type": "Application", "function": "strEq", "arguments": ["containsKRef", "containsHeadKey"] },
+    "containsRecCall":   { "type": "Application", "function": "containsRecRef", "arguments": ["containsKRef", "containsConsTail"] },
+    "containsConsBody":  { "type": "Application", "function": "boolOr",  "arguments": ["containsKMatches", "containsRecCall"] },
+    "containsConsCase":  { "type": "MatchCase", "pattern": "containsPCons", "body": "containsConsBody" },
+
+    "falseLit":          { "type": "BoolLit", "value": false },
+    "trueLit":           { "type": "BoolLit", "value": true },
+    "containsPNil":      { "type": "Pattern", "kind": "constructor", "patternType": "jsonObjectT", "caseName": "Nil" },
+    "containsNilCase":   { "type": "MatchCase", "pattern": "containsPNil", "body": "falseLit" },
+
+    "containsMatch":     { "type": "Match", "scrutinee": "containsXsRef", "cases": ["containsConsCase", "containsNilCase"] },
+    "containsBody":      { "type": "Lambda", "parameters": ["containsRecurse", "containsK", "containsXs"], "body": "containsMatch" },
+    "containsFn":        { "type": "Fixpoint", "recursionType": "containsT", "body": "containsBody" },
+
+    "uniqueKeysT":       { "type": "FunctionType", "parameters": ["jsonObjectT"], "result": "boolT" },
+    "ukRecurse":         { "type": "ParameterDecl", "name": "self", "paramType": "uniqueKeysT" },
+    "ukXs":              { "type": "ParameterDecl", "name": "xs",   "paramType": "jsonObjectT" },
+    "ukRecRef":          { "type": "VarRef", "binder": "ukRecurse" },
+    "ukXsRef":           { "type": "VarRef", "binder": "ukXs" },
+
+    "ukPHead":           { "type": "Pattern", "kind": "variable", "patternType": "entryConsOuter", "name": "p" },
+    "ukPCons":           { "type": "Pattern", "kind": "constructor", "patternType": "jsonObjectT", "caseName": "Cons", "payloadPattern": "ukPHead" },
+    "ukPHeadRef":        { "type": "VarRef", "binder": "ukPHead" },
+    "ukConsHead":        { "type": "ProductFieldGet", "target": "ukPHeadRef", "fieldName": "head" },
+    "ukConsTail":        { "type": "ProductFieldGet", "target": "ukPHeadRef", "fieldName": "tail" },
+    "ukHeadKey":         { "type": "ProductFieldGet", "target": "ukConsHead", "fieldName": "key" },
+    "ukContainsTail":    { "type": "Application", "function": "containsFn", "arguments": ["ukHeadKey", "ukConsTail"] },
+    "ukKeyNotInTail":    { "type": "Application", "function": "boolNot",  "arguments": ["ukContainsTail"] },
+    "ukRecCall":         { "type": "Application", "function": "ukRecRef", "arguments": ["ukConsTail"] },
+    "ukConsBody":        { "type": "Application", "function": "boolAnd",  "arguments": ["ukKeyNotInTail", "ukRecCall"] },
+    "ukConsCase":        { "type": "MatchCase", "pattern": "ukPCons", "body": "ukConsBody" },
+
+    "ukPNil":            { "type": "Pattern", "kind": "constructor", "patternType": "jsonObjectT", "caseName": "Nil" },
+    "ukNilCase":         { "type": "MatchCase", "pattern": "ukPNil", "body": "trueLit" },
+
+    "ukMatch":           { "type": "Match", "scrutinee": "ukXsRef", "cases": ["ukConsCase", "ukNilCase"] },
+    "ukBody":            { "type": "Lambda", "parameters": ["ukRecurse", "ukXs"], "body": "ukMatch" },
+    "uniqueKeysFn":      { "type": "Fixpoint", "recursionType": "uniqueKeysT", "body": "ukBody" },
+
+    "uniqueKeysInvariant": {
+      "type": "Invariant",
+      "invariantName": "unique_keys",
+      "targetSchema": "uniqueKeyObject",
+      "body": "uniqueKeysFn"
+    },
+    "uniqueKeyObject": {
+      "type": "Schema",
+      "schemaName": "UniqueKeyJsonObject",
+      "valueType": "jsonObjectT",
+      "invariants": ["uniqueKeysInvariant"]
+    },
+
+    "nilObj":            { "type": "SumValue", "ofType": "jsonObjectT", "caseName": "Nil", "payload": null },
+
+    "keyName":           { "type": "StringLit", "value": "name" },
+    "valNameStr":        { "type": "StringLit", "value": "Strand" },
+    "valName":           { "type": "SumValue", "ofType": "jsonValueT", "caseName": "JsonString", "payload": "valNameStr" },
+    "entryNameKey":      { "type": "ProductFieldValue", "fieldName": "key",   "value": "keyName" },
+    "entryNameValue":    { "type": "ProductFieldValue", "fieldName": "value", "value": "valName" },
+    "entryName":         { "type": "ProductValue", "ofType": "jsonEntryT", "fields": ["entryNameKey", "entryNameValue"] },
+
+    "keyVersion":        { "type": "StringLit", "value": "version" },
+    "valVersionInt":     { "type": "IntLit", "value": 1 },
+    "valVersion":        { "type": "SumValue", "ofType": "jsonValueT", "caseName": "JsonNumber", "payload": "valVersionInt" },
+    "entryVersionKey":   { "type": "ProductFieldValue", "fieldName": "key",   "value": "keyVersion" },
+    "entryVersionValue": { "type": "ProductFieldValue", "fieldName": "value", "value": "valVersion" },
+    "entryVersion":      { "type": "ProductValue", "ofType": "jsonEntryT", "fields": ["entryVersionKey", "entryVersionValue"] },
+
+    "keyEnabled":        { "type": "StringLit", "value": "enabled" },
+    "valEnabledBool":    { "type": "BoolLit", "value": true },
+    "valEnabled":        { "type": "SumValue", "ofType": "jsonValueT", "caseName": "JsonBool", "payload": "valEnabledBool" },
+    "entryEnabledKey":   { "type": "ProductFieldValue", "fieldName": "key",   "value": "keyEnabled" },
+    "entryEnabledValue": { "type": "ProductFieldValue", "fieldName": "value", "value": "valEnabled" },
+    "entryEnabled":      { "type": "ProductValue", "ofType": "jsonEntryT", "fields": ["entryEnabledKey", "entryEnabledValue"] },
+
+    "consEnabledHead":   { "type": "ProductFieldValue", "fieldName": "head", "value": "entryEnabled" },
+    "consEnabledTail":   { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilObj" },
+    "consEnabledPair":   { "type": "ProductValue", "ofType": "entryConsOuter", "fields": ["consEnabledHead", "consEnabledTail"] },
+    "consEnabled":       { "type": "SumValue", "ofType": "jsonObjectT", "caseName": "Cons", "payload": "consEnabledPair" },
+
+    "consVersionHead":   { "type": "ProductFieldValue", "fieldName": "head", "value": "entryVersion" },
+    "consVersionTail":   { "type": "ProductFieldValue", "fieldName": "tail", "value": "consEnabled" },
+    "consVersionPair":   { "type": "ProductValue", "ofType": "entryConsOuter", "fields": ["consVersionHead", "consVersionTail"] },
+    "consVersion":       { "type": "SumValue", "ofType": "jsonObjectT", "caseName": "Cons", "payload": "consVersionPair" },
+
+    "consNameHead":      { "type": "ProductFieldValue", "fieldName": "head", "value": "entryName" },
+    "consNameTail":      { "type": "ProductFieldValue", "fieldName": "tail", "value": "consVersion" },
+    "consNamePair":      { "type": "ProductValue", "ofType": "entryConsOuter", "fields": ["consNameHead", "consNameTail"] },
+    "objWithThreeKeys":  { "type": "SumValue", "ofType": "jsonObjectT", "caseName": "Cons", "payload": "consNamePair" },
+
+    "objParam":          { "type": "ParameterDecl", "name": "obj", "paramType": "uniqueKeyObject" },
+    "objRef":            { "type": "VarRef", "binder": "objParam" },
+    "identityOfUniqueObject": { "type": "Lambda", "parameters": ["objParam"], "body": "objRef" },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfUniqueObject",
+      "arguments": ["objWithThreeKeys"]
+    }
+  }
+}

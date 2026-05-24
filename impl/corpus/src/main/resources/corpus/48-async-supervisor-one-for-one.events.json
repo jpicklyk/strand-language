@@ -1,0 +1,7 @@
+{
+  "events": [
+    { "stream": "extInputA", "tag": "int", "value": 5 },
+    { "stream": "extInputB", "tag": "int", "value": 10 },
+    { "stream": "extInputA", "tag": "int", "value": 7 }
+  ]
+}

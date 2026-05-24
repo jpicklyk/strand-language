@@ -72,6 +72,14 @@ object Builtins {
             require(args.size == 1) { "Bool.Not expects 1 arg, got ${args.size}" }
             Value.BoolV(!(args[0] as Value.BoolV).v)
         },
+        "strand-builtin:Bool.And" to Fn { args ->
+            require(args.size == 2) { "Bool.And expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.BoolV).v && (args[1] as Value.BoolV).v)
+        },
+        "strand-builtin:Bool.Or" to Fn { args ->
+            require(args.size == 2) { "Bool.Or expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.BoolV).v || (args[1] as Value.BoolV).v)
+        },
 
         // Pure Int comparisons: pair with Match on a BoolLit pattern to give
         // conditional logic.
@@ -100,6 +108,10 @@ object Builtins {
         "strand-builtin:String.Concat" to Fn { args ->
             require(args.size == 2) { "String.Concat expects 2 args, got ${args.size}" }
             Value.StringV((args[0] as Value.StringV).v + (args[1] as Value.StringV).v)
+        },
+        "strand-builtin:String.Eq" to Fn { args ->
+            require(args.size == 2) { "String.Eq expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.StringV).v == (args[1] as Value.StringV).v)
         },
 
         // Effectful: nominally exercises Time.Now. Returns a fixed timestamp

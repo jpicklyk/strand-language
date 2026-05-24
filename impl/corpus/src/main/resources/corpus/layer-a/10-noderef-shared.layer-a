@@ -1,0 +1,19 @@
+# Layer A form of corpus/10-noderef-shared.json — NodeRef shares a
+# single IntLit between two Application positions; each call
+# instantiates id at Int.
+@v=1 root=outer
+T_a TPM "a"
+intT PRM Int
+x PRC "x" T_a
+xRef VAR x
+idInner LAM [x] xRef
+idLambda TAB [T_a] idInner
+shared ILT 123
+ref1 NRF shared
+ref2 NRF shared
+idUse1 VAR outer
+idUse2 VAR outer
+call1 APP idUse1 [ref1] [intT]
+call2 APP idUse2 [ref2] [intT]
+innerLet LET "_" call1 call2
+outer LET "id" idLambda innerLet

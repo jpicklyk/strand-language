@@ -52,6 +52,7 @@
     "initialState":     { "type": "IntLit", "value": 0 },
 
     "inputStream":      { "type": "EventStream", "eventType": "eventT", "streamKind": "external" },
+    "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
 
     "counterMachine":   {
       "type": "StateMachine",
@@ -59,7 +60,7 @@
       "initialState": "initialState",
       "inputStreams": ["inputStream"],
       "outputStreams": [],
-      "effects": []
+      "effects": ["receiveFx"]
     }
   }
 }

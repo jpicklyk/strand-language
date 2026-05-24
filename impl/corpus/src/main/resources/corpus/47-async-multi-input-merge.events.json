@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "stream": "inputA", "tag": "int", "value": 10 },
+    { "stream": "inputB", "tag": "int", "value": 20 },
+    { "stream": "inputA", "tag": "int", "value": 30 },
+    { "stream": "inputB", "tag": "int", "value": 40 }
+  ]
+}

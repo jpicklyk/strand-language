@@ -1,0 +1,9 @@
+# Layer A form of corpus/15-builtin-add.json — Int.Add(2, 3) → 5. The
+# first program with a ForeignNode (FN code).
+@v=1 root=app
+intT PRM Int
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+two ILT 2
+three ILT 3
+app APP add [two three]

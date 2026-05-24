@@ -14,7 +14,8 @@ Proposals here are **drafts**, not accepted decisions. They have not been promot
 
 | File | Topic | Question | Scope |
 |------|-------|----------|-------|
-| [`state-machines-runtime-step-2.md`](state-machines-runtime-step-2.md) | Layer 6 step 2: async multi-machine actor runtime via Kotlin coroutines + Channel<Value> + select; tagged-Event sums; inter-machine wiring; supervisor pattern; recursive-list output | [Q-033](../open-questions.md#Q-033) | Large |
+| [`llm-authoring-layer.md`](llm-authoring-layer.md) | Four-layer emission stack for efficient LLM-emitted Strand: compact text projection + grammar-constrained decoding + bidirectional elaboration + existing verifier | [Q-034](../open-questions.md#Q-034) | Medium-Large |
+| [`state-machines-runtime-step-3.md`](state-machines-runtime-step-3.md) | Layer 6 step 3: per-stream overflow policies (Q-015); real supervision via E-030/E-031; snapshot/replay-from-log; runtime metrics; implicit Send/Receive verifier enforcement via well-known-EffectCategory registry; multi-producer fan-in and broadcast fan-out | [Q-008](../open-questions.md#Q-008) (part), [Q-015](../open-questions.md#Q-015), implicit Send/Receive | Large (six independently-shippable slices) |
 
 The four Wave-3 implementation proposals (Q-030 effect handlers, Q-031 refinement-lattice capability matching, Q-032 state machines runtime step 1, Q-035 schema + invariant step 1) have all landed and live in `implemented/`.
 
@@ -28,6 +29,8 @@ Moved to `proposals/implemented/` once executed. Each retains its full text plus
 | [`implemented/effect-handlers.md`](implemented/effect-handlers.md) | Layer 3 step 3: no-continuation effect handlers (N-043 Handler) | Q-030 | 2026-05-23 |
 | [`implemented/state-machines-runtime.md`](implemented/state-machines-runtime.md) | Layer 6 step 1: synchronous trace runtime for state machines (steps 2 and 3 still deferred) | Q-032 (step 1; Q-008 unchanged) | 2026-05-24 |
 | [`implemented/schema-and-invariant.md`](implemented/schema-and-invariant.md) | Layer 7 step 1: N-032 Schema + N-033 Invariant nodes; pure-expression invariants on statically-known values; new `:schema` Gradle module; synthetic PositiveInt / NonEmptyList corpus | Q-035 | 2026-05-24 |
+| [`implemented/state-machines-runtime-step-2.md`](implemented/state-machines-runtime-step-2.md) | Layer 6 step 2: async multi-machine actor runtime via Kotlin coroutines + Channel<Value> + select; tagged-Event sums; inter-machine wiring; multi-input supervisor pattern; recursive-list output; `strand group` CLI | Q-033 | 2026-05-24 |
+| [`implemented/json-blessed-library.md`](implemented/json-blessed-library.md) | Layer 7 step 1.5: first blessed output library — `JsonValue` (flat primitives sum) + `UniqueKeyJsonObject` Schema with `Fixpoint`+`Match` `unique_keys` invariant; three new corpus programs; `Bool.And`/`Bool.Or`/`String.Eq` builtins | Q-026 (first slice) | 2026-05-24 |
 
 ## Reading order recommendation
 

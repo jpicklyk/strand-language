@@ -1,0 +1,34 @@
+# Layer A form of corpus/31-recursive-list-head.json — first program
+# using a recursive type (RT + RS). Constructs Cons(7, Nil) and extracts
+# head via Match + ConstructorPattern + ProductFieldGet → 7. The list
+# type definition needs separate inner (tail: RecursiveSelf) and outer
+# (tail: listT) Product types — see corpus README for the recurrence
+# pattern explanation.
+@v=1 root=main
+intT PRM Int
+headFieldInner PRF "head" intT
+tailFieldInner PRF "tail" recSelf
+consProductInner PRD [headFieldInner tailFieldInner]
+consCase SCS "Cons" consProductInner
+nilCase SCS "Nil" _
+listBody SUM [consCase nilCase]
+recSelf RS
+listT RT listBody
+headFieldOuter PRF "head" intT
+tailFieldOuter PRF "tail" listT
+consProductOuter PRD [headFieldOuter tailFieldOuter]
+nilVal SV listT "Nil" _
+seven ILT 7
+innerHead PFV "head" seven
+innerTail PFV "tail" nilVal
+innerProduct PV consProductOuter [innerHead innerTail]
+oneItemList SV listT "Cons" innerProduct
+varP PVR consProductOuter "p"
+patCons PCN listT "Cons" varP
+pRef VAR varP
+headExtract PFG pRef "head"
+caseCons MC patCons headExtract
+zero ILT 0
+patNil PCN listT "Nil"
+caseNil MC patNil zero
+main MAT oneItemList [caseCons caseNil]

@@ -1,12 +1,25 @@
 package org.strand.cli
 
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import org.strand.authoring.Authoring
+import org.strand.authoring.AuthoringException
 import org.strand.core.JsonIngest
+import org.strand.core.Node
+import org.strand.core.NodeId
 import org.strand.hashing.FinalizedProgram
 import org.strand.hashing.Hasher
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.InterpretException
 import org.strand.interpreter.Value
 import org.strand.runtime.EventCodec
+import org.strand.runtime.MachineGroup
 import org.strand.runtime.StateMachineRuntime
 import org.strand.runtime.Trace
 import org.strand.runtime.TraceStep
@@ -17,15 +30,25 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
+ * Parse, finalize, and return the canonical [FinalizedProgram] alongside
+ * the ingest result. The ingest is preserved (rather than just the
+ * finalized form) so commands that need the author-id-to-NodeId map
+ * (`strand group`'s routed events) can resolve user-named streams.
+ */
+private fun loadFinalizedWithIngest(text: String): Pair<JsonIngest.IngestResult, FinalizedProgram> {
+    val ingest = JsonIngest.parse(text)
+    val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
+    return ingest to finalized
+}
+
+/**
  * Parse, finalize, and return the canonical [FinalizedProgram]. Every
  * command after the JSON-parse step operates on the finalized form — the
  * verifier and interpreter need the canonical [NodeStore] (with
  * Hash-bearing NodeRefs) plus the `hashToNodeId` reverse map.
  */
-private fun loadFinalized(text: String): FinalizedProgram {
-    val ingest = JsonIngest.parse(text)
-    return Hasher(ingest.rawStore).finalize(ingest.root)
-}
+private fun loadFinalized(text: String): FinalizedProgram =
+    loadFinalizedWithIngest(text).second
 
 /**
  * CLI for the Strand reference implementation.
@@ -34,10 +57,17 @@ private fun loadFinalized(text: String): FinalizedProgram {
  *   strand verify  <file.json>
  *   strand run     <file.json>
  *   strand machine <file.json> --events <events.json>
+ *   strand group   <file.json> --events <events.json>
+ *   strand author  <file.layer-a> [--emit-json]
  *
  * `verify` ingests and type-checks; `run` additionally evaluates pure
- * programs (Layer 1–5); `machine` drives a StateMachine over a JSON event
- * list (Layer 6 step 1).
+ * programs (Layer 1–5); `machine` drives a single StateMachine over a JSON
+ * event list (Layer 6 step 1, synchronous fold); `group` drives every
+ * StateMachine reachable in the program as a MachineGroup over a routed
+ * event list (Layer 6 step 2, per-machine coroutine actors); `author`
+ * compiles a Layer A authoring-format file (Q-034 step 1) to canonical
+ * dag-json and runs the verifier — with `--emit-json` it prints the
+ * generated JSON instead of running the pipeline.
  */
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
@@ -47,6 +77,8 @@ fun main(args: Array<String>) {
     when (val command = args[0]) {
         "verify", "run" -> runVerifyOrEval(command, args)
         "machine" -> runMachine(args)
+        "group" -> runGroup(args)
+        "author" -> runAuthor(args)
         else -> {
             usage()
             exitProcess(2)
@@ -167,9 +199,196 @@ private fun printTrace(trace: Trace) {
 private fun formatStateTransition(before: Value, after: Value): String =
     if (before == after) "state=$before (unchanged)" else "state: $before -> $after"
 
+/**
+ * Layer 6 step 2: drive every StateMachine reachable from the program as
+ * a [MachineGroup]. The events file uses the "routed" format — each entry
+ * carries a `stream` field naming the external input EventStream by its
+ * author id, plus the standard [EventCodec] payload encoding.
+ *
+ * Output streams are drained concurrently and each emission is printed as
+ * it arrives, prefixed with the output stream's author id (so multi-output
+ * programs are distinguishable in the trace). The CLI exits when every
+ * actor has halted (all input channels closed and all events processed).
+ */
+private fun runGroup(args: Array<String>) {
+    if (args.size < 4 || args[2] != "--events") {
+        usage()
+        exitProcess(2)
+    }
+    val programPath = args[1]
+    val eventsPath = args[3]
+
+    val programText = File(programPath).readText()
+    val (ingest, finalized) = loadFinalizedWithIngest(programText)
+    val verifier = Verifier(finalized.store, finalized.hashToNodeId)
+    val verifyResult = verifier.verify(finalized.root)
+    if (verifyResult is VerifyResult.Failed) {
+        System.err.println("verification failed:")
+        for (e in verifyResult.errors) System.err.println("  $e")
+        exitProcess(1)
+    }
+    if (!runSchemaCheck(finalized, verifyResult as VerifyResult.Ok)) exitProcess(1)
+
+    // Collect every StateMachine NodeId from the canonical store. The
+    // group includes ALL reachable StateMachines, regardless of whether
+    // they appear at the root or are buried inside a Let chain (the
+    // multi-machine corpus 48 pattern).
+    val machineIds: List<NodeId> = finalized.store.entries()
+        .filter { it.second is Node.StateMachine }
+        .map { it.first }
+    if (machineIds.isEmpty()) {
+        System.err.println("group: no StateMachine nodes found in $programPath")
+        exitProcess(1)
+    }
+
+    // Parse the routed event list. The "stream" field names the external
+    // input EventStream by author id; we resolve it to the NodeId via
+    // the ingest's nameMap (which the canonical store has rewritten to
+    // opaque NodeIds but the author names are preserved here for routing).
+    val eventsText = File(eventsPath).readText()
+    val routedEvents = parseRoutedEvents(eventsText)
+    val resolvedRouted = routedEvents.map { (streamName, payload) ->
+        val streamId = ingest.nameMap[streamName]
+            ?: run {
+                System.err.println(
+                    "group: routed event names unknown stream '$streamName'; " +
+                        "known names: ${ingest.nameMap.keys.sorted().joinToString(", ")}"
+                )
+                exitProcess(1)
+            }
+        streamId to payload
+    }
+
+    val group = MachineGroup(
+        store = finalized.store,
+        hashToNodeId = finalized.hashToNodeId,
+        machines = machineIds,
+        recordInputs = false,  // CLI runs are not replay-determinism tests
+    )
+
+    // Inverse name map for nicer output labelling (NodeId → author name).
+    val nameByNodeId: Map<NodeId, String> = ingest.nameMap.entries
+        .associate { (name, id) -> id to name }
+
+    try {
+        runBlocking {
+            val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
+            val handle = runtime.runGroup(group, this)
+
+            // Send routed events on their designated input streams, then
+            // close all external inputs so the actors halt naturally.
+            for ((streamId, payload) in resolvedRouted) {
+                val channel = handle.externalInputs[streamId]
+                    ?: error("group: stream $streamId is not an external input")
+                channel.send(payload)
+            }
+            for (channel in handle.externalInputs.values) channel.close()
+
+            // Drain output streams concurrently. Each emission is printed
+            // as it arrives; the actors continue until their input
+            // channels close and any pending transitions complete.
+            coroutineScope {
+                for ((streamId, channel) in handle.externalOutputs) {
+                    val name = nameByNodeId[streamId] ?: "<unnamed:$streamId>"
+                    launch {
+                        for (value in channel) println("output $name: $value")
+                    }
+                }
+            }
+            handle.await()
+        }
+    } catch (e: InterpretException) {
+        System.err.println("group evaluation failed: ${e.error}")
+        exitProcess(1)
+    }
+}
+
+/**
+ * Parse a routed event list of the form
+ * `{"events": [{"stream": "<name>", "tag": "<tag>", ...}, ...]}`. Each
+ * entry's `stream` field names an external input EventStream by author
+ * id; the remaining fields decode to a [Value] via the standard
+ * [EventCodec] format. Returns the (stream name, decoded value) pairs in
+ * the order they appear in the file.
+ */
+private fun parseRoutedEvents(text: String): List<Pair<String, Value>> {
+    val parser = Json { ignoreUnknownKeys = true }
+    val root = parser.parseToJsonElement(text) as? JsonObject
+        ?: error("routed event list: top-level value must be an object")
+    val events = root["events"] as? JsonArray
+        ?: error("routed event list: missing or non-array 'events' field")
+    return events.mapIndexed { i, elt ->
+        val obj = elt as? JsonObject
+            ?: error("routed event list: events[$i] must be an object")
+        val streamName = obj["stream"]?.jsonPrimitive?.contentOrNull
+            ?: error("routed event list: events[$i] missing 'stream' field")
+        val payload = EventCodec.decodeValue(obj, ctx = "events[$i]")
+        streamName to payload
+    }
+}
+
+/**
+ * Q-034 step 1: compile a Layer A authoring-format file to canonical
+ * dag-json, ingest, finalize, verify. Flags:
+ *   `--emit-json`   print the compiled JSON to stdout, skip the verify
+ *                   pipeline
+ *   `--elaborate`   run Layer C effect-closure inference before emission
+ *                   (fills in missing Lambda effects from the body's
+ *                    closure); 1-way compilation, no hash-equivalence
+ *
+ * Flags can be combined.
+ */
+private fun runAuthor(args: Array<String>) {
+    if (args.size < 2) {
+        usage()
+        exitProcess(2)
+    }
+    val path = args[1]
+    val flags = args.drop(2).toSet()
+    val emitOnly = "--emit-json" in flags
+    val elaborate = "--elaborate" in flags
+    val recognized = setOf("--emit-json", "--elaborate")
+    val unknown = flags - recognized
+    if (unknown.isNotEmpty()) {
+        System.err.println("unknown flags: ${unknown.joinToString(", ")}")
+        usage()
+        exitProcess(2)
+    }
+    val layerAText = File(path).readText()
+    val dagJsonText = try {
+        if (elaborate) Authoring.compileWithElaboration(layerAText)
+        else Authoring.compileToDagJson(layerAText)
+    } catch (e: AuthoringException) {
+        System.err.println("Layer A compilation failed:")
+        for (err in e.errors) {
+            System.err.println("  line ${err.line}: ${err.detail}")
+        }
+        exitProcess(1)
+    }
+    if (emitOnly) {
+        println(dagJsonText)
+        return
+    }
+    val finalized = loadFinalized(dagJsonText)
+    val verifier = Verifier(finalized.store, finalized.hashToNodeId)
+    when (val result = verifier.verify(finalized.root)) {
+        is VerifyResult.Failed -> {
+            System.err.println("verification failed for $path (after Layer A compile):")
+            for (e in result.errors) System.err.println("  $e")
+            exitProcess(1)
+        }
+        is VerifyResult.Ok -> {
+            println("type: ${result.rootType}")
+            if (!runSchemaCheck(finalized, result)) exitProcess(1)
+        }
+    }
+}
+
 private fun usage() {
     System.err.println("usage:")
     System.err.println("  strand verify  <file.json>")
     System.err.println("  strand run     <file.json>")
     System.err.println("  strand machine <file.json> --events <events.json>")
+    System.err.println("  strand group   <file.json> --events <events.json>")
+    System.err.println("  strand author  <file.layer-a> [--emit-json] [--elaborate]")
 }

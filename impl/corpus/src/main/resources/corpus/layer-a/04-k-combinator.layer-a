@@ -1,0 +1,16 @@
+# Layer A form of corpus/04-k-combinator.json — the K combinator
+# `Λa,b. \x:a y:b. x` instantiated at (Int, String) and applied to
+# (7, "ignored"). Returns 7.
+@v=1 root=applyK
+T_a TPM "a"
+T_b TPM "b"
+intT PRM Int
+strT PRM String
+x PRC "x" T_a
+y PRC "y" T_b
+x_use VAR x
+kInner LAM [x y] x_use
+kLambda TAB [T_a T_b] kInner
+arg1 ILT 7
+arg2 STR "ignored"
+applyK APP kLambda [arg1 arg2] [intT strT]

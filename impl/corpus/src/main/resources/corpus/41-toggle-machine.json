@@ -32,6 +32,7 @@
     "initialState":     { "type": "BoolLit", "value": false },
 
     "inputStream":      { "type": "EventStream", "eventType": "unitT", "streamKind": "external" },
+    "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
 
     "toggleMachine":    {
       "type": "StateMachine",
@@ -39,7 +40,7 @@
       "initialState": "initialState",
       "inputStreams": ["inputStream"],
       "outputStreams": [],
-      "effects": []
+      "effects": ["receiveFx"]
     }
   }
 }

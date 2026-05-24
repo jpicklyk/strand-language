@@ -1,0 +1,49 @@
+# Layer A form of corpus/47-async-multi-input-merge.json — Q-033 step 2
+# multi-input machine. Two external Int input streams + one String output.
+# Transition Matches on the synthesized stream_0/stream_1 InputEvent
+# sum and emits "A" or "B".
+@v=1 root=machine
+intT PRM Int
+stringT PRM String
+stream0Case SCS "stream_0" intT
+stream1Case SCS "stream_1" intT
+inputEventT SUM [stream0Case stream1Case]
+someStrCase SCS "Some" stringT
+noneStrCase SCS "None" _
+optionStrT SUM [someStrCase noneStrCase]
+output0Field PRF "output_0" optionStrT
+outputBatchT PRD [output0Field]
+stateField PRF "state" intT
+outputsField PRF "outputs" outputBatchT
+resultType PRD [stateField outputsField]
+addT FNT [intT intT] intT
+addFn FN "strand-builtin:Int.Add" addT
+sParam PRC "s" intT
+eParam PRC "e" inputEventT
+sRef VAR sParam
+eRef VAR eParam
+one ILT 1
+newState APP addFn [sRef one]
+labelA STR "A"
+labelB STR "B"
+wildA PWC intT
+pStream0 PCN inputEventT "stream_0" wildA
+caseStream0 MC pStream0 labelA
+wildB PWC intT
+pStream1 PCN inputEventT "stream_1" wildB
+caseStream1 MC pStream1 labelB
+tagStr MAT eRef [caseStream0 caseStream1]
+someTag SV optionStrT "Some" tagStr
+output0Value PFV "output_0" someTag
+outputBatchValue PV outputBatchT [output0Value]
+stateFieldV PFV "state" newState
+outputsFieldV PFV "outputs" outputBatchValue
+resultValue PV resultType [stateFieldV outputsFieldV]
+transitionLambda LAM [sParam eParam] resultValue
+initialState ILT 0
+inputA ESE intT
+inputB ESE intT
+outputLog ESO stringT
+receiveFx EFC "StateMachine.Receive"
+sendFx EFC "StateMachine.Send"
+machine SM transitionLambda initialState [inputA inputB] [outputLog] [receiveFx sendFx]

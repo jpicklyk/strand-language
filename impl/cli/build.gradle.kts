@@ -10,6 +10,7 @@ dependencies {
     implementation(project(":hashing"))
     implementation(project(":runtime"))
     implementation(project(":schema"))
+    implementation(project(":authoring"))
 }
 
 application {

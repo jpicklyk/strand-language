@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "root": "machine",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+
+    "output0Case":      { "type": "SumTypeCase", "name": "output_0", "caseType": "intT" },
+    "output1Case":      { "type": "SumTypeCase", "name": "output_1", "caseType": "intT" },
+    "taggedOutputT":    { "type": "SumType", "cases": ["output0Case", "output1Case"] },
+
+    "recSelf":          { "type": "RecursiveSelf" },
+    "headFieldInner":   { "type": "ProductTypeField", "name": "head", "fieldType": "taggedOutputT" },
+    "tailFieldInner":   { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "consProductInner": { "type": "ProductType", "fields": ["headFieldInner", "tailFieldInner"] },
+    "consCase":         { "type": "SumTypeCase", "name": "Cons", "caseType": "consProductInner" },
+    "nilCase":          { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "listBody":         { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "taggedListT":      { "type": "RecursiveType", "body": "listBody" },
+
+    "headFieldOuter":   { "type": "ProductTypeField", "name": "head", "fieldType": "taggedOutputT" },
+    "tailFieldOuter":   { "type": "ProductTypeField", "name": "tail", "fieldType": "taggedListT" },
+    "consProductOuter": { "type": "ProductType", "fields": ["headFieldOuter", "tailFieldOuter"] },
+
+    "stateField":       { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+    "outputsField":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "taggedListT" },
+    "resultType":       { "type": "ProductType", "fields": ["stateField", "outputsField"] },
+
+    "addT":             { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "mulT":             { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "mulFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Mul", "foreignType": "mulT" },
+
+    "sParam":           { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "eParam":           { "type": "ParameterDecl", "name": "e", "paramType": "intT" },
+    "sRef":             { "type": "VarRef", "binder": "sParam" },
+    "eRef":             { "type": "VarRef", "binder": "eParam" },
+
+    "two":              { "type": "IntLit", "value": 2 },
+    "newStateRaw":      { "type": "Application", "function": "addFn", "arguments": ["sRef", "eRef"] },
+    "newStateParam":    { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+    "newStateParamRef": { "type": "VarRef", "binder": "newStateParam" },
+    "doubled":          { "type": "Application", "function": "mulFn", "arguments": ["newStateParamRef", "two"] },
+
+    "nilValue":         { "type": "SumValue", "ofType": "taggedListT", "caseName": "Nil", "payload": null },
+
+    "out1Tag":          { "type": "SumValue", "ofType": "taggedOutputT", "caseName": "output_1", "payload": "doubled" },
+    "h1FieldV":         { "type": "ProductFieldValue", "fieldName": "head", "value": "out1Tag" },
+    "t1FieldV":         { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilValue" },
+    "cons1Payload":     { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h1FieldV", "t1FieldV"] },
+    "cons1":            { "type": "SumValue", "ofType": "taggedListT", "caseName": "Cons", "payload": "cons1Payload" },
+
+    "out0Tag":          { "type": "SumValue", "ofType": "taggedOutputT", "caseName": "output_0", "payload": "newStateParamRef" },
+    "h0FieldV":         { "type": "ProductFieldValue", "fieldName": "head", "value": "out0Tag" },
+    "t0FieldV":         { "type": "ProductFieldValue", "fieldName": "tail", "value": "cons1" },
+    "cons0Payload":     { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h0FieldV", "t0FieldV"] },
+    "cons0":            { "type": "SumValue", "ofType": "taggedListT", "caseName": "Cons", "payload": "cons0Payload" },
+
+    "stateFieldV":      { "type": "ProductFieldValue", "fieldName": "state", "value": "newStateParamRef" },
+    "outputsFieldV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "cons0" },
+    "resultValue":      { "type": "ProductValue", "ofType": "resultType", "fields": ["stateFieldV", "outputsFieldV"] },
+
+    "innerLambda":      { "type": "Lambda", "parameters": ["newStateParam"], "body": "resultValue" },
+    "innerApp":         { "type": "Application", "function": "innerLambda", "arguments": ["newStateRaw"] },
+    "transitionLambda": { "type": "Lambda", "parameters": ["sParam", "eParam"], "body": "innerApp" },
+
+    "initialState":     { "type": "IntLit", "value": 0 },
+    "inputStream":      { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
+    "outputA":          { "type": "EventStream", "eventType": "intT", "streamKind": "output" },
+    "outputB":          { "type": "EventStream", "eventType": "intT", "streamKind": "output" },
+    "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "sendFx":           { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
+
+    "machine": {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": ["outputA", "outputB"],
+      "effects": ["receiveFx", "sendFx"]
+    }
+  }
+}

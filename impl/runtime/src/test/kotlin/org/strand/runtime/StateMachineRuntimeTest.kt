@@ -153,13 +153,14 @@ class StateMachineRuntimeTest {
             "lam":     { "type": "Lambda", "parameters": ["sP", "eP"], "body": "result" },
             "init":    { "type": "BoolLit", "value": false },
             "stream":  { "type": "EventStream", "eventType": "unitT", "streamKind": "external" },
+            "receiveFx": { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
             "m": {
               "type": "StateMachine",
               "transitionFn": "lam",
               "initialState": "init",
               "inputStreams": ["stream"],
               "outputStreams": [],
-              "effects": []
+              "effects": ["receiveFx"]
             }
           }
         }
@@ -208,13 +209,15 @@ class StateMachineRuntimeTest {
             "init":   { "type": "IntLit", "value": 0 },
             "inStr":  { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
             "outStr": { "type": "EventStream", "eventType": "intT", "streamKind": "output"   },
+            "receiveFx": { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+            "sendFx":    { "type": "EffectCategory", "categoryName": "StateMachine.Send"    },
             "m": {
               "type": "StateMachine",
               "transitionFn": "lam",
               "initialState": "init",
               "inputStreams": ["inStr"],
               "outputStreams": ["outStr"],
-              "effects": []
+              "effects": ["receiveFx", "sendFx"]
             }
           }
         }

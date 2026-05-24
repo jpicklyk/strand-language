@@ -52,6 +52,8 @@
 
     "inputStream":      { "type": "EventStream", "eventType": "requestT",  "streamKind": "external" },
     "outputStream":     { "type": "EventStream", "eventType": "responseT", "streamKind": "output"   },
+    "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "sendFx":           { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
 
     "echoMachine":      {
       "type": "StateMachine",
@@ -59,7 +61,7 @@
       "initialState": "initialState",
       "inputStreams": ["inputStream"],
       "outputStreams": ["outputStream"],
-      "effects": []
+      "effects": ["receiveFx", "sendFx"]
     }
   }
 }

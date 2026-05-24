@@ -1,0 +1,20 @@
+# Layer A form of corpus/51-positive-int-schema-fail.json — same
+# PositiveInt Schema as 50, applied to IntLit(-3). SchemaChecker
+# evaluates `-3 > 0 = false` and produces SchemaInvariantViolation.
+@v=1 root=schemaClaim
+intT PRM Int
+boolT PRM Bool
+zero ILT 0
+xParam PRC "x" intT
+xRef VAR xParam
+gtT FNT [intT intT] boolT
+gt FN "strand-builtin:Int.Gt" gtT
+gtBody APP gt [xRef zero]
+predLam LAM [xParam] gtBody
+positiveInvariant INV "x_positive" positiveInt predLam
+positiveInt SCH "PositiveInt" intT [positiveInvariant]
+negThree ILT -3
+pIn PRC "p" positiveInt
+pInRef VAR pIn
+identityOfPositiveInt LAM [pIn] pInRef
+schemaClaim APP identityOfPositiveInt [negThree]

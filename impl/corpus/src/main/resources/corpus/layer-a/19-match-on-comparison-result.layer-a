@@ -1,0 +1,20 @@
+# Layer A form of corpus/19-match-on-comparison-result.json — the
+# canonical if-as-Match idiom: branching on Int.Lt(3, 5) via two
+# literal Bool patterns. Evaluates to 1.
+@v=1 root=m
+intT PRM Int
+boolT PRM Bool
+ltT FNT [intT intT] boolT
+lt FN "strand-builtin:Int.Lt" ltT
+three ILT 3
+five ILT 5
+compare APP lt [three five]
+litTrue BLT true
+patTrue PLT boolT litTrue
+bodyT ILT 1
+caseT MC patTrue bodyT
+litFalse BLT false
+patFalse PLT boolT litFalse
+bodyF ILT 0
+caseF MC patFalse bodyF
+m MAT compare [caseT caseF]

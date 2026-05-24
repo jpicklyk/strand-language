@@ -13,6 +13,7 @@ dependencies {
     testImplementation(project(":hashing"))
     testImplementation(project(":runtime"))
     testImplementation(project(":schema"))
+    testImplementation(project(":authoring"))
     // For AsyncCorpusTest's runTest virtual-time dispatcher (Layer 6 step 2).
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }

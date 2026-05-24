@@ -1,0 +1,13 @@
+# Layer A form of corpus/02-identity-applied.json — the polymorphic
+# identity applied to Int 42. The whole program is 8 lines of Layer A
+# vs ~14 lines of canonical JSON (~3x fewer tokens under a standard BPE
+# tokenizer).
+@v=1 root=app
+T_a TPM "a"
+intT PRM Int
+x PRC "x" T_a
+x_use VAR x
+idInner LAM [x] x_use
+id TAB [T_a] idInner
+arg ILT 42
+app APP id [arg] [intT]

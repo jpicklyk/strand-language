@@ -426,16 +426,20 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
-     * A StateMachine declares zero input streams. Step 1 also requires
-     * exactly one input stream (see [StateMachineInputStreamCountUnsupported]).
+     * A StateMachine declares zero input streams. Every state machine must
+     * have at least one input stream (the runtime needs *something* to
+     * drive transitions). Multi-input machines are well-formed as of
+     * Layer 6 step 2; the verifier synthesizes a tagged InputEvent sum
+     * for the transition function's Event parameter — see
+     * [Verifier.synthesizeInputEventSum].
      */
     data class StateMachineRequiresInputStream(
         override val at: NodeId
     ) : VerifyError()
 
     /**
-     * A StateMachine's [transitionFn] does not resolve to a Lambda. Step 1
-     * does not yet support Fixpoint-wrapped transition functions.
+     * A StateMachine's [transitionFn] does not resolve to a Lambda.
+     * Fixpoint-wrapped transition functions remain step-3 work.
      */
     data class StateMachineTransitionFnNotLambda(
         override val at: NodeId,
@@ -444,11 +448,15 @@ sealed class VerifyError {
 
     /**
      * A StateMachine's transition function does not have the expected shape
-     * `(State, Event) -> (State, OutputBatch)`. The State type is taken from
+     * `(State, Event) -> (State, Outputs)`. The State type is taken from
      * the inferred `initialState` type; the Event type is taken from the
-     * (single) input stream's `eventType`; the OutputBatch is a ProductType
-     * whose fields are positionally indexed by output stream
-     * (`output_i: Option<outputStreams[i].eventType>`).
+     * input streams (single input: `inputStreams[0].eventType`; multi-input:
+     * synthesized `stream_0(T_0) | ... | stream_{n-1}(T_{n-1})` sum); the
+     * Outputs field accepts either the fixed-arity OutputBatch
+     * (`{output_i: Option<outputStreams[i].eventType>}` product) or the
+     * recursive tagged list (`μ. Cons({head, tail}) | Nil` over the
+     * `output_i(T_i)` TaggedOutput sum). The error reports whichever of
+     * the two expected shapes is closer to the actual.
      */
     data class StateMachineTransitionFnShapeMismatch(
         override val at: NodeId,
@@ -467,24 +475,35 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
-     * A StateMachine has an input stream count step 1 does not support.
-     * Step 1 requires exactly 1. Multi-stream machines land in step 2.
-     */
-    data class StateMachineInputStreamCountUnsupported(
-        override val at: NodeId,
-        val count: Int,
-    ) : VerifyError()
-
-    /**
-     * A StateMachine's declared effects do not cover the transition function's
-     * effect closure plus the implicit StateMachine.Send/Receive effects per
-     * OQ-E of the proposal. Step 1 enforces coverage of the transition Lambda's
-     * closure; the implicit send/receive effects are enforced once those
-     * EffectCategories are introduced (step 2).
+     * A StateMachine's declared effects do not cover the transition
+     * function's effect closure. Separate from
+     * [StateMachineMissingImplicitEffect] which covers the runtime-
+     * implicit Send/Receive/Spawn/Terminate effects: this one is about
+     * the user's transition function's own declared closure.
      */
     data class StateMachineEffectCoverageViolation(
         override val at: NodeId,
         val missing: Set<NodeId>,
+    ) : VerifyError()
+
+    /**
+     * A StateMachine's declared `effects` list is missing one or more
+     * runtime-implicit effects the machine WILL perform — at minimum
+     * `StateMachine.Receive` (input streams are mandatory), and
+     * `StateMachine.Send` whenever `outputStreams.isNotEmpty()`. The
+     * runtime performs these effects on the user's behalf at each
+     * channel boundary; declaring them in the machine's effects list
+     * is how the user acknowledges that fact.
+     *
+     * Layer 6 step 3 slice 3.5 introduces this check via a small
+     * `WellKnownEffect` registry that the verifier consults by
+     * `EffectCategory.categoryName`. Adding an EffectCategory node
+     * named `"StateMachine.Receive"` (or `"StateMachine.Send"`) and
+     * listing it in the machine's `effects` satisfies the check.
+     */
+    data class StateMachineMissingImplicitEffect(
+        override val at: NodeId,
+        val missing: Set<String>,
     ) : VerifyError()
 
     /**

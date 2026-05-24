@@ -1,0 +1,11 @@
+# Layer A form of corpus/08-product-type-decl.json — Lambda whose
+# parameter is a ProductType {a: Int, b: Bool}. Verify-only.
+@v=1 root=lambda
+intT PRM Int
+boolT PRM Bool
+fieldA PRF "a" intT
+fieldB PRF "b" boolT
+recordType PRD [fieldA fieldB]
+r PRC "r" recordType
+rRef VAR r
+lambda LAM [r] rRef

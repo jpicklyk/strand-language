@@ -75,6 +75,8 @@
 
     "inputStream":      { "type": "EventStream", "eventType": "eventT", "streamKind": "external" },
     "outputStream":     { "type": "EventStream", "eventType": "intT",   "streamKind": "output"   },
+    "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "sendFx":           { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
 
     "counterMachine":   {
       "type": "StateMachine",
@@ -82,7 +84,7 @@
       "initialState": "initialState",
       "inputStreams": ["inputStream"],
       "outputStreams": ["outputStream"],
-      "effects": []
+      "effects": ["receiveFx", "sendFx"]
     }
   }
 }

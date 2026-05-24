@@ -1,0 +1,13 @@
+# Layer A form of corpus/17-builtin-compose-pure-and-effectful.json —
+# composes the pure builtin Int.Add with effectful Time.Now: add(now(), 1).
+# Demonstrates effect closure propagation through Application.
+@v=1 root=app
+intT PRM Int
+timeFx EFC "Time.Now"
+nowT FNT [] intT
+now FN "strand-builtin:Time.Now" nowT [timeFx]
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+callNow APP now []
+one ILT 1
+app APP add [callNow one]

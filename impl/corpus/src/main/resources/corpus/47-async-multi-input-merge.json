@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "root": "machine",
+  "nodes": {
+    "intT":            { "type": "PrimitiveType", "kind": "Int" },
+    "stringT":         { "type": "PrimitiveType", "kind": "String" },
+
+    "stream0Case":     { "type": "SumTypeCase", "name": "stream_0", "caseType": "intT" },
+    "stream1Case":     { "type": "SumTypeCase", "name": "stream_1", "caseType": "intT" },
+    "inputEventT":     { "type": "SumType", "cases": ["stream0Case", "stream1Case"] },
+
+    "someStrCase":     { "type": "SumTypeCase", "name": "Some", "caseType": "stringT" },
+    "noneStrCase":     { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionStrT":      { "type": "SumType", "cases": ["someStrCase", "noneStrCase"] },
+
+    "output0Field":    { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionStrT" },
+    "outputBatchT":    { "type": "ProductType", "fields": ["output0Field"] },
+
+    "stateField":      { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+    "outputsField":    { "type": "ProductTypeField", "name": "outputs", "fieldType": "outputBatchT" },
+    "resultType":      { "type": "ProductType", "fields": ["stateField", "outputsField"] },
+
+    "addT":            { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":           { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "sParam":          { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "eParam":          { "type": "ParameterDecl", "name": "e", "paramType": "inputEventT" },
+    "sRef":            { "type": "VarRef", "binder": "sParam" },
+    "eRef":            { "type": "VarRef", "binder": "eParam" },
+
+    "one":             { "type": "IntLit", "value": 1 },
+    "newState":        { "type": "Application", "function": "addFn", "arguments": ["sRef", "one"] },
+
+    "labelA":          { "type": "StringLit", "value": "A" },
+    "labelB":          { "type": "StringLit", "value": "B" },
+
+    "wildA":           { "type": "Pattern", "kind": "wildcard", "patternType": "intT" },
+    "pStream0":        { "type": "Pattern", "kind": "constructor", "patternType": "inputEventT", "caseName": "stream_0", "payloadPattern": "wildA" },
+    "caseStream0":     { "type": "MatchCase", "pattern": "pStream0", "body": "labelA" },
+
+    "wildB":           { "type": "Pattern", "kind": "wildcard", "patternType": "intT" },
+    "pStream1":        { "type": "Pattern", "kind": "constructor", "patternType": "inputEventT", "caseName": "stream_1", "payloadPattern": "wildB" },
+    "caseStream1":     { "type": "MatchCase", "pattern": "pStream1", "body": "labelB" },
+
+    "tagStr":          { "type": "Match", "scrutinee": "eRef", "cases": ["caseStream0", "caseStream1"] },
+
+    "someTag":         { "type": "SumValue", "ofType": "optionStrT", "caseName": "Some", "payload": "tagStr" },
+    "output0Value":    { "type": "ProductFieldValue", "fieldName": "output_0", "value": "someTag" },
+    "outputBatchValue":{ "type": "ProductValue", "ofType": "outputBatchT", "fields": ["output0Value"] },
+    "stateFieldV":     { "type": "ProductFieldValue", "fieldName": "state", "value": "newState" },
+    "outputsFieldV":   { "type": "ProductFieldValue", "fieldName": "outputs", "value": "outputBatchValue" },
+    "resultValue":     { "type": "ProductValue", "ofType": "resultType", "fields": ["stateFieldV", "outputsFieldV"] },
+
+    "transitionLambda":{ "type": "Lambda", "parameters": ["sParam", "eParam"], "body": "resultValue" },
+
+    "initialState":    { "type": "IntLit", "value": 0 },
+    "inputA":          { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
+    "inputB":          { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
+    "outputLog":       { "type": "EventStream", "eventType": "stringT", "streamKind": "output" },
+    "receiveFx":       { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "sendFx":          { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
+
+    "machine": {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputA", "inputB"],
+      "outputStreams": ["outputLog"],
+      "effects": ["receiveFx", "sendFx"]
+    }
+  }
+}

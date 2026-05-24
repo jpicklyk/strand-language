@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "root": "rootLet",
+  "nodes": {
+    "intT":              { "type": "PrimitiveType", "kind": "Int" },
+
+    "someIntCase":       { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneIntCase":       { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionIntT":        { "type": "SumType", "cases": ["someIntCase", "noneIntCase"] },
+
+    "addT":              { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":             { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "workerOutput0F":    { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionIntT" },
+    "workerOutputBatchT":{ "type": "ProductType", "fields": ["workerOutput0F"] },
+    "workerStateF":      { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+    "workerOutputsF":    { "type": "ProductTypeField", "name": "outputs", "fieldType": "workerOutputBatchT" },
+    "workerResultT":     { "type": "ProductType", "fields": ["workerStateF", "workerOutputsF"] },
+
+    "workerSParam":      { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "workerEParam":      { "type": "ParameterDecl", "name": "e", "paramType": "intT" },
+    "workerSRef":        { "type": "VarRef", "binder": "workerSParam" },
+    "workerERef":        { "type": "VarRef", "binder": "workerEParam" },
+    "workerNewState":    { "type": "Application", "function": "addFn", "arguments": ["workerSRef", "workerERef"] },
+    "workerSomeEmit":    { "type": "SumValue", "ofType": "optionIntT", "caseName": "Some", "payload": "workerNewState" },
+    "workerO0V":         { "type": "ProductFieldValue", "fieldName": "output_0", "value": "workerSomeEmit" },
+    "workerOutputBatchV":{ "type": "ProductValue", "ofType": "workerOutputBatchT", "fields": ["workerO0V"] },
+    "workerStateV":      { "type": "ProductFieldValue", "fieldName": "state", "value": "workerNewState" },
+    "workerOutputsV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "workerOutputBatchV" },
+    "workerResultV":     { "type": "ProductValue", "ofType": "workerResultT", "fields": ["workerStateV", "workerOutputsV"] },
+    "workerTransition":  { "type": "Lambda", "parameters": ["workerSParam", "workerEParam"], "body": "workerResultV" },
+    "workerInitial":     { "type": "IntLit", "value": 0 },
+
+    "supStream0Case":    { "type": "SumTypeCase", "name": "stream_0", "caseType": "intT" },
+    "supStream1Case":    { "type": "SumTypeCase", "name": "stream_1", "caseType": "intT" },
+    "supInputEventT":    { "type": "SumType", "cases": ["supStream0Case", "supStream1Case"] },
+
+    "supOutput0F":       { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionIntT" },
+    "supOutputBatchT":   { "type": "ProductType", "fields": ["supOutput0F"] },
+    "supStateF":         { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+    "supOutputsF":       { "type": "ProductTypeField", "name": "outputs", "fieldType": "supOutputBatchT" },
+    "supResultT":        { "type": "ProductType", "fields": ["supStateF", "supOutputsF"] },
+
+    "supSParam":         { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "supEParam":         { "type": "ParameterDecl", "name": "e", "paramType": "supInputEventT" },
+    "supSRef":           { "type": "VarRef", "binder": "supSParam" },
+    "supERef":           { "type": "VarRef", "binder": "supEParam" },
+    "one":               { "type": "IntLit", "value": 1 },
+    "supNewState":       { "type": "Application", "function": "addFn", "arguments": ["supSRef", "one"] },
+
+    "supWildA":          { "type": "Pattern", "kind": "wildcard", "patternType": "intT" },
+    "supPStream0":       { "type": "Pattern", "kind": "constructor", "patternType": "supInputEventT", "caseName": "stream_0", "payloadPattern": "supWildA" },
+    "supSomeNewState":   { "type": "SumValue", "ofType": "optionIntT", "caseName": "Some", "payload": "supNewState" },
+    "supCaseStream0":    { "type": "MatchCase", "pattern": "supPStream0", "body": "supSomeNewState" },
+    "supWildB":          { "type": "Pattern", "kind": "wildcard", "patternType": "intT" },
+    "supPStream1":       { "type": "Pattern", "kind": "constructor", "patternType": "supInputEventT", "caseName": "stream_1", "payloadPattern": "supWildB" },
+    "supCaseStream1":    { "type": "MatchCase", "pattern": "supPStream1", "body": "supSomeNewState" },
+    "supEmittedOption":  { "type": "Match", "scrutinee": "supERef", "cases": ["supCaseStream0", "supCaseStream1"] },
+
+    "supO0V":            { "type": "ProductFieldValue", "fieldName": "output_0", "value": "supEmittedOption" },
+    "supOutputBatchV":   { "type": "ProductValue", "ofType": "supOutputBatchT", "fields": ["supO0V"] },
+    "supStateV":         { "type": "ProductFieldValue", "fieldName": "state", "value": "supNewState" },
+    "supOutputsV":       { "type": "ProductFieldValue", "fieldName": "outputs", "value": "supOutputBatchV" },
+    "supResultV":        { "type": "ProductValue", "ofType": "supResultT", "fields": ["supStateV", "supOutputsV"] },
+    "supTransition":     { "type": "Lambda", "parameters": ["supSParam", "supEParam"], "body": "supResultV" },
+    "supInitial":        { "type": "IntLit", "value": 0 },
+
+    "extInputA":         { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
+    "extInputB":         { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
+    "chanA":             { "type": "EventStream", "eventType": "intT", "streamKind": "internal" },
+    "chanB":             { "type": "EventStream", "eventType": "intT", "streamKind": "internal" },
+    "extOutput":         { "type": "EventStream", "eventType": "intT", "streamKind": "output" },
+    "receiveFx":         { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "sendFx":            { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
+
+    "workerA": {
+      "type": "StateMachine",
+      "transitionFn": "workerTransition",
+      "initialState": "workerInitial",
+      "inputStreams": ["extInputA"],
+      "outputStreams": ["chanA"],
+      "effects": ["receiveFx", "sendFx"]
+    },
+    "workerB": {
+      "type": "StateMachine",
+      "transitionFn": "workerTransition",
+      "initialState": "workerInitial",
+      "inputStreams": ["extInputB"],
+      "outputStreams": ["chanB"],
+      "effects": ["receiveFx", "sendFx"]
+    },
+    "supervisor": {
+      "type": "StateMachine",
+      "transitionFn": "supTransition",
+      "initialState": "supInitial",
+      "inputStreams": ["chanA", "chanB"],
+      "outputStreams": ["extOutput"],
+      "effects": ["receiveFx", "sendFx"]
+    },
+
+    "letInner":  { "type": "Let", "name": "_workerB", "value": "workerB", "body": "supervisor" },
+    "rootLet":   { "type": "Let", "name": "_workerA", "value": "workerA", "body": "letInner" }
+  }
+}

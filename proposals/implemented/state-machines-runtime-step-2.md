@@ -1,10 +1,12 @@
 # Layer 6 step 2: Async Multi-Machine Actor Runtime
 
-**Document:** `proposals/state-machines-runtime-step-2.md`
-**Status:** Draft proposal
-**Date:** 2026-05-24
-**Concerns:** [`design/state-machines.md`](../design/state-machines.md), [`decisions/ADR-007-state-machines.md`](../decisions/ADR-007-state-machines.md), [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md) § State machine effects (E-028..E-031), [`design/distribution-model.md`](../design/distribution-model.md), [`proposals/implemented/state-machines-runtime.md`](implemented/state-machines-runtime.md) (the step 1 proposal that sketched this), [Q-008](../open-questions.md#Q-008), [Q-009](../open-questions.md#Q-009), [Q-033](../open-questions.md#Q-033)
+**Document:** `proposals/implemented/state-machines-runtime-step-2.md`
+**Status:** Implemented (Layer 6 step 2 of the Kotlin/JVM reference implementation, 2026-05-24)
+**Date:** 2026-05-24 (proposed); 2026-05-24 (initial runtime + corpus 46 landed); 2026-05-24 (verifier multi-stream lift + corpus 47–49 + `strand group` CLI landed)
+**Concerns:** [`design/state-machines.md`](../../design/state-machines.md), [`decisions/ADR-007-state-machines.md`](../../decisions/ADR-007-state-machines.md), [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md) § State machine effects (E-028..E-031), [`design/distribution-model.md`](../../design/distribution-model.md), [`proposals/implemented/state-machines-runtime.md`](state-machines-runtime.md) (the step 1 proposal that sketched this), [Q-008](../../open-questions.md#Q-008), [Q-009](../../open-questions.md#Q-009), [Q-033](../../open-questions.md#Q-033)
 **Scope:** Large
+
+> **Implementation note (2026-05-24).** The proposal landed in two passes. The first pass (recorded at the time the proposal was authored) shipped the runtime infrastructure — `StateMachineRuntime.runGroup`, per-machine coroutine actors over `Channel<Value>`, `select`-based multi-stream input merge, OutputBatch + tagged-list output dispatch in `MachineActor`, `EventRecorder` for replay determinism, `MachineGroupValidationError` for topology checks — alongside one async corpus program (46-async-single-machine-counter). The verifier's `StateMachineInputStreamCountUnsupported` rule, corpus programs 47–49, and the `strand group` CLI subcommand were deferred. The second pass closes those deferred items: the verifier now lifts the single-stream bound and synthesizes the InputEvent sum (`Verifier.synthesizeInputEventSum`) for multi-input machines plus the tagged-output list (`Verifier.synthesizeTaggedOutputListType`) as an alternative result shape; corpus programs 47 (multi-input merge), 48 (supervisor pattern wired via internal streams), and 49 (tagged-output list) ship with companion routed-event files; `strand group <file.json> --events <events.json>` drives a `MachineGroup` built from every reachable `StateMachine` node in the canonical store. Three deviations from the literal proposal text are worth recording. (1) The proposal's §5 lists new `InternalStreamNoProducer` / `InternalStreamMultipleProducers` / `InternalStreamNoConsumer` verifier rules and a `MalformedMachineGroup` umbrella; the implementation kept these as **runtime-side checks** in `MachineGroupValidationError` because the per-machine verifier reasons about one StateMachine at a time and cannot reason about cross-machine stream connections. Promoting these to true verifier rules would require a new "GroupVerifier" pass that the step-2 work does not yet introduce. (2) The proposal's §5 calls for the implicit `StateMachine.Send` / `StateMachine.Receive` effects (E-028/E-029) to flow through the verifier; the implementation **defers this to step 3**. The runtime, not user code, performs the channel send/receive at the boundary, so the existing closure-coverage check on the transition Lambda is sufficient for correctness. Promoting Send/Receive to verifier-enforced obligations needs a registration mechanism for "well-known" EffectCategory nodes that the verifier can resolve by name rather than NodeId identity — work that hasn't been needed for any other category and is therefore held back. (3) The supervisor corpus program (48) implements the proposal's §6.6 framing (observational supervisor wired via internal streams) rather than §3 / §7's stronger spawn-and-restart framing; the latter requires real dynamic spawn/terminate of children via E-030/E-031 and lands in step 3. The corpus program demonstrates inter-machine wiring through internal streams and multi-input merge in the supervisor; that is the load-bearing demonstration step 2 needs.
 
 Step 2 of the Layer 6 shipping strategy. Where step 1 evaluates a single state machine over a fixed event list as a deterministic synchronous fold, step 2 introduces concurrency: per-machine Kotlin coroutine actors, multiple input streams with FIFO-per-stream and nondeterministic merge, inter-machine wiring so the output of one machine drives the input of another, tagged-Event sums that preserve stream provenance, and the implicit `StateMachine.Send`/`Receive` effects (E-028, E-029) propagating through the verifier. Step 1's `runMachine(machine, events): Trace` survives unchanged as the deterministic-replay seam.
 
@@ -340,14 +342,14 @@ Step 2 does not yet ship a supervisor protocol that *responds* to failures — t
 ## References
 
 **Outgoing references:**
-- [`design/state-machines.md`](../design/state-machines.md) — full state-machine spec
-- [`decisions/ADR-007-state-machines.md`](../decisions/ADR-007-state-machines.md)
-- [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md) — § State machine effects (E-028 through E-031)
-- [`design/distribution-model.md`](../design/distribution-model.md) — backpressure, distribution
-- [`proposals/implemented/state-machines-runtime.md`](implemented/state-machines-runtime.md) — the step 1 proposal whose § 7 sketches step 2
-- [`open-questions.md`](../open-questions.md) — Q-008, Q-009, Q-015 ground this proposal; Q-033 points back at this document
+- [`design/state-machines.md`](../../design/state-machines.md) — full state-machine spec
+- [`decisions/ADR-007-state-machines.md`](../../decisions/ADR-007-state-machines.md)
+- [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md) — § State machine effects (E-028 through E-031)
+- [`design/distribution-model.md`](../../design/distribution-model.md) — backpressure, distribution
+- [`proposals/implemented/state-machines-runtime.md`](state-machines-runtime.md) — the step 1 proposal whose § 7 sketches step 2
+- [`open-questions.md`](../../open-questions.md) — Q-008, Q-009, Q-015 ground this proposal; Q-033 points back at this document
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-033 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl/CLAUDE.md`](../impl/CLAUDE.md) — Known gaps section
+- [`open-questions.md`](../../open-questions.md) — Q-033 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — Known gaps section

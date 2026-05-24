@@ -61,6 +61,22 @@ class CorpusSchemaTest {
             expectedInvariantAuthorId = "nonEmptyInvariant",
             notes = "Nil claimed as NonEmptyList fails the non_empty invariant — the Cons case does not match.",
         ),
+        Case(
+            resource = "/corpus/54-json-value-primitives.json",
+            expectViolation = false,
+            notes = "JsonNumber(42) wrapped in the JsonValue schema (no invariants); first program in the blessed JSON library.",
+        ),
+        Case(
+            resource = "/corpus/55-json-object-unique-keys.json",
+            expectViolation = false,
+            notes = "Three-entry JsonObject with distinct keys claimed as UniqueKeyJsonObject; the Fixpoint+Match unique_keys invariant returns true.",
+        ),
+        Case(
+            resource = "/corpus/56-json-object-duplicate-keys-fail.json",
+            expectViolation = true,
+            expectedInvariantAuthorId = "uniqueKeysInvariant",
+            notes = "Two-entry JsonObject where both entries use the key 'name'; the unique_keys invariant evaluates false and produces SchemaInvariantViolation.",
+        ),
     )
 
     @TestFactory

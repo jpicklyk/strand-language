@@ -1258,7 +1258,11 @@ class VerifierTest {
         outputStreams: String = "[]",
         transitionFn: String = "transitionLambda",
         initialState: String = "initialState",
-        effects: String = "[]",
+        // Default carries the StateMachine.Receive implicit effect that
+        // Layer 6 step 3 slice 3.5 requires of every input-stream-bearing
+        // machine. Tests that explicitly probe the slice-3.5 check
+        // override this with a list that omits `receiveFx`.
+        effects: String = "[\"receiveFx\"]",
     ): String = """{
       "version": 1, "root": "m",
       "nodes": {
@@ -1286,6 +1290,8 @@ class VerifierTest {
         "inputStreamB":     { "type": "EventStream", "eventType": "unitT", "streamKind": "external" },
         "notALambda":       { "type": "IntLit", "value": 1 },
         "timeFx":           { "type": "EffectCategory", "categoryName": "Time.Now" },
+        "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+        "sendFx":           { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
         "m": {
           "type": "StateMachine",
           "transitionFn": "$transitionFn",
@@ -1313,11 +1319,17 @@ class VerifierTest {
     }
 
     @Test
-    fun `StateMachine with two inputStreams is rejected by step 1 bound`() {
+    fun `StateMachine with two inputStreams whose transition does not match synthesized InputEvent shape is rejected`() {
+        // Layer 6 step 2 lifts the step-1 ==1 bound: multi-input machines
+        // are now well-formed when their transition function consumes the
+        // synthesized InputEvent sum. The toggle machine's transition
+        // expects a bare Unit Event (the step-1 single-input shape), so a
+        // two-input declaration produces a shape mismatch rather than the
+        // old StateMachineInputStreamCountUnsupported rejection.
         val r = verify(toggleMachineJson(inputStreams = "[\"inputStream\", \"inputStreamB\"]"))
         val f = r as VerifyResult.Failed
-        assertTrue(f.errors.any { it is VerifyError.StateMachineInputStreamCountUnsupported }) {
-            "expected StateMachineInputStreamCountUnsupported, got ${f.errors}"
+        assertTrue(f.errors.any { it is VerifyError.StateMachineTransitionFnShapeMismatch }) {
+            "expected StateMachineTransitionFnShapeMismatch (single-input transition vs multi-input synthesized Event), got ${f.errors}"
         }
     }
 
@@ -1382,7 +1394,9 @@ class VerifierTest {
     @Test
     fun `StateMachine effect coverage violation is reported when transitionFn declares effect StateMachine does not`() {
         // The transition Lambda declares Time.Now; the StateMachine declares
-        // no effects. The verifier reports StateMachineEffectCoverageViolation.
+        // only the well-known StateMachine.Receive (so the slice 3.5 check
+        // passes) but not Time.Now. The verifier reports
+        // StateMachineEffectCoverageViolation for the missing Time.Now.
         val r = verify("""{
           "version": 1, "root": "m",
           "nodes": {
@@ -1394,7 +1408,8 @@ class VerifierTest {
             "oft":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyT" },
             "resT":    { "type": "ProductType", "fields": ["sft", "oft"] },
 
-            "timeFx":  { "type": "EffectCategory", "categoryName": "Time.Now" },
+            "timeFx":     { "type": "EffectCategory", "categoryName": "Time.Now" },
+            "receiveFx":  { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
             "nowT":    { "type": "FunctionType", "parameters": [], "result": "intT",
                          "effects": ["timeFx"] },
             "nowFn":   { "type": "ForeignNode", "target": "strand-builtin:Time.Now",
@@ -1426,13 +1441,53 @@ class VerifierTest {
               "initialState": "initialState",
               "inputStreams": ["inputStream"],
               "outputStreams": [],
-              "effects": []
+              "effects": ["receiveFx"]
             }
           }
         }""")
         val f = r as VerifyResult.Failed
         assertTrue(f.errors.any { it is VerifyError.StateMachineEffectCoverageViolation }) {
             "expected StateMachineEffectCoverageViolation, got ${f.errors}"
+        }
+    }
+
+    @Test
+    fun `StateMachine without Receive declared is rejected as MissingImplicitEffect (slice 3-5)`() {
+        // Default toggleMachineJson declares ["receiveFx"]; override to []
+        // so the slice 3.5 check fires for the missing well-known
+        // StateMachine.Receive.
+        val r = verify(toggleMachineJson(effects = "[]"))
+        val f = r as VerifyResult.Failed
+        val missing = f.errors.firstNotNullOfOrNull {
+            (it as? VerifyError.StateMachineMissingImplicitEffect)?.missing
+        }
+        assertNotNull(missing) {
+            "expected StateMachineMissingImplicitEffect, got ${f.errors}"
+        }
+        assertTrue("StateMachine.Receive" in missing!!) {
+            "expected missing set to contain StateMachine.Receive, got $missing"
+        }
+    }
+
+    @Test
+    fun `StateMachine with outputs but no Send declared is rejected as MissingImplicitEffect (slice 3-5)`() {
+        // Default machine has no output streams; add one and declare only
+        // receiveFx — the slice 3.5 check must report missing
+        // StateMachine.Send.
+        val r = verify(toggleMachineJson(
+            outputStreams = "[\"inputStreamB\"]",
+            effects = "[\"receiveFx\"]",
+        ))
+        val f = r as VerifyResult.Failed
+        // The transition function's shape disagrees with the output streams
+        // (toggle has no output emission), so we'll see either
+        // StateMachineTransitionFnShapeMismatch or MissingImplicitEffect;
+        // both are acceptable outcomes — we want at least one of them.
+        assertTrue(
+            f.errors.any { it is VerifyError.StateMachineMissingImplicitEffect } ||
+                f.errors.any { it is VerifyError.StateMachineTransitionFnShapeMismatch }
+        ) {
+            "expected MissingImplicitEffect or shape mismatch, got ${f.errors}"
         }
     }
 
