@@ -17,3 +17,4 @@ local.properties
 
 # Worktree scratch space (parallel agent isolation creates these)
 .worktrees/
+.claude/worktrees/
