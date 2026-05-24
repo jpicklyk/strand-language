@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "T_a":     { "type": "TypeParameter", "name": "a" },
+    "intT":    { "type": "PrimitiveType", "kind": "Int" },
+    "x":       { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+    "x_use":   { "type": "VarRef", "binder": "x" },
+    "idInner": { "type": "Lambda", "parameters": ["x"], "body": "x_use" },
+    "id":      { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "idInner" },
+    "arg":     { "type": "IntLit", "value": 42 },
+    "app":     { "type": "Application", "function": "id", "arguments": ["arg"], "typeArguments": ["intT"] }
+  }
+}

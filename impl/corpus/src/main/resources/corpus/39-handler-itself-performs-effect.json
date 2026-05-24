@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "root": "handler",
+  "nodes": {
+    "intT":       { "type": "PrimitiveType", "kind": "Int" },
+    "strT":       { "type": "PrimitiveType", "kind": "String" },
+    "timeFx":     { "type": "EffectCategory", "categoryName": "Time.Now" },
+    "fsWriteFx":  { "type": "EffectCategory", "categoryName": "Filesystem.Write" },
+    "nowT":       { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+    "now":        { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+    "callNow":    { "type": "Application", "function": "now", "arguments": [] },
+    "writeT":     { "type": "FunctionType", "parameters": ["strT"], "result": "intT", "effects": ["fsWriteFx"] },
+    "write":      { "type": "ForeignNode", "target": "strand-builtin:Filesystem.Write", "foreignType": "writeT", "effects": ["fsWriteFx"] },
+    "pathLit":    { "type": "StringLit", "value": "/tmp/log" },
+    "callWrite":  { "type": "Application", "function": "write", "arguments": ["pathLit"] },
+    "handleLam":  { "type": "Lambda", "parameters": [], "body": "callWrite", "effects": ["fsWriteFx"] },
+    "handler":    { "type": "Handler", "intercept": "timeFx", "handle": "handleLam", "body": "callNow" }
+  }
+}

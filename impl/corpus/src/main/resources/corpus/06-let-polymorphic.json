@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "root": "letId",
+  "nodes": {
+    "T_a":       { "type": "TypeParameter", "name": "a" },
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":     { "type": "PrimitiveType", "kind": "Bool" },
+    "x":         { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+    "x_use":     { "type": "VarRef", "binder": "x" },
+    "idInner":   { "type": "Lambda", "parameters": ["x"], "body": "x_use" },
+    "idLambda":  { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "idInner" },
+
+    "idRef1":    { "type": "VarRef", "binder": "letId" },
+    "argInt":    { "type": "IntLit", "value": 42 },
+    "callInt":   { "type": "Application", "function": "idRef1", "arguments": ["argInt"], "typeArguments": ["intT"] },
+
+    "idRef2":    { "type": "VarRef", "binder": "letId" },
+    "argBool":   { "type": "BoolLit", "value": true },
+    "callBool":  { "type": "Application", "function": "idRef2", "arguments": ["argBool"], "typeArguments": ["boolT"] },
+
+    "innerLet":  { "type": "Let", "name": "_unused", "value": "callInt", "body": "callBool" },
+    "letId":     { "type": "Let", "name": "id", "value": "idLambda", "body": "innerLet" }
+  }
+}

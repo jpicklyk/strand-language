@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "root": "getY",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+
+    "xField":    { "type": "ProductTypeField", "name": "x", "fieldType": "intT" },
+    "yField":    { "type": "ProductTypeField", "name": "y", "fieldType": "intT" },
+    "pointType": { "type": "ProductType", "fields": ["xField", "yField"] },
+
+    "lit3":      { "type": "IntLit", "value": 3 },
+    "lit4":      { "type": "IntLit", "value": 4 },
+    "xValue":    { "type": "ProductFieldValue", "fieldName": "x", "value": "lit3" },
+    "yValue":    { "type": "ProductFieldValue", "fieldName": "y", "value": "lit4" },
+    "point":     { "type": "ProductValue", "ofType": "pointType", "fields": ["xValue", "yValue"] },
+
+    "getY":      { "type": "ProductFieldGet", "target": "point", "fieldName": "y" }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "root": "counterMachine",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+    "unitT":            { "type": "PrimitiveType", "kind": "Unit" },
+
+    "incCase":          { "type": "SumTypeCase", "name": "Increment", "caseType": null },
+    "decCase":          { "type": "SumTypeCase", "name": "Decrement", "caseType": null },
+    "resetCase":        { "type": "SumTypeCase", "name": "Reset", "caseType": null },
+    "eventT":           { "type": "SumType", "cases": ["incCase", "decCase", "resetCase"] },
+
+    "emptyOutputsT":    { "type": "ProductType", "fields": [] },
+
+    "stateFieldT":      { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+    "outputsFieldT":    { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyOutputsT" },
+    "resultT":          { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
+
+    "addFnT":           { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "subFnT":           { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+
+    "addFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addFnT" },
+    "subFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Sub", "foreignType": "subFnT" },
+
+    "stateParam":       { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "eventParam":       { "type": "ParameterDecl", "name": "e", "paramType": "eventT" },
+    "stateParamRef":    { "type": "VarRef", "binder": "stateParam" },
+    "eventParamRef":    { "type": "VarRef", "binder": "eventParam" },
+
+    "litOne":           { "type": "IntLit", "value": 1 },
+    "litZero":          { "type": "IntLit", "value": 0 },
+
+    "addOne":           { "type": "Application", "function": "addFn", "arguments": ["stateParamRef", "litOne"] },
+    "subOne":           { "type": "Application", "function": "subFn", "arguments": ["stateParamRef", "litOne"] },
+
+    "patInc":           { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Increment" },
+    "patDec":           { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Decrement" },
+    "patReset":         { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Reset" },
+    "caseInc":          { "type": "MatchCase", "pattern": "patInc",   "body": "addOne" },
+    "caseDec":          { "type": "MatchCase", "pattern": "patDec",   "body": "subOne" },
+    "caseReset":        { "type": "MatchCase", "pattern": "patReset", "body": "litZero" },
+
+    "newState":         { "type": "Match", "scrutinee": "eventParamRef", "cases": ["caseInc", "caseDec", "caseReset"] },
+
+    "stateFieldV":      { "type": "ProductFieldValue", "fieldName": "state", "value": "newState" },
+    "emptyOutputsV":    { "type": "ProductValue", "ofType": "emptyOutputsT", "fields": [] },
+    "outputsFieldV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "emptyOutputsV" },
+    "transitionResult": { "type": "ProductValue", "ofType": "resultT", "fields": ["stateFieldV", "outputsFieldV"] },
+
+    "transitionLambda": { "type": "Lambda", "parameters": ["stateParam", "eventParam"], "body": "transitionResult" },
+
+    "initialState":     { "type": "IntLit", "value": 0 },
+
+    "inputStream":      { "type": "EventStream", "eventType": "eventT", "streamKind": "external" },
+
+    "counterMachine":   {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": [],
+      "effects": []
+    }
+  }
+}

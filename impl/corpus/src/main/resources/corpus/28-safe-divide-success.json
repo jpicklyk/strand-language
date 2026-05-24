@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":     { "type": "PrimitiveType", "kind": "Bool" },
+
+    "someCase":  { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneCase":  { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionT":   { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "eqT":       { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "eq":        { "type": "ForeignNode", "target": "strand-builtin:Int.Eq", "foreignType": "eqT" },
+    "divT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "div":       { "type": "ForeignNode", "target": "strand-builtin:Int.Div", "foreignType": "divT" },
+
+    "n":         { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+    "d":         { "type": "ParameterDecl", "name": "d", "paramType": "intT" },
+    "zero":      { "type": "IntLit", "value": 0 },
+    "dRef":      { "type": "VarRef", "binder": "d" },
+    "dIsZero":   { "type": "Application", "function": "eq", "arguments": ["dRef", "zero"] },
+
+    "litTrue":   { "type": "BoolLit", "value": true },
+    "patTrue":   { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litTrue" },
+    "noneVal":   { "type": "SumValue", "ofType": "optionT", "caseName": "None", "payload": null },
+    "caseTrue":  { "type": "MatchCase", "pattern": "patTrue", "body": "noneVal" },
+
+    "litFalse":  { "type": "BoolLit", "value": false },
+    "patFalse":  { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litFalse" },
+    "nRef":      { "type": "VarRef", "binder": "n" },
+    "quotient":  { "type": "Application", "function": "div", "arguments": ["nRef", "dRef"] },
+    "someVal":   { "type": "SumValue", "ofType": "optionT", "caseName": "Some", "payload": "quotient" },
+    "caseFalse": { "type": "MatchCase", "pattern": "patFalse", "body": "someVal" },
+
+    "divBody":   { "type": "Match", "scrutinee": "dIsZero", "cases": ["caseTrue", "caseFalse"] },
+    "divideFn":  { "type": "Lambda", "parameters": ["n", "d"], "body": "divBody" },
+
+    "ten":       { "type": "IntLit", "value": 10 },
+    "two":       { "type": "IntLit", "value": 2 },
+    "divResult": { "type": "Application", "function": "divideFn", "arguments": ["ten", "two"] },
+
+    "varX":      { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "x" },
+    "patSome":   { "type": "Pattern", "kind": "constructor", "patternType": "optionT", "caseName": "Some", "payloadPattern": "varX" },
+    "xRef":      { "type": "VarRef", "binder": "varX" },
+    "caseSome":  { "type": "MatchCase", "pattern": "patSome", "body": "xRef" },
+    "negOne":    { "type": "IntLit", "value": -1 },
+    "patNone":   { "type": "Pattern", "kind": "constructor", "patternType": "optionT", "caseName": "None" },
+    "caseNone":  { "type": "MatchCase", "pattern": "patNone", "body": "negOne" },
+
+    "main":      { "type": "Match", "scrutinee": "divResult", "cases": ["caseSome", "caseNone"] }
+  }
+}

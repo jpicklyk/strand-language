@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "root": "bankMachine",
+  "nodes": {
+    "intT":              { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":             { "type": "PrimitiveType", "kind": "Bool" },
+    "unitT":             { "type": "PrimitiveType", "kind": "Unit" },
+
+    "balanceFieldT":     { "type": "ProductTypeField", "name": "balance",          "fieldType": "intT" },
+    "txCountFieldT":     { "type": "ProductTypeField", "name": "transactionCount", "fieldType": "intT" },
+    "accountT":          { "type": "ProductType", "fields": ["balanceFieldT", "txCountFieldT"] },
+
+    "depositCase":       { "type": "SumTypeCase", "name": "Deposit",  "caseType": "intT" },
+    "withdrawCase":      { "type": "SumTypeCase", "name": "Withdraw", "caseType": "intT" },
+    "queryCase":         { "type": "SumTypeCase", "name": "Query",    "caseType": null  },
+    "eventT":            { "type": "SumType", "cases": ["depositCase", "withdrawCase", "queryCase"] },
+
+    "someCase":          { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneCase":          { "type": "SumTypeCase", "name": "None", "caseType": null  },
+    "optionIntT":        { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "output0FieldT":     { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionIntT" },
+    "outputBatchT":      { "type": "ProductType", "fields": ["output0FieldT"] },
+
+    "stateFieldT":       { "type": "ProductTypeField", "name": "state",   "fieldType": "accountT" },
+    "outputsFieldT":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "outputBatchT" },
+    "resultT":           { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
+
+    "addFnT":            { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "subFnT":            { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "geFnT":             { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "addFn":             { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addFnT" },
+    "subFn":             { "type": "ForeignNode", "target": "strand-builtin:Int.Sub", "foreignType": "subFnT" },
+    "geFn":              { "type": "ForeignNode", "target": "strand-builtin:Int.Ge",  "foreignType": "geFnT" },
+
+    "stateParam":        { "type": "ParameterDecl", "name": "s", "paramType": "accountT" },
+    "eventParam":        { "type": "ParameterDecl", "name": "e", "paramType": "eventT" },
+    "stateParamRef":     { "type": "VarRef", "binder": "stateParam" },
+    "eventParamRef":     { "type": "VarRef", "binder": "eventParam" },
+
+    "litOne":            { "type": "IntLit", "value": 1 },
+
+    "balanceAccess":     { "type": "ProductFieldGet", "target": "stateParamRef", "fieldName": "balance" },
+    "txCountAccess":     { "type": "ProductFieldGet", "target": "stateParamRef", "fieldName": "transactionCount" },
+    "txCountPlusOne":    { "type": "Application", "function": "addFn", "arguments": ["txCountAccess", "litOne"] },
+
+    "depositAmountP":    { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "amount" },
+    "patDeposit":        { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Deposit", "payloadPattern": "depositAmountP" },
+    "depositAmountRef":  { "type": "VarRef", "binder": "depositAmountP" },
+    "newBalanceDeposit": { "type": "Application", "function": "addFn", "arguments": ["balanceAccess", "depositAmountRef"] },
+    "newBalanceFieldD":  { "type": "ProductFieldValue", "fieldName": "balance",          "value": "newBalanceDeposit" },
+    "newTxCountFieldD":  { "type": "ProductFieldValue", "fieldName": "transactionCount", "value": "txCountPlusOne" },
+    "depositState":      { "type": "ProductValue", "ofType": "accountT", "fields": ["newBalanceFieldD", "newTxCountFieldD"] },
+    "depositNone":       { "type": "SumValue", "ofType": "optionIntT", "caseName": "None" },
+    "depositStateFV":    { "type": "ProductFieldValue", "fieldName": "state",   "value": "depositState" },
+    "depositOutput0FV":  { "type": "ProductFieldValue", "fieldName": "output_0", "value": "depositNone" },
+    "depositOutputBV":   { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["depositOutput0FV"] },
+    "depositOutputFV":   { "type": "ProductFieldValue", "fieldName": "outputs", "value": "depositOutputBV" },
+    "depositResult":     { "type": "ProductValue", "ofType": "resultT", "fields": ["depositStateFV", "depositOutputFV"] },
+    "caseDeposit":       { "type": "MatchCase", "pattern": "patDeposit", "body": "depositResult" },
+
+    "withdrawAmountP":   { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "amount" },
+    "patWithdraw":       { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Withdraw", "payloadPattern": "withdrawAmountP" },
+    "withdrawAmountRef": { "type": "VarRef", "binder": "withdrawAmountP" },
+    "sufficientFunds":   { "type": "Application", "function": "geFn",  "arguments": ["balanceAccess", "withdrawAmountRef"] },
+    "balanceAfterDebit": { "type": "Application", "function": "subFn", "arguments": ["balanceAccess", "withdrawAmountRef"] },
+
+    "trueLit":           { "type": "BoolLit", "value": true },
+    "falseLit":          { "type": "BoolLit", "value": false },
+    "patTrueWd":         { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "trueLit" },
+    "patFalseWd":        { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "falseLit" },
+
+    "wdSuccBalanceFV":   { "type": "ProductFieldValue", "fieldName": "balance",          "value": "balanceAfterDebit" },
+    "wdSuccTxCountFV":   { "type": "ProductFieldValue", "fieldName": "transactionCount", "value": "txCountPlusOne" },
+    "wdSuccState":       { "type": "ProductValue", "ofType": "accountT", "fields": ["wdSuccBalanceFV", "wdSuccTxCountFV"] },
+    "wdSuccNone":        { "type": "SumValue", "ofType": "optionIntT", "caseName": "None" },
+    "wdSuccStateFV":     { "type": "ProductFieldValue", "fieldName": "state",   "value": "wdSuccState" },
+    "wdSuccOutput0FV":   { "type": "ProductFieldValue", "fieldName": "output_0", "value": "wdSuccNone" },
+    "wdSuccOutputBV":    { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["wdSuccOutput0FV"] },
+    "wdSuccOutputFV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "wdSuccOutputBV" },
+    "wdSuccResult":      { "type": "ProductValue", "ofType": "resultT", "fields": ["wdSuccStateFV", "wdSuccOutputFV"] },
+    "caseWdTrue":        { "type": "MatchCase", "pattern": "patTrueWd",  "body": "wdSuccResult" },
+
+    "litMinusOne":       { "type": "IntLit", "value": -1 },
+    "wdFailSignal":      { "type": "SumValue", "ofType": "optionIntT", "caseName": "Some", "payload": "litMinusOne" },
+    "wdFailStateFV":     { "type": "ProductFieldValue", "fieldName": "state",   "value": "stateParamRef" },
+    "wdFailOutput0FV":   { "type": "ProductFieldValue", "fieldName": "output_0", "value": "wdFailSignal" },
+    "wdFailOutputBV":    { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["wdFailOutput0FV"] },
+    "wdFailOutputFV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "wdFailOutputBV" },
+    "wdFailResult":      { "type": "ProductValue", "ofType": "resultT", "fields": ["wdFailStateFV", "wdFailOutputFV"] },
+    "caseWdFalse":       { "type": "MatchCase", "pattern": "patFalseWd", "body": "wdFailResult" },
+
+    "withdrawDispatch":  { "type": "Match", "scrutinee": "sufficientFunds", "cases": ["caseWdTrue", "caseWdFalse"] },
+    "caseWithdraw":      { "type": "MatchCase", "pattern": "patWithdraw", "body": "withdrawDispatch" },
+
+    "patQuery":          { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Query" },
+    "querySomeBalance":  { "type": "SumValue", "ofType": "optionIntT", "caseName": "Some", "payload": "balanceAccess" },
+    "queryStateFV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "stateParamRef" },
+    "queryOutput0FV":    { "type": "ProductFieldValue", "fieldName": "output_0", "value": "querySomeBalance" },
+    "queryOutputBV":     { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["queryOutput0FV"] },
+    "queryOutputFV":     { "type": "ProductFieldValue", "fieldName": "outputs", "value": "queryOutputBV" },
+    "queryResult":       { "type": "ProductValue", "ofType": "resultT", "fields": ["queryStateFV", "queryOutputFV"] },
+    "caseQuery":         { "type": "MatchCase", "pattern": "patQuery", "body": "queryResult" },
+
+    "dispatch":          { "type": "Match", "scrutinee": "eventParamRef", "cases": ["caseDeposit", "caseWithdraw", "caseQuery"] },
+
+    "transitionLambda":  { "type": "Lambda", "parameters": ["stateParam", "eventParam"], "body": "dispatch" },
+
+    "initBalance":       { "type": "IntLit", "value": 0 },
+    "initTxCount":       { "type": "IntLit", "value": 0 },
+    "initBalanceFV":     { "type": "ProductFieldValue", "fieldName": "balance",          "value": "initBalance" },
+    "initTxCountFV":     { "type": "ProductFieldValue", "fieldName": "transactionCount", "value": "initTxCount" },
+    "initialState":      { "type": "ProductValue", "ofType": "accountT", "fields": ["initBalanceFV", "initTxCountFV"] },
+
+    "inputStream":       { "type": "EventStream", "eventType": "eventT", "streamKind": "external" },
+    "outputStream":      { "type": "EventStream", "eventType": "intT",   "streamKind": "output"   },
+
+    "bankMachine":       {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": ["outputStream"],
+      "effects": []
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "root": "lambda",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "caseSome":  { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "caseNone":  { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionInt": { "type": "SumType", "cases": ["caseSome", "caseNone"] },
+
+    "o":         { "type": "ParameterDecl", "name": "o", "paramType": "optionInt" },
+    "oRef":      { "type": "VarRef", "binder": "o" },
+    "lambda":    { "type": "Lambda", "parameters": ["o"], "body": "oRef" }
+  }
+}

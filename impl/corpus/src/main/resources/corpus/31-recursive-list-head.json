@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+
+    "headFieldInner":   { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+    "tailFieldInner":   { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "consProductInner": { "type": "ProductType", "fields": ["headFieldInner", "tailFieldInner"] },
+
+    "consCase":         { "type": "SumTypeCase", "name": "Cons", "caseType": "consProductInner" },
+    "nilCase":          { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "listBody":         { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "recSelf":          { "type": "RecursiveSelf" },
+    "listT":            { "type": "RecursiveType", "body": "listBody" },
+
+    "headFieldOuter":   { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+    "tailFieldOuter":   { "type": "ProductTypeField", "name": "tail", "fieldType": "listT" },
+    "consProductOuter": { "type": "ProductType", "fields": ["headFieldOuter", "tailFieldOuter"] },
+
+    "nilVal":           { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+
+    "seven":            { "type": "IntLit", "value": 7 },
+    "innerHead":        { "type": "ProductFieldValue", "fieldName": "head", "value": "seven" },
+    "innerTail":        { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "innerProduct":     { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["innerHead", "innerTail"] },
+    "oneItemList":      { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "innerProduct" },
+
+    "varP":             { "type": "Pattern", "kind": "variable", "patternType": "consProductOuter", "name": "p" },
+    "patCons":          { "type": "Pattern", "kind": "constructor", "patternType": "listT", "caseName": "Cons", "payloadPattern": "varP" },
+    "pRef":             { "type": "VarRef", "binder": "varP" },
+    "headExtract":      { "type": "ProductFieldGet", "target": "pRef", "fieldName": "head" },
+    "caseCons":         { "type": "MatchCase", "pattern": "patCons", "body": "headExtract" },
+
+    "zero":             { "type": "IntLit", "value": 0 },
+    "patNil":           { "type": "Pattern", "kind": "constructor", "patternType": "listT", "caseName": "Nil" },
+    "caseNil":          { "type": "MatchCase", "pattern": "patNil", "body": "zero" },
+
+    "main":             { "type": "Match", "scrutinee": "oneItemList", "cases": ["caseCons", "caseNil"] }
+  }
+}

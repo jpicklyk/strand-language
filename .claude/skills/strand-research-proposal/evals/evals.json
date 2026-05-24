@@ -1,0 +1,23 @@
+{
+  "skill_name": "strand-research-proposal",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "we have Q-013 in open-questions.md about topology obfuscation - the partial resolution says structural transformations like decoy nodes are 'identified as future research direction'. can you research what that would actually look like and draft a proposal?",
+      "expected_output": "Skill should trigger. Reads CLAUDE.md, impl/CLAUDE.md Known gaps, open-questions.md Q-013, design/security-model.md, design/encryption-model.md. Identifies that the question is contained (single topic, related to security/encryption) so does NOT decompose with parallel agents. Conducts research, produces a self-contained proposal in proposals/topology-obfuscation.md following the standard structure (problem statement, prior art on graph obfuscation techniques, recommended approach with commitment to specific transformations, canonical encoding implications, verifier rules if any, test scenarios, tradeoffs including what's deferred, implementation sketch with file-by-file scope). Updates Q-013 in open-questions.md from 'Open' to 'Proposed' with resolution pointing at the proposal. Links from impl/CLAUDE.md Known gaps. Final review surfaces any judgment calls.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I want to understand how Strand should integrate with WebAssembly for sandboxed foreign bindings. that's the Milestone 2.4 work in the research plan and there are several sub-questions: how does the WASM runtime get instantiated, how do effect declarations translate to WIT imports, what does signed-binding verification look like, what happens at the WASM/Strand boundary for value marshalling. produce a design proposal.",
+      "expected_output": "Skill should trigger AND should decompose with parallel research agents — the question has 4 clearly independent sub-questions, each requires deep reading of different docs (security-model, encryption-model, distribution-model, ADR-005). The skill spawns 4 agents in parallel, each with a self-contained prompt covering: project context, files to read, specific sub-question, output format, word count target, do-not-write-code instruction. Synthesizes the 4 returned proposals into a single proposals/wasm-sandboxed-bindings.md OR into 4 related proposals (judgment call). Identifies any cross-cutting concerns (e.g., effect-to-WIT mapping affects all four). Registers Q-NNN in open-questions.md. Links from impl/CLAUDE.md. Surfaces real research questions in the final review.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "the spec is ambiguous about how Lambda's effect closure interacts with TypeAbstraction - does a polymorphic effectful function have different effects at different instantiations? need a clarifying design pass.",
+      "expected_output": "Skill should trigger. This is a contained question (single design doc concern — effects-and-capabilities.md + node-algebra.md). No decomposition needed. Reads existing docs to understand the current state. Produces a focused proposal — probably medium length, not the full ~2500 words because the question is narrower. Could be a clarifying ADR amendment rather than a new mechanism. Skill should be willing to produce a shorter proposal if the question warrants it (the proposal-structure.md template says >3500 words suggests over-scoping). Stores in proposals/, opens Q-NNN as Proposed, links from impl/CLAUDE.md. Honest about whether the answer is a small clarification or a real design choice.",
+      "files": []
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+
+    "nowT":   { "type": "FunctionType", "parameters": [], "result": "intT" },
+    "now":    { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+
+    "addT":   { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":    { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "callNow": { "type": "Application", "function": "now", "arguments": [] },
+    "one":     { "type": "IntLit", "value": 1 },
+    "app":     { "type": "Application", "function": "add", "arguments": ["callNow", "one"] }
+  }
+}

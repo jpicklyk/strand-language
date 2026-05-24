@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "root": "m",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+
+    "lit0":   { "type": "IntLit", "value": 0 },
+    "pat0":   { "type": "Pattern", "kind": "literal", "patternType": "intT", "literal": "lit0" },
+    "body0":  { "type": "IntLit", "value": 100 },
+    "case0":  { "type": "MatchCase", "pattern": "pat0", "body": "body0" },
+
+    "patAny": { "type": "Pattern", "kind": "wildcard", "patternType": "intT" },
+    "bodyA":  { "type": "IntLit", "value": 200 },
+    "caseA":  { "type": "MatchCase", "pattern": "patAny", "body": "bodyA" },
+
+    "scrut":  { "type": "IntLit", "value": 0 },
+    "m":      { "type": "Match", "scrutinee": "scrut", "cases": ["case0", "caseA"] }
+  }
+}

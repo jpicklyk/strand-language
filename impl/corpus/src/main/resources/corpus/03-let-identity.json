@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "root": "outer",
+  "nodes": {
+    "T_a":      { "type": "TypeParameter", "name": "a" },
+    "boolT":    { "type": "PrimitiveType", "kind": "Bool" },
+    "x":        { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+    "x_use":    { "type": "VarRef", "binder": "x" },
+    "idInner":  { "type": "Lambda", "parameters": ["x"], "body": "x_use" },
+    "idLambda": { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "idInner" },
+    "id_use":   { "type": "VarRef", "binder": "outer" },
+    "argTrue":  { "type": "BoolLit", "value": true },
+    "callId":   { "type": "Application", "function": "id_use", "arguments": ["argTrue"], "typeArguments": ["boolT"] },
+    "outer":    { "type": "Let", "name": "id", "value": "idLambda", "body": "callId" }
+  }
+}

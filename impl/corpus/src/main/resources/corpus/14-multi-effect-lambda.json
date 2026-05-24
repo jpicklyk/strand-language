@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "root": "callG",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+    "netFx":  { "type": "EffectCategory", "categoryName": "Network.Connect" },
+    "fsFx":   { "type": "EffectCategory", "categoryName": "Filesystem.Read" },
+
+    "gX":     { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+    "gBody":  { "type": "VarRef", "binder": "gX" },
+    "g":      { "type": "Lambda", "parameters": ["gX"], "body": "gBody", "effects": ["timeFx", "netFx", "fsFx"] },
+
+    "nine":   { "type": "IntLit", "value": 9 },
+    "callG":  { "type": "Application", "function": "g", "arguments": ["nine"] }
+  }
+}

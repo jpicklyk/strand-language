@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "root": "m",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":  { "type": "PrimitiveType", "kind": "Bool" },
+
+    "ltT":    { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "lt":     { "type": "ForeignNode", "target": "strand-builtin:Int.Lt", "foreignType": "ltT" },
+
+    "three":  { "type": "IntLit", "value": 3 },
+    "five":   { "type": "IntLit", "value": 5 },
+    "compare":{ "type": "Application", "function": "lt", "arguments": ["three", "five"] },
+
+    "litTrue":  { "type": "BoolLit", "value": true },
+    "patTrue":  { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litTrue" },
+    "bodyT":    { "type": "IntLit", "value": 1 },
+    "caseT":    { "type": "MatchCase", "pattern": "patTrue", "body": "bodyT" },
+
+    "litFalse": { "type": "BoolLit", "value": false },
+    "patFalse": { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litFalse" },
+    "bodyF":    { "type": "IntLit", "value": 0 },
+    "caseF":    { "type": "MatchCase", "pattern": "patFalse", "body": "bodyF" },
+
+    "m":        { "type": "Match", "scrutinee": "compare", "cases": ["caseT", "caseF"] }
+  }
+}

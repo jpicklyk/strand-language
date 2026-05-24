@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "root": "counterMachine",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":            { "type": "PrimitiveType", "kind": "Bool" },
+
+    "incCase":          { "type": "SumTypeCase", "name": "Increment", "caseType": null },
+    "decCase":          { "type": "SumTypeCase", "name": "Decrement", "caseType": null },
+    "eventT":           { "type": "SumType", "cases": ["incCase", "decCase"] },
+
+    "someCase":         { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneCase":         { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionIntT":       { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "output0FieldT":    { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionIntT" },
+    "outputBatchT":     { "type": "ProductType", "fields": ["output0FieldT"] },
+
+    "stateFieldT":      { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+    "outputsFieldT":    { "type": "ProductTypeField", "name": "outputs", "fieldType": "outputBatchT" },
+    "resultT":          { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
+
+    "addFnT":           { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "subFnT":           { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "gtFnT":            { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+
+    "addFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addFnT" },
+    "subFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Sub", "foreignType": "subFnT" },
+    "gtFn":             { "type": "ForeignNode", "target": "strand-builtin:Int.Gt",  "foreignType": "gtFnT" },
+
+    "stateParam":       { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "eventParam":       { "type": "ParameterDecl", "name": "e", "paramType": "eventT" },
+    "stateParamRef":    { "type": "VarRef", "binder": "stateParam" },
+    "eventParamRef":    { "type": "VarRef", "binder": "eventParam" },
+
+    "litOne":           { "type": "IntLit", "value": 1 },
+    "litThreshold":     { "type": "IntLit", "value": 5 },
+
+    "addOne":           { "type": "Application", "function": "addFn", "arguments": ["stateParamRef", "litOne"] },
+    "subOne":           { "type": "Application", "function": "subFn", "arguments": ["stateParamRef", "litOne"] },
+
+    "patInc":           { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Increment" },
+    "patDec":           { "type": "Pattern", "kind": "constructor", "patternType": "eventT", "caseName": "Decrement" },
+    "caseInc":          { "type": "MatchCase", "pattern": "patInc", "body": "addOne" },
+    "caseDec":          { "type": "MatchCase", "pattern": "patDec", "body": "subOne" },
+
+    "stateLet":         { "type": "Let", "name": "newS", "value": "stateMatch", "body": "fullResult" },
+    "stateMatch":       { "type": "Match", "scrutinee": "eventParamRef", "cases": ["caseInc", "caseDec"] },
+
+    "newStateRef":      { "type": "VarRef", "binder": "stateLet" },
+
+    "exceedsThreshold": { "type": "Application", "function": "gtFn", "arguments": ["newStateRef", "litThreshold"] },
+
+    "someEmitted":      { "type": "SumValue", "ofType": "optionIntT", "caseName": "Some", "payload": "newStateRef" },
+    "noneEmitted":      { "type": "SumValue", "ofType": "optionIntT", "caseName": "None" },
+
+    "trueLit":          { "type": "BoolLit", "value": true },
+    "falseLit":         { "type": "BoolLit", "value": false },
+    "patTrue":          { "type": "Pattern", "kind": "literal",  "patternType": "boolT", "literal": "trueLit" },
+    "patFalse":         { "type": "Pattern", "kind": "literal",  "patternType": "boolT", "literal": "falseLit" },
+    "caseTrue":         { "type": "MatchCase", "pattern": "patTrue",  "body": "someEmitted" },
+    "caseFalse":        { "type": "MatchCase", "pattern": "patFalse", "body": "noneEmitted" },
+    "emitDecision":     { "type": "Match", "scrutinee": "exceedsThreshold", "cases": ["caseTrue", "caseFalse"] },
+
+    "output0FieldV":    { "type": "ProductFieldValue", "fieldName": "output_0", "value": "emitDecision" },
+    "outputBatchV":     { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["output0FieldV"] },
+
+    "stateFieldV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "newStateRef" },
+    "outputsFieldV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "outputBatchV" },
+    "fullResult":       { "type": "ProductValue", "ofType": "resultT", "fields": ["stateFieldV", "outputsFieldV"] },
+
+    "transitionLambda": { "type": "Lambda", "parameters": ["stateParam", "eventParam"], "body": "stateLet" },
+
+    "initialState":     { "type": "IntLit", "value": 0 },
+
+    "inputStream":      { "type": "EventStream", "eventType": "eventT", "streamKind": "external" },
+    "outputStream":     { "type": "EventStream", "eventType": "intT",   "streamKind": "output"   },
+
+    "counterMachine":   {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": ["outputStream"],
+      "effects": []
+    }
+  }
+}

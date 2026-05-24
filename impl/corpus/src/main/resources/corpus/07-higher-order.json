@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "root": "topApp",
+  "nodes": {
+    "T_a":           { "type": "TypeParameter", "name": "a" },
+    "intT":          { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":         { "type": "PrimitiveType", "kind": "Bool" },
+
+    "idFunType":     { "type": "FunctionType", "parameters": ["T_a"], "result": "T_a" },
+    "idForallType":  { "type": "ForallType", "typeParameters": ["T_a"], "body": "idFunType" },
+
+    "f":             { "type": "ParameterDecl", "name": "f", "paramType": "idForallType" },
+    "n":             { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+    "b":             { "type": "ParameterDecl", "name": "b", "paramType": "boolT" },
+
+    "fRef1":         { "type": "VarRef", "binder": "f" },
+    "bRef":          { "type": "VarRef", "binder": "b" },
+    "callFB":        { "type": "Application", "function": "fRef1", "arguments": ["bRef"], "typeArguments": ["boolT"] },
+
+    "fRef2":         { "type": "VarRef", "binder": "f" },
+    "nRef":          { "type": "VarRef", "binder": "n" },
+    "callFN":        { "type": "Application", "function": "fRef2", "arguments": ["nRef"], "typeArguments": ["intT"] },
+
+    "discardLet":    { "type": "Let", "name": "_", "value": "callFB", "body": "callFN" },
+
+    "innerB":        { "type": "Lambda", "parameters": ["b"], "body": "discardLet" },
+    "innerN":        { "type": "Lambda", "parameters": ["n"], "body": "innerB" },
+    "applyLambda":   { "type": "Lambda", "parameters": ["f"], "body": "innerN" },
+
+    "idX":           { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+    "idXRef":        { "type": "VarRef", "binder": "idX" },
+    "idInner":       { "type": "Lambda", "parameters": ["idX"], "body": "idXRef" },
+    "idLambda":      { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "idInner" },
+
+    "argN":          { "type": "IntLit", "value": 99 },
+    "argB":          { "type": "BoolLit", "value": true },
+
+    "applyF":        { "type": "Application", "function": "applyLambda", "arguments": ["idLambda"], "typeArguments": [] },
+    "applyFN":       { "type": "Application", "function": "applyF", "arguments": ["argN"], "typeArguments": [] },
+    "topApp":        { "type": "Application", "function": "applyFN", "arguments": ["argB"], "typeArguments": [] }
+  }
+}

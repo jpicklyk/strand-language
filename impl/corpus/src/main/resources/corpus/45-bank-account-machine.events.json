@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "tag": "sum", "case": "Deposit", "payload": { "tag": "int", "value": 100 } },
+    { "tag": "sum", "case": "Deposit", "payload": { "tag": "int", "value": 50 } },
+    { "tag": "sum", "case": "Query" },
+    { "tag": "sum", "case": "Withdraw", "payload": { "tag": "int", "value": 30 } },
+    { "tag": "sum", "case": "Withdraw", "payload": { "tag": "int", "value": 1000 } },
+    { "tag": "sum", "case": "Query" }
+  ]
+}

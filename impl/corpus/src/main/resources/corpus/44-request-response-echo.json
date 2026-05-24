@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "root": "echoMachine",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+    "stringT":          { "type": "PrimitiveType", "kind": "String" },
+    "unitT":            { "type": "PrimitiveType", "kind": "Unit" },
+
+    "reqIdField":       { "type": "ProductTypeField", "name": "requestId", "fieldType": "intT" },
+    "reqPayloadField":  { "type": "ProductTypeField", "name": "payload",   "fieldType": "stringT" },
+    "requestT":         { "type": "ProductType", "fields": ["reqIdField", "reqPayloadField"] },
+
+    "respIdField":      { "type": "ProductTypeField", "name": "requestId", "fieldType": "intT" },
+    "respPayloadField": { "type": "ProductTypeField", "name": "response",  "fieldType": "stringT" },
+    "responseT":        { "type": "ProductType", "fields": ["respIdField", "respPayloadField"] },
+
+    "someCase":         { "type": "SumTypeCase", "name": "Some", "caseType": "responseT" },
+    "noneCase":         { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionRespT":      { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "output0FieldT":    { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionRespT" },
+    "outputBatchT":     { "type": "ProductType", "fields": ["output0FieldT"] },
+
+    "stateFieldT":      { "type": "ProductTypeField", "name": "state",   "fieldType": "unitT" },
+    "outputsFieldT":    { "type": "ProductTypeField", "name": "outputs", "fieldType": "outputBatchT" },
+    "resultT":          { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
+
+    "stateParam":       { "type": "ParameterDecl", "name": "s", "paramType": "unitT" },
+    "eventParam":       { "type": "ParameterDecl", "name": "e", "paramType": "requestT" },
+    "stateParamRef":    { "type": "VarRef", "binder": "stateParam" },
+    "eventParamRef":    { "type": "VarRef", "binder": "eventParam" },
+
+    "reqIdAccess":      { "type": "ProductFieldGet", "target": "eventParamRef", "fieldName": "requestId" },
+    "reqPayloadAccess": { "type": "ProductFieldGet", "target": "eventParamRef", "fieldName": "payload" },
+
+    "respIdFieldV":     { "type": "ProductFieldValue", "fieldName": "requestId", "value": "reqIdAccess" },
+    "respPayloadFieldV":{ "type": "ProductFieldValue", "fieldName": "response",  "value": "reqPayloadAccess" },
+    "responseValue":    { "type": "ProductValue", "ofType": "responseT", "fields": ["respIdFieldV", "respPayloadFieldV"] },
+
+    "someResponse":     { "type": "SumValue", "ofType": "optionRespT", "caseName": "Some", "payload": "responseValue" },
+
+    "output0FieldV":    { "type": "ProductFieldValue", "fieldName": "output_0", "value": "someResponse" },
+    "outputBatchV":     { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["output0FieldV"] },
+
+    "stateFieldV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "stateParamRef" },
+    "outputsFieldV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "outputBatchV" },
+    "transitionResult": { "type": "ProductValue", "ofType": "resultT", "fields": ["stateFieldV", "outputsFieldV"] },
+
+    "transitionLambda": { "type": "Lambda", "parameters": ["stateParam", "eventParam"], "body": "transitionResult" },
+
+    "initialState":     { "type": "UnitLit" },
+
+    "inputStream":      { "type": "EventStream", "eventType": "requestT",  "streamKind": "external" },
+    "outputStream":     { "type": "EventStream", "eventType": "responseT", "streamKind": "output"   },
+
+    "echoMachine":      {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": ["outputStream"],
+      "effects": []
+    }
+  }
+}

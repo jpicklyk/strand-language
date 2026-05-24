@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "root": "callG",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+
+    "gX":     { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+    "gBody":  { "type": "VarRef", "binder": "gX" },
+    "g":      { "type": "Lambda", "parameters": ["gX"], "body": "gBody", "effects": ["timeFx"] },
+
+    "seven":  { "type": "IntLit", "value": 7 },
+    "callG":  { "type": "Application", "function": "g", "arguments": ["seven"] }
+  }
+}

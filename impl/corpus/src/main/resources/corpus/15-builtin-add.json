@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":  { "type": "PrimitiveType", "kind": "Int" },
+    "addT":  { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":   { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "two":   { "type": "IntLit", "value": 2 },
+    "three": { "type": "IntLit", "value": 3 },
+    "app":   { "type": "Application", "function": "add", "arguments": ["two", "three"] }
+  }
+}

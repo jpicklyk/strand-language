@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "root": "result",
+  "nodes": {
+    "strT":   { "type": "PrimitiveType", "kind": "String" },
+    "concT":  { "type": "FunctionType", "parameters": ["strT", "strT"], "result": "strT" },
+    "conc":   { "type": "ForeignNode", "target": "strand-builtin:String.Concat", "foreignType": "concT" },
+    "hello":  { "type": "StringLit", "value": "Hello, " },
+    "world":  { "type": "StringLit", "value": "Strand!" },
+    "result": { "type": "Application", "function": "conc", "arguments": ["hello", "world"] }
+  }
+}

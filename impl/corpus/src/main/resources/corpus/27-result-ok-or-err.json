@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "root": "result",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "strT":      { "type": "PrimitiveType", "kind": "String" },
+
+    "okCase":    { "type": "SumTypeCase", "name": "Ok", "caseType": "intT" },
+    "errCase":   { "type": "SumTypeCase", "name": "Err", "caseType": "strT" },
+    "resultT":   { "type": "SumType", "cases": ["okCase", "errCase"] },
+
+    "okPayload": { "type": "IntLit", "value": 7 },
+    "okValue":   { "type": "SumValue", "ofType": "resultT", "caseName": "Ok", "payload": "okPayload" },
+
+    "varN":      { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+    "patOk":     { "type": "Pattern", "kind": "constructor", "patternType": "resultT", "caseName": "Ok", "payloadPattern": "varN" },
+    "addT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":       { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "lit100":    { "type": "IntLit", "value": 100 },
+    "nRef":      { "type": "VarRef", "binder": "varN" },
+    "okBody":    { "type": "Application", "function": "add", "arguments": ["nRef", "lit100"] },
+    "caseOk":    { "type": "MatchCase", "pattern": "patOk", "body": "okBody" },
+
+    "wildErr":   { "type": "Pattern", "kind": "wildcard", "patternType": "strT" },
+    "patErr":    { "type": "Pattern", "kind": "constructor", "patternType": "resultT", "caseName": "Err", "payloadPattern": "wildErr" },
+    "negOne":    { "type": "IntLit", "value": -1 },
+    "caseErr":   { "type": "MatchCase", "pattern": "patErr", "body": "negOne" },
+
+    "result":    { "type": "Match", "scrutinee": "okValue", "cases": ["caseOk", "caseErr"] }
+  }
+}

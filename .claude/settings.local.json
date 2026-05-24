@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /d/Projects/strand-language/impl && ls -la)",
+      "Bash(gradle wrapper *)",
+      "Bash(gradle :wrapper --gradle-version 8.10.2 --configure-on-demand)"
+    ]
+  }
+}

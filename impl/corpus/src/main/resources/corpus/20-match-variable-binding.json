@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "root": "m",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+
+    "lit0":   { "type": "IntLit", "value": 0 },
+    "pat0":   { "type": "Pattern", "kind": "literal", "patternType": "intT", "literal": "lit0" },
+    "body0":  { "type": "IntLit", "value": 999 },
+    "case0":  { "type": "MatchCase", "pattern": "pat0", "body": "body0" },
+
+    "patN":   { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+    "addT":   { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":    { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "nRef":   { "type": "VarRef", "binder": "patN" },
+    "ten":    { "type": "IntLit", "value": 10 },
+    "bodyN":  { "type": "Application", "function": "add", "arguments": ["nRef", "ten"] },
+    "caseN":  { "type": "MatchCase", "pattern": "patN", "body": "bodyN" },
+
+    "scrut":  { "type": "IntLit", "value": 7 },
+    "m":      { "type": "Match", "scrutinee": "scrut", "cases": ["case0", "caseN"] }
+  }
+}

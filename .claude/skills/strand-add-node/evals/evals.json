@@ -1,0 +1,23 @@
+{
+  "skill_name": "strand-add-node",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "ok so the recursive-types work is in, next thing on my list is implementing the effect handler proposal. theres a draft at proposals/effect-handlers.md - can you advance that to a working implementation?",
+      "expected_output": "Skill should trigger. Reads the proposal, confirms N-043 assignment (proposal acknowledges conflict with N-041/N-042 already claimed), then walks through the 11-step workflow: spec update in node-algebra.md, INDEX.md registration, Json ingest, CategoryTag, CanonicalEncoder dispatch + encoder helper, Hasher.walk extension, Verifier inferHandler with closure-subtraction rule, new VerifyError variants (HandlerSignatureMismatch, HandlerOverPolymorphicHandle, HandlerNotAFunction), Interpreter handler-table threading, ActiveHandler data class, applyCall interception, corpus programs (mock Time.Now, nested handlers, handler with own effect), tests, impl/CLAUDE.md update, final clean test run. The skill enforces: exhaustive when, structured errors, no emoji, Last revised lines, INDEX sync.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I want to add a new boolean operation node - Bool.Xor. its just a binary boolean function. should be straightforward",
+      "expected_output": "Skill should ASK FOR CLARIFICATION before triggering the full workflow. Bool.Xor is most naturally added as a new builtin in interpreter/Builtins.kt, NOT as a new Node category requiring N-NNN registration. The skill should recognize this distinction (per its own 'When to use this skill vs other approaches' section) and steer the user toward the simpler change rather than running the full 11-step procedure for what is effectively a one-file addition. If user pushes back and wants it as a true new node category, then the skill follows through.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "we need to add support for Match exhaustiveness checking. when you Match on a sum type that has cases [A, B, C] and the patterns only cover [A, B], the verifier should reject with a new MatchNonExhaustive error. this isn't a new node category but it does need a new error variant and a check in the verifier.",
+      "expected_output": "Skill should partially trigger. This isn't a full new-node-category workflow (no N-NNN, no encoder change, no interpreter dispatch case, no JSON ingest change). The skill should recognize this and execute only the relevant subset: update inferMatch in Verifier.kt to check coverage, add MatchNonExhaustive variant to VerifyError.kt with categoryName update if needed (not needed here since no new Node), add verifier unit tests, add a corpus program or two demonstrating the new check, update impl/CLAUDE.md if it touches a Known gap. The skill should be honest that most steps don't apply.",
+      "files": []
+    }
+  ]
+}

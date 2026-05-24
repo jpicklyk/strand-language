@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":     { "type": "PrimitiveType", "kind": "Bool" },
+
+    "sumT":      { "type": "FunctionType", "parameters": ["intT"], "result": "intT" },
+
+    "addT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":       { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "subT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "sub":       { "type": "ForeignNode", "target": "strand-builtin:Int.Sub", "foreignType": "subT" },
+    "leT":       { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "le":        { "type": "ForeignNode", "target": "strand-builtin:Int.Le", "foreignType": "leT" },
+
+    "recurse":   { "type": "ParameterDecl", "name": "recurse", "paramType": "sumT" },
+    "n":         { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+
+    "zero":      { "type": "IntLit", "value": 0 },
+    "one":       { "type": "IntLit", "value": 1 },
+
+    "nRef":      { "type": "VarRef", "binder": "n" },
+    "nLeZero":   { "type": "Application", "function": "le", "arguments": ["nRef", "zero"] },
+
+    "litTrue":   { "type": "BoolLit", "value": true },
+    "patTrue":   { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litTrue" },
+    "caseTrue":  { "type": "MatchCase", "pattern": "patTrue", "body": "zero" },
+
+    "litFalse":  { "type": "BoolLit", "value": false },
+    "patFalse":  { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litFalse" },
+    "recRef":    { "type": "VarRef", "binder": "recurse" },
+    "nMinus1":   { "type": "Application", "function": "sub", "arguments": ["nRef", "one"] },
+    "recCall":   { "type": "Application", "function": "recRef", "arguments": ["nMinus1"] },
+    "addBody":   { "type": "Application", "function": "add", "arguments": ["nRef", "recCall"] },
+    "caseFalse": { "type": "MatchCase", "pattern": "patFalse", "body": "addBody" },
+
+    "matchBody": { "type": "Match", "scrutinee": "nLeZero", "cases": ["caseTrue", "caseFalse"] },
+    "bodyLam":   { "type": "Lambda", "parameters": ["recurse", "n"], "body": "matchBody" },
+
+    "sum":       { "type": "Fixpoint", "recursionType": "sumT", "body": "bodyLam" },
+
+    "ten":       { "type": "IntLit", "value": 10 },
+    "app":       { "type": "Application", "function": "sum", "arguments": ["ten"] }
+  }
+}

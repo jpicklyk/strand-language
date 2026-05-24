@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "root": "applyK",
+  "nodes": {
+    "T_a":     { "type": "TypeParameter", "name": "a" },
+    "T_b":     { "type": "TypeParameter", "name": "b" },
+    "intT":    { "type": "PrimitiveType", "kind": "Int" },
+    "strT":    { "type": "PrimitiveType", "kind": "String" },
+    "x":       { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+    "y":       { "type": "ParameterDecl", "name": "y", "paramType": "T_b" },
+    "x_use":   { "type": "VarRef", "binder": "x" },
+    "kInner":  { "type": "Lambda", "parameters": ["x", "y"], "body": "x_use" },
+    "kLambda": { "type": "TypeAbstraction", "typeParameters": ["T_a", "T_b"], "body": "kInner" },
+    "arg1":    { "type": "IntLit", "value": 7 },
+    "arg2":    { "type": "StringLit", "value": "ignored" },
+    "applyK":  { "type": "Application", "function": "kLambda", "arguments": ["arg1", "arg2"], "typeArguments": ["intT", "strT"] }
+  }
+}

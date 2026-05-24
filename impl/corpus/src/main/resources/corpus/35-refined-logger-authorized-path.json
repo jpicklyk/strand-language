@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "root": "outerApp",
+  "nodes": {
+    "intT":       { "type": "PrimitiveType", "kind": "Int" },
+    "strT":       { "type": "PrimitiveType", "kind": "String" },
+    "fsWriteFx":  { "type": "EffectCategory", "categoryName": "Filesystem.Write", "parameters": ["strT"] },
+    "writeT":     { "type": "FunctionType", "parameters": ["strT"], "result": "intT", "effects": ["fsWriteFx"] },
+    "write":      { "type": "ForeignNode", "target": "strand-builtin:Filesystem.Write", "foreignType": "writeT", "effects": ["fsWriteFx"] },
+    "loggerP":    { "type": "ParameterDecl", "name": "callerPath", "paramType": "strT" },
+    "loggerPRef": { "type": "VarRef", "binder": "loggerP" },
+    "loggerDecl": { "type": "EffectDecl", "effectType": "fsWriteFx", "parameters": ["loggerPRef"] },
+    "loggerCall": { "type": "Application", "function": "write", "arguments": ["loggerPRef"], "effectInstances": ["loggerDecl"] },
+    "logger":     { "type": "Lambda", "parameters": ["loggerP"], "body": "loggerCall", "effects": ["fsWriteFx"] },
+    "authPath":   { "type": "StringLit", "value": "/var/log/app.log" },
+    "outerApp":   { "type": "Application", "function": "logger", "arguments": ["authPath"] }
+  }
+}

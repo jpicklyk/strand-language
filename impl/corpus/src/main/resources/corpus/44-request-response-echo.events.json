@@ -1,0 +1,12 @@
+{
+  "events": [
+    { "tag": "product", "fields": {
+      "requestId": { "tag": "int", "value": 1 },
+      "payload":   { "tag": "string", "value": "ping" }
+    }},
+    { "tag": "product", "fields": {
+      "requestId": { "tag": "int", "value": 2 },
+      "payload":   { "tag": "string", "value": "hello" }
+    }}
+  ]
+}

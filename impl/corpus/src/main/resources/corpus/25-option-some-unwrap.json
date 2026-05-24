@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "root": "result",
+  "nodes": {
+    "intT":       { "type": "PrimitiveType", "kind": "Int" },
+
+    "someCase":   { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneCase":   { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionT":    { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "lit42":      { "type": "IntLit", "value": 42 },
+    "someValue":  { "type": "SumValue", "ofType": "optionT", "caseName": "Some", "payload": "lit42" },
+
+    "varN":       { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+    "patSome":    { "type": "Pattern", "kind": "constructor", "patternType": "optionT", "caseName": "Some", "payloadPattern": "varN" },
+    "nRef":       { "type": "VarRef", "binder": "varN" },
+    "caseSome":   { "type": "MatchCase", "pattern": "patSome", "body": "nRef" },
+
+    "patNone":    { "type": "Pattern", "kind": "constructor", "patternType": "optionT", "caseName": "None" },
+    "zero":       { "type": "IntLit", "value": 0 },
+    "caseNone":   { "type": "MatchCase", "pattern": "patNone", "body": "zero" },
+
+    "result":     { "type": "Match", "scrutinee": "someValue", "cases": ["caseSome", "caseNone"] }
+  }
+}

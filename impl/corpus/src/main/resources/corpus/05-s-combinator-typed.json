@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "root": "sLambda",
+  "nodes": {
+    "T_a":     { "type": "TypeParameter", "name": "a" },
+    "T_b":     { "type": "TypeParameter", "name": "b" },
+    "T_c":     { "type": "TypeParameter", "name": "c" },
+
+    "fType_inner":  { "type": "FunctionType", "parameters": ["T_b"], "result": "T_c" },
+    "fType":        { "type": "FunctionType", "parameters": ["T_a"], "result": "fType_inner" },
+    "gType":        { "type": "FunctionType", "parameters": ["T_a"], "result": "T_b" },
+
+    "f":       { "type": "ParameterDecl", "name": "f", "paramType": "fType" },
+    "g":       { "type": "ParameterDecl", "name": "g", "paramType": "gType" },
+    "x":       { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+
+    "x_useFx": { "type": "VarRef", "binder": "x" },
+    "f_use":   { "type": "VarRef", "binder": "f" },
+    "fx":      { "type": "Application", "function": "f_use", "arguments": ["x_useFx"], "typeArguments": [] },
+
+    "x_useGx": { "type": "VarRef", "binder": "x" },
+    "g_use":   { "type": "VarRef", "binder": "g" },
+    "gx":      { "type": "Application", "function": "g_use", "arguments": ["x_useGx"], "typeArguments": [] },
+
+    "fxgx":    { "type": "Application", "function": "fx", "arguments": ["gx"], "typeArguments": [] },
+
+    "innerX":  { "type": "Lambda", "parameters": ["x"], "body": "fxgx" },
+    "innerG":  { "type": "Lambda", "parameters": ["g"], "body": "innerX" },
+    "sInner":  { "type": "Lambda", "parameters": ["f"], "body": "innerG" },
+    "sLambda": { "type": "TypeAbstraction", "typeParameters": ["T_a", "T_b", "T_c"], "body": "sInner" }
+  }
+}

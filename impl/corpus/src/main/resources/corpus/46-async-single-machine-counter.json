@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "root": "machine",
+  "nodes": {
+    "intT":         { "type": "PrimitiveType", "kind": "Int" },
+    "unitT":        { "type": "PrimitiveType", "kind": "Unit" },
+
+    "someCase":     { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneCase":     { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionInt":    { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "output0Field": { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionInt" },
+    "outputBatchT": { "type": "ProductType", "fields": ["output0Field"] },
+
+    "stateField":   { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+    "outputsField": { "type": "ProductTypeField", "name": "outputs", "fieldType": "outputBatchT" },
+    "resultType":   { "type": "ProductType", "fields": ["stateField", "outputsField"] },
+
+    "addT":  { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn": { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "sParam":   { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "eParam":   { "type": "ParameterDecl", "name": "e", "paramType": "intT" },
+    "sRef":     { "type": "VarRef", "binder": "sParam" },
+    "eRef":     { "type": "VarRef", "binder": "eParam" },
+    "newState": { "type": "Application", "function": "addFn", "arguments": ["sRef", "eRef"] },
+
+    "someNewState":    { "type": "SumValue", "ofType": "optionInt", "caseName": "Some", "payload": "newState" },
+    "output0Value":    { "type": "ProductFieldValue", "fieldName": "output_0", "value": "someNewState" },
+    "outputBatchValue":{ "type": "ProductValue", "ofType": "outputBatchT", "fields": ["output0Value"] },
+    "newStateFieldV":  { "type": "ProductFieldValue", "fieldName": "state", "value": "newState" },
+    "newOutputsFieldV":{ "type": "ProductFieldValue", "fieldName": "outputs", "value": "outputBatchValue" },
+    "resultValue":     { "type": "ProductValue", "ofType": "resultType", "fields": ["newStateFieldV", "newOutputsFieldV"] },
+
+    "transitionLambda":{ "type": "Lambda", "parameters": ["sParam", "eParam"], "body": "resultValue" },
+
+    "initialState":  { "type": "IntLit", "value": 0 },
+    "inputStream":   { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
+    "outputStream":  { "type": "EventStream", "eventType": "intT", "streamKind": "output" },
+
+    "machine": {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": ["outputStream"],
+      "effects": []
+    }
+  }
+}

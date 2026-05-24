@@ -1,0 +1,18 @@
+# Gradle build outputs
+.gradle/
+build/
+*/build/
+*/*/build/
+
+# IDE
+.idea/
+*.iml
+*.iws
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local environment overrides
+local.properties

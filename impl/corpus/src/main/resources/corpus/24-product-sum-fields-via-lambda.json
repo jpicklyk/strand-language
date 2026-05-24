@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "root": "result",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+
+    "xField":    { "type": "ProductTypeField", "name": "x", "fieldType": "intT" },
+    "yField":    { "type": "ProductTypeField", "name": "y", "fieldType": "intT" },
+    "pointType": { "type": "ProductType", "fields": ["xField", "yField"] },
+
+    "fnType":    { "type": "FunctionType", "parameters": ["pointType"], "result": "intT" },
+
+    "addT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":       { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "p":         { "type": "ParameterDecl", "name": "p", "paramType": "pointType" },
+    "pRef":      { "type": "VarRef", "binder": "p" },
+    "getX":      { "type": "ProductFieldGet", "target": "pRef", "fieldName": "x" },
+    "getY":      { "type": "ProductFieldGet", "target": "pRef", "fieldName": "y" },
+    "sumBody":   { "type": "Application", "function": "add", "arguments": ["getX", "getY"] },
+    "sumFn":     { "type": "Lambda", "parameters": ["p"], "body": "sumBody" },
+
+    "lit10":     { "type": "IntLit", "value": 10 },
+    "lit32":     { "type": "IntLit", "value": 32 },
+    "xValue":    { "type": "ProductFieldValue", "fieldName": "x", "value": "lit10" },
+    "yValue":    { "type": "ProductFieldValue", "fieldName": "y", "value": "lit32" },
+    "point":     { "type": "ProductValue", "ofType": "pointType", "fields": ["xValue", "yValue"] },
+
+    "result":    { "type": "Application", "function": "sumFn", "arguments": ["point"] }
+  }
+}

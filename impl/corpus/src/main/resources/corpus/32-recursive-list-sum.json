@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+
+    "headFieldInner":   { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+    "tailFieldInner":   { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "consProductInner": { "type": "ProductType", "fields": ["headFieldInner", "tailFieldInner"] },
+
+    "consCase":         { "type": "SumTypeCase", "name": "Cons", "caseType": "consProductInner" },
+    "nilCase":          { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "listBody":         { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "recSelf":          { "type": "RecursiveSelf" },
+    "listT":            { "type": "RecursiveType", "body": "listBody" },
+
+    "headFieldOuter":   { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+    "tailFieldOuter":   { "type": "ProductTypeField", "name": "tail", "fieldType": "listT" },
+    "consProductOuter": { "type": "ProductType", "fields": ["headFieldOuter", "tailFieldOuter"] },
+
+    "addT":             { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":              { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "sumType":          { "type": "FunctionType", "parameters": ["listT"], "result": "intT" },
+    "recurse":          { "type": "ParameterDecl", "name": "recurse", "paramType": "sumType" },
+    "xs":               { "type": "ParameterDecl", "name": "xs", "paramType": "listT" },
+    "xsRef":            { "type": "VarRef", "binder": "xs" },
+
+    "varP":             { "type": "Pattern", "kind": "variable", "patternType": "consProductOuter", "name": "p" },
+    "patCons":          { "type": "Pattern", "kind": "constructor", "patternType": "listT", "caseName": "Cons", "payloadPattern": "varP" },
+    "pRef":             { "type": "VarRef", "binder": "varP" },
+    "hExtract":         { "type": "ProductFieldGet", "target": "pRef", "fieldName": "head" },
+    "tExtract":         { "type": "ProductFieldGet", "target": "pRef", "fieldName": "tail" },
+    "recRef":           { "type": "VarRef", "binder": "recurse" },
+    "sumOfTail":        { "type": "Application", "function": "recRef", "arguments": ["tExtract"] },
+    "sumBody":          { "type": "Application", "function": "add", "arguments": ["hExtract", "sumOfTail"] },
+    "caseCons":         { "type": "MatchCase", "pattern": "patCons", "body": "sumBody" },
+
+    "zero":             { "type": "IntLit", "value": 0 },
+    "patNil":           { "type": "Pattern", "kind": "constructor", "patternType": "listT", "caseName": "Nil" },
+    "caseNil":          { "type": "MatchCase", "pattern": "patNil", "body": "zero" },
+
+    "matchBody":        { "type": "Match", "scrutinee": "xsRef", "cases": ["caseCons", "caseNil"] },
+    "bodyLam":          { "type": "Lambda", "parameters": ["recurse", "xs"], "body": "matchBody" },
+    "sumFn":            { "type": "Fixpoint", "recursionType": "sumType", "body": "bodyLam" },
+
+    "nilVal":           { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+
+    "three":            { "type": "IntLit", "value": 3 },
+    "h3":               { "type": "ProductFieldValue", "fieldName": "head", "value": "three" },
+    "t3":               { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "p3":               { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h3", "t3"] },
+    "node3":            { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p3" },
+
+    "two":              { "type": "IntLit", "value": 2 },
+    "h2":               { "type": "ProductFieldValue", "fieldName": "head", "value": "two" },
+    "t2":               { "type": "ProductFieldValue", "fieldName": "tail", "value": "node3" },
+    "p2":               { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h2", "t2"] },
+    "node2":            { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p2" },
+
+    "one":              { "type": "IntLit", "value": 1 },
+    "h1":               { "type": "ProductFieldValue", "fieldName": "head", "value": "one" },
+    "t1":               { "type": "ProductFieldValue", "fieldName": "tail", "value": "node2" },
+    "p1":               { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h1", "t1"] },
+    "list123":          { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p1" },
+
+    "main":             { "type": "Application", "function": "sumFn", "arguments": ["list123"] }
+  }
+}

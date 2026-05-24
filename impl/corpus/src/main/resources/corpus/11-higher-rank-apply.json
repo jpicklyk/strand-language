@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "root": "topApp",
+  "nodes": {
+    "T_a":          { "type": "TypeParameter", "name": "a" },
+    "intT":         { "type": "PrimitiveType", "kind": "Int" },
+
+    "idFunType":    { "type": "FunctionType", "parameters": ["T_a"], "result": "T_a" },
+    "idForallType": { "type": "ForallType", "typeParameters": ["T_a"], "body": "idFunType" },
+
+    "f":            { "type": "ParameterDecl", "name": "f", "paramType": "idForallType" },
+    "n":            { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+
+    "fRef":         { "type": "VarRef", "binder": "f" },
+    "nRef":         { "type": "VarRef", "binder": "n" },
+    "callFN":       { "type": "Application", "function": "fRef", "arguments": ["nRef"], "typeArguments": ["intT"] },
+
+    "innerN":       { "type": "Lambda", "parameters": ["n"], "body": "callFN" },
+    "applyLambda":  { "type": "Lambda", "parameters": ["f"], "body": "innerN" },
+
+    "idX":          { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+    "idXRef":       { "type": "VarRef", "binder": "idX" },
+    "idInner":      { "type": "Lambda", "parameters": ["idX"], "body": "idXRef" },
+    "idLambda":     { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "idInner" },
+
+    "argN":         { "type": "IntLit", "value": 7 },
+
+    "partialApply": { "type": "Application", "function": "applyLambda", "arguments": ["idLambda"], "typeArguments": [] },
+    "topApp":       { "type": "Application", "function": "partialApply", "arguments": ["argN"], "typeArguments": [] }
+  }
+}

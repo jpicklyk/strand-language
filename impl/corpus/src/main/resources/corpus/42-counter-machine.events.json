@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "tag": "sum", "case": "Increment" },
+    { "tag": "sum", "case": "Increment" },
+    { "tag": "sum", "case": "Increment" },
+    { "tag": "sum", "case": "Decrement" },
+    { "tag": "sum", "case": "Reset" },
+    { "tag": "sum", "case": "Increment" }
+  ]
+}

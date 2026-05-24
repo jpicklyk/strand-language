@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "root": "outerApp",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "strT":      { "type": "PrimitiveType", "kind": "String" },
+    "netConnFx": { "type": "EffectCategory", "categoryName": "Network.Connect", "parameters": ["strT", "intT"] },
+    "connectT":  { "type": "FunctionType", "parameters": ["strT", "intT"], "result": "intT", "effects": ["netConnFx"] },
+    "connect":   { "type": "ForeignNode", "target": "strand-builtin:Network.Connect", "foreignType": "connectT", "effects": ["netConnFx"] },
+    "h":         { "type": "ParameterDecl", "name": "h", "paramType": "strT" },
+    "p":         { "type": "ParameterDecl", "name": "p", "paramType": "intT" },
+    "hRef":      { "type": "VarRef", "binder": "h" },
+    "pRef":      { "type": "VarRef", "binder": "p" },
+    "connDecl":  { "type": "EffectDecl", "effectType": "netConnFx", "parameters": ["hRef", "pRef"] },
+    "innerApp":  { "type": "Application", "function": "connect", "arguments": ["hRef", "pRef"], "effectInstances": ["connDecl"] },
+    "wrap":      { "type": "Lambda", "parameters": ["h", "p"], "body": "innerApp", "effects": ["netConnFx"] },
+    "host":      { "type": "StringLit", "value": "api.example.com" },
+    "port":      { "type": "IntLit", "value": 443 },
+    "outerApp":  { "type": "Application", "function": "wrap", "arguments": ["host", "port"] }
+  }
+}

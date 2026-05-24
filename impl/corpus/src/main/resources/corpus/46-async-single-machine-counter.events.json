@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "tag": "int", "value": 1 },
+    { "tag": "int", "value": 2 },
+    { "tag": "int", "value": 3 },
+    { "tag": "int", "value": 10 }
+  ]
+}
