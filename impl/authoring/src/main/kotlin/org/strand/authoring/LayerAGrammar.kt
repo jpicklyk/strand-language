@@ -544,6 +544,25 @@ object LayerAGrammar {
             optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),
         ),
 
+        // Layer A density v1.5 (Slice 4) — IF/Match-on-Bool sugar.
+        // Expands at emit time to 7 dag-json nodes (2 BoolLit, 2 Pattern
+        // literal, 2 MatchCase, 1 Match). The Match takes the user's
+        // author id; the other 6 nodes get `__if<n>_*` internal ids in
+        // [DagJsonEmitter]. The jsonType "Match" here is informational —
+        // the emitter dispatches IF to a dedicated expansion path that
+        // synthesizes the wrapper tower, so this schema's `required`
+        // list drives only arg-shape validation. The "boolT" referenced
+        // by the synthesized Patterns resolves through Slice 1's
+        // implicit prelude unless the user declares their own.
+        "IF" to CodeSchema(
+            jsonType = "Match",
+            required = listOf(
+                FieldSpec("scrutinee", ArgKind.REFERENCE, "scrutinee"),
+                FieldSpec("then", ArgKind.REFERENCE, "then"),
+                FieldSpec("else", ArgKind.REFERENCE, "else"),
+            ),
+        ),
+
         // Control flow (Layer 5 steps 1, 2)
         "MAT" to CodeSchema(
             jsonType = "Match",

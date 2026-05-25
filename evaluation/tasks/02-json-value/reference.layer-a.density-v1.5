@@ -1,0 +1,11 @@
+@v=1 root=schemaClaim
+jsonNullCase SCS "JsonNull" _
+jsonBoolCase SCS "JsonBool" boolT
+jsonNumberCase SCS "JsonNumber" intT
+jsonStringCase SCS "JsonString" stringT
+jsonValueT SUM [jsonNullCase jsonBoolCase jsonNumberCase jsonStringCase]
+jsonValueSchema SCH "JsonValue" jsonValueT []
+numberValue SV jsonValueT "JsonNumber" 42
+jvParam PRC "jv" jsonValueSchema
+identityOfJsonValue LAM [jvParam] jvParam
+schemaClaim APP identityOfJsonValue [numberValue]

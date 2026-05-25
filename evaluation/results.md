@@ -17,6 +17,7 @@ _Task 01 — Factorial_
 | Strand canonical dag-json | 2493 | 46 | 623 | 13.85 |
 | Strand Layer A | 890 | 34 | 223 | 4.94 |
 | Strand Layer A density v1 | 442 | 18 | 111 | 2.46 |
+| Strand Layer A density v1.5 | 288 | 12 | 72 | 1.60 |
 
 ## 02-json-value
 
@@ -28,6 +29,7 @@ _Task 02 — JSON value_
 | Strand canonical dag-json | 1467 | 35 | 367 | 3.20 |
 | Strand Layer A | 534 | 16 | 134 | 1.16 |
 | Strand Layer A density v1 | 449 | 11 | 112 | 0.98 |
+| Strand Layer A density v1.5 | 449 | 11 | 112 | 0.98 |
 
 ## 03-toggle-machine
 
@@ -39,6 +41,7 @@ _Task 03 — Toggle state machine_
 | Strand canonical dag-json | 2281 | 46 | 570 | 4.45 |
 | Strand Layer A | 1051 | 27 | 263 | 2.05 |
 | Strand Layer A density v1 | 603 | 16 | 151 | 1.18 |
+| Strand Layer A density v1.5 | 603 | 16 | 151 | 1.18 |
 
 ## Aggregate
 
@@ -48,6 +51,7 @@ _Task 03 — Toggle state machine_
 | Strand canonical dag-json | 6241 | 1560 | 5.82 |
 | Strand Layer A | 2475 | 620 | 2.28 |
 | Strand Layer A density v1 | 1494 | 374 | 1.41 |
+| Strand Layer A density v1.5 | 1340 | 335 | 1.23 |
 
 ## Interpretation
 

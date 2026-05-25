@@ -44,6 +44,8 @@ class LayerADensityTest {
         Pair("density-v1", "21-fixpoint-factorial-density") to "21-fixpoint-factorial",
         Pair("density-v1", "54-json-value-primitives-density") to "54-json-value-primitives",
         Pair("density-v1", "41-toggle-machine-density") to "41-toggle-machine",
+        // Slice 4 (v1.5) — IF sugar on top of v1
+        Pair("density-v1.5", "21-fixpoint-factorial-if") to "21-fixpoint-factorial",
     )
 
     @TestFactory

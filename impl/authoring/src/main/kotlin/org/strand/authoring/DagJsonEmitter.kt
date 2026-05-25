@@ -110,6 +110,7 @@ object DagJsonEmitter {
     private class EmitContext(doc: LayerADocument) {
         var litCounter: Int = 0
         var varRefCounter: Int = 0
+        var ifCounter: Int = 0
         val synthesized: LinkedHashMap<String, JsonObject> = linkedMapOf()
 
         /**
@@ -135,6 +136,7 @@ object DagJsonEmitter {
 
         fun freshLitId(): String = "__lit${litCounter++}"
         fun freshVarRefId(): String = "__var${varRefCounter++}"
+        fun freshIfPrefix(): String = "__if${ifCounter++}"
     }
 
     /**
@@ -232,6 +234,12 @@ object DagJsonEmitter {
             return null
         }
 
+        // Layer A density v1.5 (Slice 4) — IF/Match-on-Bool sugar.
+        // IF expands to the Match wrapper + 6 child nodes (2 BoolLit, 2
+        // Pattern literal, 2 MatchCase). The Match takes the user's
+        // author id; the 6 child nodes get `__if<n>_*` internal ids.
+        if (node.code == "IF") return expandIfSugar(node, errors, ctx)
+
         val fields = mutableMapOf<String, JsonElement>()
         fields["type"] = JsonPrimitive(schema.jsonType)
 
@@ -256,6 +264,128 @@ object DagJsonEmitter {
         }
 
         return JsonObject(fields)
+    }
+
+    /**
+     * Slice 4 — IF/Match-on-Bool sugar expansion.
+     *
+     * Takes the user's `result IF scrutinee thenExpr elseExpr` and produces
+     * a 7-node tower with the same canonical hash as the explicit form:
+     *
+     *     __ifN_lit_true   BoolLit true
+     *     __ifN_lit_false  BoolLit false
+     *     __ifN_pat_true   Pattern{kind=literal, patternType=boolT, literal=__ifN_lit_true}
+     *     __ifN_pat_false  Pattern{kind=literal, patternType=boolT, literal=__ifN_lit_false}
+     *     __ifN_case_true  MatchCase{pattern=__ifN_pat_true, body=resolvedThen}
+     *     __ifN_case_false MatchCase{pattern=__ifN_pat_false, body=resolvedElse}
+     *     <user id>        Match{scrutinee=resolvedScrutinee, cases=[__ifN_case_true, __ifN_case_false]}
+     *
+     * Returns the Match JsonObject for the user's author id; the 6 child
+     * nodes are added to [EmitContext.synthesized] for later inclusion in
+     * the document.
+     *
+     * Each arg is resolved through [resolveExpressionRef] which applies
+     * Slice 2 inline-literal synthesis and Slice 3 auto-VarRef. So
+     * `IF nIsZero 1 0` synthesizes IntLit children for the 1 and 0; and
+     * `IF cond x y` where `x` is a PRC param synthesizes a VarRef around
+     * `x`.
+     *
+     * The `boolT` reference in the synthesized Patterns is left as a bare
+     * id — Slice 1's reserved-name prelude resolves it. A user who
+     * declares their own `boolT` shadows the implicit one (the canonical
+     * encoder makes both byte-identical).
+     */
+    private fun expandIfSugar(
+        node: NodeDecl,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): JsonObject? {
+        val scrutineeArg = node.args[0]
+        val thenArg = node.args[1]
+        val elseArg = node.args[2]
+
+        val scrutineeId = resolveExpressionRef(node.line, "IF", 0, scrutineeArg, errors, ctx)
+            ?: return null
+        val thenId = resolveExpressionRef(node.line, "IF", 1, thenArg, errors, ctx)
+            ?: return null
+        val elseId = resolveExpressionRef(node.line, "IF", 2, elseArg, errors, ctx)
+            ?: return null
+
+        val prefix = ctx.freshIfPrefix()
+        val litTrueId = "${prefix}_lit_true"
+        val litFalseId = "${prefix}_lit_false"
+        val patTrueId = "${prefix}_pat_true"
+        val patFalseId = "${prefix}_pat_false"
+        val caseTrueId = "${prefix}_case_true"
+        val caseFalseId = "${prefix}_case_false"
+
+        ctx.synthesized[litTrueId] = buildJsonObject {
+            put("type", "BoolLit")
+            put("value", true)
+        }
+        ctx.synthesized[litFalseId] = buildJsonObject {
+            put("type", "BoolLit")
+            put("value", false)
+        }
+        ctx.synthesized[patTrueId] = buildJsonObject {
+            put("type", "Pattern")
+            put("kind", "literal")
+            put("patternType", "boolT")
+            put("literal", litTrueId)
+        }
+        ctx.synthesized[patFalseId] = buildJsonObject {
+            put("type", "Pattern")
+            put("kind", "literal")
+            put("patternType", "boolT")
+            put("literal", litFalseId)
+        }
+        ctx.synthesized[caseTrueId] = buildJsonObject {
+            put("type", "MatchCase")
+            put("pattern", patTrueId)
+            put("body", thenId)
+        }
+        ctx.synthesized[caseFalseId] = buildJsonObject {
+            put("type", "MatchCase")
+            put("pattern", patFalseId)
+            put("body", elseId)
+        }
+
+        // Return the Match wrapper for the user's id.
+        return buildJsonObject {
+            put("type", "Match")
+            put("scrutinee", scrutineeId)
+            put("cases", JsonArray(listOf(JsonPrimitive(caseTrueId), JsonPrimitive(caseFalseId))))
+        }
+    }
+
+    /**
+     * Resolve a single expression-position [arg] to its dag-json id text.
+     * Applies Slice 2 inline-literal synthesis and Slice 3 auto-VarRef
+     * (treating the slot as a value-position REFERENCE). Returns null on
+     * shape mismatch (errors recorded).
+     */
+    private fun resolveExpressionRef(
+        line: Int,
+        code: String,
+        position: Int,
+        arg: Arg,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): String? {
+        synthesizeLiteralIfLiteral(arg, ctx)?.let { return it }
+        val text = (arg as? Arg.Bare)?.text ?: run {
+            shapeMismatch(line, code, position, "bare reference or inline literal", arg, errors)
+            return null
+        }
+        // Treat the slot as value-position; auto-VarRef PRC binders.
+        return if (text in ctx.binderIds) {
+            val id = ctx.freshVarRefId()
+            ctx.synthesized[id] = buildJsonObject {
+                put("type", "VarRef")
+                put("binder", text)
+            }
+            id
+        } else text
     }
 
     private fun argToJson(

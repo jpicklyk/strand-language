@@ -1,0 +1,16 @@
+# Slice 4 (Layer A density v1.5) fixture for 21-fixpoint-factorial.
+# Combines v1 (Slices 1+2+3) with IF sugar: the 7-line BLT/PLT/MC tower
+# for the Match-on-Bool becomes one line `matchBody IF nIsZero 1 mulBody`.
+# Round-trip: canonical hash equals 21-fixpoint-factorial.json's.
+@v=1 root=app
+factT FNT [intT] intT
+recurse PRC "recurse" factT
+n PRC "n" intT
+nIsZero APP eqInt [n 0]
+nMinus1 APP sub [n 1]
+recCall APP recurse [nMinus1]
+mulBody APP mul [n recCall]
+matchBody IF nIsZero 1 mulBody
+bodyLam LAM [recurse n] matchBody
+fact FIX factT bodyLam
+app APP fact [5]

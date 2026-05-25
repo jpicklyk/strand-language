@@ -25,6 +25,7 @@ FORMS=(
     "reference.canonical-json.json:Strand canonical dag-json"
     "reference.layer-a:Strand Layer A"
     "reference.layer-a.density-v1:Strand Layer A density v1"
+    "reference.layer-a.density-v1.5:Strand Layer A density v1.5"
 )
 
 count_bytes() {
