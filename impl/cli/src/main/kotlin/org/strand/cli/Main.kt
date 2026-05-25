@@ -99,6 +99,7 @@ fun main(args: Array<String>) {
         "machine" -> runMachine(args)
         "group" -> runGroup(args)
         "author" -> runAuthor(args)
+        "translate" -> runTranslate(args)
         "grammar" -> runGrammar(args)
         else -> {
             usage()
@@ -474,13 +475,47 @@ private fun runAuthor(args: Array<String>) {
     }
 }
 
+/**
+ * Q-036 reverse projection: canonical dag-json → Layer A text.
+ *
+ * Reads a canonical dag-json file, runs [Authoring.projectFromDagJson]
+ * (translator + SAFE elaboration-omission + probe-and-fallback + implicit
+ * prelude), and prints the projected Layer A text to stdout. The output is
+ * suitable as an LLM prompt context (compact authoring form) or as input to
+ * `strand author` for a re-emit round-trip.
+ */
+private fun runTranslate(args: Array<String>) {
+    if (args.size < 2) {
+        usage()
+        exitProcess(2)
+    }
+    val path = args[1]
+    if (args.size > 2) {
+        System.err.println("unexpected arguments: ${args.drop(2).joinToString(" ")}")
+        usage()
+        exitProcess(2)
+    }
+    val canonicalText = File(path).readText()
+    val layerAText = try {
+        Authoring.projectFromDagJson(canonicalText)
+    } catch (e: AuthoringException) {
+        System.err.println("reverse projection failed for $path:")
+        for (err in e.errors) {
+            System.err.println("  ${err.detail}")
+        }
+        exitProcess(1)
+    }
+    print(layerAText)
+}
+
 private fun usage() {
     System.err.println("usage:")
-    System.err.println("  strand verify  <file.json>")
-    System.err.println("  strand run     <file.json> [--grant-all]")
-    System.err.println("  strand machine <file.json> --events <events.json> [--grant-all]")
-    System.err.println("  strand group   <file.json> --events <events.json> [--grant-all] [--metrics]")
-    System.err.println("  strand author  <file.layer-a> [--emit-json]")
+    System.err.println("  strand verify    <file.json>")
+    System.err.println("  strand run       <file.json> [--grant-all]")
+    System.err.println("  strand machine   <file.json> --events <events.json> [--grant-all]")
+    System.err.println("  strand group     <file.json> --events <events.json> [--grant-all] [--metrics]")
+    System.err.println("  strand author    <file.layer-a> [--emit-json]")
+    System.err.println("  strand translate <file.json>  → emit Layer A reverse projection (Q-036)")
     System.err.println("  strand grammar                → emit Layer B constraint grammar (GBNF)")
     System.err.println()
     System.err.println("  --grant-all: auto-grant wildcard capabilities for every EffectCategory")
