@@ -79,4 +79,21 @@ sealed class Arg {
 
     /** The null/absent marker `_`. Used for nullable fields (e.g., SumTypeCase.caseType = `_`). */
     object Null : Arg()
+
+    /**
+     * Slice 10 (Layer A density v4) — nested expression at a reference
+     * position. Written as `(CODE args...)` inside a `[...]` list or in
+     * a singleton REFERENCE / NULLABLE_REF slot. The emitter synthesizes
+     * a fresh `__expr<n>` child node from the inner code + args and points
+     * the parent reference at it. Composes with Slices 1-3 (reserved
+     * names, inline literals, auto-VarRef) — for example `(APP sub [n 1])`
+     * uses Slice 3 auto-VarRef on `n` and Slice 2 inline-literal on `1`.
+     *
+     * Only codes that produce values are legal here. Type-position codes
+     * (PRM, FNT, PRD, PRF, SUM, SCS, FAL, TPM, RT, RS) and structural-only
+     * codes (PRC, PLT/PVR/PWC/PCN patterns, EFC, EFD, ESE/ESI/ESO, TR, SCH,
+     * INV, MC) are rejected at emit time with an
+     * [AuthoringError.ArgShapeMismatch].
+     */
+    data class Nested(val code: String, val args: List<Arg>) : Arg()
 }

@@ -224,6 +224,13 @@ object LayerAParser {
                     out += list
                     i = end
                 }
+                c == '(' -> {
+                    // Slice 10 (Layer A density v4) — nested expression
+                    // `(CODE args...)` synthesizes a child node at emit time.
+                    val (nested, end) = readNested(line, i, lineNum, errors) ?: return out
+                    out += nested
+                    i = end
+                }
                 c == '_' && (i + 1 == n || !isBareChar(line[i + 1])) -> {
                     out += Arg.Null
                     i++
@@ -325,6 +332,13 @@ object LayerAParser {
                     items += inner
                     i = end
                 }
+                c == '(' -> {
+                    // Slice 10 (Layer A density v4) — nested expression
+                    // `(CODE args...)` inside a list element position.
+                    val (nested, end) = readNested(line, i, lineNum, errors) ?: return null
+                    items += nested
+                    i = end
+                }
                 c == '"' -> {
                     val (str, end) = readQuotedString(line, i, lineNum, errors) ?: return null
                     items += Arg.Str(str)
@@ -356,6 +370,97 @@ object LayerAParser {
         errors += AuthoringError.TokenError(
             line = lineNum,
             detail = "unterminated list starting at column ${start + 1}",
+        )
+        return null
+    }
+
+    /**
+     * Slice 10 (Layer A density v4) — read a nested-expression form
+     * `(CODE args...)`. The first non-whitespace token inside the parens
+     * must be a bare identifier (the code). Subsequent tokens are lexed
+     * recursively — they can themselves be nested expressions, lists,
+     * literals, or bare references.
+     *
+     * Returns `(Arg.Nested(code, args), end)` where `end` is the index
+     * just past the closing `)`. Returns null with an error recorded on
+     * lexical issues.
+     */
+    private fun readNested(
+        line: String,
+        start: Int,
+        lineNum: Int,
+        errors: MutableList<AuthoringError>,
+    ): Pair<Arg.Nested, Int>? {
+        // start points at opening (
+        var i = start + 1
+        // Skip leading whitespace.
+        while (i < line.length && line[i].isWhitespace()) i++
+        if (i >= line.length) {
+            errors += AuthoringError.TokenError(
+                line = lineNum,
+                detail = "unterminated nested expression starting at column ${start + 1}",
+            )
+            return null
+        }
+        // Read the code (first token).
+        if (!isBareStartChar(line[i])) {
+            errors += AuthoringError.TokenError(
+                line = lineNum,
+                detail = "expected code identifier after '(' at column ${i + 1}; got '${line[i]}'",
+            )
+            return null
+        }
+        val codeStart = i
+        while (i < line.length && isBareChar(line[i])) i++
+        val code = line.substring(codeStart, i)
+
+        val items = mutableListOf<Arg>()
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c.isWhitespace() -> i++
+                c == ')' -> return Arg.Nested(code, items) to (i + 1)
+                c == '(' -> {
+                    val (inner, end) = readNested(line, i, lineNum, errors) ?: return null
+                    items += inner
+                    i = end
+                }
+                c == '[' -> {
+                    val (list, end) = readList(line, i, lineNum, errors) ?: return null
+                    items += list
+                    i = end
+                }
+                c == '"' -> {
+                    val (str, end) = readQuotedString(line, i, lineNum, errors) ?: return null
+                    items += Arg.Str(str)
+                    i = end
+                }
+                c == '_' && (i + 1 == line.length || !isBareChar(line[i + 1])) -> {
+                    items += Arg.Null
+                    i++
+                }
+                c == '-' || c.isDigit() -> {
+                    val (arg, end) = readNumeric(line, i, lineNum, errors) ?: return null
+                    items += arg
+                    i = end
+                }
+                isBareStartChar(c) -> {
+                    val (arg, end) = readBare(line, i)
+                    items += arg
+                    i = end
+                }
+                else -> {
+                    errors += AuthoringError.TokenError(
+                        line = lineNum,
+                        detail = "unexpected character '${c}' inside nested expression at column ${i + 1}",
+                    )
+                    return null
+                }
+            }
+        }
+        errors += AuthoringError.TokenError(
+            line = lineNum,
+            detail = "unterminated nested expression starting at column ${start + 1}",
         )
         return null
     }

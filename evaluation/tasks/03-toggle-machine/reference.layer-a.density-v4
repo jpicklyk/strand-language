@@ -3,9 +3,8 @@ emptyOutputsT PRD []
 stateFieldT PRF "state" boolT
 outputsFieldT PRF "outputs" emptyOutputsT
 resultT PRD [stateFieldT outputsFieldT]
-negatedState APP not [s]
-emptyOutputsV PV emptyOutputsT []
-transitionResult PV resultT [state=negatedState outputs=emptyOutputsV]
-transitionLambda LAM [s e] transitionResult
+transitionFnT FNT [boolT unitT] resultT
+transitionResult PV resultT [state=(APP not [s]) outputs=(PV emptyOutputsT [])]
+transitionLambda LAM [s:boolT e:unitT] transitionResult
 inputStream ESE unitT
 toggleMachine SM transitionLambda false [inputStream] [] [receiveFx]

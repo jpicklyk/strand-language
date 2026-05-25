@@ -13,15 +13,15 @@ _Task 01 — Factorial_
 
 | Form | Bytes | Lines | Tokens (est) | × vs Python |
 |------|------:|------:|-------------:|------------:|
-| Python+type-hints | 180 | 12 | 45 | 1.00 |
-| Strand canonical dag-json | 2493 | 46 | 623 | 13.85 |
-| Strand Layer A | 890 | 34 | 223 | 4.94 |
-| Strand Layer A density v1 | 442 | 18 | 111 | 2.46 |
-| Strand Layer A density v1.5 | 288 | 12 | 72 | 1.60 |
-| Strand Layer A density v2 | 248 | 10 | 62 | 1.38 |
-| Strand Layer A density v2.5 | 248 | 10 | 62 | 1.38 |
-| Strand Layer A density v3 | 248 | 10 | 62 | 1.38 |
-| Strand Layer A density v4 | 215 | 9 | 54 | 1.19 |
+| Python+type-hints | 192 | 12 | 48 | 1.00 |
+| Strand canonical dag-json | 2539 | 46 | 635 | 13.22 |
+| Strand Layer A | 924 | 34 | 231 | 4.81 |
+| Strand Layer A density v1 | 442 | 18 | 111 | 2.30 |
+| Strand Layer A density v1.5 | 288 | 12 | 72 | 1.50 |
+| Strand Layer A density v2 | 248 | 10 | 62 | 1.29 |
+| Strand Layer A density v2.5 | 248 | 10 | 62 | 1.29 |
+| Strand Layer A density v3 | 248 | 10 | 62 | 1.29 |
+| Strand Layer A density v4 | 200 | 6 | 50 | 1.04 |
 
 ## 02-json-value
 
@@ -29,15 +29,15 @@ _Task 02 — JSON value_
 
 | Form | Bytes | Lines | Tokens (est) | × vs Python |
 |------|------:|------:|-------------:|------------:|
-| Python+type-hints | 459 | 34 | 115 | 1.00 |
-| Strand canonical dag-json | 1467 | 35 | 367 | 3.20 |
-| Strand Layer A | 534 | 16 | 134 | 1.16 |
-| Strand Layer A density v1 | 449 | 11 | 112 | 0.98 |
-| Strand Layer A density v1.5 | 449 | 11 | 112 | 0.98 |
-| Strand Layer A density v2 | 422 | 10 | 106 | 0.92 |
-| Strand Layer A density v2.5 | 422 | 10 | 106 | 0.92 |
-| Strand Layer A density v3 | 422 | 10 | 106 | 0.92 |
-| Strand Layer A density v4 | 419 | 10 | 105 | 0.91 |
+| Python+type-hints | 493 | 34 | 123 | 1.00 |
+| Strand canonical dag-json | 1502 | 35 | 376 | 3.05 |
+| Strand Layer A | 550 | 16 | 138 | 1.12 |
+| Strand Layer A density v1 | 449 | 11 | 112 | 0.91 |
+| Strand Layer A density v1.5 | 449 | 11 | 112 | 0.91 |
+| Strand Layer A density v2 | 422 | 10 | 106 | 0.86 |
+| Strand Layer A density v2.5 | 422 | 10 | 106 | 0.86 |
+| Strand Layer A density v3 | 422 | 10 | 106 | 0.86 |
+| Strand Layer A density v4 | 400 | 9 | 100 | 0.81 |
 
 ## 03-toggle-machine
 
@@ -45,29 +45,29 @@ _Task 03 — Toggle state machine_
 
 | Form | Bytes | Lines | Tokens (est) | × vs Python |
 |------|------:|------:|-------------:|------------:|
-| Python+type-hints | 513 | 27 | 128 | 1.00 |
-| Strand canonical dag-json | 2281 | 46 | 570 | 4.45 |
-| Strand Layer A | 1051 | 27 | 263 | 2.05 |
-| Strand Layer A density v1 | 603 | 16 | 151 | 1.18 |
-| Strand Layer A density v1.5 | 603 | 16 | 151 | 1.18 |
-| Strand Layer A density v2 | 538 | 14 | 135 | 1.05 |
-| Strand Layer A density v2.5 | 474 | 12 | 119 | 0.92 |
-| Strand Layer A density v3 | 474 | 12 | 119 | 0.92 |
-| Strand Layer A density v4 | 422 | 11 | 106 | 0.82 |
+| Python+type-hints | 540 | 27 | 135 | 1.00 |
+| Strand canonical dag-json | 2327 | 46 | 582 | 4.31 |
+| Strand Layer A | 1078 | 27 | 270 | 2.00 |
+| Strand Layer A density v1 | 603 | 16 | 151 | 1.12 |
+| Strand Layer A density v1.5 | 603 | 16 | 151 | 1.12 |
+| Strand Layer A density v2 | 538 | 14 | 135 | 1.00 |
+| Strand Layer A density v2.5 | 474 | 12 | 119 | 0.88 |
+| Strand Layer A density v3 | 474 | 12 | 119 | 0.88 |
+| Strand Layer A density v4 | 424 | 10 | 106 | 0.79 |
 
 ## Aggregate
 
 | Form | Total bytes | Total tokens (est) | Geometric mean × vs Python |
 |------|------------:|-------------------:|---------------------------:|
-| Python+type-hints | 1152 | 288 | 1.00 |
-| Strand canonical dag-json | 6241 | 1560 | 5.82 |
-| Strand Layer A | 2475 | 620 | 2.28 |
-| Strand Layer A density v1 | 1494 | 374 | 1.41 |
-| Strand Layer A density v1.5 | 1340 | 335 | 1.23 |
-| Strand Layer A density v2 | 1208 | 303 | 1.10 |
-| Strand Layer A density v2.5 | 1144 | 287 | 1.05 |
-| Strand Layer A density v3 | 1144 | 287 | 1.05 |
-| Strand Layer A density v4 | 1056 | 265 | 0.96 |
+| Python+type-hints | 1225 | 306 | 1.00 |
+| Strand canonical dag-json | 6368 | 1593 | 5.58 |
+| Strand Layer A | 2552 | 639 | 2.20 |
+| Strand Layer A density v1 | 1494 | 374 | 1.33 |
+| Strand Layer A density v1.5 | 1340 | 335 | 1.15 |
+| Strand Layer A density v2 | 1208 | 303 | 1.03 |
+| Strand Layer A density v2.5 | 1144 | 287 | 0.99 |
+| Strand Layer A density v3 | 1144 | 287 | 0.99 |
+| Strand Layer A density v4 | 1024 | 256 | 0.87 |
 
 ## Interpretation
 

@@ -1,9 +1,6 @@
 @v=1 root=app
-nIsZero APP eqInt [n 0]
-_ APP sub [n 1]
-recCall APP recurse [@last]
-mulBody APP mul [n recCall]
-matchBody IF nIsZero 1 mulBody
-bodyLam LAM [recurse n] matchBody
+factT FNT [intT] intT
+matchBody IF (APP eqInt [n 0]) 1 (APP mul [n (APP recurse [(APP sub [n 1])])])
+bodyLam LAM [recurse:factT n:intT] matchBody
 fact FIX factT bodyLam
 app APP fact [5]

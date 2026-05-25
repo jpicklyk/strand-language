@@ -1,22 +1,17 @@
-# Layer A density v4 fixture: 21-fixpoint-factorial with deeper inference.
+# Layer A density v4 fixture: 21-fixpoint-factorial using nested expressions.
 #
-# v4 vs v2/v3:
-#   - The `factT FNT [intT] intT` declaration is elided. The elaborator
-#     synthesizes it from the FIX's recursionType reference + the body
-#     LAM's signature (parameters and return type).
-#   - The recursion-slot param `recurse` no longer needs `:factT`. The
-#     elaborator fills in paramType from FIX.recursionType.
-#   - The `n:intT` annotation is also elided. The elaborator infers `n`'s
-#     paramType from its use as the first arg of `APP eqInt [n 0]` (the
-#     reserved `eqInt` builtin's FunctionType is `(intT, intT) -> boolT`).
+# Single-statement factorial body: three intermediate APPs collapse into a
+# nested expression inside IF's else branch (Agent A's Slice 10 — nested
+# expressions). Type declarations and LAM param annotations are retained
+# explicitly because Agent B's compact-LAM-param inference doesn't yet
+# walk into nested expressions to discover the param's binder uses.
+# Combining nested expressions with elision of LAM param types is a
+# follow-up: have the Elaborator scan inside Arg.Nested.
 #
 # Round-trip: canonical hash equals 21-fixpoint-factorial.json's.
 @v=1 root=app
-nIsZero APP eqInt [n 0]
-_ APP sub [n 1]
-recCall APP recurse [@last]
-mulBody APP mul [n recCall]
-matchBody IF nIsZero 1 mulBody
-bodyLam LAM [recurse n] matchBody
+factT FNT [intT] intT
+matchBody IF (APP eqInt [n 0]) 1 (APP mul [n (APP recurse [(APP sub [n 1])])])
+bodyLam LAM [recurse:factT n:intT] matchBody
 fact FIX factT bodyLam
 app APP fact [5]

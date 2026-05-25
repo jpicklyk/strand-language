@@ -1,0 +1,19 @@
+# Slice 10 (Layer A density v4) fixture: 54-json-value-primitives using
+# a nested SumValue inside the schemaClaim's argument list. The single-
+# use `numberValue` declaration collapses into the nested form
+# `(SV jsonValueT "JsonNumber" 42)`.
+#
+# The remaining lines are types (SUM/SCS), the Schema declaration (SCH),
+# and the identity Lambda — none of which produce values that the
+# nested-expression form can inline. Most JSON value work is type-level.
+#
+# Round-trip: canonical hash equals 54-json-value-primitives.json's.
+@v=1 root=schemaClaim
+jsonNullCase SCS "JsonNull" _
+jsonBoolCase SCS "JsonBool" boolT
+jsonNumberCase SCS "JsonNumber" intT
+jsonStringCase SCS "JsonString" stringT
+jsonValueT SUM [jsonNullCase jsonBoolCase jsonNumberCase jsonStringCase]
+jsonValueSchema SCH "JsonValue" jsonValueT []
+identityOfJsonValue LAM [jv:jsonValueSchema] jv
+schemaClaim APP identityOfJsonValue [(SV jsonValueT "JsonNumber" 42)]

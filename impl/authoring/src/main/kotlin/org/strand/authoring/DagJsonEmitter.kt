@@ -115,6 +115,7 @@ object DagJsonEmitter {
         var varRefCounter: Int = 0
         var ifCounter: Int = 0
         var whenCounter: Int = 0
+        var exprCounter: Int = 0
         val synthesized: LinkedHashMap<String, JsonObject> = linkedMapOf()
         val document: LayerADocument = doc
 
@@ -171,6 +172,7 @@ object DagJsonEmitter {
         fun freshVarRefId(): String = "__var${varRefCounter++}"
         fun freshIfPrefix(): String = "__if${ifCounter++}"
         fun freshWhenPrefix(): String = "__when${whenCounter++}"
+        fun freshExprId(): String = "__expr${exprCounter++}"
     }
 
     /**
@@ -700,6 +702,43 @@ object DagJsonEmitter {
      * (treating the slot as a value-position REFERENCE). Returns null on
      * shape mismatch (errors recorded).
      */
+    /**
+     * Slice 10 (v4) — resolve the value side of a `name=value` FIELD_LIST
+     * entry where the value has been tokenized separately (because of a
+     * `(` or quoted-string boundary inside the entry). Accepts an inline
+     * literal, a nested expression, or a bare reference (with Slice 3
+     * auto-VarRef + Slice 7 `@last` resolution). The resulting string is
+     * the synthetic id pointed at by the parent PFV's `value` field.
+     */
+    private fun resolveFieldValue(
+        valueArg: Arg,
+        parentCode: String,
+        position: Int,
+        line: Int,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): String? {
+        synthesizeLiteralIfLiteral(valueArg, ctx)?.let { return it }
+        synthesizeNestedIfNested(valueArg, parentCode, position, line, errors, ctx)
+            ?.let { return it }
+        if (valueArg is Arg.Nested) {
+            return null  // error already recorded
+        }
+        val text = (valueArg as? Arg.Bare)?.text ?: run {
+            shapeMismatch(line, parentCode, position, "compact field value (ref / literal / nested)", valueArg, errors)
+            return null
+        }
+        val resolvedAnon = resolveAtLast(text, line, parentCode, errors, ctx) ?: return null
+        return if (resolvedAnon in ctx.binderIds) {
+            val varId = ctx.freshVarRefId()
+            ctx.synthesized[varId] = buildJsonObject {
+                put("type", "VarRef")
+                put("binder", resolvedAnon)
+            }
+            varId
+        } else resolvedAnon
+    }
+
     private fun resolveExpressionRef(
         line: Int,
         code: String,
@@ -709,6 +748,11 @@ object DagJsonEmitter {
         ctx: EmitContext,
     ): String? {
         synthesizeLiteralIfLiteral(arg, ctx)?.let { return it }
+        // Slice 10 (v4): nested expression at IF/WHEN expression position.
+        synthesizeNestedIfNested(arg, code, position, line, errors, ctx)?.let { return it }
+        if (arg is Arg.Nested) {
+            return null  // error already recorded
+        }
         val text = (arg as? Arg.Bare)?.text ?: run {
             shapeMismatch(line, code, position, "bare reference or inline literal", arg, errors)
             return null
@@ -739,6 +783,13 @@ object DagJsonEmitter {
             LayerAGrammar.ArgKind.REFERENCE -> {
                 // Slice 2: inline literal synthesizes a child literal node.
                 synthesizeLiteralIfLiteral(arg, ctx)?.let { return JsonPrimitive(it) }
+                // Slice 10 (v4): nested expression `(CODE args...)`
+                // synthesizes a child node at a value-position REFERENCE.
+                synthesizeNestedIfNested(arg, code, position, line, errors, ctx)
+                    ?.let { return JsonPrimitive(it) }
+                if (arg is Arg.Nested) {
+                    return null  // error already recorded by synthesizeNestedIfNested
+                }
                 val text = (arg as? Arg.Bare)?.text ?: run {
                     shapeMismatch(line, code, position, "bare reference", arg, errors)
                     return null
@@ -797,6 +848,14 @@ object DagJsonEmitter {
                     if (litId != null) {
                         return@map JsonPrimitive(litId)
                     }
+                    // Slice 10 (v4): list element can be a nested expression.
+                    val nestedId = synthesizeNestedIfNested(elt, code, position, line, errors, ctx)
+                    if (nestedId != null) {
+                        return@map JsonPrimitive(nestedId)
+                    }
+                    if (elt is Arg.Nested) {
+                        return null  // error already recorded
+                    }
                     val text = (elt as? Arg.Bare)?.text ?: run {
                         shapeMismatch(line, code, position, "list of bare references", elt, errors)
                         return null
@@ -813,6 +872,12 @@ object DagJsonEmitter {
             LayerAGrammar.ArgKind.NULLABLE_REF -> {
                 // Slice 2: nullable-ref slot can be an inline literal.
                 synthesizeLiteralIfLiteral(arg, ctx)?.let { return JsonPrimitive(it) }
+                // Slice 10 (v4): nullable-ref slot can be a nested expression.
+                synthesizeNestedIfNested(arg, code, position, line, errors, ctx)
+                    ?.let { return JsonPrimitive(it) }
+                if (arg is Arg.Nested) {
+                    return null  // error already recorded
+                }
                 return when (arg) {
                     is Arg.Bare -> {
                         val resolvedAnon = resolveAtLast(arg.text, line, code, errors, ctx)
@@ -832,11 +897,22 @@ object DagJsonEmitter {
                 // ref (to an existing PFV NodeDecl) or a compact `name=ref`
                 // pair. Compact entries synthesize a PFV with an internal
                 // author id; the parent PV.fields points at the synthetic.
+                //
+                // Slice 10 (v4): a compact field's value may be a nested
+                // expression `name=(NESTED)` — the parser produces an
+                // `Arg.Bare("name=")` (note trailing `=`) followed by the
+                // separately-tokenized `Arg.Nested` (the `(` terminates
+                // the bare-token sweep mid-stream). The iterator below
+                // peeks ahead when it sees `name=` so it can pair the
+                // synthetic value into one PFV synthesis.
                 val list = (arg as? Arg.Listing)?.items ?: run {
                     shapeMismatch(line, code, position, "[name=ref ...] or [ref ref ...] list", arg, errors)
                     return null
                 }
-                val elements = list.map { elt ->
+                val elements = mutableListOf<JsonElement>()
+                var idx = 0
+                while (idx < list.size) {
+                    val elt = list[idx]
                     val text = (elt as? Arg.Bare)?.text ?: run {
                         shapeMismatch(line, code, position, "field list entry", elt, errors)
                         return null
@@ -846,40 +922,63 @@ object DagJsonEmitter {
                         // PFV NodeDecl. `@last` resolution applies here too.
                         val resolvedAnon = resolveAtLast(text, line, code, errors, ctx)
                             ?: return null
-                        return@map JsonPrimitive(resolvedAnon)
+                        elements += JsonPrimitive(resolvedAnon)
+                        idx++
+                        continue
                     }
-                    val name = text.substringBefore('=')
-                    val valueRef = text.substringAfter('=')
-                    if (name.isEmpty() || valueRef.isEmpty()) {
-                        errors += AuthoringError.ArgShapeMismatch(
-                            line = line, code = code, position = position,
-                            expectedKind = "compact field `name=ref`",
-                            actualKind = "malformed `$text`",
-                        )
-                        return null
+                    val name: String
+                    val resolvedValue: String
+                    if (text.endsWith("=")) {
+                        // Slice 10 (v4): split-token form. `name=` is followed
+                        // by a separately-tokenized value (Arg.Bare, literal,
+                        // or Arg.Nested).
+                        name = text.dropLast(1)
+                        if (name.isEmpty() || idx + 1 >= list.size) {
+                            errors += AuthoringError.ArgShapeMismatch(
+                                line = line, code = code, position = position,
+                                expectedKind = "compact field `name=value` (value follows the `=`)",
+                                actualKind = "malformed `$text` with no following value",
+                            )
+                            return null
+                        }
+                        val valueArg = list[idx + 1]
+                        val resolved = resolveFieldValue(valueArg, code, position, line, errors, ctx)
+                            ?: return null
+                        resolvedValue = resolved
+                        idx += 2
+                    } else {
+                        // Slice 8: single-token form `name=ref`.
+                        name = text.substringBefore('=')
+                        val valueRef = text.substringAfter('=')
+                        if (name.isEmpty() || valueRef.isEmpty()) {
+                            errors += AuthoringError.ArgShapeMismatch(
+                                line = line, code = code, position = position,
+                                expectedKind = "compact field `name=ref`",
+                                actualKind = "malformed `$text`",
+                            )
+                            return null
+                        }
+                        val resolvedAnon = resolveAtLast(valueRef, line, code, errors, ctx)
+                            ?: return null
+                        resolvedValue = if (resolvedAnon in ctx.binderIds) {
+                            val varId = ctx.freshVarRefId()
+                            ctx.synthesized[varId] = buildJsonObject {
+                                put("type", "VarRef")
+                                put("binder", resolvedAnon)
+                            }
+                            varId
+                        } else resolvedAnon
+                        idx++
                     }
                     // Synthesize a PFV node with an internal author id.
-                    // The PFV's `value` field may itself reference a PRC
-                    // binder; auto-VarRef should fire. Slice 7's `@last`
-                    // also applies for the value ref.
-                    val resolvedValue = resolveAtLast(valueRef, line, code, errors, ctx)
-                        ?: return null
-                    val wrappedValue = if (resolvedValue in ctx.binderIds) {
-                        val varId = ctx.freshVarRefId()
-                        ctx.synthesized[varId] = buildJsonObject {
-                            put("type", "VarRef")
-                            put("binder", resolvedValue)
-                        }
-                        varId
-                    } else resolvedValue
                     val pfvId = "__pfv${ctx.litCounter}_${name}"
                     ctx.litCounter++
                     ctx.synthesized[pfvId] = buildJsonObject {
                         put("type", "ProductFieldValue")
                         put("fieldName", name)
-                        put("value", wrappedValue)
+                        put("value", resolvedValue)
                     }
-                    JsonPrimitive(pfvId)
+                    elements += JsonPrimitive(pfvId)
                 }
                 return JsonArray(elements)
             }
@@ -992,6 +1091,70 @@ object DagJsonEmitter {
     }
 
     /**
+     * Slice 10 (Layer A density v4) — nested expression synthesis.
+     *
+     * If [arg] is `Arg.Nested(code, args)`, synthesize a child node by
+     * generating a fresh `__expr<n>` id and recursively emitting the
+     * nested code+args as a NodeDecl. Returns the synthesized id on
+     * success, or null on error (errors recorded in [errors]).
+     *
+     * The nested code must be `producesValue = true` — type codes (PRM,
+     * FNT, PRD, SUM, ...) and structural codes (PRC, Pattern variants,
+     * MC, EFC, ESE/ESI/ESO, ...) are rejected as
+     * [AuthoringError.ArgShapeMismatch]. This guards against authors
+     * writing `(PRM Int)` at a value-position arg slot.
+     *
+     * Nesting composes recursively: `(APP foo [(APP bar [x])])` emits
+     * one outer `__expr0` for the outer APP, then `__expr1` for the
+     * inner APP (encountered while emitting the outer's arguments).
+     *
+     * Composes with Slices 1-3:
+     *   * Slice 1 reserved names — `(APP eqInt [n 0])` resolves `eqInt`
+     *     to the reserved `eqInt` ForeignNode synthesized at the document
+     *     level (the same code path as a top-level NodeDecl).
+     *   * Slice 2 inline literals — args inside the nested form can be
+     *     literal tokens, synthesizing extra `__lit<n>` children.
+     *   * Slice 3 auto-VarRef — PRC binder references inside the nested
+     *     args wrap in synthetic VarRefs.
+     *
+     * Returns null with no error recorded when [arg] is not nested
+     * (caller continues with the normal reference path).
+     */
+    private fun synthesizeNestedIfNested(
+        arg: Arg,
+        parentCode: String,
+        position: Int,
+        line: Int,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): String? {
+        if (arg !is Arg.Nested) return null
+        val schema = LayerAGrammar.codes[arg.code]
+        if (schema == null) {
+            errors += AuthoringError.UnknownCode(line = line, code = arg.code)
+            return null
+        }
+        if (!schema.producesValue) {
+            errors += AuthoringError.ArgShapeMismatch(
+                line = line, code = parentCode, position = position,
+                expectedKind = "value-producing nested expression (code `${arg.code}` is type-only or structural)",
+                actualKind = "nested `(${arg.code} ...)`",
+            )
+            return null
+        }
+        // Generate a fresh internal id. The synthesized NodeDecl is fed
+        // through `emitNode` so the per-code schema validation, sugar
+        // dispatch (IF/WHEN), and slot-aware reference resolution all run
+        // recursively — nested expressions reuse the same code paths as
+        // top-level declarations.
+        val id = ctx.freshExprId()
+        val childDecl = NodeDecl(id = id, code = arg.code, args = arg.args, line = line)
+        val childJson = emitNode(childDecl, errors, ctx) ?: return null
+        ctx.synthesized[id] = childJson
+        return id
+    }
+
+    /**
      * Slice 3 auto-VarRef. If [refText] resolves to a `PRC` or `LET`
      * binder declared elsewhere in the document AND the parent slot is
      * an expression value-position (see [isValuePositionRefSlot]),
@@ -1077,6 +1240,7 @@ object DagJsonEmitter {
         is Arg.FloatL -> "float ${arg.value}"
         is Arg.BoolL -> "${arg.value}"
         is Arg.Listing -> "list of ${arg.items.size}"
+        is Arg.Nested -> "nested `(${arg.code} ...)`"
         Arg.Null -> "null '_'"
     }
 }
