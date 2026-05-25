@@ -1,5 +1,0 @@
-# Layer A form of corpus/01-int-literal.json — the smallest Strand program
-# (a bare IntLit 42). Round-trip property: parsing this file and emitting
-# canonical dag-json produces a RawNodeStore byte-equal to the original.
-@v=1 root=answer
-answer ILT 42

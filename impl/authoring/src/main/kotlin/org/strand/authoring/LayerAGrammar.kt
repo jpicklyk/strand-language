@@ -60,14 +60,13 @@ object LayerAGrammar {
          */
         val discriminator: Pair<String, String>? = null,
         /**
-         * True for sugar codes that expand at emit time to multiple
-         * canonical nodes (Slice 4 IF, Slice 9 WHEN). The reverse
-         * translator [LayerATranslator] skips these — there's no
-         * unambiguous reverse mapping (not every Match is an IF; not
-         * every Match-on-sum is a WHEN) and the canonical-form-shaped
-         * code (MAT) is the right pick for the no-discriminator fallback.
+         * Slice 10 (Layer A density v4) — true if this code produces a
+         * value, so it may legally appear in a `(CODE args...)` nested
+         * expression at an expression-position reference slot. Type-only
+         * codes (PRM, FNT, PRD, SUM, ...) and structural codes (PRC,
+         * Pattern variants, MC, EFC, ...) are false.
          */
-        val sugarOnly: Boolean = false,
+        val producesValue: Boolean = false,
     )
 
     /**
@@ -409,28 +408,34 @@ object LayerAGrammar {
         "ILT" to CodeSchema(
             jsonType = "IntLit",
             required = listOf(FieldSpec("value", ArgKind.INT, "value")),
+            producesValue = true,
         ),
         "FLT" to CodeSchema(
             jsonType = "FloatLit",
             required = listOf(FieldSpec("value", ArgKind.FLOAT, "value")),
+            producesValue = true,
         ),
         "STR" to CodeSchema(
             jsonType = "StringLit",
             required = listOf(FieldSpec("value", ArgKind.STRING, "value")),
+            producesValue = true,
         ),
         "BLT" to CodeSchema(
             jsonType = "BoolLit",
             required = listOf(FieldSpec("value", ArgKind.BOOL, "value")),
+            producesValue = true,
         ),
         "ULT" to CodeSchema(
             jsonType = "UnitLit",
             required = emptyList(),
+            producesValue = true,
         ),
         "BYT" to CodeSchema(
             jsonType = "BytesLit",
             // Base64-encoded payload as a string. Matches the JSON ingest's
             // BytesLit convention (a single base64 string field).
             required = listOf(FieldSpec("value", ArgKind.STRING, "value")),
+            producesValue = true,
         ),
 
         // Types
@@ -486,6 +491,7 @@ object LayerAGrammar {
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
             optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),
+            producesValue = true,
         ),
         "PRC" to CodeSchema(
             jsonType = "ParameterDecl",
@@ -511,6 +517,7 @@ object LayerAGrammar {
                 FieldSpec("typeArguments", ArgKind.LIST_REF, "typeArguments"),
                 FieldSpec("effectInstances", ArgKind.LIST_REF, "effectInstances"),
             ),
+            producesValue = true,
         ),
         "LET" to CodeSchema(
             jsonType = "Let",
@@ -519,16 +526,19 @@ object LayerAGrammar {
                 FieldSpec("value", ArgKind.REFERENCE, "value"),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
+            producesValue = true,
         ),
         "VAR" to CodeSchema(
             jsonType = "VarRef",
             required = listOf(FieldSpec("binder", ArgKind.REFERENCE, "binder")),
+            producesValue = true,
         ),
 
         // References
         "NRF" to CodeSchema(
             jsonType = "NodeRef",
             required = listOf(FieldSpec("target", ArgKind.REFERENCE, "target")),
+            producesValue = true,
         ),
 
         // Type abstraction (N-034) and ForallType (N-035) — explicit System F.
@@ -538,6 +548,7 @@ object LayerAGrammar {
                 FieldSpec("typeParameters", ArgKind.LIST_REF, "typeParameters"),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
+            producesValue = true,
         ),
         "FAL" to CodeSchema(
             jsonType = "ForallType",
@@ -566,6 +577,7 @@ object LayerAGrammar {
                 FieldSpec("capabilities", ArgKind.LIST_REF, "capabilities"),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
+            producesValue = true,
         ),
 
         // Foreign function interface (Layer 4)
@@ -576,6 +588,7 @@ object LayerAGrammar {
                 FieldSpec("foreignType", ArgKind.REFERENCE, "foreignType"),
             ),
             optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),
+            producesValue = true,
         ),
 
         // Layer A density v3 (Slice 9) — WHEN/constructor-pattern sugar.
@@ -606,7 +619,7 @@ object LayerAGrammar {
                 FieldSpec("sumType", ArgKind.REFERENCE, "sumType"),
                 FieldSpec("cases", ArgKind.STRING, "cases"),
             ),
-            sugarOnly = true,
+            producesValue = true,
         ),
 
         // Layer A density v1.5 (Slice 4) — IF/Match-on-Bool sugar.
@@ -626,7 +639,7 @@ object LayerAGrammar {
                 FieldSpec("then", ArgKind.REFERENCE, "then"),
                 FieldSpec("else", ArgKind.REFERENCE, "else"),
             ),
-            sugarOnly = true,
+            producesValue = true,
         ),
 
         // Control flow (Layer 5 steps 1, 2)
@@ -636,6 +649,7 @@ object LayerAGrammar {
                 FieldSpec("scrutinee", ArgKind.REFERENCE, "scrutinee"),
                 FieldSpec("cases", ArgKind.LIST_REF, "cases"),
             ),
+            producesValue = true,
         ),
         "MC" to CodeSchema(
             jsonType = "MatchCase",
@@ -687,6 +701,7 @@ object LayerAGrammar {
                 FieldSpec("recursionType", ArgKind.REFERENCE, "recursionType"),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
+            producesValue = true,
         ),
 
         // Composite values (Layer 5 steps 3a, 3b).
@@ -699,6 +714,7 @@ object LayerAGrammar {
                 FieldSpec("ofType", ArgKind.REFERENCE, "ofType"),
                 FieldSpec("fields", ArgKind.FIELD_LIST, "fields"),
             ),
+            producesValue = true,
         ),
         "PFV" to CodeSchema(
             jsonType = "ProductFieldValue",
@@ -713,6 +729,7 @@ object LayerAGrammar {
                 FieldSpec("target", ArgKind.REFERENCE, "target"),
                 FieldSpec("fieldName", ArgKind.STRING, "fieldName"),
             ),
+            producesValue = true,
         ),
         "SV" to CodeSchema(
             jsonType = "SumValue",
@@ -721,6 +738,7 @@ object LayerAGrammar {
                 FieldSpec("caseName", ArgKind.STRING, "caseName"),
                 FieldSpec("payload", ArgKind.NULLABLE_REF, "payload"),
             ),
+            producesValue = true,
         ),
 
         // Recursive types
@@ -741,6 +759,7 @@ object LayerAGrammar {
                 FieldSpec("handle", ArgKind.REFERENCE, "handle"),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
+            producesValue = true,
         ),
 
         // State machines (Layer 6)

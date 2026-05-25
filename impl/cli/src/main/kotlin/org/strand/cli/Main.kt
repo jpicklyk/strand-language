@@ -10,16 +10,19 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.strand.authoring.Authoring
 import org.strand.authoring.AuthoringException
+import org.strand.authoring.ConstraintGrammar
 import org.strand.core.JsonIngest
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.hashing.FinalizedProgram
 import org.strand.hashing.Hasher
+import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.InterpretException
 import org.strand.interpreter.Value
 import org.strand.runtime.EventCodec
 import org.strand.runtime.MachineGroup
+import org.strand.runtime.RuntimeMetrics
 import org.strand.runtime.StateMachineRuntime
 import org.strand.runtime.Trace
 import org.strand.runtime.TraceStep
@@ -51,6 +54,21 @@ private fun loadFinalized(text: String): FinalizedProgram =
     loadFinalizedWithIngest(text).second
 
 /**
+ * Build a permissive [CapabilitySet] that grants wildcard patterns for every
+ * EffectCategory NodeId reachable in the verified store. Used by the
+ * `--grant-all` CLI flag so capability-requiring corpus programs can run
+ * end-to-end from the command line without a policy file. This is demo /
+ * dev-mode only — production deployments build CapabilitySets from policy.
+ */
+private fun grantAllCapabilities(finalized: FinalizedProgram): CapabilitySet {
+    val categories: Set<NodeId> = finalized.store.entries()
+        .filter { it.second is Node.EffectCategory }
+        .map { it.first }
+        .toSet()
+    return CapabilitySet.ofCategories(categories)
+}
+
+/**
  * CLI for the Strand reference implementation.
  *
  * Usage:
@@ -59,6 +77,7 @@ private fun loadFinalized(text: String): FinalizedProgram =
  *   strand machine <file.json> --events <events.json>
  *   strand group   <file.json> --events <events.json>
  *   strand author  <file.layer-a> [--emit-json]
+ *   strand grammar
  *
  * `verify` ingests and type-checks; `run` additionally evaluates pure
  * programs (Layer 1–5); `machine` drives a single StateMachine over a JSON
@@ -66,8 +85,9 @@ private fun loadFinalized(text: String): FinalizedProgram =
  * StateMachine reachable in the program as a MachineGroup over a routed
  * event list (Layer 6 step 2, per-machine coroutine actors); `author`
  * compiles a Layer A authoring-format file (Q-034 step 1) to canonical
- * dag-json and runs the verifier — with `--emit-json` it prints the
- * generated JSON instead of running the pipeline.
+ * dag-json (always elaborating absent annotations) and runs the verifier
+ * — with `--emit-json` it prints the generated JSON instead of running
+ * the pipeline; `grammar` emits the Layer B GBNF constraint grammar.
  */
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
@@ -79,6 +99,7 @@ fun main(args: Array<String>) {
         "machine" -> runMachine(args)
         "group" -> runGroup(args)
         "author" -> runAuthor(args)
+        "grammar" -> runGrammar(args)
         else -> {
             usage()
             exitProcess(2)
@@ -86,12 +107,36 @@ fun main(args: Array<String>) {
     }
 }
 
+/**
+ * Q-034 step 1 Layer B: emit the constraint grammar (GBNF) that describes
+ * exactly the well-formed Layer A documents. The grammar is consumable by
+ * `llama.cpp --grammar-file`, Outlines, LMQL, and any other GBNF-aware
+ * decoder. Lexical / syntactic correctness only; semantic correctness
+ * (reference validity, id uniqueness) is out of GBNF's expressive range
+ * and not enforced by the emitted grammar.
+ */
+private fun runGrammar(args: Array<String>) {
+    if (args.size > 1) {
+        usage()
+        exitProcess(2)
+    }
+    print(ConstraintGrammar.emitGbnf())
+}
+
 private fun runVerifyOrEval(command: String, args: Array<String>) {
-    if (args.size != 2) {
+    if (args.size < 2) {
         usage()
         exitProcess(2)
     }
     val path = args[1]
+    val flags = args.drop(2).toSet()
+    val grantAll = "--grant-all" in flags
+    val unknown = flags - setOf("--grant-all")
+    if (unknown.isNotEmpty()) {
+        System.err.println("unknown flags: ${unknown.joinToString(", ")}")
+        usage()
+        exitProcess(2)
+    }
     val text = File(path).readText()
     val finalized = loadFinalized(text)
     val verifier = Verifier(finalized.store, finalized.hashToNodeId)
@@ -110,7 +155,12 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             if (!runSchemaCheck(finalized, result)) exitProcess(1)
             if (command == "run") {
                 try {
-                    val value = Interpreter(finalized.store, finalized.hashToNodeId).eval(finalized.root)
+                    val interp = Interpreter(finalized.store, finalized.hashToNodeId)
+                    val value = if (grantAll) {
+                        interp.eval(finalized.root, capabilities = grantAllCapabilities(finalized))
+                    } else {
+                        interp.eval(finalized.root)
+                    }
                     println("value: $value")
                 } catch (e: InterpretException) {
                     System.err.println("interpretation failed: ${e.error}")
@@ -148,6 +198,14 @@ private fun runMachine(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
+    val flags = args.drop(4).toSet()
+    val grantAll = "--grant-all" in flags
+    val unknown = flags - setOf("--grant-all")
+    if (unknown.isNotEmpty()) {
+        System.err.println("unknown flags: ${unknown.joinToString(", ")}")
+        usage()
+        exitProcess(2)
+    }
 
     val programText = File(programPath).readText()
     val finalized = loadFinalized(programText)
@@ -167,7 +225,8 @@ private fun runMachine(args: Array<String>) {
             val events = EventCodec.parseEventList(eventsText)
             val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
             try {
-                val trace = runtime.runMachine(finalized.root, events)
+                val caps = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY
+                val trace = runtime.runMachine(finalized.root, events, caps)
                 printTrace(trace)
             } catch (e: InterpretException) {
                 System.err.println("machine evaluation failed: ${e.error}")
@@ -217,6 +276,15 @@ private fun runGroup(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
+    val flags = args.drop(4).toSet()
+    val grantAll = "--grant-all" in flags
+    val emitMetrics = "--metrics" in flags
+    val unknown = flags - setOf("--grant-all", "--metrics")
+    if (unknown.isNotEmpty()) {
+        System.err.println("unknown flags: ${unknown.joinToString(", ")}")
+        usage()
+        exitProcess(2)
+    }
 
     val programText = File(programPath).readText()
     val (ingest, finalized) = loadFinalizedWithIngest(programText)
@@ -263,6 +331,7 @@ private fun runGroup(args: Array<String>) {
         store = finalized.store,
         hashToNodeId = finalized.hashToNodeId,
         machines = machineIds,
+        capabilities = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY,
         recordInputs = false,  // CLI runs are not replay-determinism tests
     )
 
@@ -296,10 +365,34 @@ private fun runGroup(args: Array<String>) {
                 }
             }
             handle.await()
+            if (emitMetrics) printMetrics(handle.metrics(), nameByNodeId)
         }
     } catch (e: InterpretException) {
         System.err.println("group evaluation failed: ${e.error}")
         exitProcess(1)
+    }
+}
+
+/**
+ * Print a [RuntimeMetrics] snapshot in a human-readable form. Per-instance
+ * counters are listed first, then per-stream. Stream NodeIds are labeled with
+ * their author name when known.
+ */
+private fun printMetrics(metrics: RuntimeMetrics, nameByNodeId: Map<NodeId, String>) {
+    println("metrics:")
+    println("  instances (${metrics.perInstance.size}):")
+    for ((id, m) in metrics.perInstance) {
+        println("    $id:")
+        println("      eventsReceived=${m.eventsReceived}")
+        println("      transitionsExecuted=${m.transitionsExecuted}")
+        println("      lastTransitionLatencyNanos=${m.lastTransitionLatencyNanos}")
+        println("      halted=${m.halted}")
+        println("      currentState=${m.currentState}")
+    }
+    println("  streams (${metrics.perStream.size}):")
+    for ((id, m) in metrics.perStream) {
+        val name = nameByNodeId[id] ?: "<unnamed:$id>"
+        println("    $name: overflowDrops=${m.overflowDrops}  closed=${m.closed}")
     }
 }
 
@@ -329,14 +422,13 @@ private fun parseRoutedEvents(text: String): List<Pair<String, Value>> {
 
 /**
  * Q-034 step 1: compile a Layer A authoring-format file to canonical
- * dag-json, ingest, finalize, verify. Flags:
+ * dag-json, ingest, finalize, verify. Elaboration (Layer C — fills in
+ * absent Lambda effects, Application effectInstances / typeArguments,
+ * Lambda paramType) runs unconditionally.
+ *
+ * Flags:
  *   `--emit-json`   print the compiled JSON to stdout, skip the verify
  *                   pipeline
- *   `--elaborate`   run Layer C effect-closure inference before emission
- *                   (fills in missing Lambda effects from the body's
- *                    closure); 1-way compilation, no hash-equivalence
- *
- * Flags can be combined.
  */
 private fun runAuthor(args: Array<String>) {
     if (args.size < 2) {
@@ -346,8 +438,7 @@ private fun runAuthor(args: Array<String>) {
     val path = args[1]
     val flags = args.drop(2).toSet()
     val emitOnly = "--emit-json" in flags
-    val elaborate = "--elaborate" in flags
-    val recognized = setOf("--emit-json", "--elaborate")
+    val recognized = setOf("--emit-json")
     val unknown = flags - recognized
     if (unknown.isNotEmpty()) {
         System.err.println("unknown flags: ${unknown.joinToString(", ")}")
@@ -356,8 +447,7 @@ private fun runAuthor(args: Array<String>) {
     }
     val layerAText = File(path).readText()
     val dagJsonText = try {
-        if (elaborate) Authoring.compileWithElaboration(layerAText)
-        else Authoring.compileToDagJson(layerAText)
+        Authoring.compileToDagJson(layerAText)
     } catch (e: AuthoringException) {
         System.err.println("Layer A compilation failed:")
         for (err in e.errors) {
@@ -387,8 +477,16 @@ private fun runAuthor(args: Array<String>) {
 private fun usage() {
     System.err.println("usage:")
     System.err.println("  strand verify  <file.json>")
-    System.err.println("  strand run     <file.json>")
-    System.err.println("  strand machine <file.json> --events <events.json>")
-    System.err.println("  strand group   <file.json> --events <events.json>")
-    System.err.println("  strand author  <file.layer-a> [--emit-json] [--elaborate]")
+    System.err.println("  strand run     <file.json> [--grant-all]")
+    System.err.println("  strand machine <file.json> --events <events.json> [--grant-all]")
+    System.err.println("  strand group   <file.json> --events <events.json> [--grant-all] [--metrics]")
+    System.err.println("  strand author  <file.layer-a> [--emit-json]")
+    System.err.println("  strand grammar                → emit Layer B constraint grammar (GBNF)")
+    System.err.println()
+    System.err.println("  --grant-all: auto-grant wildcard capabilities for every EffectCategory")
+    System.err.println("               in the verified store (demo / dev-mode convenience; not for")
+    System.err.println("               production use).")
+    System.err.println("  --metrics:   after `strand group` completes, print a RuntimeMetrics snapshot")
+    System.err.println("               (Layer 6 step 3 slice 3.4) showing per-instance and per-stream")
+    System.err.println("               counters.")
 }
