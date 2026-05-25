@@ -471,6 +471,112 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# Subcommand: step
+# --------------------------------------------------------------------------
+
+
+def cmd_step(args: argparse.Namespace) -> int:
+    """Advance a step-mode session one turn.
+
+    Exit codes:
+      0  needs-response (the next prompt is written; caller writes response.md)
+      1  converged       (summary.json contains the final metrics)
+      2  exhausted       (summary.json contains the partial metrics)
+    """
+    from strand_eval.step import step_init, step_advance, StepState
+
+    session_dir = Path(args.session).resolve()
+
+    if args.init:
+        # New session.
+        if not args.task or not args.config:
+            print("ERROR: --init requires --task and --config", file=sys.stderr)
+            return 2
+        configs_dir = Path(args.configs_dir) if args.configs_dir else DEFAULT_CONFIGS_DIR
+        tasks_dir = Path(args.tasks_dir) if args.tasks_dir else DEFAULT_TASKS_DIR
+        try:
+            cfg = load_run_configuration(args.config, configs_dir)
+        except FileNotFoundError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+        language_name = cfg.get("language")
+        if not language_name:
+            print(f"ERROR: config {args.config} missing 'language'", file=sys.stderr)
+            return 2
+        try:
+            task = load_task(args.task, tasks_dir)
+        except FileNotFoundError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
+
+        system_prompt = ""
+        sp_path = cfg.get("system_prompt_path")
+        if sp_path:
+            sp_file = (configs_dir.parent / sp_path).resolve()
+            if sp_file.exists():
+                system_prompt = sp_file.read_text(encoding="utf-8")
+
+        feedback_fmt = FeedbackFormat(cfg.get("feedback_format", args.feedback_format))
+        max_retries = int(cfg.get("max_retries", args.max_retries))
+
+        state = step_init(
+            session_dir=session_dir,
+            task_id=task.task_id,
+            config_name=args.config,
+            model=args.model,
+            language_name=language_name,
+            system_prompt=system_prompt,
+            task_prompt=task.description,
+            expected=task.expected,
+            feedback_format=feedback_fmt,
+            max_retries=max_retries,
+            sample_index=args.sample_index,
+        )
+        print(f"session initialized: {session_dir}")
+        print(f"prompt at: {session_dir / 'turn-00' / 'prompt.md'}")
+        print("write your response to response.md in that directory, then re-run `strand-eval step --session <dir>`")
+        return 0  # needs-response
+
+    # Advance.
+    if not (session_dir / "session.json").exists():
+        print(
+            f"ERROR: no session.json at {session_dir}. "
+            "Use --init to start a new session.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        state = step_advance(session_dir)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
+    if state.status == "needs-response":
+        print(
+            f"verify failed on attempt {state.attempt - 1}; "
+            f"prompt for attempt {state.attempt} written at "
+            f"{session_dir / f'turn-{state.attempt:02d}' / 'prompt.md'}"
+        )
+        return 0
+    if state.status == "converged":
+        print(
+            f"converged at attempt {state.converged_at_attempt + 1} "
+            f"(input={state.emissions[-1]['input_tokens'] if state.emissions else 0} "
+            f"output={state.emissions[-1]['output_tokens'] if state.emissions else 0} "
+            f"of total {sum(e['input_tokens'] for e in state.emissions)}/"
+            f"{sum(e['output_tokens'] for e in state.emissions)} tokens)"
+        )
+        print(f"summary at: {session_dir / 'summary.json'}")
+        return 1
+    # exhausted
+    print(
+        f"exhausted after {len(state.emissions)} attempts without converging. "
+        f"summary at {session_dir / 'summary.json'}"
+    )
+    return 2
+
+
+# --------------------------------------------------------------------------
 # argparse plumbing
 # --------------------------------------------------------------------------
 
@@ -535,6 +641,39 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--runs-dir", default=None, dest="runs_dir")
     p_rep.add_argument("--baseline", default="python-type-hints")
     p_rep.set_defaults(func=cmd_report)
+
+    # step — file-IPC step-mode for Claude Code or any external driver.
+    p_step = subs.add_parser(
+        "step",
+        help=(
+            "Advance a step-mode session one turn. With --init, create a "
+            "new session and write turn-00/prompt.md. Without --init, read "
+            "the latest turn's response.md and process verify+run, then "
+            "either write the next turn's prompt.md or summary.json."
+        ),
+    )
+    p_step.add_argument(
+        "--session",
+        required=True,
+        help="Session directory. Will be created on --init; must exist otherwise.",
+    )
+    p_step.add_argument("--init", action="store_true", help="Initialize a new session")
+    p_step.add_argument("--task", default=None, help="(--init only) task id")
+    p_step.add_argument("--config", default=None, help="(--init only) config name")
+    p_step.add_argument("--model", default="claude-sonnet-4-7", help="(--init only) model identifier")
+    p_step.add_argument(
+        "--max-retries", type=int, default=5, dest="max_retries",
+        help="(--init only) max emission attempts",
+    )
+    p_step.add_argument(
+        "--feedback-format", default="prose",
+        choices=[f.value for f in FeedbackFormat], dest="feedback_format",
+        help="(--init only) how verifier errors are formatted for the caller",
+    )
+    p_step.add_argument("--sample", type=int, default=0, dest="sample_index")
+    p_step.add_argument("--tasks-dir", default=None, dest="tasks_dir")
+    p_step.add_argument("--configs-dir", default=None, dest="configs_dir")
+    p_step.set_defaults(func=cmd_step)
 
     return parser
 
