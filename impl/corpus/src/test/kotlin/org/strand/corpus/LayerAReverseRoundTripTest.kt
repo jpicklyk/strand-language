@@ -27,10 +27,8 @@ import org.strand.verifier.Verifier
 class LayerAReverseRoundTripTest {
 
     /**
-     * Layer 1-5 programs. State machines (41-49), schemas (50-56),
-     * overflow (57), and blessed-library programs (58+) will be added as
-     * subsequent steps verify they round-trip cleanly under the canonical
-     * projection.
+     * Every canonical seed-corpus program (excluding `.events.json` event
+     * inputs for state-machine drivers, which are not standalone programs).
      */
     private val corpusResources = listOf(
         "/corpus/01-int-literal.json",
@@ -47,6 +45,7 @@ class LayerAReverseRoundTripTest {
         "/corpus/12-effect-declared-and-granted.json",
         "/corpus/13-capability-scope-narrow-then-call.json",
         "/corpus/14-multi-effect-lambda.json",
+        "/corpus/14-pure-lambda-with-overdeclared-effect.json",
         "/corpus/15-builtin-add.json",
         "/corpus/16-builtin-time-now-under-capability.json",
         "/corpus/17-builtin-compose-pure-and-effectful.json",
@@ -73,6 +72,29 @@ class LayerAReverseRoundTripTest {
         "/corpus/38-handler-nested-innermost-wins.json",
         "/corpus/39-handler-itself-performs-effect.json",
         "/corpus/40-handler-fires-through-fixpoint.json",
+        "/corpus/41-toggle-machine.json",
+        "/corpus/42-counter-machine.json",
+        "/corpus/43-counter-with-overflow-output.json",
+        "/corpus/44-request-response-echo.json",
+        "/corpus/45-bank-account-machine.json",
+        "/corpus/46-async-single-machine-counter.json",
+        "/corpus/47-async-multi-input-merge.json",
+        "/corpus/48-async-supervisor-one-for-one.json",
+        "/corpus/49-async-tagged-output-list.json",
+        "/corpus/50-positive-int-schema-pass.json",
+        "/corpus/51-positive-int-schema-fail.json",
+        "/corpus/52-non-empty-list-schema-pass.json",
+        "/corpus/53-non-empty-list-schema-fail.json",
+        "/corpus/54-json-value-primitives.json",
+        "/corpus/55-json-object-unique-keys.json",
+        "/corpus/56-json-object-duplicate-keys-fail.json",
+        "/corpus/57-dropoldest-overflow.json",
+        "/corpus/58-plain-text-document.json",
+        "/corpus/59-non-empty-text-pass.json",
+        "/corpus/60-non-empty-text-fail.json",
+        "/corpus/61-markdown-document.json",
+        "/corpus/62-non-empty-markdown-pass.json",
+        "/corpus/63-non-empty-markdown-fail.json",
     )
 
     @TestFactory
