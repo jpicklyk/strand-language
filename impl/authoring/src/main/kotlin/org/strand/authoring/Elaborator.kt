@@ -86,6 +86,53 @@ object Elaborator {
     private const val FIXED_POINT_MAX_ITERATIONS = 8
 
     /**
+     * Yield every NodeDecl-like in [doc], descending through `Arg.Nested`
+     * expressions to surface them as synthetic NodeDecls. Each synthetic
+     * NodeDecl gets a placeholder id (`__nested<n>`) so callers iterating
+     * to find binder use-sites can recognize a nested APP / MAT / PFV / SV
+     * just like a top-level one. The id is iteration-only — callers don't
+     * look it up in `byId`.
+     *
+     * Closes the integration gap between Agent A's nested expressions
+     * (`Arg.Nested(code, args)`) and Agent B's compact-LAM-param inference:
+     * a reference like `(APP eqInt [n 0])` inside a parent's arg list now
+     * surfaces as a synthetic APP NodeDecl whose argList contains `n`,
+     * letting `inferTypeForCompactParam`'s usage-scan find it.
+     */
+    private fun allNodesIncludingNested(doc: LayerADocument): List<NodeDecl> {
+        val out = mutableListOf<NodeDecl>()
+        val counter = intArrayOf(0)
+        for (node in doc.nodes) {
+            out += node
+            collectNestedFromArgs(node.args, out, counter)
+        }
+        return out
+    }
+
+    private fun collectNestedFromArgs(
+        args: List<Arg>,
+        out: MutableList<NodeDecl>,
+        counter: IntArray,
+    ) {
+        for (arg in args) {
+            when (arg) {
+                is Arg.Nested -> {
+                    val synthetic = NodeDecl(
+                        id = "__nested${counter[0]++}",
+                        code = arg.code,
+                        args = arg.args,
+                        line = 0,
+                    )
+                    out += synthetic
+                    collectNestedFromArgs(arg.args, out, counter)
+                }
+                is Arg.Listing -> collectNestedFromArgs(arg.items, out, counter)
+                else -> {}
+            }
+        }
+    }
+
+    /**
      * Elaborate [doc] by running each inference pass to a fixed point.
      * Each pass is a pure function `(doc) -> doc`. The loop terminates
      * when an iteration produces no change to the node list.
@@ -133,8 +180,18 @@ object Elaborator {
         val byId = doc.nodes.associateBy { it.id }
         val primTypeIdByKind = buildPrimTypeMap(doc)
 
-        // Build LAM -> list of APPs whose function arg resolves to this LAM.
-        val callSitesByLam: Map<String, List<NodeDecl>> = doc.nodes
+        // v4 follow-up (close A/B gap): include synthetic NodeDecls for
+        // every Arg.Nested expression in the document. Without this, a
+        // compact LAM param whose ONLY uses are inside a nested expression
+        // — e.g., `LAM [recurse n] (IF (APP eqInt [n 0]) 1 (APP mul [n
+        // (APP recurse [(APP sub [n 1])])]))` — fails to infer because
+        // the usage scan only saw top-level NodeDecls.
+        val allNodes = allNodesIncludingNested(doc)
+
+        // Build LAM -> list of APPs whose function arg resolves to this
+        // LAM. Includes nested APPs so a LAM called only via
+        // `(APP lamId [...])` still has its call sites discovered.
+        val callSitesByLam: Map<String, List<NodeDecl>> = allNodes
             .asSequence()
             .filter { it.code == "APP" }
             .mapNotNull { app ->
@@ -169,7 +226,7 @@ object Elaborator {
                     paramName = text,
                     paramIndex = paramIndex,
                     lamId = node.id,
-                    nodes = doc.nodes,
+                    nodes = allNodes,
                     byId = byId,
                     primTypeIdByKind = primTypeIdByKind,
                     callSitesByLam = callSitesByLam,

@@ -1,17 +1,16 @@
-# Layer A density v4 fixture: 21-fixpoint-factorial using nested expressions.
+# Layer A density v4 fixture: 21-fixpoint-factorial combining BOTH
+# nested expressions AND deeper Elaborator type inference.
 #
-# Single-statement factorial body: three intermediate APPs collapse into a
-# nested expression inside IF's else branch (Agent A's Slice 10 — nested
-# expressions). Type declarations and LAM param annotations are retained
-# explicitly because Agent B's compact-LAM-param inference doesn't yet
-# walk into nested expressions to discover the param's binder uses.
-# Combining nested expressions with elision of LAM param types is a
-# follow-up: have the Elaborator scan inside Arg.Nested.
+# Single-statement factorial body via nested IF branches (Agent A's
+# Slice 10 nested expressions). The `factT FNT [intT] intT` declaration
+# and BOTH LAM param annotations (`recurse:factT n:intT`) elided —
+# inferred by the Elaborator's compact-LAM-param walk after the v4
+# follow-up extended it to descend into Arg.Nested.
 #
-# Round-trip: canonical hash equals 21-fixpoint-factorial.json's.
+# Five lines for what canonical JSON writes in ~30. Round-trip hash
+# equals 21-fixpoint-factorial.json's.
 @v=1 root=app
-factT FNT [intT] intT
 matchBody IF (APP eqInt [n 0]) 1 (APP mul [n (APP recurse [(APP sub [n 1])])])
-bodyLam LAM [recurse:factT n:intT] matchBody
+bodyLam LAM [recurse n] matchBody
 fact FIX factT bodyLam
 app APP fact [5]

@@ -1,11 +1,12 @@
-# Layer A density v4 fixture: 41-toggle-machine using nested expressions
-# inside FIELD_LIST compact-form values (Agent A's Slice 10).
+# Layer A density v4 fixture: 41-toggle-machine combining BOTH
+# nested expressions AND compact-LAM-param inference.
 #
-# Two intermediate declarations (negatedState, emptyOutputsV) collapse into
-# the FIELD_LIST entries `state=(APP not [s])` and `outputs=(PV emptyOutputsT
-# [])`. The PRC annotations on LAM are retained because Agent B's compact-
-# form-param inference doesn't walk into nested expressions to discover
-# `s` and `e`'s use sites (a follow-up to combine the two streams).
+# Two intermediate declarations (negatedState, emptyOutputsV) collapse
+# into nested FIELD_LIST values (Agent A's Slice 10). LAM param
+# annotations `s:boolT e:unitT` elided — `s` is inferred from its use
+# inside the nested `(APP not [s])` (the not builtin's signature is
+# boolT → boolT); `e` is inferred from the StateMachine's transitionFn
+# (state, event) signature with the inputStream's eventType being unitT.
 #
 # Round-trip: canonical hash equals 41-toggle-machine.json's.
 @v=1 root=toggleMachine
@@ -15,6 +16,6 @@ outputsFieldT PRF "outputs" emptyOutputsT
 resultT PRD [stateFieldT outputsFieldT]
 transitionFnT FNT [boolT unitT] resultT
 transitionResult PV resultT [state=(APP not [s]) outputs=(PV emptyOutputsT [])]
-transitionLambda LAM [s:boolT e:unitT] transitionResult
+transitionLambda LAM [s e] transitionResult
 inputStream ESE unitT
 toggleMachine SM transitionLambda false [inputStream] [] [receiveFx]
