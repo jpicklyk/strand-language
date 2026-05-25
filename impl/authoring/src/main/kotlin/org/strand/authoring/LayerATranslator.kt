@@ -85,7 +85,13 @@ object LayerATranslator {
         val canonical = translateCanonical(text)
         val safelyOmitted = omitSafelyInferableFields(canonical)
         val probed = probeAndOmit(safelyOmitted)
-        return applyImplicitPrelude(probed)
+        val prelude = applyImplicitPrelude(probed)
+        val ifSugar = applyIfSugar(prelude)
+        val compactLam = applyCompactLam(ifSugar)
+        val inlined = applyInlineSubstitutions(compactLam)
+        val pfvFolded = applyInlinePfv(inlined)
+        val nested = applyNestedExpressions(pfvFolded)
+        return nested
     }
 
     /** Translate without any elaboration-omission. Useful for testing and
@@ -606,6 +612,520 @@ object LayerATranslator {
         // Reject if decl has *more* args than schema accounts for; defensive.
         if (decl.args.size > schema.required.size + schema.optional.size) return false
         return true
+    }
+
+    // ========================================================================
+    // Step 4 (Slice 4) — IF/Match-on-Bool sugar
+    // ========================================================================
+
+    /**
+     * Detect Match nodes that fold to an IF: exactly two cases, both
+     * LiteralPattern over boolT with one BoolLit `true` and one BoolLit
+     * `false`. The six wrapper nodes (2 BoolLit, 2 Pattern, 2 MatchCase)
+     * must each be used exactly once.
+     *
+     * On match: rewrite the MAT to an IF (3 args: scrutinee, then, else),
+     * remove the six wrapper nodes. Canonical hash is preserved because
+     * the IF code's DagJsonEmitter expansion re-synthesizes the same tower
+     * on the way back through forward compilation.
+     */
+    private fun applyIfSugar(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val byId = doc.nodes.associateBy { it.id }
+        val useCounts = computeUseCounts(doc)
+
+        val rewrites = mutableListOf<IfRewrite>()
+        val toRemove = mutableSetOf<String>()
+
+        for (mat in doc.nodes.filter { it.code == "MAT" }) {
+            val rewrite = detectIfPattern(mat, byId, useCounts) ?: continue
+            // Skip if any wrapper overlaps an earlier rewrite (defensive).
+            if (rewrite.wrapperIds.any { it in toRemove }) continue
+            rewrites += rewrite
+            toRemove += rewrite.wrapperIds
+        }
+
+        if (rewrites.isEmpty()) return doc
+
+        val rewriteById = rewrites.associateBy { it.matId }
+        val newNodes = doc.nodes.mapNotNull { node ->
+            if (node.id in toRemove) return@mapNotNull null
+            val rewrite = rewriteById[node.id] ?: return@mapNotNull node
+            NodeDecl(
+                id = node.id,
+                code = "IF",
+                args = listOf(rewrite.scrutinee, rewrite.thenBody, rewrite.elseBody),
+                line = node.line,
+            )
+        }
+
+        val candidate = doc.copy(nodes = newNodes)
+        return if (canonicalHash(candidate) == baselineHash) candidate else doc
+    }
+
+    private data class IfRewrite(
+        val matId: String,
+        val scrutinee: Arg,
+        val thenBody: Arg,
+        val elseBody: Arg,
+        val wrapperIds: Set<String>,
+    )
+
+    private fun detectIfPattern(
+        mat: NodeDecl,
+        byId: Map<String, NodeDecl>,
+        useCounts: Map<String, Int>,
+    ): IfRewrite? {
+        if (mat.args.size != 2) return null
+        val scrutinee = mat.args[0]
+        val cases = (mat.args[1] as? Arg.Listing) ?: return null
+        if (cases.items.size != 2) return null
+
+        val case1Ref = (cases.items[0] as? Arg.Bare)?.text ?: return null
+        val case2Ref = (cases.items[1] as? Arg.Bare)?.text ?: return null
+        val case1 = byId[case1Ref] ?: return null
+        val case2 = byId[case2Ref] ?: return null
+        if (case1.code != "MC" || case2.code != "MC") return null
+        if (case1.args.size != 2 || case2.args.size != 2) return null
+
+        val pat1Ref = (case1.args[0] as? Arg.Bare)?.text ?: return null
+        val pat2Ref = (case2.args[0] as? Arg.Bare)?.text ?: return null
+        val body1 = case1.args[1]
+        val body2 = case2.args[1]
+
+        val pat1 = byId[pat1Ref] ?: return null
+        val pat2 = byId[pat2Ref] ?: return null
+        if (pat1.code != "PLT" || pat2.code != "PLT") return null
+        if (pat1.args.size != 2 || pat2.args.size != 2) return null
+
+        val pat1Type = (pat1.args[0] as? Arg.Bare)?.text ?: return null
+        val pat2Type = (pat2.args[0] as? Arg.Bare)?.text ?: return null
+        if (!isBoolTypeRef(pat1Type, byId)) return null
+        if (!isBoolTypeRef(pat2Type, byId)) return null
+
+        val lit1Ref = (pat1.args[1] as? Arg.Bare)?.text ?: return null
+        val lit2Ref = (pat2.args[1] as? Arg.Bare)?.text ?: return null
+        val lit1 = byId[lit1Ref] ?: return null
+        val lit2 = byId[lit2Ref] ?: return null
+        if (lit1.code != "BLT" || lit2.code != "BLT") return null
+
+        val lit1Val = (lit1.args.getOrNull(0) as? Arg.BoolL)?.value ?: return null
+        val lit2Val = (lit2.args.getOrNull(0) as? Arg.BoolL)?.value ?: return null
+        if (lit1Val == lit2Val) return null
+
+        val wrapperIds = setOf(case1Ref, case2Ref, pat1Ref, pat2Ref, lit1Ref, lit2Ref)
+        if (wrapperIds.size != 6) return null  // collision means shared wrapper — refuse
+        for (id in wrapperIds) {
+            if ((useCounts[id] ?: 0) != 1) return null
+        }
+
+        val (thenBody, elseBody) = if (lit1Val) (body1 to body2) else (body2 to body1)
+        return IfRewrite(
+            matId = mat.id,
+            scrutinee = scrutinee,
+            thenBody = thenBody,
+            elseBody = elseBody,
+            wrapperIds = wrapperIds,
+        )
+    }
+
+    /**
+     * True when [id] refers to a boolT-equivalent node: either the
+     * reserved name "boolT" (which forward emission resolves to a
+     * PrimitiveType{Bool}), OR a local PRM with kind "Bool", OR the local
+     * node was previously removed by [applyImplicitPrelude] (in which case
+     * the reference remains as "boolT" but no longer exists in `byId`).
+     */
+    private fun isBoolTypeRef(id: String, byId: Map<String, NodeDecl>): Boolean {
+        if (id == "boolT") return true
+        val node = byId[id] ?: return false
+        if (node.code != "PRM") return false
+        val kind = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return false
+        return kind == "Bool"
+    }
+
+    /**
+     * Count how many times each node id appears as an [Arg.Bare] anywhere
+     * in [doc]. References inside nested args (Listings, Nested) are
+     * counted recursively. The root id gets +1 since the document declares
+     * it as the entry point.
+     */
+    private fun computeUseCounts(doc: LayerADocument): Map<String, Int> {
+        val counts = mutableMapOf<String, Int>()
+        for (node in doc.nodes) {
+            for (arg in node.args) countRefsInArg(arg, counts)
+        }
+        counts.merge(doc.rootId, 1) { a, b -> a + b }
+        return counts
+    }
+
+    private fun countRefsInArg(arg: Arg, counts: MutableMap<String, Int>) {
+        when (arg) {
+            is Arg.Bare -> counts.merge(arg.text, 1) { a, b -> a + b }
+            is Arg.Listing -> arg.items.forEach { countRefsInArg(it, counts) }
+            is Arg.Nested -> arg.args.forEach { countRefsInArg(it, counts) }
+            else -> Unit
+        }
+    }
+
+    // ========================================================================
+    // Step 4 (Slice 5) — Compact Lambda parameter declarations
+    // ========================================================================
+
+    /**
+     * Detect Lambdas whose `parameters` PRCs satisfy the compact-form
+     * preconditions and rewrite them as `[name:typeRef ...]` entries with
+     * the explicit PRC declarations dropped.
+     *
+     * A PRC qualifies for compact-form lifting when:
+     *  * Its author id equals its `name` string (else the synthesized PRC
+     *    would have a different id and break VarRefs).
+     *  * Its `name` is a valid identifier (no `:` or other separators).
+     *  * It is referenced from the parameters list of exactly one LAM
+     *    (sharing a binder across LAMs is technically possible but the
+     *    compact form has nowhere to express the sharing).
+     *
+     * The compact entry is `name:typeRef` when the PRC retains its
+     * paramType, or bare `name` when paramType was already stripped by
+     * Step 2's recursion-slot rule. The forward Slice 5 emission +
+     * Elaborator case 5 re-derive paramType for the bare form.
+     */
+    private fun applyCompactLam(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val byId = doc.nodes.associateBy { it.id }
+
+        // Pre-pass: identify which LAM each PRC is bound by (via parameters).
+        val prcOwnerLam = mutableMapOf<String, MutableList<String>>()
+        for (lam in doc.nodes.filter { it.code == "LAM" }) {
+            val params = (lam.args.getOrNull(0) as? Arg.Listing) ?: continue
+            for (param in params.items) {
+                val text = (param as? Arg.Bare)?.text ?: continue
+                if (':' in text) continue
+                val prc = byId[text] ?: continue
+                if (prc.code != "PRC") continue
+                prcOwnerLam.getOrPut(text) { mutableListOf() } += lam.id
+            }
+        }
+
+        val toRemove = mutableSetOf<String>()
+        val newNodes = doc.nodes.map nodeMap@{ node ->
+            if (node.code != "LAM") return@nodeMap node
+            val params = (node.args.getOrNull(0) as? Arg.Listing) ?: return@nodeMap node
+            var changed = false
+            val newItems = params.items.map { param ->
+                val text = (param as? Arg.Bare)?.text ?: return@map param
+                if (':' in text) return@map param
+                val prc = byId[text] ?: return@map param
+                if (prc.code != "PRC") return@map param
+                val owners = prcOwnerLam[text] ?: return@map param
+                if (owners.size != 1 || owners[0] != node.id) return@map param
+
+                val prcName = (prc.args.getOrNull(0) as? Arg.Str)?.value ?: return@map param
+                if (prcName != prc.id || !isValidIdentifier(prcName)) return@map param
+
+                val paramType = (prc.args.getOrNull(1) as? Arg.Bare)?.text
+                val compactText = if (paramType != null) "$prcName:$paramType" else prcName
+                changed = true
+                toRemove += text
+                Arg.Bare(compactText)
+            }
+            if (!changed) return@nodeMap node
+            val newArgs = node.args.toMutableList()
+            newArgs[0] = Arg.Listing(newItems)
+            node.copy(args = newArgs)
+        }
+
+        if (toRemove.isEmpty()) return doc
+
+        val candidate = doc.copy(
+            nodes = newNodes.filterNot { it.id in toRemove }
+        )
+        return if (canonicalHash(candidate) == baselineHash) candidate else doc
+    }
+
+    // ========================================================================
+    // Step 4 (Slices 2 + 3) — Inline literals and auto-VarRef
+    // ========================================================================
+
+    /**
+     * Combined inline-substitution pass for two density sugars:
+     *
+     *  * **Slice 2 (inline literals).** When a single-use literal node
+     *    (ILT/FLT/BLT/STR) sits at a REFERENCE / LIST_REF / NULLABLE_REF
+     *    arg position of some parent, inline its value at that position
+     *    and drop the standalone declaration. The forward DagJsonEmitter's
+     *    Slice 2 logic synthesizes a child literal node on the way back.
+     *
+     *  * **Slice 3 (auto-VarRef).** When a single-use VarRef node sits at
+     *    a value-position arg and its binder is a PRC, substitute the PRC
+     *    id directly at the parent's arg position and drop the VarRef
+     *    declaration. The forward emitter's Slice 3 resolver re-wraps the
+     *    bare PRC reference into a VarRef on emit.
+     *
+     * Both substitutions are gated on slot kind — only REFERENCE,
+     * NULLABLE_REF, and LIST_REF positions are eligible (KEYWORD, STRING,
+     * INT, etc. positions are left alone; PARAM_LIST and FIELD_LIST entries
+     * are binder declarations, not references, so they are also skipped).
+     */
+    private fun applyInlineSubstitutions(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val byId = doc.nodes.associateBy { it.id }
+        val useCounts = computeUseCounts(doc)
+        val toRemove = mutableSetOf<String>()
+
+        val newNodes = doc.nodes.map { node ->
+            val schema = LayerAGrammar.codes[node.code] ?: return@map node
+            var changed = false
+            val newArgs = node.args.mapIndexed { i, arg ->
+                val spec = positionToFieldSpec(schema, i) ?: return@mapIndexed arg
+                val replaced = substituteAtSlot(arg, spec.kind, byId, useCounts, toRemove)
+                if (replaced !== arg) changed = true
+                replaced
+            }
+            if (changed) node.copy(args = newArgs) else node
+        }
+
+        if (toRemove.isEmpty()) return doc
+
+        val candidate = doc.copy(nodes = newNodes.filterNot { it.id in toRemove })
+        return if (canonicalHash(candidate) == baselineHash) candidate else doc
+    }
+
+    private fun positionToFieldSpec(
+        schema: LayerAGrammar.CodeSchema,
+        position: Int,
+    ): LayerAGrammar.FieldSpec? {
+        if (position < schema.required.size) return schema.required[position]
+        val optIdx = position - schema.required.size
+        return schema.optional.getOrNull(optIdx)
+    }
+
+    private fun substituteAtSlot(
+        arg: Arg,
+        kind: LayerAGrammar.ArgKind,
+        byId: Map<String, NodeDecl>,
+        useCounts: Map<String, Int>,
+        toRemove: MutableSet<String>,
+    ): Arg = when (kind) {
+        LayerAGrammar.ArgKind.REFERENCE,
+        LayerAGrammar.ArgKind.NULLABLE_REF -> trySubstituteValuePosition(arg, byId, useCounts, toRemove)
+        LayerAGrammar.ArgKind.LIST_REF -> {
+            if (arg !is Arg.Listing) arg
+            else {
+                val newItems = arg.items.map { item ->
+                    trySubstituteValuePosition(item, byId, useCounts, toRemove)
+                }
+                if (newItems == arg.items) arg else Arg.Listing(newItems)
+            }
+        }
+        else -> arg
+    }
+
+    /**
+     * Try to replace [arg] (an [Arg.Bare] reference) with either an inline
+     * literal value or a PRC-id auto-VarRef. Returns [arg] unchanged when
+     * the target is not single-use, not a literal/VarRef leaf, or otherwise
+     * ineligible.
+     */
+    private fun trySubstituteValuePosition(
+        arg: Arg,
+        byId: Map<String, NodeDecl>,
+        useCounts: Map<String, Int>,
+        toRemove: MutableSet<String>,
+    ): Arg {
+        if (arg !is Arg.Bare) return arg
+        val targetId = arg.text
+        if (targetId in toRemove) return arg
+        if ((useCounts[targetId] ?: 0) != 1) return arg
+        val target = byId[targetId] ?: return arg
+        val replacement: Arg = when (target.code) {
+            "ILT" -> target.args.getOrNull(0) as? Arg.IntL ?: return arg
+            "FLT" -> target.args.getOrNull(0) as? Arg.FloatL ?: return arg
+            "BLT" -> target.args.getOrNull(0) as? Arg.BoolL ?: return arg
+            "STR" -> target.args.getOrNull(0) as? Arg.Str ?: return arg
+            "VAR" -> {
+                val binderRef = (target.args.getOrNull(0) as? Arg.Bare) ?: return arg
+                val binder = byId[binderRef.text] ?: return arg
+                if (binder.code != "PRC") return arg
+                Arg.Bare(binderRef.text)
+            }
+            else -> return arg
+        }
+        toRemove += targetId
+        return replacement
+    }
+
+    // ========================================================================
+    // Step 4 (Slice 8) — Inline ProductFieldValue list
+    // ========================================================================
+
+    /**
+     * Detect ProductValue nodes whose PFV children are single-use and have
+     * a Bare-ref value, and fold them into compact `name=ref` entries in
+     * the PV's `fields` slot.
+     *
+     * PFVs whose value was already inlined to a literal by Slice 2 stay
+     * explicit (the compact form supports `name=ref` only, not
+     * `name=<literal>`). This is consistent with the forward Slice 8
+     * grammar.
+     */
+    private fun applyInlinePfv(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val byId = doc.nodes.associateBy { it.id }
+        val useCounts = computeUseCounts(doc)
+        val toRemove = mutableSetOf<String>()
+
+        val newNodes = doc.nodes.map { node ->
+            if (node.code != "PV") return@map node
+            val fields = (node.args.getOrNull(1) as? Arg.Listing) ?: return@map node
+            var changed = false
+            val newItems = fields.items.map { item ->
+                val ref = (item as? Arg.Bare)?.text ?: return@map item
+                if ('=' in ref) return@map item
+                if ((useCounts[ref] ?: 0) != 1) return@map item
+                val pfv = byId[ref] ?: return@map item
+                if (pfv.code != "PFV" || pfv.args.size != 2) return@map item
+                val fieldName = (pfv.args[0] as? Arg.Str)?.value ?: return@map item
+                val valueRef = (pfv.args[1] as? Arg.Bare)?.text ?: return@map item
+                if (!isValidIdentifier(fieldName)) return@map item
+                toRemove += ref
+                changed = true
+                Arg.Bare("$fieldName=$valueRef")
+            }
+            if (!changed) return@map node
+            val newArgs = node.args.toMutableList()
+            newArgs[1] = Arg.Listing(newItems)
+            node.copy(args = newArgs)
+        }
+
+        if (toRemove.isEmpty()) return doc
+        val candidate = doc.copy(nodes = newNodes.filterNot { it.id in toRemove })
+        return if (canonicalHash(candidate) == baselineHash) candidate else doc
+    }
+
+    // ========================================================================
+    // Step 4 (Slice 10) — Nested expressions
+    // ========================================================================
+
+    /**
+     * Inline value-producing single-use nodes as `(CODE args...)` nested
+     * expressions at their use site, dropping the standalone declaration.
+     * Eligible at REFERENCE / LIST_REF / NULLABLE_REF slots only.
+     *
+     * The substitution recurses: when inlining target Y into parent X, the
+     * pass also tries to inline target Y's args. This produces fully
+     * collapsed expression trees in one pass — e.g., the factorial body
+     * collapses to a single nested `(APP mul [n (APP recurse [(APP sub [n 1])])])`.
+     */
+    private fun applyNestedExpressions(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val byId = doc.nodes.associateBy { it.id }
+        val useCounts = computeUseCounts(doc)
+        val toRemove = mutableSetOf<String>()
+        // Track each node's updated form as we walk the document. When a
+        // later subject substitutes a single-use target whose args reference
+        // grandchildren that have already been inlined, we want the target's
+        // UPDATED args, not the byId's original. Doc order is roughly
+        // bottom-up (leaves first per ingest), so processedById is populated
+        // before its parents look up the entry.
+        val processedById = mutableMapOf<String, NodeDecl>()
+        val newNodesList = mutableListOf<NodeDecl>()
+
+        for (node in doc.nodes) {
+            val schema = LayerAGrammar.codes[node.code]
+            val newArgs = if (schema == null) node.args
+            else node.args.mapIndexed { i, arg ->
+                val spec = positionToFieldSpec(schema, i) ?: return@mapIndexed arg
+                substituteNestedAtSlot(arg, spec.kind, processedById, byId, useCounts, toRemove)
+            }
+            val processed = if (newArgs == node.args) node else node.copy(args = newArgs)
+            processedById[node.id] = processed
+            newNodesList += processed
+        }
+
+        if (toRemove.isEmpty()) return doc
+        val candidate = doc.copy(nodes = newNodesList.filterNot { it.id in toRemove })
+        return if (canonicalHash(candidate) == baselineHash) candidate else doc
+    }
+
+    private fun substituteNestedAtSlot(
+        arg: Arg,
+        kind: LayerAGrammar.ArgKind,
+        processedById: Map<String, NodeDecl>,
+        byId: Map<String, NodeDecl>,
+        useCounts: Map<String, Int>,
+        toRemove: MutableSet<String>,
+    ): Arg = when (kind) {
+        LayerAGrammar.ArgKind.REFERENCE,
+        LayerAGrammar.ArgKind.NULLABLE_REF -> trySubstituteNested(arg, processedById, byId, useCounts, toRemove)
+        LayerAGrammar.ArgKind.LIST_REF -> {
+            if (arg !is Arg.Listing) arg
+            else {
+                val newItems = arg.items.map { item ->
+                    trySubstituteNested(item, processedById, byId, useCounts, toRemove)
+                }
+                if (newItems == arg.items) arg else Arg.Listing(newItems)
+            }
+        }
+        else -> arg
+    }
+
+    private fun trySubstituteNested(
+        arg: Arg,
+        processedById: Map<String, NodeDecl>,
+        byId: Map<String, NodeDecl>,
+        useCounts: Map<String, Int>,
+        toRemove: MutableSet<String>,
+    ): Arg {
+        if (arg is Arg.Nested) {
+            val nestedSchema = LayerAGrammar.codes[arg.code] ?: return arg
+            val newArgs = arg.args.mapIndexed { i, a ->
+                val spec = positionToFieldSpec(nestedSchema, i) ?: return@mapIndexed a
+                substituteNestedAtSlot(a, spec.kind, processedById, byId, useCounts, toRemove)
+            }
+            return if (newArgs == arg.args) arg else Arg.Nested(arg.code, newArgs)
+        }
+        if (arg !is Arg.Bare) return arg
+        val targetId = arg.text
+        if (targetId in toRemove) return arg
+        if ((useCounts[targetId] ?: 0) != 1) return arg
+        val target = processedById[targetId] ?: byId[targetId] ?: return arg
+        val schema = LayerAGrammar.codes[target.code] ?: return arg
+        if (!schema.producesValue) return arg
+        if (!isSafeToNest(target)) return arg
+        toRemove += targetId
+        return Arg.Nested(target.code, target.args)
+    }
+
+    /**
+     * Restrict Slice 10 nesting to nodes whose forward emission survives
+     * being inside another nested expression.
+     *
+     * The Elaborator runs once over top-level NodeDecls BEFORE DagJsonEmitter
+     * expansion. Nodes whose forward emission requires Elaborator-side
+     * post-processing (i.e., case 5 recursion-slot paramType inference) are
+     * unsafe to nest:
+     *  * **FIX:** Elaborator's case 5 scans top-level FIX nodes. If FIX is
+     *    inlined, the body LAM's recursion-slot PRC never receives paramType
+     *    and JsonIngest rejects the result. Skip.
+     *  * **LAM with a bare-name compact param** (no `:type` suffix): the
+     *    bare entry is a recursion-slot parameter that depends on the
+     *    enclosing FIX's case-5 inference. Skip the same way.
+     */
+    private fun isSafeToNest(target: NodeDecl): Boolean {
+        if (target.code == "FIX") return false
+        if (target.code == "LAM") {
+            val params = (target.args.getOrNull(0) as? Arg.Listing) ?: return true
+            val hasBareName = params.items.any { it is Arg.Bare && ':' !in it.text }
+            if (hasBareName) return false
+        }
+        return true
+    }
+
+    private fun isValidIdentifier(s: String): Boolean {
+        if (s.isEmpty()) return false
+        if (!s[0].isLetter() && s[0] != '_') return false
+        return s.all { it.isLetterOrDigit() || it == '_' }
     }
 
     private fun fieldMatches(

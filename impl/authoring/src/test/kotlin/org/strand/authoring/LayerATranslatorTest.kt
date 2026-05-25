@@ -74,9 +74,7 @@ class LayerATranslatorTest {
     }
 
     @Test
-    fun `Lambda translates with parameters as bare-ref list`() {
-        // Step 1 always produces the legacy bare-ref list form for LAM
-        // parameters (PARAM_LIST kind), never the compact `name:typeRef`.
+    fun `Lambda parameters render as bare-ref list in canonical form, compact form after sugar`() {
         val json = """{
             "version": 1,
             "root": "lam",
@@ -87,20 +85,31 @@ class LayerATranslatorTest {
                 "lam": { "type": "Lambda", "parameters": ["x"], "body": "xRef" }
             }
         }"""
-        val doc = LayerATranslator.translate(json)
-        val lam = doc.nodes.first { it.id == "lam" }
-        assertEquals("LAM", lam.code)
-        // parameters is a list of bare refs, body is a bare ref
-        assertEquals(2, lam.args.size)
-        assertEquals(Arg.Listing(listOf(Arg.Bare("x"))), lam.args[0])
-        assertEquals(Arg.Bare("xRef"), lam.args[1])
+        // Canonical form: explicit PRC, bare-ref list.
+        val canonical = LayerATranslator.translateCanonical(json)
+        val canonicalLam = canonical.nodes.first { it.id == "lam" }
+        assertEquals("LAM", canonicalLam.code)
+        assertEquals(2, canonicalLam.args.size)
+        assertEquals(Arg.Listing(listOf(Arg.Bare("x"))), canonicalLam.args[0])
+        assertEquals(Arg.Bare("xRef"), canonicalLam.args[1])
+        assertTrue(canonical.nodes.any { it.id == "x" && it.code == "PRC" }) {
+            "canonical form must retain the explicit PRC declaration"
+        }
+
+        // Full pipeline: Slice 5 compact-LAM lifts `x:intT` and drops the PRC.
+        val full = LayerATranslator.translate(json)
+        val fullLam = full.nodes.first { it.id == "lam" }
+        assertEquals(Arg.Listing(listOf(Arg.Bare("x:intT"))), fullLam.args[0])
+        assertTrue(full.nodes.none { it.id == "x" }) {
+            "PRC declaration should have been dropped by Slice 5"
+        }
     }
 
     @Test
-    fun `Match without IF sugar detection produces canonical MAT`() {
-        // Even when the Match looks like an IF (two cases, BoolLit patterns),
-        // Step 1 always picks MAT — the canonical code. Sugar projection
-        // is a later step.
+    fun `Match-on-Bool produces canonical MAT in canonical form, collapses to IF after sugar`() {
+        // Verifies both Step 1's canonical-form behavior (MAT, no sugar
+        // detection) AND Step 4 Slice 4's IF projection (Match-on-Bool
+        // folds to IF + drops six wrapper nodes).
         val json = """{
             "version": 1,
             "root": "m",
@@ -119,9 +128,25 @@ class LayerATranslatorTest {
                 "m": { "type": "Match", "scrutinee": "scrut", "cases": ["tCase", "fCase"] }
             }
         }"""
-        val doc = LayerATranslator.translate(json)
-        val m = doc.nodes.first { it.id == "m" }
-        assertEquals("MAT", m.code)
+        // Canonical-form translator picks MAT.
+        val canonical = LayerATranslator.translateCanonical(json)
+        assertEquals("MAT", canonical.nodes.first { it.id == "m" }.code)
+
+        // Full pipeline detects IF and collapses the six wrappers. Slices
+        // 2 + 3 then inline the single-use scrutinee BoolLit and the two
+        // IntLit branch bodies into the IF's arg positions.
+        val full = LayerATranslator.translate(json)
+        val m = full.nodes.first { it.id == "m" }
+        assertEquals("IF", m.code)
+        assertEquals(3, m.args.size)
+        assertEquals(Arg.BoolL(true), m.args[0])
+        assertEquals(Arg.IntL(1), m.args[1])
+        assertEquals(Arg.IntL(0), m.args[2])
+        // Wrapper ids removed from the doc.
+        val ids = full.nodes.map { it.id }.toSet()
+        for (wrapper in listOf("tCase", "fCase", "tPat", "fPat", "tLit", "fLit", "scrut", "one", "zero")) {
+            assertTrue(wrapper !in ids) { "wrapper $wrapper should have been removed by IF + inline" }
+        }
     }
 
     @Test
