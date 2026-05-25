@@ -1,0 +1,26 @@
+# Layer A form: compose the effectful Filesystem.Write builtin with
+# the pure Int.Add. Adapted from corpus/17-builtin-compose-pure-and-
+# effectful.json, swapping Time.Now for Filesystem.Write (a refinement-
+# bearing effect with a String path parameter).
+@v=1 root=app
+intT PRM Int
+strT PRM String
+
+# Effect category with a String path parameter (refinement-bearing).
+writeFx EFC "Filesystem.Write" [strT]
+
+# Filesystem.Write builtin: (String) -> Int, declares Filesystem.Write.
+writeT FNT [strT] intT [writeFx]
+write FN "strand-builtin:Filesystem.Write" writeT [writeFx]
+
+# Int.Add builtin: (Int, Int) -> Int, pure.
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+
+# Invoke write at the path; the EffectDecl positionally instantiates
+# Filesystem.Write with the path argument.
+path STR "/tmp/strand-eval.log"
+writeDecl EFD writeFx [path]
+callWrite APP write [path] [] [writeDecl]
+one ILT 1
+app APP add [callWrite one]

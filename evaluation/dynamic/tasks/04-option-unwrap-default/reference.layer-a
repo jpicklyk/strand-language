@@ -1,0 +1,19 @@
+# Layer A form of corpus/25-option-some-unwrap.json — Option with
+# constructor patterns (Pattern.kind = constructor and Pattern.kind =
+# variable nested inside) lowered to dag-json. Unwraps Some(42) to 42;
+# the None arm returns 0.
+@v=1 root=result
+intT PRM Int
+someCase SCS "Some" intT
+noneCase SCS "None" _
+optionT SUM [someCase noneCase]
+lit42 ILT 42
+someValue SV optionT "Some" lit42
+varN PVR intT "n"
+patSome PCN optionT "Some" varN
+nRef VAR varN
+caseSome MC patSome nRef
+patNone PCN optionT "None" _
+zero ILT 0
+caseNone MC patNone zero
+result MAT someValue [caseSome caseNone]

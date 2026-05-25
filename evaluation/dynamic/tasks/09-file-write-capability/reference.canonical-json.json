@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":     { "type": "PrimitiveType", "kind": "Int" },
+    "strT":     { "type": "PrimitiveType", "kind": "String" },
+
+    "writeFx":  { "type": "EffectCategory", "categoryName": "Filesystem.Write", "parameters": ["strT"] },
+
+    "writeT":   { "type": "FunctionType", "parameters": ["strT"], "result": "intT", "effects": ["writeFx"] },
+    "write":    { "type": "ForeignNode", "target": "strand-builtin:Filesystem.Write", "foreignType": "writeT", "effects": ["writeFx"] },
+
+    "addT":     { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":      { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "path":     { "type": "StringLit", "value": "/tmp/strand-eval.log" },
+    "writeDecl":{ "type": "EffectDecl", "effectType": "writeFx", "parameters": ["path"] },
+    "callWrite":{ "type": "Application", "function": "write", "arguments": ["path"], "effectInstances": ["writeDecl"] },
+    "one":      { "type": "IntLit", "value": 1 },
+    "app":      { "type": "Application", "function": "add", "arguments": ["callWrite", "one"] }
+  }
+}

@@ -1,0 +1,7 @@
+check: pure-value
+description: Unwrap Some(42), returning 42 (default 0 for the None arm)
+value:
+  type: int
+  representation:
+    python: "42"
+    strand: "IntV(42)"

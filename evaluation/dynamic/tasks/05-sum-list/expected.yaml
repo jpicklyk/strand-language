@@ -1,0 +1,7 @@
+check: pure-value
+description: sum([1, 2, 3]) returns 6
+value:
+  type: int
+  representation:
+    python: "6"
+    strand: "IntV(6)"

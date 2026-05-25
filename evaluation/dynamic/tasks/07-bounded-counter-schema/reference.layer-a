@@ -1,0 +1,30 @@
+# Layer A form of corpus/50-positive-int-schema-pass.json — a Schema
+# named PositiveInt over Int whose Invariant body is the predicate
+# (x: Int) -> x > 0. Construct a PositiveInt-typed value from the
+# literal 5 via an identity lambda parameterized by the Schema.
+@v=1 root=schemaClaim
+intT PRM Int
+boolT PRM Bool
+
+# Invariant body: (x: Int) -> x > 0.
+zero ILT 0
+xParam PRC "x" intT
+xRef VAR xParam
+gtT FNT [intT intT] boolT
+gt FN "strand-builtin:Int.Gt" gtT
+gtBody APP gt [xRef zero]
+predLam LAM [xParam] gtBody
+
+# Schema + Invariant.
+positiveInvariant INV "x_positive" positiveInt predLam
+positiveInt SCH "PositiveInt" intT [positiveInvariant]
+
+# Flow Int literal 5 through an identity lambda whose param type is
+# the Schema; the verifier accepts the assignment via the value-flow
+# T -> SchemaType<T> compatibility rule and the SchemaChecker runs
+# the invariant on the literal at verify time.
+five ILT 5
+pIn PRC "p" positiveInt
+pInRef VAR pIn
+identityOfPositiveInt LAM [pIn] pInRef
+schemaClaim APP identityOfPositiveInt [five]

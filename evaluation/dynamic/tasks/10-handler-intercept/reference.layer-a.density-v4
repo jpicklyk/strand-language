@@ -1,0 +1,10 @@
+# Layer A density v4 form of corpus/38-handler-nested-innermost-wins.json
+# — nested handlers for Time.Now. Innermost (returns 2) wins. Uses the
+# implicit prelude for intT, nowFx, nowT, now (the latter three carry
+# the Time.Now effect declaration as their reserved-node spec).
+@v=1 root=outer
+callNow APP now []
+innerLam LAM [] 2
+inner H nowFx innerLam callNow
+outerLam LAM [] 1
+outer H nowFx outerLam inner

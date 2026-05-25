@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":            { "type": "PrimitiveType", "kind": "Bool" },
+
+    "headFieldInner":   { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+    "tailFieldInner":   { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "consProductInner": { "type": "ProductType", "fields": ["headFieldInner", "tailFieldInner"] },
+
+    "consCase":         { "type": "SumTypeCase", "name": "Cons", "caseType": "consProductInner" },
+    "nilCase":          { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "listBody":         { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "recSelf":          { "type": "RecursiveSelf" },
+    "listT":            { "type": "RecursiveType", "body": "listBody" },
+
+    "headFieldOuter":   { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+    "tailFieldOuter":   { "type": "ProductTypeField", "name": "tail", "fieldType": "listT" },
+    "consProductOuter": { "type": "ProductType", "fields": ["headFieldOuter", "tailFieldOuter"] },
+
+    "trueLit":          { "type": "BoolLit", "value": true },
+    "falseLit":         { "type": "BoolLit", "value": false },
+
+    "xsParam":          { "type": "ParameterDecl", "name": "xs", "paramType": "listT" },
+    "xsRef":            { "type": "VarRef", "binder": "xsParam" },
+
+    "patConsWild":      { "type": "Pattern", "kind": "wildcard", "patternType": "consProductOuter" },
+    "patCons":          { "type": "Pattern", "kind": "constructor", "patternType": "listT", "caseName": "Cons", "payloadPattern": "patConsWild" },
+    "caseCons":         { "type": "MatchCase", "pattern": "patCons", "body": "trueLit" },
+
+    "patNil":           { "type": "Pattern", "kind": "constructor", "patternType": "listT", "caseName": "Nil" },
+    "caseNil":          { "type": "MatchCase", "pattern": "patNil", "body": "falseLit" },
+
+    "isNonEmptyBody":   { "type": "Match", "scrutinee": "xsRef", "cases": ["caseCons", "caseNil"] },
+    "isNonEmptyLam":    { "type": "Lambda", "parameters": ["xsParam"], "body": "isNonEmptyBody" },
+
+    "nonEmptyInvariant": {
+      "type": "Invariant",
+      "invariantName": "non_empty",
+      "targetSchema": "nonEmptyList",
+      "body": "isNonEmptyLam"
+    },
+    "nonEmptyList": {
+      "type": "Schema",
+      "schemaName": "NonEmptyList",
+      "valueType": "listT",
+      "invariants": ["nonEmptyInvariant"]
+    },
+
+    "nilVal":           { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+    "one":              { "type": "IntLit", "value": 1 },
+    "h1":               { "type": "ProductFieldValue", "fieldName": "head", "value": "one" },
+    "t1":               { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "p1":               { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h1", "t1"] },
+    "oneItemList":      { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p1" },
+
+    "pIn":              { "type": "ParameterDecl", "name": "p", "paramType": "nonEmptyList" },
+    "pInRef":           { "type": "VarRef", "binder": "pIn" },
+    "identityOfNonEmpty": {
+      "type": "Lambda",
+      "parameters": ["pIn"],
+      "body": "pInRef"
+    },
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfNonEmpty",
+      "arguments": ["oneItemList"]
+    }
+  }
+}

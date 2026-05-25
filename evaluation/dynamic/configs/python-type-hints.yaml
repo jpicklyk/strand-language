@@ -1,0 +1,7 @@
+language: python
+system_prompt_path: prompts/python-system.md
+feedback_format: prose
+max_retries: 5
+description: |
+  Python+type-hints baseline. mypy --strict gates compilation;
+  runtime execution gates correctness.

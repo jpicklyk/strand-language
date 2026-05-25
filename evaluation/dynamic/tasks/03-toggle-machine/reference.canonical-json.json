@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "root": "toggleMachine",
+  "nodes": {
+    "boolT":            { "type": "PrimitiveType", "kind": "Bool" },
+    "unitT":            { "type": "PrimitiveType", "kind": "Unit" },
+
+    "emptyOutputsT":    { "type": "ProductType", "fields": [] },
+
+    "stateFieldT":      { "type": "ProductTypeField", "name": "state", "fieldType": "boolT" },
+    "outputsFieldT":    { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyOutputsT" },
+    "resultT":          { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
+
+    "transitionFnT":    { "type": "FunctionType", "parameters": ["boolT", "unitT"], "result": "resultT" },
+    "boolNotFnT":       { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
+
+    "boolNotFn":        { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "boolNotFnT" },
+
+    "stateParam":       { "type": "ParameterDecl", "name": "s", "paramType": "boolT" },
+    "eventParam":       { "type": "ParameterDecl", "name": "e", "paramType": "unitT" },
+    "stateParamRef":    { "type": "VarRef", "binder": "stateParam" },
+
+    "negatedState":     { "type": "Application", "function": "boolNotFn", "arguments": ["stateParamRef"] },
+
+    "stateFieldV":      { "type": "ProductFieldValue", "fieldName": "state", "value": "negatedState" },
+    "emptyOutputsV":    { "type": "ProductValue", "ofType": "emptyOutputsT", "fields": [] },
+    "outputsFieldV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "emptyOutputsV" },
+    "transitionResult": { "type": "ProductValue", "ofType": "resultT", "fields": ["stateFieldV", "outputsFieldV"] },
+
+    "transitionLambda": { "type": "Lambda", "parameters": ["stateParam", "eventParam"], "body": "transitionResult" },
+
+    "initialState":     { "type": "BoolLit", "value": false },
+
+    "inputStream":      { "type": "EventStream", "eventType": "unitT", "streamKind": "external" },
+    "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+
+    "toggleMachine":    {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": [],
+      "effects": ["receiveFx"]
+    }
+  }
+}

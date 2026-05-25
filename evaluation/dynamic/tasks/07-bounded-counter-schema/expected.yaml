@@ -1,0 +1,6 @@
+check: schema-validation
+description: |
+  Declare a PositiveInt Schema (Int with x > 0 invariant) and apply it
+  to the value 5. The Strand verifier statically rejects programs with
+  invariant-violating literal values; mypy --strict accepts the
+  parallel Python construction (Python's "schema" is its type system).

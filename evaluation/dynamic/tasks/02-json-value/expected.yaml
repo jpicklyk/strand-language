@@ -1,0 +1,6 @@
+check: schema-validation
+description: |
+  Construct a JsonValue sum-typed value JsonNumber(42). Acceptance is
+  measured by static checker (mypy --strict for Python, the Strand
+  verifier for Strand). The runtime is not consulted beyond confirming
+  the program executes when run.

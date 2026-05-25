@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "intT":           { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":          { "type": "PrimitiveType", "kind": "Bool" },
+    "stringT":        { "type": "PrimitiveType", "kind": "String" },
+
+    "jsonNullCase":   { "type": "SumTypeCase", "name": "JsonNull",   "caseType": null },
+    "jsonBoolCase":   { "type": "SumTypeCase", "name": "JsonBool",   "caseType": "boolT" },
+    "jsonNumberCase": { "type": "SumTypeCase", "name": "JsonNumber", "caseType": "intT" },
+    "jsonStringCase": { "type": "SumTypeCase", "name": "JsonString", "caseType": "stringT" },
+    "jsonValueT":     { "type": "SumType", "cases": ["jsonNullCase", "jsonBoolCase", "jsonNumberCase", "jsonStringCase"] },
+
+    "jsonValueSchema": {
+      "type": "Schema",
+      "schemaName": "JsonValue",
+      "valueType": "jsonValueT",
+      "invariants": []
+    },
+
+    "fortyTwo":       { "type": "IntLit", "value": 42 },
+    "numberValue":    { "type": "SumValue", "ofType": "jsonValueT", "caseName": "JsonNumber", "payload": "fortyTwo" },
+
+    "jvParam":        { "type": "ParameterDecl", "name": "jv", "paramType": "jsonValueSchema" },
+    "jvRef":          { "type": "VarRef", "binder": "jvParam" },
+    "identityOfJsonValue": { "type": "Lambda", "parameters": ["jvParam"], "body": "jvRef" },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfJsonValue",
+      "arguments": ["numberValue"]
+    }
+  }
+}

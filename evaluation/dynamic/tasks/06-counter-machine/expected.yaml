@@ -1,0 +1,16 @@
+check: state-machine
+description: |
+  Counter machine over a 5-event sequence (+1, +1, -1, reset, +1).
+  Expected final state: 1.
+events:
+  - {tag: sum, case: Increment}
+  - {tag: sum, case: Increment}
+  - {tag: sum, case: Decrement}
+  - {tag: sum, case: Reset}
+  - {tag: sum, case: Increment}
+final_state:
+  python: "1"
+  strand: "IntV(1)"
+outputs:
+  python: "[]"
+  strand: "[]"

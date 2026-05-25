@@ -1,0 +1,18 @@
+# Layer A form of corpus/38-handler-nested-innermost-wins.json — two
+# Handlers for the same Time.Now category nested inside each other.
+# Innermost (inner) returns 2; outer returns 1. The interpreter's
+# findLast over the active-handler stack selects the innermost, so
+# the program produces 2.
+@v=1 root=outer
+intT PRM Int
+timeFx EFC "Time.Now"
+nowT FNT [] intT [timeFx]
+now FN "strand-builtin:Time.Now" nowT [timeFx]
+callNow APP now []
+fakeT FNT [] intT
+innerLit ILT 2
+innerLam LAM [] innerLit
+inner H timeFx innerLam callNow
+outerLit ILT 1
+outerLam LAM [] outerLit
+outer H timeFx outerLam inner

@@ -1,0 +1,10 @@
+check: pure-value
+description: |
+  Nested handlers for Time.Now: inner returns 2, outer returns 1.
+  Innermost wins (findLast over the active-handler stack). Final
+  value is 2.
+value:
+  type: int
+  representation:
+    python: "2"
+    strand: "IntV(2)"

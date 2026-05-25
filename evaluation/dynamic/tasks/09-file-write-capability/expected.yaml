@@ -1,0 +1,10 @@
+check: pure-value
+description: |
+  Compose Filesystem.Write (returns 0 in the reference stub) with
+  Int.Add 1. Final value is 1. Effects are checked by the Strand
+  verifier; Python uses a regular function call as a stand-in.
+value:
+  type: int
+  representation:
+    python: "1"
+    strand: "IntV(1)"

@@ -1,0 +1,55 @@
+# Layer A form of corpus/42-counter-machine.json — counter state
+# machine with a 3-case Sum event type (Increment | Decrement | Reset).
+@v=1 root=counterMachine
+intT PRM Int
+unitT PRM Unit
+
+# Event type: a no-payload sum with three cases.
+incCase SCS "Increment" _
+decCase SCS "Decrement" _
+resetCase SCS "Reset" _
+eventT SUM [incCase decCase resetCase]
+
+# Result product: {state: Int, outputs: {}}.
+emptyOutputsT PRD []
+stateFieldT PRF "state" intT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+
+# Builtins for state update.
+addFnT FNT [intT intT] intT
+subFnT FNT [intT intT] intT
+addFn FN "strand-builtin:Int.Add" addFnT
+subFn FN "strand-builtin:Int.Sub" subFnT
+
+# Transition function parameters and references.
+stateParam PRC "s" intT
+eventParam PRC "e" eventT
+stateParamRef VAR stateParam
+eventParamRef VAR eventParam
+
+litOne ILT 1
+litZero ILT 0
+
+addOne APP addFn [stateParamRef litOne]
+subOne APP subFn [stateParamRef litOne]
+
+# Match arms on the event.
+patInc PCN eventT "Increment" _
+patDec PCN eventT "Decrement" _
+patReset PCN eventT "Reset" _
+caseInc MC patInc addOne
+caseDec MC patDec subOne
+caseReset MC patReset litZero
+newState MAT eventParamRef [caseInc caseDec caseReset]
+
+# Wrap as result product.
+stateFieldV PFV "state" newState
+emptyOutputsV PV emptyOutputsT []
+outputsFieldV PFV "outputs" emptyOutputsV
+transitionResult PV resultT [stateFieldV outputsFieldV]
+
+transitionLambda LAM [stateParam eventParam] transitionResult
+initialState ILT 0
+inputStream ESE eventT
+counterMachine SM transitionLambda initialState [inputStream] [] [receiveFx]

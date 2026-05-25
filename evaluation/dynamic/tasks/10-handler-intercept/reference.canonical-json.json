@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "root": "outer",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "timeFx":    { "type": "EffectCategory", "categoryName": "Time.Now" },
+    "nowT":      { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+    "now":       { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+    "callNow":   { "type": "Application", "function": "now", "arguments": [] },
+    "fakeT":     { "type": "FunctionType", "parameters": [], "result": "intT" },
+    "innerLit":  { "type": "IntLit", "value": 2 },
+    "innerLam":  { "type": "Lambda", "parameters": [], "body": "innerLit" },
+    "inner":     { "type": "Handler", "intercept": "timeFx", "handle": "innerLam", "body": "callNow" },
+    "outerLit":  { "type": "IntLit", "value": 1 },
+    "outerLam":  { "type": "Lambda", "parameters": [], "body": "outerLit" },
+    "outer":     { "type": "Handler", "intercept": "timeFx", "handle": "outerLam", "body": "inner" }
+  }
+}

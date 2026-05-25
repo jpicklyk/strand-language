@@ -1,0 +1,26 @@
+# Layer A density v4 form of corpus/42-counter-machine.json — counter
+# state machine with a 3-case Sum event type. Uses implicit prelude
+# (intT, add, sub, addT, subT, receiveFx), inline literals, compact
+# LAM params, and inline ProductFieldValue lists.
+@v=1 root=counterMachine
+incCase SCS "Increment" _
+decCase SCS "Decrement" _
+resetCase SCS "Reset" _
+eventT SUM [incCase decCase resetCase]
+emptyOutputsT PRD []
+stateFieldT PRF "state" intT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+addOne APP add [s 1]
+subOne APP sub [s 1]
+patInc PCN eventT "Increment" _
+patDec PCN eventT "Decrement" _
+patReset PCN eventT "Reset" _
+caseInc MC patInc addOne
+caseDec MC patDec subOne
+caseReset MC patReset 0
+newState MAT e [caseInc caseDec caseReset]
+transitionResult PV resultT [state=newState outputs=(PV emptyOutputsT [])]
+transitionLambda LAM [s:intT e:eventT] transitionResult
+inputStream ESE eventT
+counterMachine SM transitionLambda 0 [inputStream] [] [receiveFx]

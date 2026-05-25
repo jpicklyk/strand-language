@@ -1,0 +1,27 @@
+# Layer A form of corpus/41-toggle-machine.json — smallest state
+# machine: Bool state toggled by Unit events. Demonstrates SM, ESE
+# (external EventStream), and the OutputBatch shape (empty product `{}`
+# for zero output streams).
+@v=1 root=toggleMachine
+boolT PRM Bool
+unitT PRM Unit
+emptyOutputsT PRD []
+stateFieldT PRF "state" boolT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+transitionFnT FNT [boolT unitT] resultT
+boolNotFnT FNT [boolT] boolT
+boolNotFn FN "strand-builtin:Bool.Not" boolNotFnT
+stateParam PRC "s" boolT
+eventParam PRC "e" unitT
+stateParamRef VAR stateParam
+negatedState APP boolNotFn [stateParamRef]
+stateFieldV PFV "state" negatedState
+emptyOutputsV PV emptyOutputsT []
+outputsFieldV PFV "outputs" emptyOutputsV
+transitionResult PV resultT [stateFieldV outputsFieldV]
+transitionLambda LAM [stateParam eventParam] transitionResult
+initialState BLT false
+inputStream ESE unitT
+receiveFx EFC "StateMachine.Receive"
+toggleMachine SM transitionLambda initialState [inputStream] [] [receiveFx]

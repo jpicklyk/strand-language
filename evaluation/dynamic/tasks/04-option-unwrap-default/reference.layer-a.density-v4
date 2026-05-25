@@ -1,0 +1,18 @@
+# Layer A density v4 fixture: 25-option-some-unwrap with SCS caseType
+# inference.
+#
+# v4 vs v3:
+#   - The `someCase SCS "Some" intT` declaration elides the caseType
+#     (uses `_`). The elaborator infers `intT` by walking SV nodes that
+#     supply payloads for this case and resolving their payload types.
+#     `someValue SV optionT "Some" 42` has an inline IntLit payload
+#     whose type resolves to `intT` via the implicit prelude, so the
+#     SCS's caseType is inferred as `intT`.
+#
+# Round-trip: canonical hash equals 25-option-some-unwrap.json's.
+@v=1 root=result
+someCase SCS "Some" _
+noneCase SCS "None" _
+optionT SUM [someCase noneCase]
+someValue SV optionT "Some" 42
+result WHEN someValue optionT "Some(n) -> n | None -> 0"

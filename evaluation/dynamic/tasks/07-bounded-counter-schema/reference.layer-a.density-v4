@@ -1,0 +1,10 @@
+# Layer A density v4 form of corpus/50-positive-int-schema-pass.json —
+# PositiveInt Schema with x > 0 invariant. Uses the implicit prelude
+# for intT, boolT, gt, gtT, inline literals, compact LAM params, and
+# auto-VarRef on the PRC binder x.
+@v=1 root=schemaClaim
+predLam LAM [x:intT] (APP gt [x 0])
+positiveInvariant INV "x_positive" positiveInt predLam
+positiveInt SCH "PositiveInt" intT [positiveInvariant]
+identityOfPositiveInt LAM [p:positiveInt] p
+schemaClaim APP identityOfPositiveInt [5]

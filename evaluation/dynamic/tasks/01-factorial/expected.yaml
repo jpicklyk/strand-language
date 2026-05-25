@@ -1,0 +1,7 @@
+check: pure-value
+description: factorial(5) returns 120
+value:
+  type: int
+  representation:
+    python: "120"
+    strand: "IntV(120)"

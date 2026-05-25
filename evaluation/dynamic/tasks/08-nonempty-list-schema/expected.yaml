@@ -1,0 +1,6 @@
+check: schema-validation
+description: |
+  Declare a NonEmptyList Schema (recursive μ. Cons | Nil list with a
+  "not Nil" invariant) and apply it to Cons(1, Nil). The Strand
+  verifier statically rejects empty-list literals; mypy --strict
+  accepts the parallel Python construction.
