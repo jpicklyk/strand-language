@@ -176,6 +176,78 @@ strand-language/
 
 The `impl/` subtree is created when Milestone 2.1 scaffolding begins. The design corpus at the root is stable and should not be reorganized.
 
+## Deferred draft proposals
+
+These proposals are written to the "ready to implement" level of detail and sit under `proposals/` (not `implemented/`). They are explicitly deferred — not because of design uncertainty, but because each represents a discrete shipping unit whose scope exceeds the available session budget. They remain on the roadmap; the deferrals are sequencing, not abandonment.
+
+(All Wave-3+ implementation proposals have landed and moved to `proposals/implemented/`. The next drafted proposal will appear here if it ships partially or requires explicit deferral.)
+
+These deferrals are recorded here, not in `proposals/<topic>.md` headers, so the proposal files remain "ready to implement" at the slice level when their gating milestones arrive.
+
+## Empirical evaluation framework (Q-021 MVP)
+
+A top-level `evaluation/` directory hosts the static-cost measurement
+framework for Q-021/Q-034. Three tasks × four reference forms
+(Python+type-hints, Strand canonical dag-json, Strand Layer A baseline,
+plus the Layer A density v1 → v4 progression) × three metrics (bytes,
+lines, estimated tokens). `evaluation/measure.sh` regenerates
+`evaluation/results.md`. The framework lives outside `impl/` because it
+spans multiple languages and is not part of the reference runtime.
+
+Headline numbers as of 2026-05-25: Strand canonical dag-json runs at
+**5.82×** Python+type-hints geomean across the three-task MVP; Strand
+Layer A density v4 runs at **0.81×** geomean (factorial 0.87×, json-value
+0.81×, toggle-machine 0.76×). The density-v4 figure sits below Q-034 §6's
+projection floor of 1.30× for stacks without tokenizer alignment,
+closing the static-cost half of the Q-034 hypothesis. The remaining
+Q-021 surface — the four other baselines (Kotlin Coroutines, Rust,
+TypeScript-strict, SimPy/ShortCoder), the effects and distribution task
+suites, and the dynamic metrics (first-pass verification rate,
+tokens-per-successful-task across the agent's retry loop) — needs
+model-API integration and is tracked as Phase 1 follow-up.
+
+## Layer A density work landed 2026-05-25
+
+The full four-layer LLM emission stack from Q-034 has shipped. Layer A
+is a 51-code grammar; Layer B emits GBNF derived from
+`LayerAGrammar.codes` via `ConstraintGrammar` (CLI: `strand grammar`);
+Layer C elaboration is always-on as of the 2026-05-25 cleanup pass and
+ships eleven inference cases (the four original cases from the proposal
+plus seven added by the density work, including recursion-slot
+paramType, FunctionType synthesis, SumCaseSchema caseType from SumValue,
+and six routes for compact-LAM-param paramType inference); Layer D is
+unchanged. Ten density slices layered on top of step 1's base grammar:
+implicit prelude, inline literals, auto-VarRef, IF/Match-on-Bool sugar,
+compact Lambda parameter declarations, inline literal patterns,
+anonymous `_` plus `@last`, inline `[k=v ...]` ProductFieldValue list,
+WHEN/constructor-pattern sugar, and nested expressions inside argument
+positions. All work lives in `impl/authoring/`; the verifier, canonical
+CBOR encoder, and runtime are untouched. See
+[`proposals/implemented/layer-a-density.md`](proposals/implemented/layer-a-density.md)
+for the implementation record.
+
+The items that remain open after this work:
+
+- Tokenizer alignment (Q-034 §3.3, Phase 4 work). Compounds on the
+  measured static-cost win but is not needed to close the static-cost
+  half of the hypothesis.
+- Full Q-021 evaluation framework against the five named conventional
+  baselines (Kotlin Coroutines, Rust, TypeScript-strict, SimPy, etc.).
+  Only Python+type-hints is implemented in the MVP today.
+- Tool-call assembly as alternative emission interface (Q-034 §3.6).
+  Maps to the same Layer C elaboration; engineering rather than design.
+- Nested constructor patterns and or-patterns in WHEN. Both require an
+  explicit `MC` + `PCN` tower in the canonical form today; the WHEN
+  sugar handles the flat case only.
+- Bidirectional type inference for `SchemaType` ↔ `T` subtyping. The
+  json-value compact-LAM parameter annotation must stay explicit because
+  the call site passes a value of type `jsonValueT` while the LAM's
+  declared `paramType` is `jsonValueSchema`; the Elaborator gives up
+  rather than commit a hash-divergent inference, because the resolution
+  requires unification.
+- Q-017 bytecode VM step 2 (Rust port per ADR-008). Separate from the
+  authoring-layer work but remains on the roadmap.
+
 ## Final note
 
 The design corpus represents honest thinking, not ceremony. The implementation should reflect the same standard. Push back when something doesn't fit. Flag uncertainty when you have it. Produce code you would be willing to defend on its merits.
