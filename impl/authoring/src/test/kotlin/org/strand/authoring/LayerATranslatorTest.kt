@@ -166,11 +166,42 @@ class LayerATranslatorTest {
     }
 
     @Test
-    fun `Application with effectInstances present but typeArguments absent fills placeholder`() {
-        // APP optional fields are: typeArguments (LIST_REF), then
-        // effectInstances (LIST_REF). When effectInstances is present but
-        // typeArguments is absent, the translator must emit an empty-list
-        // placeholder for typeArguments so positional order stays correct.
+    fun `Application with effectInstances present but typeArguments absent fills placeholder (canonical form)`() {
+        // Verifies Step 1's positional placeholder + FORCE_ALL_OPTIONALS
+        // behavior on the canonical-form translator. The full `translate`
+        // pipeline (Steps 2+3) probes for and accepts effectInstances
+        // omission when the Elaborator's case 2 can re-derive the value
+        // unambiguously, so a separate test below covers the post-probe
+        // shape.
+        val json = """{
+            "version": 1,
+            "root": "app",
+            "nodes": {
+                "intT": { "type": "PrimitiveType", "kind": "Int" },
+                "nowFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+                "nowT": { "type": "FunctionType", "parameters": [], "result": "intT" },
+                "now": { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["nowFx"] },
+                "nowInst": { "type": "EffectDecl", "effectType": "nowFx", "parameters": [] },
+                "app": { "type": "Application", "function": "now", "arguments": [], "effectInstances": ["nowInst"] }
+            }
+        }"""
+        val doc = LayerATranslator.translateCanonical(json)
+        val app = doc.nodes.first { it.id == "app" }
+        assertEquals(4, app.args.size)
+        assertEquals(Arg.Bare("now"), app.args[0])
+        assertEquals(Arg.Listing(emptyList()), app.args[1])  // arguments
+        assertEquals(Arg.Listing(emptyList()), app.args[2])  // typeArguments placeholder
+        assertEquals(Arg.Listing(listOf(Arg.Bare("nowInst"))), app.args[3])
+    }
+
+    @Test
+    fun `Application effectInstances is probe-stripped when Elaborator case 2 can re-derive it`() {
+        // Same program as the canonical-form test above; the full `translate`
+        // pipeline runs Step 3's probe. The probe tentatively omits
+        // effectInstances, re-elaborates, and observes that case 2 inserts
+        // [nowInst] back identically (only one EffectDecl matches the
+        // category). The strip is accepted; both typeArguments and
+        // effectInstances are then removed, leaving the minimal 2-arg APP.
         val json = """{
             "version": 1,
             "root": "app",
@@ -185,15 +216,9 @@ class LayerATranslatorTest {
         }"""
         val doc = LayerATranslator.translate(json)
         val app = doc.nodes.first { it.id == "app" }
-        // APP has: function, arguments, typeArguments?, effectInstances?
-        // Required: function, arguments. Optional: typeArguments, effectInstances.
-        // With effectInstances present and typeArguments absent, expect
-        // the placeholder empty list filling the typeArguments slot.
-        assertEquals(4, app.args.size)
+        assertEquals(2, app.args.size)
         assertEquals(Arg.Bare("now"), app.args[0])
-        assertEquals(Arg.Listing(emptyList()), app.args[1])  // arguments
-        assertEquals(Arg.Listing(emptyList()), app.args[2])  // typeArguments placeholder
-        assertEquals(Arg.Listing(listOf(Arg.Bare("nowInst"))), app.args[3])
+        assertEquals(Arg.Listing(emptyList()), app.args[1])
     }
 
     @Test

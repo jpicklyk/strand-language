@@ -11,6 +11,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import org.strand.core.Hash
+import org.strand.core.JsonIngest
+import org.strand.hashing.Hasher
 
 /**
  * Canonical dag-json → [LayerADocument] translator. Inverse of [DagJsonEmitter].
@@ -80,7 +83,8 @@ object LayerATranslator {
      */
     fun translate(text: String): LayerADocument {
         val canonical = translateCanonical(text)
-        return omitSafelyInferableFields(canonical)
+        val safelyOmitted = omitSafelyInferableFields(canonical)
+        return probeAndOmit(safelyOmitted)
     }
 
     /** Translate without any elaboration-omission. Useful for testing and
@@ -383,5 +387,143 @@ object LayerATranslator {
     private fun stripPrcParamType(node: NodeDecl): NodeDecl {
         if (node.args.size <= 1) return node
         return node.copy(args = node.args.subList(0, 1))
+    }
+
+    // ========================================================================
+    // Step 3 — Probe-and-fallback for BORDERLINE elaboration cases
+    // ========================================================================
+
+    /**
+     * Walk each node in [doc] and tentatively omit each candidate
+     * borderline field; if elaborating the resulting document produces a
+     * dag-json JsonObject identical to the baseline, accept the omission.
+     * Strips are tried in safe order (last optional first) so positional
+     * encoding stays valid throughout the probe.
+     *
+     * The probe runs the existing forward Elaborator + DagJsonEmitter
+     * pipeline, so it auto-tracks any future Elaborator change — no manual
+     * synchronization between projection and Elaborator gate logic.
+     *
+     * Per §4.5 of the Q-036 proposal, the UNSAFE static rule for
+     * SchemaType-wrapped `paramType` is checked first: if the canonical's
+     * paramType resolves to a SCH node, we never probe-strip it (the
+     * Elaborator's bidirectional inference cannot resolve the
+     * SchemaType ↔ T ambiguity without unification).
+     */
+    private fun probeAndOmit(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val byId = doc.nodes.associateBy { it.id }
+        var current = doc
+        for (i in current.nodes.indices) {
+            for (strip in candidateStrips(current.nodes[i], byId)) {
+                val stripped = strip(current.nodes[i])
+                if (stripped === current.nodes[i] || stripped == current.nodes[i]) continue
+                val candidate = current.copy(
+                    nodes = current.nodes.toMutableList().also { it[i] = stripped },
+                )
+                val candidateHash = canonicalHash(candidate) ?: continue
+                if (candidateHash == baselineHash) {
+                    current = candidate
+                }
+            }
+        }
+        return current
+    }
+
+    /**
+     * Per-code candidate strips, ordered from outermost (last optional)
+     * inward so positional encoding remains valid as each strip lands.
+     */
+    private fun candidateStrips(
+        node: NodeDecl,
+        byId: Map<String, NodeDecl>,
+    ): List<(NodeDecl) -> NodeDecl> = when (node.code) {
+        "APP" -> listOf(::stripAppEffectInstances, ::stripAppTypeArguments)
+        "LAM" -> listOf(::stripLambdaEffectsProbe)
+        "PRC" -> if (isSchemaTypedPrc(node, byId)) emptyList()
+                 else listOf(::stripPrcParamTypeProbe)
+        "FNT" -> listOf(::stripFntEffects)
+        "SCS" -> listOf(::stripScsCaseType)
+        else -> emptyList()
+    }
+
+    /**
+     * UNSAFE static rule (proposal §4.5): a PRC whose `paramType` resolves
+     * to a SCH node carries information the Elaborator's bidirectional
+     * inference cannot reconstruct (the SchemaType↔T subtyping ambiguity —
+     * see corpus 54's `jv:jsonValueSchema` annotation in density v4). Never
+     * probe-strip such PRCs.
+     */
+    private fun isSchemaTypedPrc(node: NodeDecl, byId: Map<String, NodeDecl>): Boolean {
+        if (node.code != "PRC" || node.args.size < 2) return false
+        val typeRef = (node.args[1] as? Arg.Bare)?.text ?: return false
+        return byId[typeRef]?.code == "SCH"
+    }
+
+    /**
+     * Drop the optional last arg from a 4-arg APP (effectInstances). No-op
+     * if APP has fewer args. Must run before [stripAppTypeArguments].
+     */
+    private fun stripAppEffectInstances(node: NodeDecl): NodeDecl {
+        if (node.code != "APP" || node.args.size != 4) return node
+        return node.copy(args = node.args.subList(0, 3))
+    }
+
+    /**
+     * Drop the optional last arg from a 3-arg APP (typeArguments). Only
+     * fires when [stripAppEffectInstances] has already succeeded; the
+     * arity check ensures positional encoding stays valid.
+     */
+    private fun stripAppTypeArguments(node: NodeDecl): NodeDecl {
+        if (node.code != "APP" || node.args.size != 3) return node
+        return node.copy(args = node.args.subList(0, 2))
+    }
+
+    /** Drop the optional last arg from a 3-arg LAM (effects). */
+    private fun stripLambdaEffectsProbe(node: NodeDecl): NodeDecl {
+        if (node.code != "LAM" || node.args.size != 3) return node
+        return node.copy(args = node.args.subList(0, 2))
+    }
+
+    /** Drop the optional last arg from a 2-arg PRC (paramType). */
+    private fun stripPrcParamTypeProbe(node: NodeDecl): NodeDecl {
+        if (node.code != "PRC" || node.args.size != 2) return node
+        return node.copy(args = node.args.subList(0, 1))
+    }
+
+    /** Drop the optional last arg from a 3-arg FNT (effects). */
+    private fun stripFntEffects(node: NodeDecl): NodeDecl {
+        if (node.code != "FNT" || node.args.size != 3) return node
+        return node.copy(args = node.args.subList(0, 2))
+    }
+
+    /**
+     * Strip a SumTypeCase's `caseType` reference, replacing it with `_`
+     * (the NULLABLE_REF placeholder). SCS args: name (required), caseType
+     * (required NULLABLE_REF). When the Elaborator's case 7 can re-infer
+     * from SV usage payload types, the strip is safe; the probe verifies.
+     */
+    private fun stripScsCaseType(node: NodeDecl): NodeDecl {
+        if (node.code != "SCS" || node.args.size != 2) return node
+        if (node.args[1] == Arg.Null) return node
+        return node.copy(args = listOf(node.args[0], Arg.Null))
+    }
+
+    private fun elaborateAndEmit(doc: LayerADocument): JsonObject =
+        DagJsonEmitter.emitJson(Elaborator.elaborate(doc))
+
+    /**
+     * Compute the canonical root hash of [doc] by running the forward
+     * pipeline (Elaborator → DagJsonEmitter → JsonIngest → Hasher). Returns
+     * null if any step fails (e.g., the document is malformed after a probe
+     * strip); the probe treats null as "candidate rejected".
+     */
+    private fun canonicalHash(doc: LayerADocument): Hash? = try {
+        val json = DagJsonEmitter.emit(Elaborator.elaborate(doc))
+        val ingest = JsonIngest.parse(json)
+        val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
+        finalized.nodeIdToHash[finalized.root]
+    } catch (e: Exception) {
+        null
     }
 }
