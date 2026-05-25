@@ -132,5 +132,7 @@ object ConstraintGrammar {
         // permitting either form is a future refinement once GBNF
         // tooling around `:`-bearing tokens is exercised.
         LayerAGrammar.ArgKind.PARAM_LIST -> "list_ref"
+        // Slice 8 (v2.5): same overapproximation for FIELD_LIST.
+        LayerAGrammar.ArgKind.FIELD_LIST -> "list_ref"
     }
 }

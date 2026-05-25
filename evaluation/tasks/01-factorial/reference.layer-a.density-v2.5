@@ -1,0 +1,10 @@
+@v=1 root=app
+factT FNT [intT] intT
+nIsZero APP eqInt [n 0]
+_ APP sub [n 1]
+recCall APP recurse [@last]
+mulBody APP mul [n recCall]
+matchBody IF nIsZero 1 mulBody
+bodyLam LAM [recurse:factT n:intT] matchBody
+fact FIX factT bodyLam
+app APP fact [5]

@@ -106,6 +106,20 @@ object LayerAGrammar {
          * PRC declaration. Used only by LAM's `parameters` slot today.
          */
         PARAM_LIST,
+        /**
+         * Slice 8 (Layer A density v2.5) — Product field-value list with
+         * compact `name=ref` entries OR legacy bare PFV references. The
+         * emitter synthesizes a PFV per entry whose text contains `=`;
+         * legacy bare-ref entries pass through to the existing PFV
+         * declaration. Used only by PV's `fields` slot today.
+         *
+         * The plan §Slice 8 proposed `{name=ref ...}` curly-brace syntax;
+         * the implementation reuses `[...]` brackets (the parser already
+         * tokenizes `=` inside bare tokens, so `name=ref` lexes as one
+         * token without grammar changes). Documented in the proposal
+         * Implementation note.
+         */
+        FIELD_LIST,
     }
 
     /**
@@ -644,12 +658,15 @@ object LayerAGrammar {
             ),
         ),
 
-        // Composite values (Layer 5 steps 3a, 3b)
+        // Composite values (Layer 5 steps 3a, 3b).
+        // PV's `fields` slot accepts FIELD_LIST entries — either bare refs
+        // to existing PFVs (legacy form) or `name=ref` compact form. See
+        // Slice 8 (Layer A density v2.5) in [LayerAGrammar.ArgKind].
         "PV" to CodeSchema(
             jsonType = "ProductValue",
             required = listOf(
                 FieldSpec("ofType", ArgKind.REFERENCE, "ofType"),
-                FieldSpec("fields", ArgKind.LIST_REF, "fields"),
+                FieldSpec("fields", ArgKind.FIELD_LIST, "fields"),
             ),
         ),
         "PFV" to CodeSchema(

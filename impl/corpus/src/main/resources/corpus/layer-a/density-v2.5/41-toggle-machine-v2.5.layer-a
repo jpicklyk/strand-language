@@ -1,0 +1,15 @@
+# Slice 8 (Layer A density v2.5) fixture: 41-toggle-machine using
+# compact PV.fields syntax. The stateFieldV and outputsFieldV PFV
+# declarations collapse into the PV's inline field list.
+@v=1 root=toggleMachine
+emptyOutputsT PRD []
+stateFieldT PRF "state" boolT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+transitionFnT FNT [boolT unitT] resultT
+negatedState APP not [s]
+emptyOutputsV PV emptyOutputsT []
+transitionResult PV resultT [state=negatedState outputs=emptyOutputsV]
+transitionLambda LAM [s:boolT e:unitT] transitionResult
+inputStream ESE unitT
+toggleMachine SM transitionLambda false [inputStream] [] [receiveFx]

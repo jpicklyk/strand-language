@@ -50,6 +50,8 @@ class LayerADensityTest {
         Pair("density-v2", "21-fixpoint-factorial-v2") to "21-fixpoint-factorial",
         Pair("density-v2", "54-json-value-primitives-v2") to "54-json-value-primitives",
         Pair("density-v2", "41-toggle-machine-v2") to "41-toggle-machine",
+        // Slice 8 (v2.5) — inline ProductFieldValue list
+        Pair("density-v2.5", "41-toggle-machine-v2.5") to "41-toggle-machine",
     )
 
     @TestFactory

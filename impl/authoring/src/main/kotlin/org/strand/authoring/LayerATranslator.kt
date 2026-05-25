@@ -274,6 +274,17 @@ object LayerATranslator {
                     Arg.Bare(text)
                 })
             }
+            LayerAGrammar.ArgKind.FIELD_LIST -> {
+                // Slice 8 (v2.5): reverse-translate as a legacy bare-ref
+                // list. The compact `name=ref` form is emitter-only.
+                val arr = json as? JsonArray
+                    ?: run { typeError(spec, "ref array", json, authorId, errors); return null }
+                Arg.Listing(arr.map { elt ->
+                    val text = (elt as? JsonPrimitive)?.contentOrNull
+                        ?: run { typeError(spec, "ref in array", elt, authorId, errors); return null }
+                    Arg.Bare(text)
+                })
+            }
         }
     }
 

@@ -522,6 +522,62 @@ object DagJsonEmitter {
                     }
                 }
             }
+            LayerAGrammar.ArgKind.FIELD_LIST -> {
+                // Slice 8 (v2.5): each list entry is either a legacy bare
+                // ref (to an existing PFV NodeDecl) or a compact `name=ref`
+                // pair. Compact entries synthesize a PFV with an internal
+                // author id; the parent PV.fields points at the synthetic.
+                val list = (arg as? Arg.Listing)?.items ?: run {
+                    shapeMismatch(line, code, position, "[name=ref ...] or [ref ref ...] list", arg, errors)
+                    return null
+                }
+                val elements = list.map { elt ->
+                    val text = (elt as? Arg.Bare)?.text ?: run {
+                        shapeMismatch(line, code, position, "field list entry", elt, errors)
+                        return null
+                    }
+                    if ('=' !in text) {
+                        // Legacy bare-ref form; passes through to an existing
+                        // PFV NodeDecl. `@last` resolution applies here too.
+                        val resolvedAnon = resolveAtLast(text, line, code, errors, ctx)
+                            ?: return null
+                        return@map JsonPrimitive(resolvedAnon)
+                    }
+                    val name = text.substringBefore('=')
+                    val valueRef = text.substringAfter('=')
+                    if (name.isEmpty() || valueRef.isEmpty()) {
+                        errors += AuthoringError.ArgShapeMismatch(
+                            line = line, code = code, position = position,
+                            expectedKind = "compact field `name=ref`",
+                            actualKind = "malformed `$text`",
+                        )
+                        return null
+                    }
+                    // Synthesize a PFV node with an internal author id.
+                    // The PFV's `value` field may itself reference a PRC
+                    // binder; auto-VarRef should fire. Slice 7's `@last`
+                    // also applies for the value ref.
+                    val resolvedValue = resolveAtLast(valueRef, line, code, errors, ctx)
+                        ?: return null
+                    val wrappedValue = if (resolvedValue in ctx.binderIds) {
+                        val varId = ctx.freshVarRefId()
+                        ctx.synthesized[varId] = buildJsonObject {
+                            put("type", "VarRef")
+                            put("binder", resolvedValue)
+                        }
+                        varId
+                    } else resolvedValue
+                    val pfvId = "__pfv${ctx.litCounter}_${name}"
+                    ctx.litCounter++
+                    ctx.synthesized[pfvId] = buildJsonObject {
+                        put("type", "ProductFieldValue")
+                        put("fieldName", name)
+                        put("value", wrappedValue)
+                    }
+                    JsonPrimitive(pfvId)
+                }
+                return JsonArray(elements)
+            }
             LayerAGrammar.ArgKind.PARAM_LIST -> {
                 // Slice 5 (v2): each list entry is either a legacy bare ref
                 // (to an existing PRC NodeDecl) or a compact `name:typeRef`
