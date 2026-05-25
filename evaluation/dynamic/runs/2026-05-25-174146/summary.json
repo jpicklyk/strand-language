@@ -1,0 +1,26 @@
+{
+  "cells": [
+    {
+      "config": "strand-layer-a-density-v4",
+      "converged_at_attempt": 0,
+      "model": "claude-sonnet-4-6",
+      "num_emissions": 1,
+      "run_ok": true,
+      "sample_index": 0,
+      "success": true,
+      "task_id": "01-factorial",
+      "total_cost_usd": 0.01773,
+      "total_input_tokens": 5000,
+      "total_output_tokens": 182,
+      "verify_oks": [
+        true
+      ]
+    }
+  ],
+  "converged_cells": 1,
+  "finished_at": "2026-05-25T17:41:47.524587+00:00",
+  "run_id": "2026-05-25-174146",
+  "started_at": "2026-05-25T17:41:46.429802+00:00",
+  "total_cells": 1,
+  "total_cost_usd": 0.01773
+}
