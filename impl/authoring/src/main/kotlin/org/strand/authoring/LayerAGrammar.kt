@@ -59,6 +59,15 @@ object LayerAGrammar {
          * output). Pair is (JSON field name, constant value).
          */
         val discriminator: Pair<String, String>? = null,
+        /**
+         * True for sugar codes that expand at emit time to multiple
+         * canonical nodes (Slice 4 IF, Slice 9 WHEN). The reverse
+         * translator [LayerATranslator] skips these — there's no
+         * unambiguous reverse mapping (not every Match is an IF; not
+         * every Match-on-sum is a WHEN) and the canonical-form-shaped
+         * code (MAT) is the right pick for the no-discriminator fallback.
+         */
+        val sugarOnly: Boolean = false,
     )
 
     /**
@@ -561,6 +570,7 @@ object LayerAGrammar {
                 FieldSpec("then", ArgKind.REFERENCE, "then"),
                 FieldSpec("else", ArgKind.REFERENCE, "else"),
             ),
+            sugarOnly = true,
         ),
 
         // Control flow (Layer 5 steps 1, 2)
