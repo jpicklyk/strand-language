@@ -90,7 +90,8 @@ object LayerATranslator {
         val compactLam = applyCompactLam(ifSugar)
         val inlined = applyInlineSubstitutions(compactLam)
         val pfvFolded = applyInlinePfv(inlined)
-        val nested = applyNestedExpressions(pfvFolded)
+        val whenSugar = applyWhenSugar(pfvFolded)
+        val nested = applyNestedExpressions(whenSugar)
         return nested
     }
 
@@ -1001,6 +1002,184 @@ object LayerATranslator {
         if (toRemove.isEmpty()) return doc
         val candidate = doc.copy(nodes = newNodes.filterNot { it.id in toRemove })
         return if (canonicalHash(candidate) == baselineHash) candidate else doc
+    }
+
+    // ========================================================================
+    // Step 4 (Slice 9) — WHEN / constructor-pattern sugar
+    // ========================================================================
+
+    /**
+     * Detect Match nodes whose cases are all `PCN` constructor patterns
+     * (optionally with a single-binder `PVR` payload) over a common
+     * SumType, and collapse them to a single `WHEN scrutinee sumType
+     * "Case1 -> body | Case2(binder) -> body | ..."` form.
+     *
+     * Constraints (per impl/CLAUDE.md Slice 9 note):
+     *  * Each MC's pattern is `PCN` (no wildcards, no literal patterns,
+     *    no nested constructor patterns).
+     *  * Each PCN's payload is either absent (nullary case) or a single
+     *    `PVR` whose name is a valid identifier.
+     *  * Each MC, PCN, and PVR is used exactly once (no sharing).
+     *  * All PCNs share a single SumType `patternType`.
+     *  * Each MC's body is a single token (Arg.Bare, IntL, FloatL, BoolL).
+     *    Compound expressions (Arg.Nested, Arg.Listing, Arg.Str) can't be
+     *    expressed as a single WHEN case-string token.
+     */
+    private fun applyWhenSugar(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val byId = doc.nodes.associateBy { it.id }
+        val useCounts = computeUseCounts(doc)
+
+        val rewrites = mutableListOf<WhenRewrite>()
+        val allToRemove = mutableSetOf<String>()
+
+        for (mat in doc.nodes.filter { it.code == "MAT" }) {
+            val rewrite = detectWhenPattern(mat, byId, useCounts, doc) ?: continue
+            if (rewrite.toRemove.any { it in allToRemove }) continue
+            rewrites += rewrite
+            allToRemove += rewrite.toRemove
+        }
+
+        if (rewrites.isEmpty()) return doc
+
+        val rewriteById = rewrites.associateBy { it.matId }
+        val newNodes = doc.nodes.mapNotNull { node ->
+            if (node.id in allToRemove) return@mapNotNull null
+            val rewrite = rewriteById[node.id] ?: return@mapNotNull node
+            NodeDecl(
+                id = node.id,
+                code = "WHEN",
+                args = listOf(rewrite.scrutinee, rewrite.sumType, Arg.Str(rewrite.caseList)),
+                line = node.line,
+            )
+        }
+
+        val candidate = doc.copy(nodes = newNodes)
+        return if (canonicalHash(candidate) == baselineHash) candidate else doc
+    }
+
+    private data class WhenRewrite(
+        val matId: String,
+        val scrutinee: Arg,
+        val sumType: Arg,
+        val caseList: String,
+        val toRemove: Set<String>,
+    )
+
+    private fun detectWhenPattern(
+        mat: NodeDecl,
+        byId: Map<String, NodeDecl>,
+        useCounts: Map<String, Int>,
+        doc: LayerADocument,
+    ): WhenRewrite? {
+        if (mat.args.size != 2) return null
+        val scrutinee = mat.args[0]
+        val casesArg = (mat.args[1] as? Arg.Listing) ?: return null
+        if (casesArg.items.isEmpty()) return null
+
+        val toRemove = mutableSetOf<String>()
+        val caseDescs = mutableListOf<String>()
+        var sharedSumType: String? = null
+
+        for (caseItem in casesArg.items) {
+            val mcId = (caseItem as? Arg.Bare)?.text ?: return null
+            val mc = byId[mcId] ?: return null
+            if (mc.code != "MC" || mc.args.size != 2) return null
+
+            val pcnRef = mc.args[0]
+            val body = mc.args[1]
+            val pcnId = (pcnRef as? Arg.Bare)?.text ?: return null
+            val pcn = byId[pcnId] ?: return null
+            if (pcn.code != "PCN") return null
+            if (pcn.args.size < 2 || pcn.args.size > 3) return null
+            val patternType = (pcn.args[0] as? Arg.Bare)?.text ?: return null
+            val caseName = (pcn.args[1] as? Arg.Str)?.value ?: return null
+            if (!isValidIdentifier(caseName)) return null
+
+            if (sharedSumType == null) sharedSumType = patternType
+            else if (sharedSumType != patternType) return null
+
+            var binderName: String? = null
+            var pvrId: String? = null
+            val payloadArg = pcn.args.getOrNull(2)
+            if (payloadArg != null && payloadArg != Arg.Null) {
+                val id = (payloadArg as? Arg.Bare)?.text ?: return null
+                val pvr = byId[id] ?: return null
+                if (pvr.code != "PVR" || pvr.args.size != 2) return null
+                val pvrName = (pvr.args[1] as? Arg.Str)?.value ?: return null
+                if (!isValidIdentifier(pvrName)) return null
+                binderName = pvrName
+                pvrId = id
+                toRemove += id
+            }
+
+            // Determine the body token. If the body is a single-use VarRef
+            // pointing at the case's PVR, render it as the binder name (the
+            // forward WHEN expansion re-synthesizes the VarRef-to-binder),
+            // and mark the VarRef for removal so the PVR's external use
+            // count drops to zero.
+            val bodyToken: String = run {
+                if (body is Arg.Bare && binderName != null && pvrId != null) {
+                    val varNode = byId[body.text]
+                    if (varNode != null && varNode.code == "VAR" && varNode.args.size == 1 &&
+                        (useCounts[body.text] ?: 0) == 1) {
+                        val varBinder = (varNode.args[0] as? Arg.Bare)?.text
+                        if (varBinder == pvrId) {
+                            toRemove += body.text
+                            return@run binderName
+                        }
+                    }
+                }
+                bodyTokenForWhen(body) ?: return null
+            }
+
+            toRemove += mcId
+            toRemove += pcnId
+
+            caseDescs += if (binderName != null) "$caseName($binderName) -> $bodyToken"
+                         else "$caseName -> $bodyToken"
+        }
+
+        // Check that nothing outside (toRemove ∪ {mat.id}) references anything
+        // in toRemove. Equivalent to: each removed node's references all come
+        // from things also being removed or from the MAT being rewritten.
+        val excludedFromCount = toRemove + setOf(mat.id)
+        val externalCounts = mutableMapOf<String, Int>()
+        for (node in doc.nodes) {
+            if (node.id in excludedFromCount) continue
+            for (arg in node.args) countRefsInArg(arg, externalCounts)
+        }
+        if (doc.rootId !in excludedFromCount) {
+            externalCounts.merge(doc.rootId, 1) { a, b -> a + b }
+        }
+        for (id in toRemove) {
+            if ((externalCounts[id] ?: 0) != 0) return null
+        }
+
+        return WhenRewrite(
+            matId = mat.id,
+            scrutinee = scrutinee,
+            sumType = Arg.Bare(sharedSumType!!),
+            caseList = caseDescs.joinToString(" | "),
+            toRemove = toRemove,
+        )
+    }
+
+    /**
+     * Render a MatchCase body as a single WHEN case-string token. Returns
+     * null for shapes that can't be expressed in one token (compound
+     * expressions need an explicit MAT/MC tower).
+     *
+     * Strings are intentionally excluded: WHEN's case-string is itself a
+     * quoted string, so embedded quotes would require escape handling the
+     * Layer A parser doesn't currently support.
+     */
+    private fun bodyTokenForWhen(arg: Arg): String? = when (arg) {
+        is Arg.Bare -> if (' ' in arg.text || '|' in arg.text || '"' in arg.text) null else arg.text
+        is Arg.IntL -> arg.value.toString()
+        is Arg.FloatL -> arg.value.toString()
+        is Arg.BoolL -> if (arg.value) "true" else "false"
+        else -> null
     }
 
     // ========================================================================
