@@ -268,7 +268,7 @@ New effect categories receive higher numbers; existing numbers are not reused.
 
 ### Open questions (Q-NNN)
 
-Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-035 are currently assigned.
+Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-036 are currently assigned.
 
 ## Cross-reference graph {#cross-references}
 
