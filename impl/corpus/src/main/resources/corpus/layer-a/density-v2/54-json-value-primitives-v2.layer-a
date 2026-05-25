@@ -1,0 +1,11 @@
+# Slice 5 (v2) fixture: 54-json-value-primitives using compact LAM params.
+@v=1 root=schemaClaim
+jsonNullCase SCS "JsonNull" _
+jsonBoolCase SCS "JsonBool" boolT
+jsonNumberCase SCS "JsonNumber" intT
+jsonStringCase SCS "JsonString" stringT
+jsonValueT SUM [jsonNullCase jsonBoolCase jsonNumberCase jsonStringCase]
+jsonValueSchema SCH "JsonValue" jsonValueT []
+numberValue SV jsonValueT "JsonNumber" 42
+identityOfJsonValue LAM [jv:jsonValueSchema] jv
+schemaClaim APP identityOfJsonValue [numberValue]

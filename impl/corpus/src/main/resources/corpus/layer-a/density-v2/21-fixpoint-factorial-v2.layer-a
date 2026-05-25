@@ -1,0 +1,21 @@
+# Slices 5+6+7 (Layer A density v2) fixture for 21-fixpoint-factorial.
+# Builds on v1.5 (IF) by adding:
+#   - Slice 5: compact LAM params `[recurse:factT n:intT]` synthesizes
+#     two PRCs at emit time, removing the explicit `recurse PRC ...` and
+#     `n PRC "n" intT` declarations.
+#   - Slice 6: subsumed by Slice 2 (PLT.literal already accepts inline
+#     literals — exercised by IF's expansion).
+#   - Slice 7: anonymous `_` id + `@last` reference. The `_ APP sub ...`
+#     line declares an anonymous IntLit-minus expression; `recCall` refers
+#     to it via `@last`.
+# Round-trip: canonical hash equals 21-fixpoint-factorial.json's.
+@v=1 root=app
+factT FNT [intT] intT
+nIsZero APP eqInt [n 0]
+_ APP sub [n 1]
+recCall APP recurse [@last]
+mulBody APP mul [n recCall]
+matchBody IF nIsZero 1 mulBody
+bodyLam LAM [recurse:factT n:intT] matchBody
+fact FIX factT bodyLam
+app APP fact [5]

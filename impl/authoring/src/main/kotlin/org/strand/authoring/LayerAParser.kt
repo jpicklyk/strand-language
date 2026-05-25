@@ -136,6 +136,12 @@ object LayerAParser {
     /**
      * Parse one node line. Returns null on error (errors are recorded
      * in [errors] and the line is skipped).
+     *
+     * Slice 7 (Layer A density v2): a leading `_` in the id position
+     * generates an anonymous id of the form `__anon<lineNum>`. The
+     * emitter tracks the most recent anonymous id and resolves any
+     * `@last` reference to it. Anonymous ids cannot be referenced by
+     * the user's chosen name (because there is none).
      */
     private fun parseNodeLine(
         line: String,
@@ -151,14 +157,23 @@ object LayerAParser {
             return null
         }
         val idArg = tokens[0]
-        if (idArg !is Arg.Bare) {
-            errors += AuthoringError.TokenError(
-                line = lineNum,
-                detail = "node id (first token) must be a bare identifier; got ${idArg::class.simpleName}",
-            )
-            return null
+        // Slice 7 anonymous-id case: the first token is the null marker `_`
+        // (because the tokenizer dispatches `_<whitespace>` to Arg.Null).
+        // Mint a deterministic synthetic id keyed off the source line so
+        // re-parsing the same source produces the same anonymous ids.
+        val idText: String = when (idArg) {
+            is Arg.Bare -> idArg.text
+            Arg.Null -> "__anon$lineNum"
+            else -> {
+                errors += AuthoringError.TokenError(
+                    line = lineNum,
+                    detail = "node id (first token) must be a bare identifier or " +
+                        "`_` for anonymous; got ${idArg::class.simpleName}",
+                )
+                return null
+            }
         }
-        if (!isBareIdentifier(idArg.text)) {
+        if (idArg is Arg.Bare && !isBareIdentifier(idArg.text)) {
             errors += AuthoringError.TokenError(
                 line = lineNum,
                 detail = "node id '${idArg.text}' is not a valid author identifier",
@@ -174,7 +189,7 @@ object LayerAParser {
             return null
         }
         return NodeDecl(
-            id = idArg.text,
+            id = idText,
             code = codeArg.text,
             args = tokens.drop(2),
             line = lineNum,
@@ -400,17 +415,26 @@ object LayerAParser {
 
     /**
      * Bare-identifier characters allow `=` to support header tokens like
-     * `@v=1` and `root=foo` to lex as single tokens; otherwise the bare-
-     * char set is alphanumeric + underscore (standard identifier).
+     * `@v=1` and `root=foo`, `@` for header tokens and Slice 7's `@last`
+     * reference, and `:` for Slice 5's compact Lambda param form
+     * (`name:typeRef`).
+     *
+     * Per-slot semantics decide whether a colon-bearing or `@`-prefixed
+     * bare token is meaningful — the lexer is intentionally lenient and
+     * the per-code emitter enforces the actual rules.
      */
     private fun isBareChar(c: Char): Boolean =
-        c.isLetterOrDigit() || c == '_' || c == '@' || c == '='
+        c.isLetterOrDigit() || c == '_' || c == '@' || c == '=' || c == ':'
 
     /** First-character predicate for bare tokens. Digits are excluded so numerics dispatch first. */
     private fun isBareStartChar(c: Char): Boolean =
         c.isLetter() || c == '_' || c == '@'
 
-    /** True if [text] is a pure author-id identifier (no `=`/`@` allowed at use sites). */
+    /**
+     * True if [text] is a pure author-id identifier (no `=` / `@` / `:`
+     * allowed at use sites). Used for the strict header-id and
+     * NodeDecl-id checks.
+     */
     private fun isBareIdentifier(text: String): Boolean {
         if (text.isEmpty()) return false
         if (!(text[0].isLetter() || text[0] == '_')) return false

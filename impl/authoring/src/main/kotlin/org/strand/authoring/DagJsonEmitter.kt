@@ -65,6 +65,9 @@ object DagJsonEmitter {
         for (node in doc.nodes) {
             val nodeJson = emitNode(node, errors, ctx) ?: continue
             emittedUser[node.id] = nodeJson
+            // Slice 7: track the most-recent anonymous id so a downstream
+            // `@last` reference can resolve to it.
+            if (node.id.startsWith("__anon")) ctx.lastAnonId = node.id
         }
         if (errors.isNotEmpty()) throw AuthoringException(errors)
 
@@ -114,6 +117,14 @@ object DagJsonEmitter {
         val synthesized: LinkedHashMap<String, JsonObject> = linkedMapOf()
 
         /**
+         * Most-recent anonymous id encountered while iterating user-declared
+         * nodes. Updated by [emitJson] as each node is processed; consumed
+         * when a `@last` reference appears in a downstream node's arg list.
+         * Null until the first anonymous declaration. Slice 7 (v2).
+         */
+        var lastAnonId: String? = null
+
+        /**
          * Set of node ids whose code is `PRC` — the auto-VarRef wrap
          * targets. Implementation deviation from the plan's Slice 3
          * "Open question": LET binders are NOT included because a bare
@@ -128,11 +139,31 @@ object DagJsonEmitter {
          * the resolved answer is "PRC only" and is captured here +
          * in the Implementation note when the plan promotes to
          * proposals/implemented/.
+         *
+         * Slice 5 (v2): compact-form LAM params `[x:intT y:intT]`
+         * synthesize PRCs whose author id IS the parameter name. The
+         * pre-pass below adds those names to binderIds so the auto-
+         * VarRef rule fires correctly when the Lambda body references
+         * the parameter by name.
          */
-        val binderIds: Set<String> = doc.nodes
-            .filter { it.code == "PRC" }
-            .map { it.id }
-            .toSet()
+        val binderIds: Set<String> = run {
+            val ids = mutableSetOf<String>()
+            for (node in doc.nodes) {
+                if (node.code == "PRC") ids += node.id
+                // Slice 5: scan LAM's parameters list for compact-form
+                // entries (`name:typeRef`) and treat each `name` as a
+                // binder. Legacy bare-ref entries are already covered by
+                // the PRC NodeDecl scan above.
+                if (node.code == "LAM") {
+                    val params = node.args.firstOrNull() as? Arg.Listing ?: continue
+                    for (entry in params.items) {
+                        val text = (entry as? Arg.Bare)?.text ?: continue
+                        if (':' in text) ids += text.substringBefore(':')
+                    }
+                }
+            }
+            ids
+        }
 
         fun freshLitId(): String = "__lit${litCounter++}"
         fun freshVarRefId(): String = "__var${varRefCounter++}"
@@ -377,15 +408,17 @@ object DagJsonEmitter {
             shapeMismatch(line, code, position, "bare reference or inline literal", arg, errors)
             return null
         }
+        // Slice 7: resolve `@last` to the most-recent anonymous id.
+        val resolved = resolveAtLast(text, line, code, errors, ctx) ?: return null
         // Treat the slot as value-position; auto-VarRef PRC binders.
-        return if (text in ctx.binderIds) {
+        return if (resolved in ctx.binderIds) {
             val id = ctx.freshVarRefId()
             ctx.synthesized[id] = buildJsonObject {
                 put("type", "VarRef")
-                put("binder", text)
+                put("binder", resolved)
             }
             id
-        } else text
+        } else resolved
     }
 
     private fun argToJson(
@@ -405,10 +438,12 @@ object DagJsonEmitter {
                     shapeMismatch(line, code, position, "bare reference", arg, errors)
                     return null
                 }
+                // Slice 7: `@last` resolves to the most recent anonymous id.
+                val resolvedAnon = resolveAtLast(text, line, code, errors, ctx) ?: return null
                 // Slice 3: auto-VarRef when the parent slot is an expression
                 // value-position (see [isValuePositionRefSlot]) and the
                 // reference points at a PRC or LET binder.
-                val resolved = maybeAutoVarRef(text, code, spec, ctx)
+                val resolved = maybeAutoVarRef(resolvedAnon, code, spec, ctx)
                 return JsonPrimitive(resolved)
             }
             LayerAGrammar.ArgKind.KEYWORD -> {
@@ -461,9 +496,11 @@ object DagJsonEmitter {
                         shapeMismatch(line, code, position, "list of bare references", elt, errors)
                         return null
                     }
+                    // Slice 7: `@last` resolves to the most recent anonymous id.
+                    val resolvedAnon = resolveAtLast(text, line, code, errors, ctx) ?: return null
                     // Slice 3: auto-VarRef applies per-element for
                     // value-position list slots (e.g., Application.arguments).
-                    val resolved = maybeAutoVarRef(text, code, spec, ctx)
+                    val resolved = maybeAutoVarRef(resolvedAnon, code, spec, ctx)
                     JsonPrimitive(resolved)
                 }
                 return JsonArray(elements)
@@ -473,7 +510,9 @@ object DagJsonEmitter {
                 synthesizeLiteralIfLiteral(arg, ctx)?.let { return JsonPrimitive(it) }
                 return when (arg) {
                     is Arg.Bare -> {
-                        val resolved = maybeAutoVarRef(arg.text, code, spec, ctx)
+                        val resolvedAnon = resolveAtLast(arg.text, line, code, errors, ctx)
+                            ?: return null
+                        val resolved = maybeAutoVarRef(resolvedAnon, code, spec, ctx)
                         JsonPrimitive(resolved)
                     }
                     Arg.Null -> JsonNull
@@ -483,7 +522,84 @@ object DagJsonEmitter {
                     }
                 }
             }
+            LayerAGrammar.ArgKind.PARAM_LIST -> {
+                // Slice 5 (v2): each list entry is either a legacy bare ref
+                // (to an existing PRC NodeDecl) or a compact `name:typeRef`
+                // pair. Compact entries synthesize a PRC whose author id IS
+                // the parameter name (so a Lambda body can reference it
+                // directly, and Slice 3 auto-VarRef fires).
+                val list = (arg as? Arg.Listing)?.items ?: run {
+                    shapeMismatch(line, code, position, "[name:type ...] or [ref ref ...] list", arg, errors)
+                    return null
+                }
+                val elements = list.map { elt ->
+                    val text = (elt as? Arg.Bare)?.text ?: run {
+                        shapeMismatch(line, code, position, "param list entry", elt, errors)
+                        return null
+                    }
+                    if (':' !in text) {
+                        // Legacy bare-ref form; passes through to the existing
+                        // PRC NodeDecl. `@last` resolution applies here too.
+                        val resolvedAnon = resolveAtLast(text, line, code, errors, ctx)
+                            ?: return null
+                        return@map JsonPrimitive(resolvedAnon)
+                    }
+                    val name = text.substringBefore(':')
+                    val typeRef = text.substringAfter(':')
+                    if (name.isEmpty() || typeRef.isEmpty()) {
+                        errors += AuthoringError.ArgShapeMismatch(
+                            line = line, code = code, position = position,
+                            expectedKind = "compact param `name:typeRef`",
+                            actualKind = "malformed `$text`",
+                        )
+                        return null
+                    }
+                    // Synthesize a PRC whose author id IS the parameter name.
+                    // If the user also declared a PRC with the same name
+                    // separately, the synthesized PRC would collide; this is
+                    // a user error (don't mix compact + explicit form for the
+                    // same name). The synthesized PRC's canonical bytes match
+                    // a hand-authored `<name> PRC "<name>" <typeRef>`.
+                    ctx.synthesized[name] = buildJsonObject {
+                        put("type", "ParameterDecl")
+                        put("name", name)
+                        put("paramType", typeRef)
+                    }
+                    JsonPrimitive(name)
+                }
+                return JsonArray(elements)
+            }
         }
+    }
+
+    /**
+     * Slice 7 (v2) — resolve `@last` to the most-recent anonymous id.
+     * Returns [refText] unchanged for any other text. Errors out if the
+     * `@last` appears before any anonymous declaration has been seen.
+     *
+     * The lookahead is forward-only because emitJson iterates the
+     * NodeDecl list in source order and updates [EmitContext.lastAnonId]
+     * after each node. A `@last` in node K can only see anonymous ids
+     * declared in nodes 0..K-1.
+     */
+    private fun resolveAtLast(
+        refText: String,
+        line: Int,
+        code: String,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): String? {
+        if (refText != "@last") return refText
+        val anon = ctx.lastAnonId
+        if (anon == null) {
+            errors += AuthoringError.ArgShapeMismatch(
+                line = line, code = code, position = -1,
+                expectedKind = "`@last` resolved to a prior anonymous declaration",
+                actualKind = "no anonymous declaration seen before this line",
+            )
+            return null
+        }
+        return anon
     }
 
     /**

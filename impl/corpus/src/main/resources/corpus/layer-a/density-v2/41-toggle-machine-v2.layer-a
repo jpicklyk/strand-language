@@ -1,0 +1,15 @@
+# Slice 5 (v2) fixture: 41-toggle-machine using compact LAM params.
+@v=1 root=toggleMachine
+emptyOutputsT PRD []
+stateFieldT PRF "state" boolT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+transitionFnT FNT [boolT unitT] resultT
+negatedState APP not [s]
+stateFieldV PFV "state" negatedState
+emptyOutputsV PV emptyOutputsT []
+outputsFieldV PFV "outputs" emptyOutputsV
+transitionResult PV resultT [stateFieldV outputsFieldV]
+transitionLambda LAM [s:boolT e:unitT] transitionResult
+inputStream ESE unitT
+toggleMachine SM transitionLambda false [inputStream] [] [receiveFx]

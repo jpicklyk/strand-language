@@ -98,6 +98,14 @@ object LayerAGrammar {
         LIST_REF,
         /** Reference or `_` (null). */
         NULLABLE_REF,
+        /**
+         * Slice 5 (Layer A density v2) — Lambda parameter list with
+         * compact `name:typeRef` entries OR legacy bare PRC references.
+         * The emitter synthesizes a PRC per entry whose text contains
+         * `:`; legacy bare-ref entries pass through to the existing
+         * PRC declaration. Used only by LAM's `parameters` slot today.
+         */
+        PARAM_LIST,
     }
 
     /**
@@ -453,11 +461,14 @@ object LayerAGrammar {
             optional = listOf(FieldSpec("bound", ArgKind.REFERENCE, "bound")),
         ),
 
-        // Functions and binding
+        // Functions and binding.
+        // LAM's `parameters` slot accepts PARAM_LIST entries — either bare
+        // refs to existing PRCs (legacy form) or `name:typeRef` compact
+        // form. See Slice 5 (Layer A density v2) in LayerAGrammar.ArgKind.
         "LAM" to CodeSchema(
             jsonType = "Lambda",
             required = listOf(
-                FieldSpec("parameters", ArgKind.LIST_REF, "parameters"),
+                FieldSpec("parameters", ArgKind.PARAM_LIST, "parameters"),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
             optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),

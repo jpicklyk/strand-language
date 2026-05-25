@@ -46,6 +46,10 @@ class LayerADensityTest {
         Pair("density-v1", "41-toggle-machine-density") to "41-toggle-machine",
         // Slice 4 (v1.5) — IF sugar on top of v1
         Pair("density-v1.5", "21-fixpoint-factorial-if") to "21-fixpoint-factorial",
+        // Slices 5+6+7 (v2) — compact LAM params + anonymous nodes + @last
+        Pair("density-v2", "21-fixpoint-factorial-v2") to "21-fixpoint-factorial",
+        Pair("density-v2", "54-json-value-primitives-v2") to "54-json-value-primitives",
+        Pair("density-v2", "41-toggle-machine-v2") to "41-toggle-machine",
     )
 
     @TestFactory

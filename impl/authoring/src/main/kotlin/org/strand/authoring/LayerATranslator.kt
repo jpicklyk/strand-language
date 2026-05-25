@@ -260,6 +260,20 @@ object LayerATranslator {
                     ?: run { typeError(spec, "nullable ref", json, authorId, errors); return null }
                 Arg.Bare(text)
             }
+            LayerAGrammar.ArgKind.PARAM_LIST -> {
+                // Slice 5 (v2): reverse-translate as a legacy bare-ref list.
+                // The compact `name:typeRef` form is emitter-only; the
+                // canonical JSON always carries an explicit PRC declaration
+                // plus a ref in the Lambda's parameters array, and that's
+                // what we re-emit as a Layer A list.
+                val arr = json as? JsonArray
+                    ?: run { typeError(spec, "ref array", json, authorId, errors); return null }
+                Arg.Listing(arr.map { elt ->
+                    val text = (elt as? JsonPrimitive)?.contentOrNull
+                        ?: run { typeError(spec, "ref in array", elt, authorId, errors); return null }
+                    Arg.Bare(text)
+                })
+            }
         }
     }
 
