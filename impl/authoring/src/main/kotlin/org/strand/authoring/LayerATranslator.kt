@@ -84,7 +84,8 @@ object LayerATranslator {
     fun translate(text: String): LayerADocument {
         val canonical = translateCanonical(text)
         val safelyOmitted = omitSafelyInferableFields(canonical)
-        return probeAndOmit(safelyOmitted)
+        val probed = probeAndOmit(safelyOmitted)
+        return applyImplicitPrelude(probed)
     }
 
     /** Translate without any elaboration-omission. Useful for testing and
@@ -525,5 +526,116 @@ object LayerATranslator {
         finalized.nodeIdToHash[finalized.root]
     } catch (e: Exception) {
         null
+    }
+
+    // ========================================================================
+    // Step 4 (Slice 1) — Implicit prelude
+    // ========================================================================
+
+    /**
+     * Slice 1: when a local NodeDecl matches a reserved-name spec from
+     * [LayerAGrammar.reservedNodes] (same content shape, same author id),
+     * drop the local declaration. The forward DagJsonEmitter resolves
+     * references to the reserved name back to the synthesized node so the
+     * canonical hash is preserved by construction.
+     *
+     * The pass collects all removable declarations, applies them all at
+     * once, and validates by canonical-hash comparison. If the whole-set
+     * substitution fails (e.g., a corner case where the canonical encoder
+     * disagrees), the pass falls back to per-declaration probing.
+     */
+    private fun applyImplicitPrelude(doc: LayerADocument): LayerADocument {
+        val baselineHash = canonicalHash(doc) ?: return doc
+        val toRemove = doc.nodes.filter { decl ->
+            val spec = LayerAGrammar.reservedNodes[decl.id] ?: return@filter false
+            val schema = LayerAGrammar.codes[decl.code] ?: return@filter false
+            matchesReservedSpec(decl, spec, schema)
+        }.map { it.id }.toSet()
+        if (toRemove.isEmpty()) return doc
+
+        val bulk = doc.copy(nodes = doc.nodes.filterNot { it.id in toRemove })
+        if (canonicalHash(bulk) == baselineHash) return bulk
+
+        // Per-decl fallback: try each removal independently. Should not
+        // normally fire — included for defense against unforeseen corner
+        // cases in the reserved-spec ↔ canonical-encoder alignment.
+        var current = doc
+        var currentHash = baselineHash
+        for (id in toRemove) {
+            val candidate = current.copy(nodes = current.nodes.filterNot { it.id == id })
+            val candidateHash = canonicalHash(candidate) ?: continue
+            if (candidateHash == currentHash) {
+                current = candidate
+            }
+        }
+        return current
+    }
+
+    /**
+     * Check whether [decl] is content-equivalent to the reserved [spec]
+     * under [schema]'s positional arg shape. Compares each required field
+     * by kind: STRING and KEYWORD by string equality against `spec.stringFields`,
+     * REFERENCE by author-id equality against `spec.refFields`, LIST_REF
+     * by element-wise author-id equality against `spec.refListFields`. Any
+     * present optional fields must also match — for the reserved table this
+     * is just the `effects` list on a few foreign nodes (e.g., `now`).
+     */
+    private fun matchesReservedSpec(
+        decl: NodeDecl,
+        spec: LayerAGrammar.ReservedNodeSpec,
+        schema: LayerAGrammar.CodeSchema,
+    ): Boolean {
+        if (schema.jsonType != spec.jsonType) return false
+        var idx = 0
+        for (fieldSpec in schema.required) {
+            val arg = decl.args.getOrNull(idx++) ?: return false
+            if (!fieldMatches(fieldSpec, arg, spec)) return false
+        }
+        for ((j, fieldSpec) in schema.optional.withIndex()) {
+            val i = schema.required.size + j
+            val arg = decl.args.getOrNull(i)
+            if (arg == null) {
+                // Optional absent in decl; spec must not declare a value for it.
+                if (spec.stringFields.containsKey(fieldSpec.jsonField)) return false
+                if (spec.refFields.containsKey(fieldSpec.jsonField)) return false
+                if (spec.refListFields.containsKey(fieldSpec.jsonField)) return false
+                continue
+            }
+            if (!fieldMatches(fieldSpec, arg, spec)) return false
+        }
+        // Reject if decl has *more* args than schema accounts for; defensive.
+        if (decl.args.size > schema.required.size + schema.optional.size) return false
+        return true
+    }
+
+    private fun fieldMatches(
+        fieldSpec: LayerAGrammar.FieldSpec,
+        arg: Arg,
+        spec: LayerAGrammar.ReservedNodeSpec,
+    ): Boolean = when (fieldSpec.kind) {
+        LayerAGrammar.ArgKind.STRING -> {
+            val expected = spec.stringFields[fieldSpec.jsonField]
+            expected != null && arg is Arg.Str && arg.value == expected
+        }
+        LayerAGrammar.ArgKind.KEYWORD -> {
+            val expected = spec.stringFields[fieldSpec.jsonField]
+            expected != null && arg is Arg.Bare && arg.text == expected
+        }
+        LayerAGrammar.ArgKind.REFERENCE -> {
+            val expected = spec.refFields[fieldSpec.jsonField]
+            expected != null && arg is Arg.Bare && arg.text == expected
+        }
+        LayerAGrammar.ArgKind.LIST_REF -> {
+            val expected = spec.refListFields[fieldSpec.jsonField]
+            expected != null && arg is Arg.Listing &&
+                arg.items.size == expected.size &&
+                arg.items.zip(expected).all { (item, exp) ->
+                    item is Arg.Bare && item.text == exp
+                }
+        }
+        // Reserved specs don't currently use other kinds (INT/FLOAT/BOOL/
+        // PARAM_LIST/FIELD_LIST/NULLABLE_REF). If they do in the future,
+        // matching support extends here.
+        else -> false
     }
 }
