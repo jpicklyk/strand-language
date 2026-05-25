@@ -1,33 +1,46 @@
 # Layer A density — reducing emission cost further
 
 **Document:** `proposals/implemented/layer-a-density.md`
-**Status:** All 9 slices implemented 2026-05-25 in a single session.
-Geomean dropped from 2.28× Python+type-hints baseline to **1.05× across
-the three-task MVP** — within 5% of conventional-language baseline cost,
-well under the proposal's 1.30× projected floor.
+**Status:** v1 through v4 implemented 2026-05-25 in an extended session
+across eleven git commits. Geomean dropped from a 2.20× Python+type-hints
+baseline (re-measured post-cleanup) to **0.81× across the three-task MVP**
+— well below conventional-language baseline cost on bytes-as-proxy-for-
+tokens, and beyond the proposal's 1.30× projected floor for the non-
+tokenizer-aligned stack. The v4 work added one new authoring-grammar
+slice (Slice 10 nested expressions) plus seven new Elaborator inference
+cases beyond the original four Layer C cases from Q-034 step 1.
 **Date:** 2026-05-25
 **Concerns:** [`evaluation/results.md`](../../evaluation/results.md),
 [`impl/authoring/`](../../impl/authoring/),
 [Q-021](../../open-questions.md#Q-021), [Q-034](../../open-questions.md#Q-034)
 
-> **Implementation note (2026-05-25).** All 9 slices landed in one
-> session across five git commits (v1, v1.5, v2, v2.5, v3 per the
-> Recommended shipping order). Geomean trajectory across the three-task
-> evaluation suite (factorial / json-value / toggle):
+> **Implementation note (2026-05-25).** All 10 slices plus seven
+> Elaborator inference extensions landed in one session across eleven
+> git commits (v1, v1.5, v2, v2.5, v3, plan promotion, cleanup pass,
+> v4 nested expressions, v4 deeper type inference, v4 integration-gap
+> follow-up — the first five per the Recommended shipping order, the
+> last six surfaced during implementation). Geomean trajectory across
+> the three-task evaluation suite (factorial / json-value / toggle):
 >
 > | Form | factorial | json-value | toggle | geomean |
 > |------|----------:|-----------:|-------:|--------:|
-> | Strand Layer A (baseline) | 4.94× | 1.16× | 2.05× | 2.28× |
-> | v1 (Slices 1+2+3) | 2.46× | 0.98× | 1.18× | 1.41× |
-> | v1.5 (+ Slice 4 IF) | 1.60× | 0.98× | 1.18× | 1.23× |
-> | v2 (+ Slices 5+6+7) | 1.38× | 0.92× | 1.05× | 1.10× |
-> | v2.5 (+ Slice 8) | 1.38× | 0.92× | 0.92× | 1.05× |
-> | v3 (+ Slice 9 WHEN) | 1.38× | 0.92× | 0.92× | 1.05× |
+> | Strand Layer A (baseline, post-cleanup) | 4.81× | 1.12× | 2.00× | 2.20× |
+> | v1 (Slices 1+2+3) | 2.30× | 0.91× | 1.12× | 1.33× |
+> | v1.5 (+ Slice 4 IF) | 1.50× | 0.91× | 1.12× | 1.15× |
+> | v2 (+ Slices 5+6+7) | 1.29× | 0.86× | 1.00× | 1.03× |
+> | v2.5 (+ Slice 8) | 1.29× | 0.86× | 0.88× | 0.99× |
+> | v3 (+ Slice 9 WHEN) | 1.29× | 0.86× | 0.88× | 0.99× |
+> | v4 (+ Slice 10 nested + 7 inference cases) | 0.87× | 0.81× | 0.76× | 0.81× |
 >
-> All five shipping increments preserved the additive-versioning
-> property: `LayerARoundTripTest` (56 corpus programs) plus the broader
-> test suite remain green; canonical dag-json output for programs that
-> do NOT use any new sugar is byte-identical to today's.
+> All shipping increments preserved the additive-versioning property:
+> the density-vN corpus fixtures plus the broader test suite remain
+> green; canonical dag-json output for programs that do NOT use any new
+> sugar is byte-identical to today's. The baseline column reflects the
+> re-measurement after the v3-to-v4 cleanup pass retired the legacy
+> hand-authored Layer A fixtures and the JSON→Layer A reverse-translation
+> surface; the 2.20× there replaces the 2.28× figure quoted before the
+> retirement, with the small shift due to corpus-mix differences and not
+> to any change in the v1-v3 emitter behavior.
 >
 > **Plan deviations worth recording.**
 >
@@ -41,16 +54,17 @@ well under the proposal's 1.30× projected floor.
 > `EmitContext.binderIds` set filters to PRC-only with a comment citing
 > the corpus programs that motivated the choice.
 >
-> *(2) Slice 4 IF and Slice 9 WHEN both carry a `sugarOnly` marker on
-> their `CodeSchema`.* Discovery during implementation: `LayerATranslator`
-> (the JSON → Layer A reverse direction) previously picked the first
-> code with matching `jsonType`. With two codes mapping to
-> `jsonType="Match"` (the canonical `MAT` plus the new sugar codes), the
-> translator picked the wrong one. Adding `sugarOnly: Boolean = false` to
-> `CodeSchema` and skipping sugar-only codes in
-> `LayerATranslator.resolveCode` resolves the ambiguity in the reverse
-> direction without affecting forward emission or LLM-side constraint
-> generation.
+> *(2) Slice 4 IF and Slice 9 WHEN both carried a `sugarOnly` marker on
+> their `CodeSchema` during v1.5-v3.* Discovery during the v1.5 fixup:
+> the now-deleted `LayerATranslator` (JSON → Layer A reverse direction)
+> picked the first code with matching `jsonType`, and with two codes
+> mapping to `jsonType="Match"` (canonical `MAT` plus IF/WHEN), it picked
+> the wrong one. Adding `sugarOnly: Boolean = false` to `CodeSchema` and
+> skipping sugar-only codes in `LayerATranslator.resolveCode` resolved
+> the ambiguity in the reverse direction without affecting forward
+> emission. The cleanup pass deleted both the translator and the marker;
+> v4 emission keeps the canonical-MAT-when-possible behavior implicitly
+> because there is no longer a reverse direction to disambiguate.
 >
 > *(3) Slice 5 compact LAM params synthesize PRCs whose author id IS the
 > parameter name.* The plan suggested `__param_<idx>` ids; using the
@@ -91,25 +105,134 @@ well under the proposal's 1.30× projected floor.
 > ref>}`. Documented as a sub-property of Slice 2 rather than a
 > standalone slice.
 >
+> *(8) Slice 10 nested expressions reuse the `(...)` parenthesization
+> token already present in the tokenizer alongside an `Arg.Nested(code,
+> args)` variant on `LayerADocument` rather than a separate s-expression
+> mode.* The recursive `readNested()` lexes `(CODE arg arg ...)` with
+> args following the same shape rules as top-level args, so every
+> Slice 1-9 emit-time mechanism (reserved-name resolution, inline
+> literals, auto-VarRef, IF/WHEN sugar) composes at the recursive
+> `emitNode()` call. A new `CodeSchema.producesValue` flag (true for
+> value-producing codes ILT/FLT/STR/BLT/ULT/BYT/LAM/APP/LET/VAR/NRF/TAB/
+> CAP/FN/IF/WHEN/MAT/FIX/PV/PFG/SV/H; false for type-only PRM/FNT/PRD/
+> SUM/FAL/TPM/RT/RS and structural PRC/MC/EFC/EFD/ESE/ESI/ESO/TR/SM/SCH/
+> INV/Pattern variants) gates which codes are legal at expression
+> positions, with `ArgShapeMismatch` reported for the rest. FIELD_LIST
+> required one additional parser tweak so a compact-form entry
+> `name=(NESTED)` lexes as a trailing-`=` bare token paired with the
+> following parenthesized value rather than as a single bare token.
+>
+> *(9) Slice 10's IF expansion interacts with nested expressions at the
+> scrutinee/then/else slots.* The expansion path already accepts a
+> single REFERENCE arg per slot, and `resolveExpressionRef` was extended
+> to recognize nested forms there. Factorial's v4 fixture uses a single
+> IF with three nested `APP` chains (the `eqInt` test plus the two
+> branch expressions), collapsing the conditional scaffold to one line.
+>
+> *(10) Compact-LAM-param inference in the json-value v4 fixture keeps
+> the `jv:jsonValueSchema` annotation explicit.* The call site provides
+> a value of type `jsonValueT`, not the `SchemaType`-wrapped
+> `jsonValueSchema` referenced by the canonical's `paramType`. Inferring
+> `jv: jsonValueT` from the call site would hash differently than the
+> canonical; bidirectional inference cannot resolve the SchemaType↔T
+> ambiguity without unification, which is out of scope per Q-034's
+> design boundary. The annotation stays in source.
+>
 > **What this work doesn't ship** (per plan §"What this plan deliberately
 > doesn't ship", all still deferred):
 > - Library / import mechanism (general `@use <hash>`)
-> - Operator-like sugar (`(eq n 0)` s-expression form)
+> - Operator-like sugar (`(eq n 0)` s-expression form — Slice 10's
+>   nested-expression form lands `(APP eq [n 0])` instead, keeping
+>   the explicit code prefix at every nested node)
 > - Tokenizer alignment (Q-034 §3.3 Phase 4)
 > - Tool-call assembly as alternative interface (Q-034 §3.6)
 > - Nested constructor patterns and or-patterns in WHEN
+> - Unification-based inference (the SchemaType↔T case in v4 json-value
+>   would need it)
 > - The single concrete project-scope follow-up surfaced during
 >   implementation: a sum-consumer task in the evaluation MVP would let
 >   WHEN's compression register in the headline geomean. Today none of
 >   the three MVP tasks consume sum types, so WHEN's value is visible
->   only in corpus fixtures like `25-option-some-unwrap-when` (12-line
->   tower → 6-line WHEN).
+>   only in corpus fixtures.
 >
-> All five increments preserved the constraint-list: no changes to
+> All increments preserved the constraint-list: no changes to
 > `impl/core/`, `impl/verifier/`, `impl/interpreter/`, `impl/hashing/`,
 > `impl/schema/`, `impl/runtime/`, `impl/bytecode/`, `impl/vm/`, or the
 > canonical CBOR encoder. All work lives in `impl/authoring/` + its
 > tests + corpus fixtures + evaluation files.
+>
+> **What got added beyond the original plan.** The original plan
+> specified nine slices stopping at v3. Three follow-on shipping units
+> landed during the same session and were folded into the implementation
+> note above rather than spun off as separate proposals.
+>
+> *Cleanup pass.* With the elaborate-then-emit pipeline established as
+> the only supported authoring path, the legacy JSON→Layer A reverse-
+> translation surface was retired. Deleted: `LayerATranslator.kt`,
+> `LayerARenderer.kt`, `LayerATranslatorTest.kt`, `LayerARoundTripTest.kt`,
+> 33 hand-authored `*.layer-a` corpus fixtures directly under
+> `corpus/layer-a/`, the `corpus/layer-a/elaborated/` subdirectory, the
+> `--elaborate` flag on `strand author` (elaboration is now always-on),
+> the `strand translate` CLI subcommand, the `sugarOnly` field on
+> `CodeSchema` (only the reverse translator consumed it). The density-vN
+> fixtures plus `LayerADensityTest` are the surviving regression net for
+> Layer A authoring.
+>
+> *Slice 10 nested expressions.* New `Arg.Nested(code, args)` variant in
+> `LayerADocument` extends the grammar so `(CODE args...)` can appear
+> inline inside `[...]` lists and at REFERENCE / NULLABLE_REF slots. The
+> parent expression's emitter calls
+> `DagJsonEmitter.synthesizeNestedIfNested()` which mints a fresh
+> `__expr<n>` id and recursively re-enters per-code schema validation —
+> reserved-name resolution, inline literals, auto-VarRef, IF/WHEN sugar
+> all compose at the recursive call. `CodeSchema.producesValue` gates
+> which codes are legal at expression positions. FIELD_LIST gained a
+> trailing-`=` pairing rule for `name=(NESTED)` entries. Six new
+> `NestedExpressionTest` unit cases (basic shape, deep nesting, type-
+> code rejection, structural-code rejection, auto-VarRef composition,
+> FIELD_LIST integration); three new corpus fixtures under density-v4/;
+> `~250 lines` of parser/emitter changes.
+>
+> *Seven new Elaborator inference cases (Layer C extensions).* The
+> Q-034 step 1 proposal sketched four Layer C inference cases (Lambda
+> effects, Application effectInstances defaulting, Application
+> typeArguments, Lambda paramType). v4 extends `Elaborator` with seven
+> more so most explicit type declarations can be elided: recursion-slot
+> `paramType` (FIX body Lambda's first param fills from
+> `FIX.recursionType`); FunctionType synthesis (a FIX whose
+> `recursionType` references an undeclared name synthesizes the FNT
+> with parameters from the body LAM signature after the recursion slot
+> and result from the body's return type); SumTypeCase `caseType`
+> inference from `SumValue` payload; compact-LAM param inference from
+> call sites + reserved-name builtins + StateMachine `transitionFn`
+> signature + Match scrutinee context + ProductFieldValue context +
+> ProductFieldGet target. Extended internal `typeOfArg` covers
+> foreign-call results, lambda bodies, SV/PV `ofType`, PFG field
+> lookup, MAT/IF/WHEN first-case-body, NRF target, TAB body, with a
+> reserved-name fallback for callees (so `add`/`not`/`eqInt`/etc.
+> resolve through `LayerAGrammar.reservedNodes` when the document
+> doesn't declare them). The passes run in a fixed-point loop with an
+> 8-iteration defensive bound because earlier passes (recursion-slot,
+> FNT synthesis) feed later ones (paramType call-site inference) and
+> vice versa. Eight new `ElaboratorTest` cases cover each inference
+> extension end-to-end.
+>
+> *Integration-gap follow-up.* The merge of Slice 10 and the seven new
+> inference cases left a real gap: Agent B's compact-LAM-param
+> inference walked `doc.nodes` looking for binder use-sites, but Agent
+> A's nested expressions are stored as `Arg.Nested(code, args)` inside
+> parent nodes' arg lists — so a param `n` referenced only inside
+> `(APP eqInt [n 0])` was invisible to the inference scan. The fix
+> added `Elaborator.allNodesIncludingNested(doc)` which surfaces every
+> `Arg.Nested` as a synthetic `NodeDecl` with placeholder id
+> (`__nested<n>`); the `callSitesByLam` table-build and the per-binder
+> usage-site scan (`inferTypeForCompactParam`'s 2a/2b/2c/2d branches)
+> both iterate that expanded list. After this fix, the toggle machine's
+> compact LAM `[s e]` infers `s:boolT` from the nested `(APP not [s])`
+> body and `e:unitT` from the StateMachine `transitionFn` context, and
+> factorial's compact-LAM `[recurse n]` infers both slots without any
+> annotation. Three-task geomean fell from 0.87× (post-Agent B alone)
+> to 0.81× (post-follow-up).
 
 **Context:** Q-034 step 1 fully implemented. `evaluation/measure.sh`
 reports Strand Layer A at **2.28× Python+type-hints geomean** across
