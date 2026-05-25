@@ -4,4 +4,4 @@ value:
   type: int
   representation:
     python: "6"
-    strand: "IntV(6)"
+    strand: "IntV(v=6)"

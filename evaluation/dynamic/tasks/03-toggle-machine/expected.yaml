@@ -8,7 +8,7 @@ events:
   - {tag: unit}
 final_state:
   python: "True"
-  strand: "BoolV(true)"
+  strand: "BoolV(v=true)"
 outputs:
   python: "[]"
   strand: "[]"

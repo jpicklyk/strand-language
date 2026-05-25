@@ -7,4 +7,4 @@ value:
   type: int
   representation:
     python: "1"
-    strand: "IntV(1)"
+    strand: "IntV(v=1)"

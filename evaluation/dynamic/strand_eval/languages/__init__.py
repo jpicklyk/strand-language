@@ -103,3 +103,16 @@ __all__ = [
     "register_language",
     "get_language",
 ]
+
+
+# Auto-register the shipped language adapters on package import. Importing
+# the modules runs their `@register_language(...)` decorators so the CLI's
+# `get_language` lookup succeeds without callers needing an explicit
+# `from strand_eval.languages import python, strand` first.
+#
+# Imports are placed at the bottom of the file (after LANGUAGE_REGISTRY,
+# register_language, and the Language ABC are defined) to avoid a circular
+# import: each adapter module does `from strand_eval.languages import
+# Language, register_language` at its top.
+from strand_eval.languages import python as _python_adapter  # noqa: F401
+from strand_eval.languages import strand as _strand_adapter  # noqa: F401

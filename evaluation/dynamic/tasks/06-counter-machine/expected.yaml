@@ -10,7 +10,7 @@ events:
   - {tag: sum, case: Increment}
 final_state:
   python: "1"
-  strand: "IntV(1)"
+  strand: "IntV(v=1)"
 outputs:
   python: "[]"
   strand: "[]"
