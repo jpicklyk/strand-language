@@ -52,6 +52,8 @@ class LayerADensityTest {
         Pair("density-v2", "41-toggle-machine-v2") to "41-toggle-machine",
         // Slice 8 (v2.5) — inline ProductFieldValue list
         Pair("density-v2.5", "41-toggle-machine-v2.5") to "41-toggle-machine",
+        // Slice 9 (v3) — WHEN/constructor-pattern sugar
+        Pair("density-v3", "25-option-some-unwrap-when") to "25-option-some-unwrap",
     )
 
     @TestFactory

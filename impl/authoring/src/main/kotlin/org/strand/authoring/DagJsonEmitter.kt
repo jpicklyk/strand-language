@@ -114,7 +114,9 @@ object DagJsonEmitter {
         var litCounter: Int = 0
         var varRefCounter: Int = 0
         var ifCounter: Int = 0
+        var whenCounter: Int = 0
         val synthesized: LinkedHashMap<String, JsonObject> = linkedMapOf()
+        val document: LayerADocument = doc
 
         /**
          * Most-recent anonymous id encountered while iterating user-declared
@@ -168,6 +170,7 @@ object DagJsonEmitter {
         fun freshLitId(): String = "__lit${litCounter++}"
         fun freshVarRefId(): String = "__var${varRefCounter++}"
         fun freshIfPrefix(): String = "__if${ifCounter++}"
+        fun freshWhenPrefix(): String = "__when${whenCounter++}"
     }
 
     /**
@@ -270,6 +273,9 @@ object DagJsonEmitter {
         // Pattern literal, 2 MatchCase). The Match takes the user's
         // author id; the 6 child nodes get `__if<n>_*` internal ids.
         if (node.code == "IF") return expandIfSugar(node, errors, ctx)
+
+        // Layer A density v3 (Slice 9) — WHEN/constructor-pattern sugar.
+        if (node.code == "WHEN") return expandWhenSugar(node, errors, ctx)
 
         val fields = mutableMapOf<String, JsonElement>()
         fields["type"] = JsonPrimitive(schema.jsonType)
@@ -387,6 +393,305 @@ object DagJsonEmitter {
             put("scrutinee", scrutineeId)
             put("cases", JsonArray(listOf(JsonPrimitive(caseTrueId), JsonPrimitive(caseFalseId))))
         }
+    }
+
+    /**
+     * Slice 9 (v3) — WHEN/constructor-pattern sugar expansion.
+     *
+     * Takes the user's `result WHEN scrutinee sumType "<cases>"` and
+     * produces a Match wrapper + per-case {PCN [+ PVR] + MC} tower. The
+     * `<cases>` STRING is parsed at emit time as a `|`-separated list
+     * of `CaseName[(binder)] -> body` entries.
+     *
+     * For each case:
+     *  * If `(binder)` is present and the SumType's matching SCS has a
+     *    non-null caseType, synthesize a PVR with author id =
+     *    `__when<n>_bind_<binder>` and patternType = the case's caseType.
+     *  * Synthesize a PCN with author id = `__when<n>_pat_<CaseName>`,
+     *    patternType = the user-named sumType, caseName, payloadPattern =
+     *    PVR id (or null when no binder).
+     *  * Resolve the body string:
+     *    - Inline literal: synthesize child literal node, body = its id.
+     *    - Identifier matching the case's binder: synthesize VarRef
+     *      pointing at the PVR, body = VarRef id.
+     *    - Identifier matching a PRC binder in scope: synthesize VarRef
+     *      pointing at the PRC, body = VarRef id.
+     *    - Any other identifier: pass through (must be a declared node).
+     *  * Synthesize a MC with author id = `__when<n>_case_<CaseName>`,
+     *    pattern = PCN id, body = resolved body.
+     *
+     * The Match wrapper takes the user's author id; its scrutinee resolves
+     * through the same path as a regular REFERENCE arg (Slice 2 inline-
+     * literal + Slice 3 auto-VarRef).
+     *
+     * Out of scope (per the plan §Slice 9 "Out of scope" list):
+     *  * Nested constructor patterns (`Some(Cons(h, t))`) — requires
+     *    explicit MC + nested PCN tower.
+     *  * Wildcard or literal payload patterns (`Some(_)`, `Some(42)`).
+     *  * Or-patterns (the node algebra doesn't support disjunction).
+     */
+    private fun expandWhenSugar(
+        node: NodeDecl,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): JsonObject? {
+        val scrutineeArg = node.args[0]
+        val sumTypeArg = node.args[1]
+        val casesArg = node.args[2]
+
+        val scrutineeId = resolveExpressionRef(node.line, "WHEN", 0, scrutineeArg, errors, ctx)
+            ?: return null
+
+        val sumTypeId = (sumTypeArg as? Arg.Bare)?.text ?: run {
+            shapeMismatch(node.line, "WHEN", 1, "sumType reference", sumTypeArg, errors)
+            return null
+        }
+
+        val casesText = (casesArg as? Arg.Str)?.value ?: run {
+            shapeMismatch(node.line, "WHEN", 2, "\"CaseName[(binder)] -> body | ...\" string", casesArg, errors)
+            return null
+        }
+
+        val whenCases = parseWhenCaseList(node.line, casesText, errors) ?: return null
+        if (whenCases.isEmpty()) {
+            errors += AuthoringError.ArgShapeMismatch(
+                line = node.line, code = "WHEN", position = 2,
+                expectedKind = "at least one case",
+                actualKind = "empty case list",
+            )
+            return null
+        }
+
+        // Build a sum-case lookup: caseName -> caseType ref (or null for
+        // payload-less cases). We walk the document looking for SCS nodes
+        // and the SUM that references them. The SUM's id must match
+        // `sumTypeId`; each SCS reachable from the SUM's `cases` list
+        // contributes a (name -> caseType) entry.
+        val caseTypeByName = buildCaseTypeMap(sumTypeId, ctx)
+
+        val prefix = ctx.freshWhenPrefix()
+        val caseIds = mutableListOf<String>()
+        for (whenCase in whenCases) {
+            val caseType = caseTypeByName[whenCase.caseName]
+            // Whether the SCS for this case has a payload determines if a
+            // binder is allowed. Mismatch is a verifier-level error; we
+            // pass through whatever the user wrote and let the verifier
+            // reject if needed.
+
+            // Synthesize PVR (if the user wrote a binder).
+            val pvrId: String? = whenCase.binder?.let { binderName ->
+                val id = "${prefix}_bind_$binderName"
+                ctx.synthesized[id] = buildJsonObject {
+                    put("type", "Pattern")
+                    put("kind", "variable")
+                    put("patternType", caseType ?: "unknownT")
+                    put("name", binderName)
+                }
+                id
+            }
+
+            // Synthesize PCN.
+            val pcnId = "${prefix}_pat_${whenCase.caseName}"
+            ctx.synthesized[pcnId] = buildJsonObject {
+                put("type", "Pattern")
+                put("kind", "constructor")
+                put("patternType", sumTypeId)
+                put("caseName", whenCase.caseName)
+                if (pvrId != null) {
+                    put("payloadPattern", pvrId)
+                }
+            }
+
+            // Resolve the body. The case's binder is in scope only inside
+            // this body; resolveWhenBody handles the precedence.
+            val bodyId = resolveWhenBody(
+                bodyText = whenCase.body,
+                caseBinder = whenCase.binder,
+                caseBinderPvrId = pvrId,
+                line = node.line,
+                errors = errors,
+                ctx = ctx,
+            ) ?: return null
+
+            // Synthesize MC.
+            val mcId = "${prefix}_case_${whenCase.caseName}"
+            ctx.synthesized[mcId] = buildJsonObject {
+                put("type", "MatchCase")
+                put("pattern", pcnId)
+                put("body", bodyId)
+            }
+            caseIds += mcId
+        }
+
+        return buildJsonObject {
+            put("type", "Match")
+            put("scrutinee", scrutineeId)
+            put("cases", JsonArray(caseIds.map { JsonPrimitive(it) }))
+        }
+    }
+
+    /**
+     * Slice 9 case-list mini-parser. Splits the WHEN cases string on `|`
+     * (literal pipe, surrounded by whitespace for safety) and then each
+     * case on `->`. Returns null with errors recorded on malformed input.
+     */
+    private data class WhenCase(val caseName: String, val binder: String?, val body: String)
+    private fun parseWhenCaseList(
+        line: Int,
+        text: String,
+        errors: MutableList<AuthoringError>,
+    ): List<WhenCase>? {
+        val out = mutableListOf<WhenCase>()
+        for (rawCase in text.split('|')) {
+            val caseStr = rawCase.trim()
+            if (caseStr.isEmpty()) continue
+            val arrowIdx = caseStr.indexOf("->")
+            if (arrowIdx < 0) {
+                errors += AuthoringError.ArgShapeMismatch(
+                    line = line, code = "WHEN", position = 2,
+                    expectedKind = "`CaseName[(binder)] -> body`",
+                    actualKind = "case `$caseStr` missing `->` separator",
+                )
+                return null
+            }
+            val patternPart = caseStr.substring(0, arrowIdx).trim()
+            val bodyPart = caseStr.substring(arrowIdx + 2).trim()
+            if (bodyPart.isEmpty()) {
+                errors += AuthoringError.ArgShapeMismatch(
+                    line = line, code = "WHEN", position = 2,
+                    expectedKind = "non-empty body after `->`",
+                    actualKind = "case `$caseStr` has empty body",
+                )
+                return null
+            }
+            val parenIdx = patternPart.indexOf('(')
+            val (caseName, binder) = if (parenIdx < 0) {
+                patternPart to null
+            } else {
+                val closeIdx = patternPart.indexOf(')', parenIdx)
+                if (closeIdx <= parenIdx) {
+                    errors += AuthoringError.ArgShapeMismatch(
+                        line = line, code = "WHEN", position = 2,
+                        expectedKind = "balanced `(binder)`",
+                        actualKind = "case `$caseStr` missing closing paren",
+                    )
+                    return null
+                }
+                val name = patternPart.substring(0, parenIdx).trim()
+                val b = patternPart.substring(parenIdx + 1, closeIdx).trim()
+                name to b
+            }
+            if (caseName.isEmpty()) {
+                errors += AuthoringError.ArgShapeMismatch(
+                    line = line, code = "WHEN", position = 2,
+                    expectedKind = "non-empty case name",
+                    actualKind = "case `$caseStr` has empty case name",
+                )
+                return null
+            }
+            out += WhenCase(caseName = caseName, binder = binder, body = bodyPart)
+        }
+        return out
+    }
+
+    /**
+     * Build a `caseName -> caseTypeId` map for the named SumType. Walks
+     * the document's NodeDecls to find:
+     *   1. The SUM node with id matching [sumTypeId]
+     *   2. Each SCS in its `cases` list
+     *
+     * Returns an empty map if [sumTypeId] doesn't resolve to a declared
+     * SUM — the WHEN's PVR patterns then use a "unknownT" placeholder
+     * (which the verifier will reject; the LLM must add the SUM decl or
+     * the user mistyped a case name).
+     */
+    private fun buildCaseTypeMap(sumTypeId: String, ctx: EmitContext): Map<String, String?> {
+        val sumNode = ctx.document.nodes.firstOrNull {
+            it.code == "SUM" && it.id == sumTypeId
+        } ?: return emptyMap()
+        val casesList = (sumNode.args.firstOrNull() as? Arg.Listing)?.items ?: return emptyMap()
+        val scsIds = casesList.mapNotNull { (it as? Arg.Bare)?.text }.toSet()
+        val out = mutableMapOf<String, String?>()
+        for (decl in ctx.document.nodes) {
+            if (decl.code != "SCS" || decl.id !in scsIds) continue
+            val name = (decl.args.getOrNull(0) as? Arg.Str)?.value ?: continue
+            val caseType = when (val ct = decl.args.getOrNull(1)) {
+                is Arg.Bare -> ct.text
+                else -> null  // Arg.Null = no payload
+            }
+            out[name] = caseType
+        }
+        return out
+    }
+
+    /**
+     * Slice 9 case-body resolver. Handles:
+     *   * literal token: parse as Int/Float/Bool and synthesize literal
+     *     node, return its id. (StringLit support: requires recognizing
+     *     `"..."` inside the body text; deferred — bodies needing a
+     *     StringLit declare it as a separate node.)
+     *   * bare identifier matching the case's [caseBinder]: synthesize a
+     *     VarRef pointing at the case's PVR, return VarRef id.
+     *   * bare identifier matching a PRC binder in scope: synthesize a
+     *     VarRef pointing at the PRC, return VarRef id.
+     *   * any other bare identifier: pass through as a reference (must be
+     *     a declared NodeDecl id; the verifier rejects unresolved refs).
+     */
+    private fun resolveWhenBody(
+        bodyText: String,
+        caseBinder: String?,
+        caseBinderPvrId: String?,
+        line: Int,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): String? {
+        // Try literal first.
+        val asInt = bodyText.toLongOrNull()
+        if (asInt != null) {
+            val id = ctx.freshLitId()
+            ctx.synthesized[id] = buildJsonObject {
+                put("type", "IntLit")
+                put("value", asInt)
+            }
+            return id
+        }
+        if (bodyText == "true" || bodyText == "false") {
+            val id = ctx.freshLitId()
+            ctx.synthesized[id] = buildJsonObject {
+                put("type", "BoolLit")
+                put("value", bodyText == "true")
+            }
+            return id
+        }
+        val asFloat = bodyText.toDoubleOrNull()
+        if (asFloat != null && '.' in bodyText) {
+            val id = ctx.freshLitId()
+            ctx.synthesized[id] = buildJsonObject {
+                put("type", "FloatLit")
+                put("value", asFloat)
+            }
+            return id
+        }
+        // Case binder reference.
+        if (caseBinder != null && bodyText == caseBinder && caseBinderPvrId != null) {
+            val id = ctx.freshVarRefId()
+            ctx.synthesized[id] = buildJsonObject {
+                put("type", "VarRef")
+                put("binder", caseBinderPvrId)
+            }
+            return id
+        }
+        // PRC binder reference (auto-VarRef on the body).
+        if (bodyText in ctx.binderIds) {
+            val id = ctx.freshVarRefId()
+            ctx.synthesized[id] = buildJsonObject {
+                put("type", "VarRef")
+                put("binder", bodyText)
+            }
+            return id
+        }
+        // Plain declared reference.
+        return bodyText
     }
 
     /**

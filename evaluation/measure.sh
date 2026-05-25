@@ -28,6 +28,7 @@ FORMS=(
     "reference.layer-a.density-v1.5:Strand Layer A density v1.5"
     "reference.layer-a.density-v2:Strand Layer A density v2"
     "reference.layer-a.density-v2.5:Strand Layer A density v2.5"
+    "reference.layer-a.density-v3:Strand Layer A density v3"
 )
 
 count_bytes() {

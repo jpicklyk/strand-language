@@ -1,0 +1,10 @@
+# Slice 9 (Layer A density v3) fixture: 25-option-some-unwrap using WHEN.
+# The original requires 12 lines for the Match/PCN/PVR/MC tower; WHEN
+# expands inline to one line.
+# Round-trip: canonical hash equals 25-option-some-unwrap.json's.
+@v=1 root=result
+someCase SCS "Some" intT
+noneCase SCS "None" _
+optionT SUM [someCase noneCase]
+someValue SV optionT "Some" 42
+result WHEN someValue optionT "Some(n) -> n | None -> 0"

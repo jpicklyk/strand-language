@@ -578,6 +578,37 @@ object LayerAGrammar {
             optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),
         ),
 
+        // Layer A density v3 (Slice 9) — WHEN/constructor-pattern sugar.
+        // Expands at emit time to a Match plus per case {PCN [+ PVR] + MC}
+        // tower. Internal author ids are `__when<n>_*`.
+        //
+        // Signature: `WHEN scrutinee sumType "<cases>"` where <cases> is
+        // a STRING (parsed at emit time) of the form:
+        //     CaseName -> body | CaseName(binder) -> body | ...
+        // Cases are separated by ` | `. Each case body is a single token —
+        // an identifier (a declared node, the case's own binder, or any
+        // PRC binder in scope) or an inline literal (Int/Float/Bool/Str).
+        //
+        // Plan deviation worth recording: §Slice 9 sketched `[CaseName(b)
+        // -> body | ...]` inside brackets with `|`, `->`, `(`, `)` as
+        // separator tokens. The implementation uses a STRING arg instead,
+        // because the existing tokenizer doesn't recognize `|` / `->` /
+        // parens as tokens. The user-facing trade-off: the case-list
+        // content sits inside `"..."` quotes; the dag-json output is
+        // identical to the explicit form. ConstraintGrammar overapproximates
+        // by allowing any string content; tighter LLM-side constraint
+        // requires either a separate WHEN sub-grammar or the bracketed
+        // form's parser work.
+        "WHEN" to CodeSchema(
+            jsonType = "Match",
+            required = listOf(
+                FieldSpec("scrutinee", ArgKind.REFERENCE, "scrutinee"),
+                FieldSpec("sumType", ArgKind.REFERENCE, "sumType"),
+                FieldSpec("cases", ArgKind.STRING, "cases"),
+            ),
+            sugarOnly = true,
+        ),
+
         // Layer A density v1.5 (Slice 4) — IF/Match-on-Bool sugar.
         // Expands at emit time to 7 dag-json nodes (2 BoolLit, 2 Pattern
         // literal, 2 MatchCase, 1 Match). The Match takes the user's

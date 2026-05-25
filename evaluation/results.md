@@ -20,6 +20,7 @@ _Task 01 — Factorial_
 | Strand Layer A density v1.5 | 288 | 12 | 72 | 1.60 |
 | Strand Layer A density v2 | 248 | 10 | 62 | 1.38 |
 | Strand Layer A density v2.5 | 248 | 10 | 62 | 1.38 |
+| Strand Layer A density v3 | 248 | 10 | 62 | 1.38 |
 
 ## 02-json-value
 
@@ -34,6 +35,7 @@ _Task 02 — JSON value_
 | Strand Layer A density v1.5 | 449 | 11 | 112 | 0.98 |
 | Strand Layer A density v2 | 422 | 10 | 106 | 0.92 |
 | Strand Layer A density v2.5 | 422 | 10 | 106 | 0.92 |
+| Strand Layer A density v3 | 422 | 10 | 106 | 0.92 |
 
 ## 03-toggle-machine
 
@@ -48,6 +50,7 @@ _Task 03 — Toggle state machine_
 | Strand Layer A density v1.5 | 603 | 16 | 151 | 1.18 |
 | Strand Layer A density v2 | 538 | 14 | 135 | 1.05 |
 | Strand Layer A density v2.5 | 474 | 12 | 119 | 0.92 |
+| Strand Layer A density v3 | 474 | 12 | 119 | 0.92 |
 
 ## Aggregate
 
@@ -60,6 +63,7 @@ _Task 03 — Toggle state machine_
 | Strand Layer A density v1.5 | 1340 | 335 | 1.23 |
 | Strand Layer A density v2 | 1208 | 303 | 1.10 |
 | Strand Layer A density v2.5 | 1144 | 287 | 1.05 |
+| Strand Layer A density v3 | 1144 | 287 | 1.05 |
 
 ## Interpretation
 
