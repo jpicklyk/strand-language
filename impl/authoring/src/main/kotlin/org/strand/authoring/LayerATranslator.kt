@@ -64,8 +64,28 @@ object LayerATranslator {
      */
     private val FORCE_ALL_OPTIONALS = setOf("APP")
 
-    /** Translate dag-json [text] into a [LayerADocument] in canonical form. */
+    /**
+     * Translate dag-json [text] into a [LayerADocument]. Applies the
+     * Q-036 SAFE elaboration-omission rules (Step 2): the Elaborator's
+     * deterministically-reproducible inferences (Lambda.effects from the
+     * body's closure; recursion-slot paramType from FIX.recursionType) are
+     * stripped from the output so the rendered Layer A is more compact and
+     * matches the form an LLM would emit. The Elaborator re-derives the
+     * stripped fields on the way back through forward compilation; the
+     * round-trip hash is preserved.
+     *
+     * Density sugars (IF/WHEN/compact LAM/inline literals/etc.) and the
+     * probe-and-fallback path for BORDERLINE elaboration cases land in
+     * subsequent steps.
+     */
     fun translate(text: String): LayerADocument {
+        val canonical = translateCanonical(text)
+        return omitSafelyInferableFields(canonical)
+    }
+
+    /** Translate without any elaboration-omission. Useful for testing and
+     *  as the structural building block Step 2's omission pass works against. */
+    fun translateCanonical(text: String): LayerADocument {
         val parser = Json { ignoreUnknownKeys = true }
         val root = parser.parseToJsonElement(text) as? JsonObject
             ?: throw AuthoringException(listOf(
@@ -293,5 +313,75 @@ object LayerATranslator {
             line = 0,
             detail = "node '$authorId' field '${spec.jsonField}': expected $expected, got ${actual::class.simpleName}",
         )
+    }
+
+    // ========================================================================
+    // Step 2 — Static SAFE elaboration omission
+    // ========================================================================
+
+    /**
+     * Apply Step 2's SAFE omission rules.
+     *
+     * Recursion-slot `paramType` is stripped: the Elaborator's case 5 sets
+     * the first parameter's type of a FIX body Lambda from
+     * `FIX.recursionType`, which equals the original by the verifier's
+     * Fixpoint shape check, so re-derivation reproduces the same value.
+     *
+     * `Lambda.effects` was initially classified SAFE (per the Step 2
+     * research) but corpus programs 12, 13, 14 surfaced an
+     * over-declaration counter-example: a Lambda may legally declare more
+     * effects than its body's closure produces (e.g., for hand-off through
+     * a CapabilityScope, or for forward-compatibility with future body
+     * extensions), and the Elaborator's case 1 fires only when the closure
+     * is non-empty AND inserts the *closure*, not the declared set. Strict
+     * static omission therefore changes canonical bytes for over-declared
+     * Lambdas. The rule is demoted to BORDERLINE; the probe-and-fallback
+     * path in Step 3 handles it correctly.
+     */
+    private fun omitSafelyInferableFields(doc: LayerADocument): LayerADocument {
+        val byId = doc.nodes.associateBy { it.id }
+        val recursionSlotPrcIds = recursionSlotPrcs(doc, byId)
+        val newNodes = doc.nodes.map { node ->
+            when (node.code) {
+                "PRC" -> if (node.id in recursionSlotPrcIds) stripPrcParamType(node) else node
+                else -> node
+            }
+        }
+        return doc.copy(nodes = newNodes)
+    }
+
+    /**
+     * Find every PRC node that is the FIRST parameter of a Lambda that is
+     * the body of a FIX. Those PRCs' `paramType` equals `FIX.recursionType`
+     * by construction and is recoverable by the Elaborator's case 5.
+     */
+    private fun recursionSlotPrcs(
+        doc: LayerADocument,
+        byId: Map<String, NodeDecl>,
+    ): Set<String> {
+        val result = mutableSetOf<String>()
+        for (fix in doc.nodes.filter { it.code == "FIX" }) {
+            // FIX args: recursionType (0), body (1)
+            val bodyRef = (fix.args.getOrNull(1) as? Arg.Bare)?.text ?: continue
+            val body = byId[bodyRef] ?: continue
+            if (body.code != "LAM") continue
+            // LAM args: parameters (0), body (1), [effects (2)]
+            val params = (body.args.getOrNull(0) as? Arg.Listing) ?: continue
+            val firstParam = (params.items.firstOrNull() as? Arg.Bare)?.text ?: continue
+            val prc = byId[firstParam] ?: continue
+            if (prc.code != "PRC") continue
+            result += prc.id
+        }
+        return result
+    }
+
+    /**
+     * Drop the optional `paramType` argument from a PRC declaration. PRC
+     * args are: name (required), paramType (optional). When present,
+     * paramType is at index 1; truncating to 1 arg removes it.
+     */
+    private fun stripPrcParamType(node: NodeDecl): NodeDecl {
+        if (node.args.size <= 1) return node
+        return node.copy(args = node.args.subList(0, 1))
     }
 }

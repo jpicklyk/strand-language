@@ -42,7 +42,7 @@ Build the reverse projection as a **two-stage pass producing density-v4 output**
 
 **Hybrid elaboration-omission:** for the eleven inference cases the Elaborator handles in the forward direction, the projection decides per case whether to omit the inferable field:
 
-- **Always omit (SAFE):** `Lambda.effects` and recursion-slot `paramType`. These are deterministically reproducible from sibling structure; re-elaboration always produces the same value.
+- **Always omit (SAFE):** recursion-slot `paramType`. Deterministically reproducible from `FIX.recursionType` by the verifier's Fixpoint shape check. (Step 2 implementation found that `Lambda.effects`, initially proposed SAFE, is actually BORDERLINE because of legal over-declaration — see the case table in §4.2.)
 - **Probe-and-fallback (BORDERLINE, 7 cases):** emit the omitted form, run `Authoring.compileToDagJson` on it, compare to the original canonical bytes. If equal, accept; if different, dag-json diff identifies which inference produced a different result, the projection restores that one field explicitly, and the cycle retries. Bounded retry count (4) handles the deepest interaction we measured.
 - **Always emit explicit (UNSAFE):** detected by structural inspection of the canonical (the only known case is a `paramType` resolving to a `SchemaType<T>` node). Mechanical to detect.
 
@@ -82,7 +82,7 @@ Drawing from the per-case reversibility analysis in the research:
 |---|----------------|-------|-----------------|
 | 1 | `Lambda.paramType` (separate PRC, compact LAM single-call-site) | BORDERLINE | Probe: emit without paramType, re-elaborate, compare. |
 | 2 | `Application.typeArguments` | BORDERLINE | Probe. |
-| 3 | `Lambda.effects` | **SAFE** | Always omit when non-empty; canonical's value equals body's sorted closure by construction. |
+| 3 | `Lambda.effects` | BORDERLINE | Initially classified SAFE but corpus programs 12, 13, 14 (and the explicit `14-pure-lambda-with-overdeclared-effect`) demonstrate Lambdas legally declaring more effects than the body produces (over-declaration is allowed). The Elaborator's case 1 fires only on non-empty body closures and inserts the *closure*, not the declared set, so static omission changes bytes whenever declared ≠ closure. Handled by probe-and-fallback instead. |
 | 4 | `Application.effectInstances` | BORDERLINE | Probe; or static rule "omit iff each callee category has exactly one EffectDecl document-wide." |
 | 5 | Recursion-slot `paramType` | **SAFE** | Always omit (or rewrite compact-LAM entry to bare `name`); source is `FIX.recursionType`, deterministic. |
 | 6 | `FunctionType` synthesis | BORDERLINE | Probe; cycle risk on bodies whose return type depends on the recursive call. |
@@ -139,7 +139,7 @@ Two lines instead of thirty-two. Canonical hash unchanged.
 
 Four operational policies the projection commits to, alongside the structural design above.
 
-**Classification evolution.** New Elaborator inference cases default to BORDERLINE in the projection's classification table. They are promoted to SAFE only when (a) the corpus round-trip test passes on every program where the case fires, AND (b) the inference depends only on sibling structural data — not on values produced by other Elaborator passes. Cases 3 and 5 meet both criteria; the seven borderline cases meet only (a). Demotion is immediate on any round-trip failure. The CI round-trip test is the gate; classification drift between projection and Elaborator surfaces there.
+**Classification evolution.** New Elaborator inference cases default to BORDERLINE in the projection's classification table. They are promoted to SAFE only when (a) the corpus round-trip test passes on every program where the case fires, AND (b) the inference depends only on sibling structural data, not on values produced by other Elaborator passes, AND (c) the original field cannot legally diverge from the inferred value (i.e., over-declaration must be excluded by the verifier). Recursion-slot `paramType` meets all three; `Lambda.effects` fails (c) because the verifier permits over-declared Lambdas, so it was demoted to BORDERLINE during Step 2 implementation. Demotion is immediate on any round-trip failure. The CI round-trip test is the gate; classification drift between projection and Elaborator surfaces there.
 
 **Author ID preservation.** Canonical dag-json file inputs carry author IDs as JSON object keys (they are stripped by the canonical CBOR encoder but present in the dag-json serialization). The projection preserves these IDs for nodes that survive sugar projection. Nodes eliminated by sugars (Slice 4 IF, Slice 8 inline PFV, Slice 10 nested, etc.) do not appear in output, so their synthesized IDs are not a concern. For nameless single-use survivors, the projection mints short sequential IDs (`a`, `b`, `c`, ...). This yields byte-identical canonical output and preserves debugging correlation when an agent originally emitted with named IDs. Programs read directly from the canonical CBOR store (where author IDs are absent) follow the same minting rule.
 
