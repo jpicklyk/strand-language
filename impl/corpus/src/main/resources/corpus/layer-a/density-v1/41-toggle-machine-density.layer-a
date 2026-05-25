@@ -1,0 +1,20 @@
+# Slice 1+2+3 (Layer A density v1) fixture for 41-toggle-machine.
+# Demonstrates implicit prelude (no PRM Bool/Unit, no Bool.Not FNT/FN,
+# no receiveFx EFC), inline literal (false as SM initialState), and
+# auto-VarRef (stateParam in APP.arguments).
+@v=1 root=toggleMachine
+emptyOutputsT PRD []
+stateFieldT PRF "state" boolT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+transitionFnT FNT [boolT unitT] resultT
+stateParam PRC "s" boolT
+eventParam PRC "e" unitT
+negatedState APP not [stateParam]
+stateFieldV PFV "state" negatedState
+emptyOutputsV PV emptyOutputsT []
+outputsFieldV PFV "outputs" emptyOutputsV
+transitionResult PV resultT [stateFieldV outputsFieldV]
+transitionLambda LAM [stateParam eventParam] transitionResult
+inputStream ESE unitT
+toggleMachine SM transitionLambda false [inputStream] [] [receiveFx]

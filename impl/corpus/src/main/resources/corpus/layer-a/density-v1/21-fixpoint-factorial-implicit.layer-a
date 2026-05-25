@@ -1,0 +1,28 @@
+# Slice 1 (Layer A density v1) fixture: 21-fixpoint-factorial with the
+# implicit prelude doing all primitive/builtin synthesis. No PRM, no FNT,
+# no FN declarations — `intT`, `boolT`, `sub`, `mul`, `eqInt` resolve
+# to reserved synthetic nodes injected at emit time. Round-trip property:
+# canonical root hash equals 21-fixpoint-factorial.json's root hash.
+@v=1 root=app
+factT FNT [intT] intT
+recurse PRC "recurse" factT
+n PRC "n" intT
+zero ILT 0
+one ILT 1
+nRef VAR n
+nIsZero APP eqInt [nRef zero]
+litTrue BLT true
+patTrue PLT boolT litTrue
+caseTrue MC patTrue one
+litFalse BLT false
+patFalse PLT boolT litFalse
+recRef VAR recurse
+nMinus1 APP sub [nRef one]
+recCall APP recRef [nMinus1]
+mulBody APP mul [nRef recCall]
+caseFalse MC patFalse mulBody
+matchBody MAT nIsZero [caseTrue caseFalse]
+bodyLam LAM [recurse n] matchBody
+fact FIX factT bodyLam
+five ILT 5
+app APP fact [five]

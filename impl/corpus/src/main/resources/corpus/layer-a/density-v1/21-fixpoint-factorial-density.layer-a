@@ -1,0 +1,32 @@
+# Slice 1+2+3 (Layer A density v1) fixture: 21-fixpoint-factorial
+# rewritten to use the full v1 stack.
+#
+# Slice 1 — implicit prelude: no PRM Int/Bool, no FNT/FN for sub/mul/eqInt
+#   (they all resolve to reserved synthetic nodes).
+# Slice 2 — inline literals: `0`, `1`, `5` appear directly in arg lists
+#   instead of `zero ILT 0`, `one ILT 1`, `five ILT 5`. `true` and `false`
+#   appear directly in MC patterns (via PLT slot).
+# Slice 3 — auto-VarRef: `n` and `recurse` appear as bare PRC binder
+#   references in arg lists; the emitter synthesizes VarRefs implicitly.
+#
+# Round-trip property: canonical root hash equals 21-fixpoint-factorial.json's.
+# Compressed from 34 lines (890 bytes) explicit form to 16 lines:
+# bigger savings come in v1.5 (IF sugar) and v2 (more sugar).
+@v=1 root=app
+factT FNT [intT] intT
+recurse PRC "recurse" factT
+n PRC "n" intT
+nIsZero APP eqInt [n 0]
+litTrue BLT true
+patTrue PLT boolT litTrue
+caseTrue MC patTrue 1
+litFalse BLT false
+patFalse PLT boolT litFalse
+nMinus1 APP sub [n 1]
+recCall APP recurse [nMinus1]
+mulBody APP mul [n recCall]
+caseFalse MC patFalse mulBody
+matchBody MAT nIsZero [caseTrue caseFalse]
+bodyLam LAM [recurse n] matchBody
+fact FIX factT bodyLam
+app APP fact [5]

@@ -92,6 +92,284 @@ object LayerAGrammar {
     }
 
     /**
+     * Slice 1 (Layer A density v1) — synthetic node specification.
+     *
+     * A program that references a reserved name without locally declaring
+     * it gets the synthetic node injected at emit time, transparently to
+     * the verifier. Reserved names cover every primitive type, every
+     * in-process builtin, and the canonical effect categories used by
+     * state-machine corpus programs.
+     *
+     * Local declarations always win — a program that writes its own
+     * `intT PRM Int` shadows the implicit one. Because the canonical
+     * encoder content-addresses by structure (not author id), the local
+     * and implicit forms hash identically.
+     */
+    data class ReservedNodeSpec(
+        /** dag-json `type` field value (e.g., "PrimitiveType", "ForeignNode"). */
+        val jsonType: String,
+        /** Constant string-valued fields keyed by JSON field name. */
+        val stringFields: Map<String, String> = emptyMap(),
+        /** Single-reference fields keyed by JSON field name; values are reserved-name ids. */
+        val refFields: Map<String, String> = emptyMap(),
+        /** List-of-references fields keyed by JSON field name; values are reserved-name ids. */
+        val refListFields: Map<String, List<String>> = emptyMap(),
+    ) {
+        /** Reserved-name ids this node depends on (must also be synthesized). */
+        val dependencies: Set<String>
+            get() = refFields.values.toSet() + refListFields.values.flatten().toSet()
+    }
+
+    /**
+     * The reserved-name table. Iteration order is preserved so the
+     * synthesized nodes appear in a deterministic order in the emitted
+     * JSON document.
+     *
+     * Hash stability: each synthesized node's canonical bytes match a
+     * hand-authored equivalent's bytes — the existing corpus programs
+     * 16, 21, 41, etc. demonstrate the exact JSON shapes the reserved
+     * table reproduces.
+     */
+    val reservedNodes: Map<String, ReservedNodeSpec> = linkedMapOf(
+        // Primitive types
+        "intT" to ReservedNodeSpec(
+            jsonType = "PrimitiveType",
+            stringFields = mapOf("kind" to "Int"),
+        ),
+        "floatT" to ReservedNodeSpec(
+            jsonType = "PrimitiveType",
+            stringFields = mapOf("kind" to "Float"),
+        ),
+        "stringT" to ReservedNodeSpec(
+            jsonType = "PrimitiveType",
+            stringFields = mapOf("kind" to "String"),
+        ),
+        "boolT" to ReservedNodeSpec(
+            jsonType = "PrimitiveType",
+            stringFields = mapOf("kind" to "Bool"),
+        ),
+        "unitT" to ReservedNodeSpec(
+            jsonType = "PrimitiveType",
+            stringFields = mapOf("kind" to "Unit"),
+        ),
+        "bytesT" to ReservedNodeSpec(
+            jsonType = "PrimitiveType",
+            stringFields = mapOf("kind" to "Bytes"),
+        ),
+
+        // FunctionType signatures for the common builtins.
+        // Pure binops: (Int, Int) -> Int  /  (Int, Int) -> Bool  /  (Bool, Bool) -> Bool, etc.
+        "addT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "subT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "mulT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "divT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "modT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "negT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "eqIntT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "ltT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "leT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "gtT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "geT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "notT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("boolT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "andT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("boolT", "boolT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "orT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("boolT", "boolT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "concatT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "eqStrT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        // nowT is `() -> Int`. The effects live on the ForeignNode `now`,
+        // not on the FunctionType — matches the canonical pattern in
+        // corpus 16-builtin-time-now-under-capability.json.
+        "nowT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to emptyList()),
+            refFields = mapOf("result" to "intT"),
+        ),
+
+        // ForeignNode declarations. Pure builtins have no `effects` field.
+        // `now` is the only effectful reserved foreign — it declares
+        // [nowFx] to mirror corpus 16's canonical shape.
+        "add" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Add"),
+            refFields = mapOf("foreignType" to "addT"),
+        ),
+        "sub" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Sub"),
+            refFields = mapOf("foreignType" to "subT"),
+        ),
+        "mul" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Mul"),
+            refFields = mapOf("foreignType" to "mulT"),
+        ),
+        "div" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Div"),
+            refFields = mapOf("foreignType" to "divT"),
+        ),
+        "mod" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Mod"),
+            refFields = mapOf("foreignType" to "modT"),
+        ),
+        "neg" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Neg"),
+            refFields = mapOf("foreignType" to "negT"),
+        ),
+        "eqInt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Eq"),
+            refFields = mapOf("foreignType" to "eqIntT"),
+        ),
+        "lt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Lt"),
+            refFields = mapOf("foreignType" to "ltT"),
+        ),
+        "le" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Le"),
+            refFields = mapOf("foreignType" to "leT"),
+        ),
+        "gt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Gt"),
+            refFields = mapOf("foreignType" to "gtT"),
+        ),
+        "ge" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.Ge"),
+            refFields = mapOf("foreignType" to "geT"),
+        ),
+        "not" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bool.Not"),
+            refFields = mapOf("foreignType" to "notT"),
+        ),
+        "and" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bool.And"),
+            refFields = mapOf("foreignType" to "andT"),
+        ),
+        "or" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bool.Or"),
+            refFields = mapOf("foreignType" to "orT"),
+        ),
+        "concat" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Concat"),
+            refFields = mapOf("foreignType" to "concatT"),
+        ),
+        "eqStr" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Eq"),
+            refFields = mapOf("foreignType" to "eqStrT"),
+        ),
+        "now" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Time.Now"),
+            refFields = mapOf("foreignType" to "nowT"),
+            refListFields = mapOf("effects" to listOf("nowFx")),
+        ),
+
+        // Effect categories. Same mechanism, separate table per the plan.
+        "receiveFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "StateMachine.Receive"),
+        ),
+        "sendFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "StateMachine.Send"),
+        ),
+        "spawnFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "StateMachine.Spawn"),
+        ),
+        "terminateFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "StateMachine.Terminate"),
+        ),
+        "nowFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Time.Now"),
+        ),
+        "writeFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Filesystem.Write"),
+        ),
+        "connectFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Network.Connect"),
+        ),
+    )
+
+    /**
      * All Layer A codes recognized in this first slice. Codes not listed
      * here surface as [AuthoringError.UnknownCode] at emit time.
      */
@@ -179,6 +457,13 @@ object LayerAGrammar {
             jsonType = "ParameterDecl",
             required = listOf(
                 FieldSpec("name", ArgKind.STRING, "name"),
+            ),
+            // Layer C case (1) — Lambda.paramType inference. When absent,
+            // Elaborator fills the slot from the surrounding Application
+            // call-site context. Without --elaborate, an absent paramType
+            // surfaces as a JsonIngest error (the canonical JSON schema
+            // still requires the field).
+            optional = listOf(
                 FieldSpec("paramType", ArgKind.REFERENCE, "paramType"),
             ),
         ),
@@ -384,20 +669,43 @@ object LayerAGrammar {
             ),
         ),
 
-        // EventStream variants — discriminator on streamKind.
+        // EventStream variants — discriminator on streamKind. The three
+        // optional content fields (bufferSize, overflowPolicy, consumerMode)
+        // were added across Layer 6 step 3 slices 3.1 and 3.6; they take
+        // the same positional shape in each EventStream variant.
+        //
+        // overflowPolicy and consumerMode use ArgKind.KEYWORD because they
+        // emit as bare strings ("DropOldest", "Broadcast"). The Sample(n)
+        // object form is not expressible in Layer A in this slice — corpus
+        // programs that need it must use canonical JSON.
         "ESE" to CodeSchema(
             jsonType = "EventStream",
             required = listOf(FieldSpec("eventType", ArgKind.REFERENCE, "eventType")),
+            optional = listOf(
+                FieldSpec("bufferSize", ArgKind.INT, "bufferSize"),
+                FieldSpec("overflowPolicy", ArgKind.KEYWORD, "overflowPolicy"),
+                FieldSpec("consumerMode", ArgKind.KEYWORD, "consumerMode"),
+            ),
             discriminator = "streamKind" to "external",
         ),
         "ESI" to CodeSchema(
             jsonType = "EventStream",
             required = listOf(FieldSpec("eventType", ArgKind.REFERENCE, "eventType")),
+            optional = listOf(
+                FieldSpec("bufferSize", ArgKind.INT, "bufferSize"),
+                FieldSpec("overflowPolicy", ArgKind.KEYWORD, "overflowPolicy"),
+                FieldSpec("consumerMode", ArgKind.KEYWORD, "consumerMode"),
+            ),
             discriminator = "streamKind" to "internal",
         ),
         "ESO" to CodeSchema(
             jsonType = "EventStream",
             required = listOf(FieldSpec("eventType", ArgKind.REFERENCE, "eventType")),
+            optional = listOf(
+                FieldSpec("bufferSize", ArgKind.INT, "bufferSize"),
+                FieldSpec("overflowPolicy", ArgKind.KEYWORD, "overflowPolicy"),
+                FieldSpec("consumerMode", ArgKind.KEYWORD, "consumerMode"),
+            ),
             discriminator = "streamKind" to "output",
         ),
         "TR" to CodeSchema(
