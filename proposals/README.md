@@ -12,7 +12,9 @@ Proposals here are **drafts**, not accepted decisions. They have not been promot
 
 ## Current proposals
 
-(All Wave-3+ implementation proposals have landed and live in `implemented/`. The next drafted proposal will appear here when registered.)
+| File | Topic | Question | Drafted |
+|------|-------|----------|---------|
+| [`model-api-integration.md`](model-api-integration.md) | Dynamic-cost evaluation framework: Python harness driving Claude via Anthropic API through the verifier-feedback retry loop, with mocked-mode fixture replay for CI, multi-baseline support (Python+type-hints / Strand canonical / Strand Layer A density v4 in the initial slice), and per-run timestamped reports rolling up to `evaluation/dynamic-results.md`. Closes the dynamic-cost half of Q-021 / Q-034 by measuring tokens-per-successful-task across an agent's retry loop. | Q-021 (dynamic), Q-034 (dynamic) | 2026-05-25 |
 
 The four Wave-3 implementation proposals (Q-030 effect handlers, Q-031 refinement-lattice capability matching, Q-032 state machines runtime step 1, Q-035 schema + invariant step 1) have all landed and live in `implemented/`.
 
