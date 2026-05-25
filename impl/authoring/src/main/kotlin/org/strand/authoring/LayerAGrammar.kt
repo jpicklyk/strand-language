@@ -499,10 +499,16 @@ object LayerAGrammar {
                 FieldSpec("name", ArgKind.STRING, "name"),
             ),
             // Layer C case (1) — Lambda.paramType inference. When absent,
-            // Elaborator fills the slot from the surrounding Application
-            // call-site context. Without --elaborate, an absent paramType
-            // surfaces as a JsonIngest error (the canonical JSON schema
-            // still requires the field).
+            // Elaborator fills the slot from:
+            //   * the surrounding Application call-site context (v1).
+            //   * Layer A density v4 extensions: the enclosing Fixpoint's
+            //     recursionType (for the recursion-slot PRC); Match
+            //     scrutinee context; ProductFieldValue context; reserved-
+            //     name builtin callee parameter types; nested Application
+            //     chains via [resolveCalleeChain].
+            // Without elaboration, an absent paramType surfaces as a
+            // JsonIngest error (the canonical JSON schema still requires
+            // the field).
             optional = listOf(
                 FieldSpec("paramType", ArgKind.REFERENCE, "paramType"),
             ),

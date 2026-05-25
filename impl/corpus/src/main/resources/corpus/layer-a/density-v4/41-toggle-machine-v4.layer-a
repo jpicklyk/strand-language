@@ -1,0 +1,30 @@
+# Layer A density v4 fixture: 41-toggle-machine with deeper inference.
+#
+# v4 vs v2.5:
+#   - The `transitionFnT FNT [boolT unitT] resultT` declaration is
+#     dropped: it's unreachable from the StateMachine root in the
+#     canonical store, so it doesn't affect the hash. Hand-authored
+#     Layer A often carries such "decorative" type declarations; the
+#     density-v4 form trusts inference and omits them.
+#   - The `s:boolT` annotation is elided. The elaborator infers `s`'s
+#     paramType from its use as the argument to `APP not [s]` (the
+#     `not` builtin's FunctionType is `boolT -> boolT`).
+#   - The `e:unitT` annotation is elided. The elaborator infers `e`'s
+#     paramType from the StateMachine's transitionFn → (state, event)
+#     signature: the second LAM param matches `inputStream`'s eventType
+#     (unitT).
+#
+# Round-trip: canonical hash equals 41-toggle-machine.json's (the
+# unreachable transitionFnT node is not part of the reachable graph
+# hash, so its omission is hash-neutral).
+@v=1 root=toggleMachine
+emptyOutputsT PRD []
+stateFieldT PRF "state" boolT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+negatedState APP not [s]
+emptyOutputsV PV emptyOutputsT []
+transitionResult PV resultT [state=negatedState outputs=emptyOutputsV]
+transitionLambda LAM [s e] transitionResult
+inputStream ESE unitT
+toggleMachine SM transitionLambda false [inputStream] [] [receiveFx]

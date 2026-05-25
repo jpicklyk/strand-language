@@ -54,6 +54,13 @@ class LayerADensityTest {
         Pair("density-v2.5", "41-toggle-machine-v2.5") to "41-toggle-machine",
         // Slice 9 (v3) — WHEN/constructor-pattern sugar
         Pair("density-v3", "25-option-some-unwrap-when") to "25-option-some-unwrap",
+        // Layer A density v4 — deeper Elaborator type inference
+        // (FNT synthesis, recursion-slot paramType, compact-LAM param
+        // inference via call sites and reserved-name builtins, SCS
+        // caseType inference from SumValue payload types).
+        Pair("density-v4", "21-fixpoint-factorial-v4") to "21-fixpoint-factorial",
+        Pair("density-v4", "25-option-some-unwrap-v4") to "25-option-some-unwrap",
+        Pair("density-v4", "41-toggle-machine-v4") to "41-toggle-machine",
     )
 
     @TestFactory
