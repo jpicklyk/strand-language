@@ -1,0 +1,50 @@
+{
+  "_comment": "Q-026 blessed-library — NonEmptyText variant of PlainTextDocument. Adds a `non_empty` invariant whose body is `λ s. Bool.Not(String.Eq(s, \"\"))` — true if the String is anything other than the empty string. This program supplies the non-empty literal \"Hello, Strand.\" and asserts the schema accepts it (SchemaChecker invariant evaluation passes).",
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "stringT":          { "type": "PrimitiveType", "kind": "String" },
+    "boolT":            { "type": "PrimitiveType", "kind": "Bool" },
+
+    "stringEqT":        { "type": "FunctionType", "parameters": ["stringT", "stringT"], "result": "boolT" },
+    "stringEqFn":       { "type": "ForeignNode", "target": "strand-builtin:String.Eq", "foreignType": "stringEqT" },
+    "boolNotT":         { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
+    "boolNotFn":        { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "boolNotT" },
+
+    "emptyStr":         { "type": "StringLit", "value": "" },
+
+    "sParam":           { "type": "ParameterDecl", "name": "s", "paramType": "stringT" },
+    "sRef":             { "type": "VarRef", "binder": "sParam" },
+    "isEmptyCall":      { "type": "Application", "function": "stringEqFn", "arguments": ["sRef", "emptyStr"] },
+    "notEmptyCall":     { "type": "Application", "function": "boolNotFn", "arguments": ["isEmptyCall"] },
+    "nonEmptyLambda":   {
+      "type": "Lambda",
+      "parameters": ["sParam"],
+      "body": "notEmptyCall"
+    },
+    "nonEmptyInvariant": {
+      "type": "Invariant",
+      "invariantName": "non_empty",
+      "targetSchema": "nonEmptyTextSchema",
+      "body": "nonEmptyLambda"
+    },
+    "nonEmptyTextSchema": {
+      "type": "Schema",
+      "schemaName": "NonEmptyText",
+      "valueType": "stringT",
+      "invariants": ["nonEmptyInvariant"]
+    },
+
+    "helloLit":         { "type": "StringLit", "value": "Hello, Strand." },
+
+    "ptParam":          { "type": "ParameterDecl", "name": "pt", "paramType": "nonEmptyTextSchema" },
+    "ptRef":            { "type": "VarRef", "binder": "ptParam" },
+    "identityOfNonEmptyText": { "type": "Lambda", "parameters": ["ptParam"], "body": "ptRef" },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfNonEmptyText",
+      "arguments": ["helloLit"]
+    }
+  }
+}

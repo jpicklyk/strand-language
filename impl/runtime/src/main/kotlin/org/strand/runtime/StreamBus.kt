@@ -98,6 +98,34 @@ internal sealed class StreamBus {
     }
 
     /**
+     * Increment the producer-alive counter (Layer 6 step 3 slice 3.2
+     * supervision). Called by [RuntimeContext.spawn] when a new producer
+     * is added to an existing stream after group startup — without this
+     * the bus would see a producer halt before the new producer ever
+     * registered, dropping the count below zero or closing the channel
+     * prematurely. Returns the new producer count for diagnostics.
+     */
+    @Synchronized
+    fun producerSpawned(): Int {
+        remainingProducers++
+        return remainingProducers
+    }
+
+    /**
+     * Decrement the counter exactly once per initial machine that produces
+     * into this stream. Slice 3.2 spawns INITIAL machines through the same
+     * `RuntimeContext.spawn` path that handles dynamic spawn, so each initial
+     * machine's `producerSpawned()` call would double-count vs. the
+     * [producerCount] baked into the bus at Pass 1 of `runGroup`. This
+     * offset cancels that double-count so the bus ends up with
+     * [remainingProducers] == [producerCount] after initial spawn.
+     */
+    @Synchronized
+    fun producerSpawnedOffsetForInitial() {
+        if (remainingProducers > 0) remainingProducers--
+    }
+
+    /**
      * Obtain (allocating if necessary) a read-facing channel for a specific
      * consumer machine instance.
      *

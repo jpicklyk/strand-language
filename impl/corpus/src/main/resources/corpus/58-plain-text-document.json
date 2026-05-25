@@ -1,0 +1,27 @@
+{
+  "_comment": "Q-026 blessed-library slice — PlainTextDocument. The simplest of the six blessed schemas: a String-typed Schema with no invariants beyond the underlying String type itself. Demonstrates that a Schema may carry zero invariants and still serve as a canonical named type (PlainTextDocument vs. raw String) for documentation and downstream programs that compose schemas. The companion 59-non-empty-text-pass and 60-non-empty-text-fail demonstrate the NonEmptyText variant with a real invariant.",
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "stringT":          { "type": "PrimitiveType", "kind": "String" },
+
+    "plainTextSchema":  {
+      "type": "Schema",
+      "schemaName": "PlainTextDocument",
+      "valueType": "stringT",
+      "invariants": []
+    },
+
+    "helloLit":         { "type": "StringLit", "value": "Hello, Strand." },
+
+    "ptParam":          { "type": "ParameterDecl", "name": "pt", "paramType": "plainTextSchema" },
+    "ptRef":            { "type": "VarRef", "binder": "ptParam" },
+    "identityOfPlainText": { "type": "Lambda", "parameters": ["ptParam"], "body": "ptRef" },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfPlainText",
+      "arguments": ["helloLit"]
+    }
+  }
+}

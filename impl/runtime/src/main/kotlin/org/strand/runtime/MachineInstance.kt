@@ -62,7 +62,25 @@ value class InstanceId(val value: String) {
 internal class MachineInstance(
     val instanceId: InstanceId,
     val node: Node.StateMachine,
+    /**
+     * The source [Node.StateMachine] NodeId this instance was built from.
+     * Used by [MachineGroupHandle.snapshot] (Layer 6 step 3 slice 3.3) to
+     * look up the machine's content hash in [MachineGroup.nodeIdToHash].
+     * Null for fixtures that build a MachineInstance outside the runtime's
+     * `runMachine` / `runGroup` entry points (they get no snapshot support).
+     */
+    val machineNodeId: NodeId? = null,
     val transitionFnValue: Value,            // pre-evaluated: Closure | ForeignFn | FixpointFn
+    /**
+     * Per-event apply hook. When non-null, [MachineActor.stepOnce] and
+     * [StateMachineRuntime.stepOnce] dispatch through it instead of
+     * calling [interpreter.applyCallable] directly. Default null keeps
+     * the pre-Track-A.4 behavior (interpreter dispatch on
+     * [transitionFnValue]) so test fixtures that build a MachineInstance
+     * directly continue to work unchanged. The runtime entry points
+     * populate this via the [MachineGroup.dispatcherFactory] when present.
+     */
+    val dispatcher: TransitionDispatcher? = null,
     var currentState: Value,
     val capabilities: CapabilitySet,
     val inputQueues: Map<NodeId, ArrayDeque<Value>> = emptyMap(),
@@ -89,4 +107,12 @@ internal class MachineInstance(
     val outputBuses: Map<NodeId, StreamBus> = emptyMap(),
     val recorder: EventRecorder? = null,
     var halted: Boolean = false,
+    /**
+     * Per-instance counter cells for Layer 6 step 3 slice 3.4 metrics. Updated
+     * by [MachineActor] on every event dequeued and on every completed
+     * transition; snapshot read by [MachineGroupHandle.metrics]. Always non-null
+     * — the cells are cheap and tracking is always-on, so a host that doesn't
+     * care about metrics simply doesn't call `metrics()`.
+     */
+    val counters: InstanceCounters = InstanceCounters(),
 )

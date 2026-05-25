@@ -77,6 +77,40 @@ class CorpusSchemaTest {
             expectedInvariantAuthorId = "uniqueKeysInvariant",
             notes = "Two-entry JsonObject where both entries use the key 'name'; the unique_keys invariant evaluates false and produces SchemaInvariantViolation.",
         ),
+        // Q-026 blessed-library expansion — PlainTextDocument + NonEmptyText.
+        Case(
+            resource = "/corpus/58-plain-text-document.json",
+            expectViolation = false,
+            notes = "StringLit(\"Hello, Strand.\") claimed as PlainTextDocument schema (no invariants).",
+        ),
+        Case(
+            resource = "/corpus/59-non-empty-text-pass.json",
+            expectViolation = false,
+            notes = "Non-empty string under NonEmptyText invariant (Bool.Not(String.Eq(s, \"\"))) passes.",
+        ),
+        Case(
+            resource = "/corpus/60-non-empty-text-fail.json",
+            expectViolation = true,
+            expectedInvariantAuthorId = "nonEmptyInvariant",
+            notes = "Empty string under NonEmptyText invariant fails — the non_empty body returns false.",
+        ),
+        // Q-026 blessed-library expansion — MarkdownDocument + NonEmptyMarkdown.
+        Case(
+            resource = "/corpus/61-markdown-document.json",
+            expectViolation = false,
+            notes = "Two-block MarkdownDocument (Heading + Paragraph) under the bare MarkdownDocument schema (no invariants).",
+        ),
+        Case(
+            resource = "/corpus/62-non-empty-markdown-pass.json",
+            expectViolation = false,
+            notes = "Single-block doc claimed as NonEmptyMarkdown; the Match(Cons→true, Nil→false) invariant evaluates true.",
+        ),
+        Case(
+            resource = "/corpus/63-non-empty-markdown-fail.json",
+            expectViolation = true,
+            expectedInvariantAuthorId = "nonEmptyInvariant",
+            notes = "Empty document (Nil) under NonEmptyMarkdown — non_empty invariant evaluates false.",
+        ),
     )
 
     @TestFactory

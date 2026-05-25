@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":     { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":    { "type": "PrimitiveType", "kind": "Bool" },
+
+    "factT":    { "type": "FunctionType", "parameters": ["intT"], "result": "intT" },
+
+    "subT":     { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "sub":      { "type": "ForeignNode", "target": "strand-builtin:Int.Sub", "foreignType": "subT" },
+    "mulT":     { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "mul":      { "type": "ForeignNode", "target": "strand-builtin:Int.Mul", "foreignType": "mulT" },
+    "eqT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "eq":       { "type": "ForeignNode", "target": "strand-builtin:Int.Eq", "foreignType": "eqT" },
+
+    "recurse":  { "type": "ParameterDecl", "name": "recurse", "paramType": "factT" },
+    "n":        { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+
+    "zero":     { "type": "IntLit", "value": 0 },
+    "one":      { "type": "IntLit", "value": 1 },
+
+    "nRef":     { "type": "VarRef", "binder": "n" },
+    "nIsZero":  { "type": "Application", "function": "eq", "arguments": ["nRef", "zero"] },
+
+    "litTrue":  { "type": "BoolLit", "value": true },
+    "patTrue":  { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litTrue" },
+    "caseTrue": { "type": "MatchCase", "pattern": "patTrue", "body": "one" },
+
+    "litFalse": { "type": "BoolLit", "value": false },
+    "patFalse": { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "litFalse" },
+    "recRef":   { "type": "VarRef", "binder": "recurse" },
+    "nMinus1":  { "type": "Application", "function": "sub", "arguments": ["nRef", "one"] },
+    "recCall":  { "type": "Application", "function": "recRef", "arguments": ["nMinus1"] },
+    "mulBody":  { "type": "Application", "function": "mul", "arguments": ["nRef", "recCall"] },
+    "caseFalse":{ "type": "MatchCase", "pattern": "patFalse", "body": "mulBody" },
+
+    "matchBody":{ "type": "Match", "scrutinee": "nIsZero", "cases": ["caseTrue", "caseFalse"] },
+    "bodyLam":  { "type": "Lambda", "parameters": ["recurse", "n"], "body": "matchBody" },
+
+    "fact":     { "type": "Fixpoint", "recursionType": "factT", "body": "bodyLam" },
+
+    "five":     { "type": "IntLit", "value": 5 },
+    "app":      { "type": "Application", "function": "fact", "arguments": ["five"] }
+  }
+}

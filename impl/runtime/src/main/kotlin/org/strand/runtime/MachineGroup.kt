@@ -54,6 +54,15 @@ data class MachineGroup(
     /** Each NodeId is a [Node.StateMachine] in [store]. The verifier has accepted each. */
     val machines: List<NodeId>,
     /**
+     * Optional NodeId → Hash forward map from [org.strand.hashing.Hasher.finalize].
+     * Used by Layer 6 step 3 slice 3.3 [MachineGroupHandle.snapshot] to record
+     * the snapshotted machine's content hash for replay-integrity checks. Empty
+     * by default — callers that don't need snapshots can omit it; callers that
+     * do (the CLI `strand group --snapshot`, replay-determinism tests) pass
+     * `finalized.nodeIdToHash`.
+     */
+    val nodeIdToHash: Map<NodeId, Hash> = emptyMap(),
+    /**
      * Capability context surrounding all machines in this group. Each actor
      * evaluates its transition function under this context; the implicit
      * `StateMachine.Send` / `Receive` effects are runtime-internal and not
@@ -70,6 +79,17 @@ data class MachineGroup(
      * no-op.
      */
     val recordInputs: Boolean = true,
+    /**
+     * Optional per-instance transition-dispatcher factory (Track A.4 VM
+     * integration). When non-null, every spawned [MachineInstance] gets
+     * a dispatcher built by this factory; the actor's per-event step
+     * goes through `dispatcher.applyTransition` instead of the legacy
+     * `interpreter.applyCallable` path. Default null preserves the
+     * pre-Track-A.4 behavior for existing tests + fixtures. Used by
+     * `:corpus`'s `VmAsyncMachineEquivalenceTest` to drive the actor
+     * loop through the bytecode VM.
+     */
+    val dispatcherFactory: TransitionDispatcherFactory? = null,
 ) {
 
     /**

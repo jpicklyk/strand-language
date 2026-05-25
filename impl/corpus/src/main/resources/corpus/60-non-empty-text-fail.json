@@ -1,0 +1,50 @@
+{
+  "_comment": "Q-026 blessed-library — NonEmptyText FAIL case. Identical structure to 59, but supplies the empty string \"\" as the value. The verifier accepts the graph (the value is a String, structurally compatible with the schema's value type); the SchemaChecker invariant pass evaluates `non_empty` against the static value and reports SchemaInvariantViolation. Mirrors 51 (PositiveInt fail) and 53 (NonEmptyList fail) — designed-to-fail programs that prove the invariant-check stage runs and rejects bad values.",
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "stringT":          { "type": "PrimitiveType", "kind": "String" },
+    "boolT":            { "type": "PrimitiveType", "kind": "Bool" },
+
+    "stringEqT":        { "type": "FunctionType", "parameters": ["stringT", "stringT"], "result": "boolT" },
+    "stringEqFn":       { "type": "ForeignNode", "target": "strand-builtin:String.Eq", "foreignType": "stringEqT" },
+    "boolNotT":         { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
+    "boolNotFn":        { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "boolNotT" },
+
+    "emptyStrInBody":   { "type": "StringLit", "value": "" },
+
+    "sParam":           { "type": "ParameterDecl", "name": "s", "paramType": "stringT" },
+    "sRef":             { "type": "VarRef", "binder": "sParam" },
+    "isEmptyCall":      { "type": "Application", "function": "stringEqFn", "arguments": ["sRef", "emptyStrInBody"] },
+    "notEmptyCall":     { "type": "Application", "function": "boolNotFn", "arguments": ["isEmptyCall"] },
+    "nonEmptyLambda":   {
+      "type": "Lambda",
+      "parameters": ["sParam"],
+      "body": "notEmptyCall"
+    },
+    "nonEmptyInvariant": {
+      "type": "Invariant",
+      "invariantName": "non_empty",
+      "targetSchema": "nonEmptyTextSchema",
+      "body": "nonEmptyLambda"
+    },
+    "nonEmptyTextSchema": {
+      "type": "Schema",
+      "schemaName": "NonEmptyText",
+      "valueType": "stringT",
+      "invariants": ["nonEmptyInvariant"]
+    },
+
+    "emptyValueLit":    { "type": "StringLit", "value": "" },
+
+    "ptParam":          { "type": "ParameterDecl", "name": "pt", "paramType": "nonEmptyTextSchema" },
+    "ptRef":            { "type": "VarRef", "binder": "ptParam" },
+    "identityOfNonEmptyText": { "type": "Lambda", "parameters": ["ptParam"], "body": "ptRef" },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfNonEmptyText",
+      "arguments": ["emptyValueLit"]
+    }
+  }
+}

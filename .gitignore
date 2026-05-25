@@ -18,3 +18,9 @@ local.properties
 # Worktree scratch space (parallel agent isolation creates these)
 .worktrees/
 .claude/worktrees/
+
+# Planning scratch — local-only thinking-through-implementation docs,
+# not part of the design corpus or proposals/ directory. Anything that
+# matures here gets promoted to proposals/ or design/ on its way to
+# implementation.
+plan/

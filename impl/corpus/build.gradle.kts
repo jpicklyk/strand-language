@@ -14,6 +14,8 @@ dependencies {
     testImplementation(project(":runtime"))
     testImplementation(project(":schema"))
     testImplementation(project(":authoring"))
+    testImplementation(project(":bytecode"))
+    testImplementation(project(":vm"))
     // For AsyncCorpusTest's runTest virtual-time dispatcher (Layer 6 step 2).
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }

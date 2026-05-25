@@ -1,0 +1,575 @@
+package org.strand.vm
+
+import org.strand.bytecode.Chunk
+import org.strand.bytecode.ChunkTable
+import org.strand.bytecode.Constant
+import org.strand.bytecode.Opcode
+import org.strand.interpreter.Builtins
+import org.strand.interpreter.Value
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * Strand bytecode VM (Q-017 step 1 § 4 — Kotlin reference VM).
+ *
+ * Stack-based dispatch loop over a [ChunkTable]. Step 1 ships the Layer
+ * 1 opcode subset: literal pushes, local / capture access, calls, closures,
+ * and returns. Layers 3 / 4 / 5 / 6 opcodes (CAP_PUSH, CALL_FOREIGN,
+ * MATCH_DISPATCH, MAKE_FIXPOINT, ...) are wired into the dispatch loop
+ * as those layers reach the VM.
+ *
+ * Value representation reuses [org.strand.interpreter.Value] so existing
+ * corpus tests can compare interpreter vs VM results with the same equality.
+ * The VM never re-runs verification — it trusts its input has been
+ * verified by the same verifier the interpreter trusts.
+ *
+ * Invocation: `Vm(table).run()` returns the top-of-stack value when the
+ * root chunk hits `HALT`. The root chunk is at index 0 by convention.
+ */
+class Vm(private val table: ChunkTable) {
+
+    // Layer 3 runtime state: capability stack + active handler list.
+    // CAP_PUSH stashes the current caps onto [capStack] and replaces
+    // [currentCaps] with the narrowed set; CAP_POP restores from the
+    // stack. HANDLER_PUSH appends to [handlers]; HANDLER_POP removes
+    // the last entry. Both lists are shared across all frames — caps
+    // and handlers are lexical-scope concerns within the program, not
+    // per-frame call state.
+    private var currentCaps: Set<Int> = emptySet()
+    private val capStack: ArrayDeque<Set<Int>> = ArrayDeque()
+    private val handlers: MutableList<VmActiveHandler> = mutableListOf()
+
+    /**
+     * Execute the bytecode and return the top-of-stack value at HALT.
+     * The HALT instruction's top-of-stack is required to be a [Value]
+     * (no in-flight VmClosure can be returned to the caller).
+     *
+     * [initialCaps] grants the listed EffectCategory NodeId .values at
+     * program entry. Defaults to empty (pure-only execution; any
+     * effectful call without a matching active handler throws
+     * [VmCapabilityViolation], matching the interpreter's `Interpreter.eval`
+     * default).
+     */
+    fun run(initialCaps: Set<Int> = emptySet()): Value {
+        val raw = evaluate(initialCaps)
+        return raw as? Value
+            ?: error("HALT expected a Value at top of stack, got ${raw::class.simpleName}")
+    }
+
+    /**
+     * Run the root chunk and return whatever's at the top of the stack at
+     * HALT — including non-Value callables (VmClosure, VmFixpoint, VmForeign).
+     * Used by [applyClosure]'s setup phase: callers that want to invoke
+     * a closure multiple times pre-evaluate it once via [evaluate] and
+     * then apply it per call.
+     *
+     * The return type is [Any] because the top-of-stack at HALT may be
+     * any of the VM's runtime representations; callers cast appropriately.
+     */
+    fun evaluate(initialCaps: Set<Int> = emptySet()): Any {
+        currentCaps = initialCaps
+        capStack.clear()
+        handlers.clear()
+        val frame = Frame(chunk = table.root, captures = emptyArray())
+        val frames = ArrayDeque<Frame>()
+        frames.addLast(frame)
+        return runLoop(frames)
+    }
+
+    /**
+     * Apply a previously-evaluated [closure] (typically VmClosure or
+     * VmFixpoint from [evaluate]) to [args] under [caps]. Returns the
+     * result Value. Used by `:runtime`'s MachineActor to dispatch
+     * transition functions through the VM (Layer 6 integration) and by
+     * `:schema`'s SchemaChecker to evaluate invariant bodies through the
+     * VM (Layer 7 integration).
+     *
+     * The closure's effects are still checked against [caps] and against
+     * the active handler list, exactly as if the call had originated
+     * from a CALL opcode. The caller is responsible for granting any
+     * capabilities the closure declares; [caps] is set as the current
+     * capability context for the apply duration.
+     */
+    fun applyClosure(closure: Any, args: List<Value>, caps: Set<Int>): Value {
+        currentCaps = caps
+        // Note: we do NOT clear capStack / handlers here; the caller may
+        // be invoking this from inside an active CapabilityScope or Handler
+        // context (e.g., a transition function called from a CapabilityScope
+        // body). For top-level callers, both stacks should be empty.
+        val frames = ArrayDeque<Frame>()
+        when (closure) {
+            is VmClosure -> {
+                val sub = table[closure.chunkIndex]
+                val frame = Frame(chunk = sub, captures = closure.captures)
+                for ((i, arg) in args.withIndex()) frame.locals[i] = arg
+                frames.addLast(frame)
+            }
+            is VmFixpoint -> {
+                val sub = table[closure.chunkIndex]
+                val frame = Frame(chunk = sub, captures = closure.captures)
+                frame.locals[0] = closure  // recursive-self slot
+                for ((i, arg) in args.withIndex()) frame.locals[i + 1] = arg
+                frames.addLast(frame)
+            }
+            is VmForeign -> {
+                // Dispatch directly via Builtins; no frame setup.
+                val builtin = Builtins.lookup(closure.target)
+                    ?: error("applyClosure: no Builtins entry for foreign target '${closure.target}'")
+                return builtin.invoke(args)
+            }
+            else -> error("applyClosure: $closure is not callable (got ${closure::class.simpleName})")
+        }
+        val raw = runLoop(frames)
+        return raw as? Value
+            ?: error("applyClosure: callable returned ${raw::class.simpleName}, expected a Value")
+    }
+
+    /**
+     * The dispatch loop, extracted so [run], [evaluate], and [applyClosure]
+     * can share it. Pops/processes opcodes until the frame stack is
+     * empty (RET to the bottom) or HALT fires. Returns the top-of-stack
+     * value at termination (may be Value or VmClosure or other).
+     */
+    private fun runLoop(frames: ArrayDeque<Frame>): Any {
+        while (true) {
+            val current = frames.last()
+            val op = Opcode.fromByte(current.code[current.pc])
+            current.pc++
+            when (op) {
+                Opcode.POP -> current.stack.removeLast()
+                Opcode.DUP -> current.stack.add(current.stack.last())
+
+                Opcode.PUSH_INT -> {
+                    val c = current.constant() as Constant.IntC
+                    current.stack.add(Value.IntV(c.value))
+                }
+                Opcode.PUSH_FLOAT -> {
+                    val c = current.constant() as Constant.FloatC
+                    current.stack.add(Value.FloatV(c.value))
+                }
+                Opcode.PUSH_STRING -> {
+                    val c = current.constant() as Constant.StringC
+                    current.stack.add(Value.StringV(c.value))
+                }
+                Opcode.PUSH_BOOL -> {
+                    val c = current.constant() as Constant.BoolC
+                    current.stack.add(Value.BoolV(c.value))
+                }
+                Opcode.PUSH_UNIT -> current.stack.add(Value.UnitV)
+                Opcode.PUSH_BYTES -> {
+                    val c = current.constant() as Constant.BytesC
+                    current.stack.add(Value.BytesV(c.value))
+                }
+
+                Opcode.LOAD_LOCAL -> {
+                    val slot = current.operand()
+                    current.stack.add(current.locals[slot]
+                        ?: error("LOAD_LOCAL: slot $slot not set"))
+                }
+                Opcode.LOAD_CAPTURE -> {
+                    val slot = current.operand()
+                    current.stack.add(current.captures[slot])
+                }
+                Opcode.STORE_LOCAL -> {
+                    val slot = current.operand()
+                    // STORE_LOCAL accepts both Value (literals, computed
+                    // results) and VmClosure (let-bound lambdas — higher-
+                    // order patterns store the callable into a local then
+                    // load it back).
+                    current.locals[slot] = current.stack.removeLast()
+                }
+                Opcode.LOAD_HASH -> {
+                    val c = current.constant() as Constant.ChunkRefC
+                    // LOAD_HASH evaluates a closed subgraph: we run the
+                    // sub-chunk as a fresh frame, then push its result.
+                    runSubChunk(c.chunkIndex, frames)
+                }
+
+                Opcode.MAKE_FOREIGN -> {
+                    val targetC = current.constant() as Constant.ForeignTargetC
+                    val effectsC = current.constant() as Constant.EffectsC
+                    current.stack.add(VmForeign(targetC.target, effectsC.effectIds))
+                }
+
+                Opcode.CAP_PUSH -> {
+                    val effectsC = current.constant() as Constant.EffectsC
+                    capStack.addLast(currentCaps)
+                    // Narrow: intersect current caps with the listed set.
+                    val narrowed = HashSet<Int>(effectsC.effectIds.size)
+                    for (id in effectsC.effectIds) if (id in currentCaps) narrowed += id
+                    currentCaps = narrowed
+                }
+                Opcode.CAP_POP -> {
+                    currentCaps = capStack.removeLast()
+                }
+                Opcode.HANDLER_PUSH -> {
+                    val interceptC = current.constant() as Constant.IntC
+                    val handlerValue = current.stack.removeLast()
+                    handlers += VmActiveHandler(interceptC.value.toInt(), handlerValue)
+                }
+                Opcode.HANDLER_POP -> {
+                    handlers.removeLast()
+                }
+
+                Opcode.PRODUCT_NEW -> {
+                    // Layer 5 step 3a: pop N values, build ProductV with
+                    // the field names from the constant.
+                    val c = current.constant() as Constant.ProductFieldsC
+                    val count = current.operand()
+                    val startIdx = current.stack.size - count
+                    val fields = LinkedHashMap<String, Value>(count)
+                    for (i in 0 until count) {
+                        fields[c.names[i]] = current.stack[startIdx + i] as Value
+                    }
+                    repeat(count) { current.stack.removeLast() }
+                    current.stack.add(Value.ProductV(fields))
+                }
+
+                Opcode.PRODUCT_GET -> {
+                    // Layer 5 step 3a: pop ProductV, push the named field.
+                    val c = current.constant() as Constant.StringC
+                    val product = current.stack.removeLast() as Value.ProductV
+                    val field = product.fields[c.value]
+                        ?: error("PRODUCT_GET: field '${c.value}' not present in ${product.fields.keys}")
+                    current.stack.add(field)
+                }
+
+                Opcode.SUM_NEW -> {
+                    // Layer 5 step 3b: build a SumV. Pop payload if the
+                    // case has one; otherwise emit a nullary SumV.
+                    val c = current.constant() as Constant.SumCaseC
+                    val payload = if (c.hasPayload) current.stack.removeLast() as Value else null
+                    current.stack.add(Value.SumV(c.caseName, payload))
+                }
+
+                Opcode.EQ -> {
+                    val rhs = current.stack.removeLast()
+                    val lhs = current.stack.removeLast()
+                    current.stack.add(Value.BoolV(lhs == rhs))
+                }
+
+                Opcode.SUM_CASE_IS -> {
+                    val c = current.constant() as Constant.StringC
+                    val sum = current.stack.removeLast() as? Value.SumV
+                        ?: error("SUM_CASE_IS: top of stack is not a SumV")
+                    current.stack.add(Value.BoolV(sum.case == c.value))
+                }
+
+                Opcode.SUM_PAYLOAD -> {
+                    val sum = current.stack.removeLast() as? Value.SumV
+                        ?: error("SUM_PAYLOAD: top of stack is not a SumV")
+                    current.stack.add(sum.payload ?: Value.UnitV)
+                }
+
+                Opcode.THROW_NO_MATCH -> {
+                    throw VmNoMatchingCase()
+                }
+
+                Opcode.JUMP -> {
+                    val offset = current.operand()
+                    current.pc += offset
+                }
+
+                Opcode.JUMP_IF_FALSE -> {
+                    val offset = current.operand()
+                    val test = current.stack.removeLast() as? Value.BoolV
+                        ?: error("JUMP_IF_FALSE: top of stack is not a BoolV")
+                    if (!test.v) current.pc += offset
+                }
+
+                Opcode.MAKE_FIXPOINT -> {
+                    // Same shape as MAKE_CLOSURE but produces a VmFixpoint.
+                    val chunkIdx = (current.constant() as Constant.ChunkRefC).chunkIndex
+                    val captureCount = current.operand()
+                    val effectsC = current.constant() as Constant.EffectsC
+                    val captureArray = Array<Any>(captureCount) { Value.UnitV }
+                    val startIdx = current.stack.size - captureCount
+                    for (i in 0 until captureCount) {
+                        captureArray[i] = current.stack[startIdx + i]
+                    }
+                    repeat(captureCount) { current.stack.removeLast() }
+                    current.stack.add(VmFixpoint(chunkIdx, captureArray, effectsC.effectIds))
+                }
+
+                Opcode.MAKE_CLOSURE -> {
+                    val chunkIdx = (current.constant() as Constant.ChunkRefC).chunkIndex
+                    val captureCount = current.operand()
+                    val effectsC = current.constant() as Constant.EffectsC
+                    // Pop captures in DECLARATION order. Captures may
+                    // include VmClosure values (higher-order patterns
+                    // where a captured binder points at a lambda), so
+                    // the array is Any-typed.
+                    val captureArray = Array<Any>(captureCount) { Value.UnitV }
+                    val startIdx = current.stack.size - captureCount
+                    for (i in 0 until captureCount) {
+                        captureArray[i] = current.stack[startIdx + i]
+                    }
+                    repeat(captureCount) { current.stack.removeLast() }
+                    current.stack.add(VmClosure(chunkIdx, captureArray, effectsC.effectIds))
+                }
+
+                Opcode.CALL -> {
+                    val arity = current.operand()
+                    val args = Array<Any>(arity) { Value.UnitV }
+                    val argStart = current.stack.size - arity
+                    for (i in 0 until arity) {
+                        args[i] = current.stack[argStart + i]
+                    }
+                    repeat(arity) { current.stack.removeLast() }
+                    val fn = current.stack.removeLast()
+                    val effects: IntArray = when (fn) {
+                        is VmClosure -> fn.effects
+                        is VmForeign -> fn.effects
+                        is VmFixpoint -> fn.effects
+                        else -> error("CALL: callee is not callable (got ${fn::class.simpleName})")
+                    }
+                    // Layer 3 — active handler check: innermost handler
+                    // whose intercept matches any of the callee's effects
+                    // wins. Dispatch to it instead of the callee; the
+                    // handler stands in for the entire effectful call.
+                    val intercept = findInterceptingHandler(effects)
+                    if (intercept != null) {
+                        // Replace the callee with the handler's stored
+                        // value; we already have `args` ready.
+                        invokeCallable(intercept.handlerValue, args, frames, current)
+                        continue
+                    }
+                    // Capability check: every declared effect must be in
+                    // the current capability set. Effects not in the set
+                    // trigger VmCapabilityViolation.
+                    for (effId in effects) {
+                        if (effId !in currentCaps) {
+                            throw VmCapabilityViolation(effId)
+                        }
+                    }
+                    invokeCallable(fn, args, frames, current)
+                }
+
+                Opcode.RET -> {
+                    val result = current.stack.removeLast()
+                    frames.removeLast()
+                    if (frames.isEmpty()) {
+                        // Empty frame stack — return whatever's on top.
+                        // [run] checks Value-ness; [evaluate] returns Any.
+                        return result
+                    }
+                    frames.last().stack.add(result)
+                }
+
+                Opcode.HALT -> {
+                    // Same: return raw top-of-stack; the public entry
+                    // point ([run] vs [evaluate]) decides whether to
+                    // enforce Value-ness.
+                    return current.stack.removeLast()
+                }
+
+                // Step-1 unimplemented opcodes — the lowerer doesn't emit
+                // them yet. CALL_FIXPOINT and CALL_FOREIGN are reserved
+                // for explicit-dispatch variants the current Lowerer
+                // doesn't need (the polymorphic CALL site handles both).
+                // MATCH_DISPATCH was an early design that the JUMP-based
+                // Match lowering supersedes.
+                Opcode.CALL_FIXPOINT, Opcode.CALL_FOREIGN, Opcode.MATCH_DISPATCH -> {
+                    throw VmOpcodeNotImplemented(op)
+                }
+            }
+        }
+    }
+
+    /**
+     * Run a sub-chunk as a standalone frame and push its result onto the
+     * surrounding frame's stack. Used by LOAD_HASH for content-addressed
+     * NodeRef target resolution.
+     */
+    private fun runSubChunk(chunkIndex: Int, frames: ArrayDeque<Frame>) {
+        val sub = table[chunkIndex]
+        val nextFrame = Frame(chunk = sub, captures = emptyArray())
+        frames.addLast(nextFrame)
+        // The sub-chunk will RET back to the current frame, pushing its
+        // result onto the surrounding frame's stack. The dispatch loop
+        // handles the RET via the normal frames-list pop.
+    }
+
+    /**
+     * Search active handlers for one whose intercept category is in the
+     * callee's effects. Innermost (last-pushed) wins — the same rule the
+     * tree-walking interpreter applies.
+     */
+    private fun findInterceptingHandler(effects: IntArray): VmActiveHandler? {
+        if (handlers.isEmpty() || effects.isEmpty()) return null
+        for (i in handlers.indices.reversed()) {
+            val h = handlers[i]
+            for (effId in effects) {
+                if (h.intercept == effId) return h
+            }
+        }
+        return null
+    }
+
+    /**
+     * Apply [fn] to [args] either by dispatching to a builtin (foreign)
+     * or by pushing a fresh frame (closure / fixpoint). Used by the CALL
+     * opcode after the handler-and-cap checks pass.
+     */
+    private fun invokeCallable(
+        fn: Any,
+        args: Array<Any>,
+        frames: ArrayDeque<Frame>,
+        current: Frame,
+    ) {
+        when (fn) {
+            is VmClosure -> {
+                val sub = table[fn.chunkIndex]
+                val nextFrame = Frame(chunk = sub, captures = fn.captures)
+                for ((i, arg) in args.withIndex()) {
+                    nextFrame.locals[i] = arg
+                }
+                frames.addLast(nextFrame)
+            }
+            is VmForeign -> {
+                val builtin = Builtins.lookup(fn.target)
+                    ?: error("CALL: no Builtins entry for foreign target '${fn.target}'")
+                val valueArgs = args.map { arg ->
+                    arg as? Value
+                        ?: error("CALL_FOREIGN: arg is ${arg::class.simpleName}, not a Value")
+                }
+                val result = builtin.invoke(valueArgs)
+                current.stack.add(result)
+            }
+            is VmFixpoint -> {
+                val sub = table[fn.chunkIndex]
+                val nextFrame = Frame(chunk = sub, captures = fn.captures)
+                nextFrame.locals[0] = fn
+                for ((i, arg) in args.withIndex()) {
+                    nextFrame.locals[i + 1] = arg
+                }
+                frames.addLast(nextFrame)
+            }
+            else -> error("invokeCallable: $fn is not callable (got ${fn::class.simpleName})")
+        }
+    }
+}
+
+/**
+ * One active effect handler. Mirrors the tree-walking interpreter's
+ * `Interpreter.ActiveHandler`: an `intercept` EffectCategory NodeId
+ * value plus the handler's runtime callable value (typically VmClosure).
+ */
+internal data class VmActiveHandler(val intercept: Int, val handlerValue: Any)
+
+/**
+ * Thrown when a CALL site's callee declares an effect that is not in
+ * the current capability set AND no active handler intercepts it. The
+ * VM-side counterpart to `InterpretError.CapabilityViolation`.
+ */
+class VmCapabilityViolation(val missingEffectId: Int) :
+    RuntimeException("VM: capability violation — effect category #$missingEffectId not granted")
+
+/**
+ * Per-call frame state. Each frame owns its operand stack, its locals
+ * array, and its captures (passed by the caller via [VmClosure]).
+ */
+internal class Frame(
+    val chunk: Chunk,
+    val captures: Array<Any>,
+) {
+    val code: ByteArray get() = chunk.code
+    var pc: Int = 0
+
+    // Operand stack and locals both hold Any: literal pushes produce
+    // Value; MAKE_CLOSURE / MAKE_FOREIGN produce VmClosure / VmForeign.
+    // Higher-order programs store callables into locals (the let-bound
+    // lambda pattern) and into captures (closures over outer lambdas).
+    // The mixed-type stack is required because VmClosure / VmForeign are
+    // NOT subclasses of Value (Value is sealed in the :interpreter module).
+    val stack: ArrayDeque<Any> = ArrayDeque()
+
+    val locals: Array<Any?> = arrayOfNulls(chunk.locals)
+
+    /**
+     * Read the next 4-byte little-endian operand at the current pc,
+     * advancing pc past it.
+     */
+    fun operand(): Int {
+        val bb = ByteBuffer.wrap(code, pc, 4).order(ByteOrder.LITTLE_ENDIAN)
+        pc += 4
+        return bb.int
+    }
+
+    /**
+     * Read the next operand and use it as a constant-pool index. Returns
+     * the [Constant] at that index.
+     */
+    fun constant(): Constant = chunk.constants[operand()]
+}
+
+/**
+ * VM closure value. Captured environment is an immutable array of [Value]s
+ * in the order the lowerer collected them; the chunk's `LOAD_CAPTURE`
+ * opcodes index into this array.
+ *
+ * NOT a subclass of [Value] (which is sealed in the :interpreter module).
+ * The VM's operand stack holds `Any` so it can carry both [Value] (for
+ * the primitive results corpus tests compare against the interpreter)
+ * and [VmClosure] (the VM-internal callable representation that only the
+ * VM produces and consumes).
+ */
+internal class VmClosure(
+    val chunkIndex: Int,
+    val captures: Array<Any>,
+    val effects: IntArray = IntArray(0),
+) {
+    override fun equals(other: Any?): Boolean =
+        other is VmClosure && chunkIndex == other.chunkIndex && captures.contentEquals(other.captures)
+    override fun hashCode(): Int = 31 * chunkIndex + captures.contentHashCode()
+}
+
+/**
+ * VM foreign callable. Holds the foreign target string ("strand-builtin:
+ * Int.Add" etc.); CALL sites dispatch via [org.strand.interpreter.Builtins]
+ * to get the host-side function and apply it to the popped arguments.
+ *
+ * The VM never re-checks capabilities for foreign calls in slice 1; that
+ * checking is the verifier's responsibility (it confirms the calling
+ * context's CapabilitySet covers the foreign function's declared effects
+ * at the verify-time check). When effect-bearing application reaches the
+ * VM (Layer 3 extension), per-call CAP_PUSH/POP + runtime capability
+ * lookup will be added.
+ */
+internal class VmForeign(val target: String, val effects: IntArray = IntArray(0)) {
+    override fun equals(other: Any?): Boolean = other is VmForeign && target == other.target
+    override fun hashCode(): Int = target.hashCode()
+}
+
+/**
+ * VM Fixpoint callable. Like [VmClosure] but a CALL site prepends the
+ * FixpointV itself as the new frame's first local — the body Lambda's
+ * first parameter is the recursive-call slot, matching the tree-walking
+ * interpreter's `applyCallable` Fixpoint branch.
+ */
+internal class VmFixpoint(
+    val chunkIndex: Int,
+    val captures: Array<Any>,
+    val effects: IntArray = IntArray(0),
+) {
+    override fun equals(other: Any?): Boolean =
+        other is VmFixpoint && chunkIndex == other.chunkIndex && captures.contentEquals(other.captures)
+    override fun hashCode(): Int = 31 * chunkIndex + captures.contentHashCode()
+}
+
+/**
+ * Thrown when the VM hits an opcode whose handler hasn't been
+ * implemented yet. Used by the slice-1 dispatch loop to surface Layer 3+
+ * gaps cleanly when corpus programs use features the VM doesn't cover.
+ */
+class VmOpcodeNotImplemented(val op: Opcode) :
+    RuntimeException("VM slice 1 has not implemented opcode $op")
+
+/**
+ * Thrown when a Match's THROW_NO_MATCH opcode runs — every case's
+ * pattern test returned false. Mirrors the tree-walking interpreter's
+ * `InterpretError.NoMatchingCase` at the value level (the test asserts
+ * the message; the structural type comparison happens at the test layer
+ * because [Value] is sealed in `:interpreter`).
+ */
+class VmNoMatchingCase : RuntimeException("VM: no Match case matched the scrutinee")

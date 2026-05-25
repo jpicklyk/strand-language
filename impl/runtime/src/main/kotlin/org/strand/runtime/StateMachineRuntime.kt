@@ -182,17 +182,47 @@ class StateMachineRuntime(
             OverflowDispatcher(bus.producerChannel, policy)
         }
 
-        // Pass 2: build one MachineInstance per machine, pointing each
-        // instance's inputChannels at the bus's consumerChannel(machineId)
-        // and outputChannels at the bus's producerChannel. For Direct buses
-        // both sides resolve to the same channel; for Broadcast, each
-        // consumer machine's call to consumerChannel(...) allocates a
-        // dedicated per-consumer Channel<Value> on the bus — done BEFORE
-        // the broadcast pumps launch so the pump sees every consumer
-        // channel at startup.
-        val groupInterpreter = Interpreter(group.store, group.hashToNodeId)
-        val instances = group.machines.map { machineId ->
-            buildActorInstance(machineId, streamBuses, streamDispatchers, group, groupInterpreter, scope)
+        // Slice 3.2 supervision: allocate the RuntimeContext that owns the
+        // mutable instance/job maps and provides the foreign dispatcher for
+        // in-band Spawn/Terminate calls. Initial instances are spawned via
+        // [RuntimeContext.spawn] below; subsequent supervisor-driven Spawn
+        // calls go through the same path, so dynamic spawning is the same
+        // mechanism as initial spawning.
+        val context = RuntimeContext(
+            store = group.store,
+            hashToNodeId = group.hashToNodeId,
+            nodeIdToHash = group.nodeIdToHash,
+            scope = scope,
+            streamBuses = streamBuses,
+            streamDispatchers = streamDispatchers,
+            capabilities = group.capabilities,
+            recordInputs = group.recordInputs,
+            dispatcherFactory = group.dispatcherFactory,
+        )
+
+        // Pass 2: spawn one initial actor per declared machine. Each
+        // spawn() call builds a MachineInstance (channels, dispatchers,
+        // buses), registers it in the context's instance map, and launches
+        // a coroutine actor running [MachineActor]. Per-actor [Interpreter]
+        // instances are constructed inside spawn() with the context's
+        // foreign dispatcher, so in-band Spawn/Terminate calls reach the
+        // runtime here.
+        //
+        // The producer-spawn counter is incremented for each stream the
+        // spawned machine produces into; for INITIAL spawn this would
+        // double-count vs. the producerCount baked into each StreamBus at
+        // Pass 1 (which already accounts for the original machine list).
+        // To prevent this, we offset by decrementing each bus's count once
+        // per initial machine — net effect: the bus's remainingProducers
+        // ends up equal to the original producerCount.
+        for (machineId in group.machines) {
+            val machineNode = group.store.get(machineId) as Node.StateMachine
+            for (streamId in machineNode.outputStreams) {
+                streamBuses.getValue(streamId).producerSpawnedOffsetForInitial()
+            }
+        }
+        for (machineId in group.machines) {
+            context.spawn(machineId)
         }
 
         // Pass 2b (slice 3.6): launch one pump coroutine per Broadcast bus.
@@ -208,12 +238,6 @@ class StateMachineRuntime(
             }
         }
 
-        // Pass 3: spawn one actor coroutine per instance.
-        val actorJobs: List<Job> = instances.map { instance ->
-            val actor = MachineActor(instance, groupInterpreter)
-            scope.launch { actor.run() }
-        }
-
         // Host-facing channel handles. External inputs: host pushes events
         // into the producer-facing channel. External outputs: host drains
         // from the producer-facing channel (output streams have no machine
@@ -223,15 +247,107 @@ class StateMachineRuntime(
         val externalOutputs: Map<NodeId, ReceiveChannel<Value>> = group.externalOutputStreams()
             .associateWith { streamId -> streamBuses.getValue(streamId).producerChannel }
 
-        val instanceHandles = instances.associate { instance ->
-            instance.instanceId to MachineInstanceHandle(instance)
+        val instanceHandles = context.instances.entries.associate { (id, instance) ->
+            id to MachineInstanceHandle(instance)
+        }
+
+        // Slice 3.4 metrics: thread the per-stream dispatcher and producer-
+        // channel maps into the handle so `metrics()` can surface per-stream
+        // overflow drops and closed-for-send status. Both maps cover every
+        // unique stream in the group (`streamBuses.keys`), so external inputs,
+        // external outputs, and internal streams all show up under
+        // [RuntimeMetrics.perStream].
+        val streamProducerChannels: Map<NodeId, Channel<Value>> = streamBuses.mapValues { (_, bus) ->
+            bus.producerChannel
         }
 
         return MachineGroupHandle(
             externalInputs = externalInputs,
             externalOutputs = externalOutputs,
             instances = instanceHandles,
-            jobs = actorJobs + pumpJobs,
+            jobs = context.actorJobs.toList() + pumpJobs,
+            streamDispatchers = streamDispatchers,
+            streamProducerChannels = streamProducerChannels,
+            nodeIdToHash = group.nodeIdToHash,
+            context = context,
+        )
+    }
+
+    /**
+     * Resume an instance from a [Snapshot] and drive it over [additionalEvents]
+     * synchronously (Layer 6 step 3 slice 3.3). Returns the [Trace] covering
+     * only the post-snapshot events; combining with the pre-snapshot trace
+     * (recoverable from the snapshot's [Snapshot.recordedEventsPreSnapshot]
+     * via `runMachine(machineId, snapshotState=snapshot.snapshotState, ...)`)
+     * reconstructs the full history.
+     *
+     * Replay determinism: this is the property [`design/state-machines.md`]
+     * § Conceptual model commits to. Given a snapshot S and post-events E,
+     * `resume(machineId, S, E)` produces the same per-step trace the live
+     * actor would have produced after the snapshot point — by construction,
+     * since transitions are pure.
+     *
+     * Throws [SnapshotMachineHashMismatch] when [machineId]'s hash (looked
+     * up in [nodeIdToHash], which must be non-null and contain the machine)
+     * does not match the snapshot's recorded [Snapshot.machineHash]. This
+     * is the integrity check that prevents replaying a snapshot against a
+     * recompiled (different-content) version of the machine.
+     */
+    fun resume(
+        machineId: NodeId,
+        snapshot: Snapshot,
+        additionalEvents: List<Value>,
+        nodeIdToHash: Map<NodeId, Hash>,
+        capabilities: CapabilitySet = CapabilitySet.EMPTY,
+    ): Trace {
+        // Integrity check: the machine has not been recompiled.
+        val actualHash = nodeIdToHash[machineId]
+            ?: error("nodeIdToHash missing entry for $machineId; cannot verify snapshot integrity")
+        if (actualHash != snapshot.machineHash) {
+            throw SnapshotMachineHashMismatch(expected = snapshot.machineHash, actual = actualHash)
+        }
+        // Build a fresh instance pre-loaded with the snapshot state instead
+        // of the machine's declared initialState. Everything else (cached
+        // transitionFn closure, input queue, output sinks) follows the same
+        // `runMachine`-style construction.
+        val node = store.get(machineId) as? Node.StateMachine
+            ?: error(
+                "resume: expected a StateMachine at $machineId, got " +
+                    "${store.getOrNull(machineId)?.javaClass?.simpleName}"
+            )
+        require(node.inputStreams.size == 1) {
+            "Layer 6 step 3 slice 3.3 sync resume requires exactly 1 input stream " +
+                "(matching runMachine); got ${node.inputStreams.size}"
+        }
+        val transitionFnValue = interpreter.eval(node.transitionFn, capabilities)
+        val inputStreamId = node.inputStreams.single()
+        val inputQueues = mapOf<NodeId, ArrayDeque<Value>>(
+            inputStreamId to ArrayDeque(additionalEvents)
+        )
+        val outputSinks = node.outputStreams.associateWith { mutableListOf<Value>() }
+        val instance = MachineInstance(
+            instanceId = InstanceId.generate(),
+            node = node,
+            machineNodeId = machineId,
+            transitionFnValue = transitionFnValue,
+            currentState = snapshot.snapshotState,
+            capabilities = capabilities,
+            inputQueues = inputQueues,
+            outputSinks = outputSinks,
+            halted = false,
+        )
+        val steps = mutableListOf<TraceStep.Step>()
+        val queue = instance.inputQueues.getValue(inputStreamId)
+        while (queue.isNotEmpty() && !instance.halted) {
+            val event = queue.removeFirst()
+            steps += stepOnce(instance, event)
+        }
+        return Trace(
+            steps = steps,
+            final = TraceStep.Halt(
+                finalState = instance.currentState,
+                reason = HaltReason.EventsExhausted,
+            ),
         )
     }
 
@@ -260,64 +376,6 @@ class StateMachineRuntime(
         } finally {
             bus.closeAllConsumerChannels()
         }
-    }
-
-    /**
-     * Build an actor-shape [MachineInstance] (channels, not pre-loaded
-     * queues). The transitionFn is evaluated once at instance start and
-     * cached; this is the same caching the step 1 `buildInstance` does, so
-     * per-event dispatch in the actor loop is a single `applyCallable`
-     * call.
-     */
-    private fun buildActorInstance(
-        machineId: NodeId,
-        streamBuses: Map<NodeId, StreamBus>,
-        streamDispatchers: Map<NodeId, OverflowDispatcher>,
-        group: MachineGroup,
-        actorInterpreter: Interpreter,
-        scope: CoroutineScope,
-    ): MachineInstance {
-        val node = group.store.get(machineId) as? Node.StateMachine
-            ?: error(
-                "runGroup: expected a StateMachine at $machineId, got " +
-                    "${group.store.getOrNull(machineId)?.javaClass?.simpleName}; " +
-                    "did the verifier pass?"
-            )
-        val transitionFnValue = actorInterpreter.eval(node.transitionFn, group.capabilities)
-        val initialStateValue = actorInterpreter.eval(node.initialState, group.capabilities)
-        // Input channels: for Direct buses, the lone consumer reads from
-        // the producer channel; for Broadcast buses, a fresh per-consumer
-        // channel is allocated and its collection coroutine launched on
-        // [scope]. The consumer key is the machineId — each machine
-        // appears at most once in a group, so this is a stable per-actor
-        // identifier.
-        val inputChannels = node.inputStreams.associateWith { streamId ->
-            streamBuses.getValue(streamId).consumerChannel(machineId, scope)
-        }
-        // Output channels: all producers (one or many under slice 3.6
-        // fan-in) write to the same producer-facing channel. The dispatcher
-        // wraps this channel with the EventStream's overflow policy.
-        val outputChannels = node.outputStreams.associateWith { streamId ->
-            streamBuses.getValue(streamId).producerChannel
-        }
-        val outputDispatchers = node.outputStreams.associateWith { streamDispatchers.getValue(it) }
-        val outputBuses = node.outputStreams.associateWith { streamId ->
-            streamBuses.getValue(streamId)
-        }
-        val recorder = if (group.recordInputs) EventRecorder() else null
-        return MachineInstance(
-            instanceId = InstanceId.generate(),
-            node = node,
-            transitionFnValue = transitionFnValue,
-            currentState = initialStateValue,
-            capabilities = group.capabilities,
-            inputChannels = inputChannels,
-            outputChannels = outputChannels,
-            outputDispatchers = outputDispatchers,
-            outputBuses = outputBuses,
-            recorder = recorder,
-            halted = false,
-        )
     }
 
     /**
@@ -355,6 +413,7 @@ class StateMachineRuntime(
         return MachineInstance(
             instanceId = InstanceId.generate(),
             node = node,
+            machineNodeId = machineId,
             transitionFnValue = transitionFnValue,
             currentState = initialStateValue,
             capabilities = capabilities,
@@ -385,11 +444,17 @@ class StateMachineRuntime(
      */
     private fun stepOnce(instance: MachineInstance, event: Value): TraceStep.Step {
         val before = instance.currentState
-        val resultValue = interpreter.applyCallable(
-            fn = instance.transitionFnValue,
-            args = listOf(before, event),
-            capabilities = instance.capabilities,
-        )
+        // Track A.4: dispatch through the per-instance dispatcher when
+        // one was supplied (VM-backed in test scenarios, etc.); fall
+        // through to the legacy interpreter.applyCallable on the cached
+        // transitionFnValue when no dispatcher is set.
+        val resultValue = instance.dispatcher
+            ?.applyTransition(before, event)
+            ?: interpreter.applyCallable(
+                fn = instance.transitionFnValue,
+                args = listOf(before, event),
+                capabilities = instance.capabilities,
+            )
         val resultProduct = resultValue as? Value.ProductV
             ?: error(
                 "transition function returned a non-product value " +

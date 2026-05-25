@@ -68,6 +68,25 @@ import org.strand.core.NodeStore
 class Interpreter(
     private val store: NodeStore,
     private val hashToNodeId: Map<Hash, NodeId> = emptyMap(),
+    /**
+     * Optional foreign-call interceptor consulted before [Builtins.lookup]
+     * at every ForeignNode dispatch site. Returning a non-null [Value] uses
+     * that result as the call's return; returning null falls through to the
+     * standard [Builtins] registry.
+     *
+     * Used by the runtime to intercept `strand-runtime:StateMachine.Spawn`
+     * and `.Terminate` calls (Layer 6 step 3 slice 3.2) inside an actor's
+     * transition function — those calls produce side effects on the
+     * surrounding [org.strand.runtime.MachineGroup] state that pure builtins
+     * can't express. The dispatcher is per-Interpreter (and thus per-actor
+     * in the runtime's `runGroup` path), so each actor's Spawn calls are
+     * scoped to its own group.
+     *
+     * Default null: no interceptor, every ForeignNode goes straight to
+     * Builtins. Existing call sites that pass only `store` + `hashToNodeId`
+     * keep the pre-slice-3.2 behavior unchanged.
+     */
+    private val foreignDispatcher: ForeignDispatcher? = null,
 ) {
 
     /** Top-level evaluation under an empty capability context (pure-only). */
@@ -488,6 +507,7 @@ class Interpreter(
         }
         is Value.ForeignFn -> {
             checkCapabilities(id, callable.node.effects, emptyMap(), context)
+            foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
             val builtin = Builtins.lookup(callable.node.target)
                 ?: throw InterpretException(
                     InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
@@ -586,6 +606,7 @@ class Interpreter(
         val instances = evalEffectInstances(env, context, handlers, app)
         checkCapabilities(id, fn.node.effects, instances, context)
         val args = app.arguments.map { eval(it, env, context, handlers) }
+        foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
         val builtin = Builtins.lookup(fn.node.target)
             ?: throw InterpretException(
                 InterpretError.UnknownForeignTarget(at = id, target = fn.node.target)

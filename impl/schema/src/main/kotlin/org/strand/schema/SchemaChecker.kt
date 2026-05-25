@@ -50,6 +50,19 @@ class SchemaChecker(
     private val store: NodeStore,
     private val hashToNodeId: Map<Hash, NodeId> = emptyMap(),
     private val verifyResult: VerifyResult.Ok,
+    /**
+     * Optional override for invariant-body dispatch. Defaults to the
+     * tree-walking interpreter (the production behavior). The `:vm`
+     * module's test suite uses a VM-based evaluator here to assert
+     * Layer 7 invariant equivalence between interpreter and bytecode VM
+     * dispatch (Q-017 step 1 Track A.5).
+     *
+     * Signature: `(invariantBodyId: NodeId, staticValue: Value) -> Value`.
+     * The returned Value must be a [Value.BoolV] (the verifier's
+     * SchemaInvariantBodyTypeMismatch rule guarantees this; non-Bool
+     * returns surface as an error in [check] either way).
+     */
+    private val invariantEvaluator: ((NodeId, Value) -> Value)? = null,
 ) {
 
     private val interpreter = Interpreter(store, hashToNodeId)
@@ -218,6 +231,11 @@ class SchemaChecker(
      * effect-free, so an empty context is sufficient).
      */
     private fun evaluateInvariant(bodyId: NodeId, value: Value): Value {
+        // Test-injected evaluator (e.g., VM-based) takes precedence over
+        // the default interpreter dispatch. Production code paths never
+        // pass [invariantEvaluator]; the override is for cross-engine
+        // equivalence tests.
+        invariantEvaluator?.let { return it(bodyId, value) }
         val fn = interpreter.eval(bodyId)
         return interpreter.applyCallable(fn = fn, args = listOf(value))
     }

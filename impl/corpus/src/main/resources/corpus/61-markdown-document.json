@@ -1,0 +1,83 @@
+{
+  "_comment": "Q-026 blessed-library — MarkdownDocument. Demonstrates a recursive-list document model over a four-variant block sum (Heading, Paragraph, CodeBlock, HorizontalRule). MarkdownBlock is a flat sum (each case is non-recursive); MarkdownDocument is the canonical recursive-list pattern (Cons{head: MarkdownBlock, tail: <self>} | Nil) — the same shape NonEmptyList in corpus 52 uses for Int. This program constructs a two-block document — one Heading(level=2, text='Strand') and one Paragraph(text='Lightweight markup') — and asserts the MarkdownDocument Schema accepts it (no invariants beyond the underlying list type).",
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "intT":              { "type": "PrimitiveType", "kind": "Int" },
+    "stringT":           { "type": "PrimitiveType", "kind": "String" },
+
+    "headingLevelF":     { "type": "ProductTypeField", "name": "level", "fieldType": "intT" },
+    "headingTextF":      { "type": "ProductTypeField", "name": "text", "fieldType": "stringT" },
+    "headingT":          { "type": "ProductType", "fields": ["headingLevelF", "headingTextF"] },
+
+    "paragraphTextF":    { "type": "ProductTypeField", "name": "text", "fieldType": "stringT" },
+    "paragraphT":        { "type": "ProductType", "fields": ["paragraphTextF"] },
+
+    "codeLanguageF":     { "type": "ProductTypeField", "name": "language", "fieldType": "stringT" },
+    "codeCodeF":         { "type": "ProductTypeField", "name": "code", "fieldType": "stringT" },
+    "codeBlockT":        { "type": "ProductType", "fields": ["codeLanguageF", "codeCodeF"] },
+
+    "blockHeadingCase":  { "type": "SumTypeCase", "name": "Heading",        "caseType": "headingT" },
+    "blockParagraphCase":{ "type": "SumTypeCase", "name": "Paragraph",      "caseType": "paragraphT" },
+    "blockCodeCase":     { "type": "SumTypeCase", "name": "CodeBlock",      "caseType": "codeBlockT" },
+    "blockHrCase":       { "type": "SumTypeCase", "name": "HorizontalRule", "caseType": null },
+    "markdownBlockT":    {
+      "type": "SumType",
+      "cases": ["blockHeadingCase", "blockParagraphCase", "blockCodeCase", "blockHrCase"]
+    },
+
+    "headFieldInner":    { "type": "ProductTypeField", "name": "head", "fieldType": "markdownBlockT" },
+    "tailFieldInner":    { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "consProductInner":  { "type": "ProductType", "fields": ["headFieldInner", "tailFieldInner"] },
+    "consCase":          { "type": "SumTypeCase", "name": "Cons", "caseType": "consProductInner" },
+    "nilCase":           { "type": "SumTypeCase", "name": "Nil",  "caseType": null },
+    "docListBody":       { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "recSelf":           { "type": "RecursiveSelf" },
+    "markdownDocumentT": { "type": "RecursiveType", "body": "docListBody" },
+
+    "markdownDocumentSchema": {
+      "type": "Schema",
+      "schemaName": "MarkdownDocument",
+      "valueType": "markdownDocumentT",
+      "invariants": []
+    },
+
+    "headFieldOuter":    { "type": "ProductTypeField", "name": "head", "fieldType": "markdownBlockT" },
+    "tailFieldOuter":    { "type": "ProductTypeField", "name": "tail", "fieldType": "markdownDocumentT" },
+    "consProductOuter":  { "type": "ProductType", "fields": ["headFieldOuter", "tailFieldOuter"] },
+
+    "two":               { "type": "IntLit", "value": 2 },
+    "headingTextLit":    { "type": "StringLit", "value": "Strand" },
+    "headingLevelV":     { "type": "ProductFieldValue", "fieldName": "level", "value": "two" },
+    "headingTextV":      { "type": "ProductFieldValue", "fieldName": "text",  "value": "headingTextLit" },
+    "headingProduct":    { "type": "ProductValue", "ofType": "headingT", "fields": ["headingLevelV", "headingTextV"] },
+    "headingBlock":      { "type": "SumValue", "ofType": "markdownBlockT", "caseName": "Heading", "payload": "headingProduct" },
+
+    "paragraphTextLit":  { "type": "StringLit", "value": "Lightweight markup" },
+    "paragraphTextV":    { "type": "ProductFieldValue", "fieldName": "text", "value": "paragraphTextLit" },
+    "paragraphProduct":  { "type": "ProductValue", "ofType": "paragraphT", "fields": ["paragraphTextV"] },
+    "paragraphBlock":    { "type": "SumValue", "ofType": "markdownBlockT", "caseName": "Paragraph", "payload": "paragraphProduct" },
+
+    "nilVal":            { "type": "SumValue", "ofType": "markdownDocumentT", "caseName": "Nil", "payload": null },
+
+    "h1":                { "type": "ProductFieldValue", "fieldName": "head", "value": "paragraphBlock" },
+    "t1":                { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "p1":                { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h1", "t1"] },
+    "tailDoc":           { "type": "SumValue", "ofType": "markdownDocumentT", "caseName": "Cons", "payload": "p1" },
+
+    "h2":                { "type": "ProductFieldValue", "fieldName": "head", "value": "headingBlock" },
+    "t2":                { "type": "ProductFieldValue", "fieldName": "tail", "value": "tailDoc" },
+    "p2":                { "type": "ProductValue", "ofType": "consProductOuter", "fields": ["h2", "t2"] },
+    "twoBlockDoc":       { "type": "SumValue", "ofType": "markdownDocumentT", "caseName": "Cons", "payload": "p2" },
+
+    "docParam":          { "type": "ParameterDecl", "name": "doc", "paramType": "markdownDocumentSchema" },
+    "docRef":            { "type": "VarRef", "binder": "docParam" },
+    "identityOfMarkdown": { "type": "Lambda", "parameters": ["docParam"], "body": "docRef" },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfMarkdown",
+      "arguments": ["twoBlockDoc"]
+    }
+  }
+}

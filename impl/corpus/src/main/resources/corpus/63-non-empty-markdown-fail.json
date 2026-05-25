@@ -1,0 +1,82 @@
+{
+  "_comment": "Q-026 blessed-library — NonEmptyMarkdown FAIL. Identical structure to 62 but supplies an empty document (Nil). SchemaInvariantViolation expected at verify time; the verifier itself accepts the graph, the SchemaChecker pass rejects the empty list.",
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "intT":              { "type": "PrimitiveType", "kind": "Int" },
+    "stringT":           { "type": "PrimitiveType", "kind": "String" },
+    "boolT":             { "type": "PrimitiveType", "kind": "Bool" },
+
+    "headingLevelF":     { "type": "ProductTypeField", "name": "level", "fieldType": "intT" },
+    "headingTextF":      { "type": "ProductTypeField", "name": "text",  "fieldType": "stringT" },
+    "headingT":          { "type": "ProductType", "fields": ["headingLevelF", "headingTextF"] },
+
+    "paragraphTextF":    { "type": "ProductTypeField", "name": "text", "fieldType": "stringT" },
+    "paragraphT":        { "type": "ProductType", "fields": ["paragraphTextF"] },
+
+    "codeLanguageF":     { "type": "ProductTypeField", "name": "language", "fieldType": "stringT" },
+    "codeCodeF":         { "type": "ProductTypeField", "name": "code",     "fieldType": "stringT" },
+    "codeBlockT":        { "type": "ProductType", "fields": ["codeLanguageF", "codeCodeF"] },
+
+    "blockHeadingCase":  { "type": "SumTypeCase", "name": "Heading",        "caseType": "headingT" },
+    "blockParagraphCase":{ "type": "SumTypeCase", "name": "Paragraph",      "caseType": "paragraphT" },
+    "blockCodeCase":     { "type": "SumTypeCase", "name": "CodeBlock",      "caseType": "codeBlockT" },
+    "blockHrCase":       { "type": "SumTypeCase", "name": "HorizontalRule", "caseType": null },
+    "markdownBlockT":    {
+      "type": "SumType",
+      "cases": ["blockHeadingCase", "blockParagraphCase", "blockCodeCase", "blockHrCase"]
+    },
+
+    "headFieldInner":    { "type": "ProductTypeField", "name": "head", "fieldType": "markdownBlockT" },
+    "tailFieldInner":    { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "consProductInner":  { "type": "ProductType", "fields": ["headFieldInner", "tailFieldInner"] },
+    "consCase":          { "type": "SumTypeCase", "name": "Cons", "caseType": "consProductInner" },
+    "nilCase":           { "type": "SumTypeCase", "name": "Nil",  "caseType": null },
+    "docListBody":       { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "recSelf":           { "type": "RecursiveSelf" },
+    "markdownDocumentT": { "type": "RecursiveType", "body": "docListBody" },
+
+    "headFieldOuter":    { "type": "ProductTypeField", "name": "head", "fieldType": "markdownBlockT" },
+    "tailFieldOuter":    { "type": "ProductTypeField", "name": "tail", "fieldType": "markdownDocumentT" },
+    "consProductOuter":  { "type": "ProductType", "fields": ["headFieldOuter", "tailFieldOuter"] },
+
+    "trueLit":           { "type": "BoolLit", "value": true },
+    "falseLit":          { "type": "BoolLit", "value": false },
+
+    "docInvParam":       { "type": "ParameterDecl", "name": "d", "paramType": "markdownDocumentT" },
+    "docInvRef":         { "type": "VarRef", "binder": "docInvParam" },
+
+    "patConsWild":       { "type": "Pattern", "kind": "wildcard",    "patternType": "consProductOuter" },
+    "patCons":           { "type": "Pattern", "kind": "constructor", "patternType": "markdownDocumentT", "caseName": "Cons", "payloadPattern": "patConsWild" },
+    "caseCons":          { "type": "MatchCase", "pattern": "patCons", "body": "trueLit" },
+    "patNil":            { "type": "Pattern", "kind": "constructor", "patternType": "markdownDocumentT", "caseName": "Nil" },
+    "caseNil":           { "type": "MatchCase", "pattern": "patNil", "body": "falseLit" },
+    "isNonEmptyBody":    { "type": "Match", "scrutinee": "docInvRef", "cases": ["caseCons", "caseNil"] },
+    "isNonEmptyLam":     { "type": "Lambda", "parameters": ["docInvParam"], "body": "isNonEmptyBody" },
+
+    "nonEmptyInvariant": {
+      "type": "Invariant",
+      "invariantName": "non_empty",
+      "targetSchema": "nonEmptyMarkdown",
+      "body": "isNonEmptyLam"
+    },
+    "nonEmptyMarkdown": {
+      "type": "Schema",
+      "schemaName": "NonEmptyMarkdown",
+      "valueType": "markdownDocumentT",
+      "invariants": ["nonEmptyInvariant"]
+    },
+
+    "emptyDoc":          { "type": "SumValue", "ofType": "markdownDocumentT", "caseName": "Nil", "payload": null },
+
+    "docParam":          { "type": "ParameterDecl", "name": "doc", "paramType": "nonEmptyMarkdown" },
+    "docRef":            { "type": "VarRef", "binder": "docParam" },
+    "identityOfNonEmpty": { "type": "Lambda", "parameters": ["docParam"], "body": "docRef" },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfNonEmpty",
+      "arguments": ["emptyDoc"]
+    }
+  }
+}

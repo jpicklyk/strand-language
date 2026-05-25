@@ -63,6 +63,7 @@ internal class MachineActor(
                     continue
                 }
                 val payload = channelResult.getOrThrow()
+                instance.counters.recordEventReceived()
                 val event = wrapEvent(streamId, payload)
                 instance.recorder?.record(event)
                 stepOnce(event)
@@ -118,11 +119,23 @@ internal class MachineActor(
      * tagged-list result shapes.
      */
     private suspend fun stepOnce(event: Value) {
-        val result = interpreter.applyCallable(
-            fn = instance.transitionFnValue,
-            args = listOf(instance.currentState, event),
-            capabilities = instance.capabilities,
-        )
+        val startNanos = System.nanoTime()
+        // Track A.4: dispatch through the per-instance dispatcher when
+        // one was supplied (VM-backed in test scenarios, etc.); fall
+        // through to the legacy interpreter.applyCallable on the cached
+        // transitionFnValue when no dispatcher is set.
+        val result = instance.dispatcher
+            ?.applyTransition(instance.currentState, event)
+            ?: interpreter.applyCallable(
+                fn = instance.transitionFnValue,
+                args = listOf(instance.currentState, event),
+                capabilities = instance.capabilities,
+            )
+        // Slice 3.4 metrics: record transition latency immediately after the
+        // interpreter call returns; counter increment is paired so a snapshot
+        // taken between the two updates can't show `transitionsExecuted++`
+        // without a corresponding latency value.
+        instance.counters.recordTransitionCompleted(System.nanoTime() - startNanos)
         val resultProduct = result as? Value.ProductV
             ?: error(
                 "transition function returned a non-product value " +
