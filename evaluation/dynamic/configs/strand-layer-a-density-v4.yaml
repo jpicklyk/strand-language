@@ -1,0 +1,9 @@
+language: strand
+system_prompt_path: prompts/strand-system.md
+feedback_format: prose
+max_retries: 5
+description: |
+  Strand Layer A density v4 — the recommended emission target.
+  System prompt teaches the full grammar including density sugars
+  (IF, WHEN, compact LAM params, nested expressions). Verifier
+  feedback in prose form.
