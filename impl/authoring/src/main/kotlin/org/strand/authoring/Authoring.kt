@@ -30,4 +30,13 @@ object Authoring {
     /** Compile [text] into a canonical dag-json [JsonObject]. Runs elaboration. */
     fun compileToJsonObject(text: String): JsonObject =
         DagJsonEmitter.emitJson(Elaborator.elaborate(parse(text)))
+
+    /**
+     * Project canonical dag-json [canonical] text back to Layer A text. The
+     * inverse of [compileToDagJson] modulo elaboration-omission (Q-036).
+     * Step 1 produces canonical-form Layer A only — no density sugars, no
+     * inference-aware field stripping.
+     */
+    fun projectFromDagJson(canonical: String): String =
+        LayerARenderer.render(LayerATranslator.translate(canonical))
 }
