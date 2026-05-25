@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strand-eval"
+version = "0.1.0"
+description = "Dynamic-cost evaluation framework for the Strand language"
+requires-python = ">=3.10"
+authors = [{name = "Strand contributors"}]
+dependencies = [
+    "anthropic>=0.39.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "pytest>=7.4.0",
+    "scipy>=1.11.0",
+]
+
+[project.scripts]
+strand-eval = "strand_eval.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["strand_eval*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
