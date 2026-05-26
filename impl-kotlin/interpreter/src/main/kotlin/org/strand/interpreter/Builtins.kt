@@ -2325,26 +2325,16 @@ object Builtins {
         var cur = listValue
         while (cur is Value.SumV && cur.case == "Cons") {
             val payload = cur.payload as Value.ProductV
-            when (val head = payload.fields.getValue("head")) {
-                is Value.ToolDefV -> out += toolDefFrom(head)
-                is Value.ProductV -> {
-                    // Backward-compatibility path for the deprecated
-                    // pre-N-044 convention (JsonValue parameterSchema as a
-                    // SumV; ProductV-shaped ToolDef). Some tests and
-                    // older corpus emission may still produce this shape;
-                    // accept it for the transition window.
-                    out += LlmToolDef(
-                        name = (head.fields.getValue("name") as Value.StringV).v,
-                        description = (head.fields.getValue("description") as Value.StringV).v,
-                        parameterSchema = strandJsonValueToElement(head.fields.getValue("parameterSchema") as Value.SumV),
-                        implementation = head.fields.getValue("implementation"),
-                    )
-                }
-                else -> throw IoFailure(
+            val head = payload.fields.getValue("head") as? Value.ToolDefV
+                ?: throw IoFailure(
                     "tool-def-malformed",
-                    "expected ToolDefV or ProductV in tools list head, got ${head::class.simpleName}"
+                    "expected Value.ToolDefV in tools list head, got " +
+                        "${payload.fields.getValue("head")::class.simpleName}. " +
+                        "Tools must be authored via the N-044 ToolDef graph node " +
+                        "(Layer A code TLD); the legacy pre-N-044 JsonValue-parameterSchema " +
+                        "convention is no longer accepted."
                 )
-            }
+            out += toolDefFrom(head)
             cur = payload.fields.getValue("tail")
         }
         return out
@@ -2522,27 +2512,21 @@ object Builtins {
      */
     private fun parseResponseSchemaField(payload: Value?): kotlinx.serialization.json.JsonElement? {
         if (payload == null) return null
-        return when (payload) {
-            is Value.ResponseSchemaSpecV -> {
-                val schemaType = verifierNodeTypes?.get(payload.schemaId)
-                    as? org.strand.verifier.TypeExpr.SchemaType
-                if (schemaType != null) {
-                    when (val r = org.strand.verifier.JsonSchemaProjection.project(schemaType.valueType)) {
-                        is org.strand.verifier.JsonSchemaProjection.Result.Success -> r.schema
-                        is org.strand.verifier.JsonSchemaProjection.Result.Rejected ->
-                            kotlinx.serialization.json.JsonObject(emptyMap())  // defensive
-                    }
-                } else {
-                    kotlinx.serialization.json.JsonObject(emptyMap())
-                }
-            }
-            // Backward-compatibility path: legacy JsonValue tower
-            // (pre-N-045 fixtures may still emit this shape).
-            is Value.SumV -> strandJsonValueToElement(payload)
-            else -> throw IoFailure(
+        val spec = payload as? Value.ResponseSchemaSpecV
+            ?: throw IoFailure(
                 "response-schema-malformed",
-                "expected ResponseSchemaSpecV or JsonValue SumV in responseSchema, got ${payload::class.simpleName}"
+                "expected Value.ResponseSchemaSpecV in responseSchema, got " +
+                    "${payload::class.simpleName}. responseSchema must be authored via " +
+                    "the N-045 ResponseSchemaSpec graph node (Layer A code RSC); the " +
+                    "legacy pre-N-045 JsonValue-tower convention is no longer accepted."
             )
+        val schemaType = verifierNodeTypes?.get(spec.schemaId)
+            as? org.strand.verifier.TypeExpr.SchemaType
+            ?: return kotlinx.serialization.json.JsonObject(emptyMap())
+        return when (val r = org.strand.verifier.JsonSchemaProjection.project(schemaType.valueType)) {
+            is org.strand.verifier.JsonSchemaProjection.Result.Success -> r.schema
+            is org.strand.verifier.JsonSchemaProjection.Result.Rejected ->
+                kotlinx.serialization.json.JsonObject(emptyMap())  // defensive — verifier should have caught
         }
     }
 
