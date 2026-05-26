@@ -587,53 +587,71 @@ object Elaborator {
 
         val byId = doc.nodes.associateBy { it.id }
 
+        // The user-facing param types for a FIX body LAM come from the
+        // FIX's recursionType — an `FNT [t0 t1 ...] result` — whose
+        // parameters list gives the types of params 1..N (param 0 is
+        // the recursion slot, already typed via recursionType itself).
+        // Build a recursionType id → its FNT.parameters list (when the
+        // FNT is locally declared and well-formed).
+        val userParamTypesByRecType: Map<String, List<String>> = doc.nodes
+            .filter { it.code == "FNT" }
+            .mapNotNull { fnt ->
+                val params = fnt.args.firstOrNull() as? Arg.Listing ?: return@mapNotNull null
+                val ids = params.items.mapNotNull { (it as? Arg.Bare)?.text }
+                if (ids.size != params.items.size) return@mapNotNull null
+                fnt.id to ids
+            }
+            .toMap()
+
         // Step 1: rewrite compact-LAM params (in-place on LAM nodes).
         // Also collect any separate PRC ids that need rewriting.
-        val prcRewrites = mutableMapOf<String, String>()  // PRC id -> recType
+        val prcRewrites = mutableMapOf<String, String>()  // PRC id -> type
         val newNodes = doc.nodes.map { node ->
             if (node.code != "LAM") return@map node
             val recType = recTypeByLamId[node.id] ?: return@map node
             val paramsArg = node.args.getOrNull(0) as? Arg.Listing ?: return@map node
-            val firstEntry = paramsArg.items.firstOrNull() as? Arg.Bare ?: return@map node
+            val items = paramsArg.items
+            if (items.isEmpty()) return@map node
 
-            if (':' in firstEntry.text) {
-                // Compact form WITH type — user explicitly annotated.
-                // Leave alone (overrides inference).
-                return@map node
-            }
+            // The user-param types vector, indexed from 1 (slot 0 is the
+            // recursion slot). userParamTypes[i] is the type for items[i+1].
+            val userParamTypes = userParamTypesByRecType[recType] ?: emptyList()
 
-            val nameOrUnderscore = firstEntry.text
-            if (nameOrUnderscore == "_") {
-                // Anonymous compact slot — DagJsonEmitter doesn't accept
-                // `_` here (compact entries must have a name). This is a
-                // syntactic gap — the user wrote `[_ ...]` but the emitter
-                // expects `[name ...]` or `[name:type ...]`. Skip.
-                return@map node
-            }
+            val newItems = items.toMutableList()
+            var changed = false
 
-            // Two cases:
-            //  (a) The compact entry has no colon — bare name like
-            //      `recurse`. There's no separate PRC. Rewrite to
-            //      `recurse:<recType>`.
-            //  (b) The compact entry IS a reference to a separate PRC
-            //      declaration with id == this name. Mark the PRC for
-            //      rewrite (below) and leave the LAM entry untouched.
-            val separatePrc = byId[nameOrUnderscore]
-            if (separatePrc != null && separatePrc.code == "PRC") {
-                if (separatePrc.args.size == 1) {
-                    // PRC has only `name`, needs paramType. Schedule rewrite.
-                    prcRewrites[separatePrc.id] = recType
+            for (slot in 0 until items.size) {
+                val entry = items[slot] as? Arg.Bare ?: continue
+                val text = entry.text
+                if (':' in text) continue  // Already typed.
+                if (text == "_") continue  // Anonymous slot — emitter handles.
+
+                // Determine the type for this slot.
+                val slotType: String = when (slot) {
+                    0 -> recType  // recursion slot
+                    else -> userParamTypes.getOrNull(slot - 1) ?: continue
                 }
-                return@map node  // LAM entry stays as bare ref to PRC.
+
+                // Two cases:
+                //  (a) Compact entry refers to a separately-declared PRC.
+                //      Schedule the PRC's paramType rewrite; leave entry.
+                //  (b) Bare compact entry — rewrite to `name:type`.
+                val separatePrc = byId[text]
+                if (separatePrc != null && separatePrc.code == "PRC") {
+                    if (separatePrc.args.size == 1) {
+                        prcRewrites[separatePrc.id] = slotType
+                    }
+                    continue
+                }
+                newItems[slot] = Arg.Bare("$text:$slotType")
+                changed = true
             }
 
-            // No separate PRC — must be a compact-form entry. Rewrite
-            // to `name:recType`.
-            val newItems = paramsArg.items.toMutableList()
-            newItems[0] = Arg.Bare("$nameOrUnderscore:$recType")
-            val newArgs = node.args.toMutableList()
-            newArgs[0] = Arg.Listing(newItems)
-            node.copy(args = newArgs)
+            if (changed) {
+                val newArgs = node.args.toMutableList()
+                newArgs[0] = Arg.Listing(newItems)
+                node.copy(args = newArgs)
+            } else node
         }
 
         // Step 2: apply collected PRC rewrites.

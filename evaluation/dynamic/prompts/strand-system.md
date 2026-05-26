@@ -209,11 +209,26 @@ Example: `r IF cond v_true v_false`
 
 The cases-string is parsed at emit time. Each case is `CaseName -> body` for
 nullary cases or `CaseName(binderName) -> body` for cases with payloads.
-Cases are separated by ` | `. The `body` is a single token — an identifier
-(a declared node, the case's binder, or any PRC binder in scope) or an
-inline literal (Int/Float/Bool/Str).
+Cases are separated by ` | `. The `body` may be:
+
+- An inline literal (Int/Float/Bool — e.g., `42`, `true`, `-1`).
+- An identifier — the case's binder, a PRC binder in scope, or any
+  declared node id.
+- A **nested expression** `(CODE args...)` — composes recursively, so
+  `Cons(p) -> (APP add [(PFG p "head") (APP recurse [(PFG p "tail")])])`
+  works inline. The nested code follows the same Slice 10 rules as
+  nested expressions elsewhere.
+
+`<sumType>` may be either a SUM node id directly, or an RT-wrapped node
+whose body resolves to a SUM (e.g., a recursive list type — the WHEN
+parser follows up to 8 RT wrappers to find the underlying SUM and uses
+its SCS cases for binder-type inference). If the parser can't resolve
+the SumType to a SUM via RT-following, binders are typed as the
+placeholder `unknownT` which the verifier rejects.
 
 Example: `r WHEN someValue optT "Some(n) -> n | None -> 0"`
+
+Example with nested body: `r WHEN xs listT "Cons(p) -> (APP add [(PFG p \"head\") 1]) | Nil -> 0"`
 
 ### Compact LAM parameters
 
@@ -228,9 +243,22 @@ recursionType, state-machine transition signatures, etc.). Bare names like
 ### Auto-VarRef on PRC binders
 
 A bare PRC name in an expression slot (Application argument, Let value, IF
-scrutinee, ...) automatically lowers to a VarRef binding to that PRC. So
+or WHEN scrutinee, nested expression args, FIELD_LIST values, WHEN case
+bodies, ...) automatically lowers to a VarRef binding to that PRC. So
 `APP add [x y]` works without writing out a VarRef declaration when `x`/`y`
 are PRC names in scope.
+
+**Important:** "PRC name" here means the PRC node's **author id**, not its
+`name:` field. If you declare `xParam PRC "x" intT` and then reference `x`
+in an expression, auto-VarRef looks for a PRC with id `x` (not the
+`name:` field) and will fail to resolve. Use the author id directly:
+write `xParam PRC "x" intT` then `APP gt [xParam 0]`, or — preferred —
+use the compact-LAM form `LAM [x:intT] (APP gt [x 0])` where the
+LAM-entry name IS the author id.
+
+PRC binders introduced by compact-LAM entries (whether typed `[x:intT]`
+or bare `[x]`) are recognized as binder ids and trigger auto-VarRef.
+WHEN's scrutinee and case-body positions respect the same rule.
 
 ### Inline literals at REFERENCE positions
 
@@ -261,16 +289,53 @@ needed unless you reuse the same PFV across multiple values.
 
 ### Nested expressions (CODE args...)
 
-Any value-producing code may appear in parentheses at a REFERENCE,
-LIST_REF, or NULLABLE_REF position. The emitter assigns it a synthetic id
-and inserts the declaration at the appropriate place:
+Any **value-producing** code (APP, LET, VAR, LAM, NRF, TAB, MAT, IF,
+WHEN, FIX, PV, PFG, SV, FN, H, CAP) may appear in parentheses at any
+REFERENCE / LIST_REF / NULLABLE_REF position. **Type-producing** codes
+(PRM, PRD, SUM, FNT, TPM, FAL, RT) may also appear nested, but only in
+**type-position** slots — PRF.fieldType, FNT.parameters/result,
+PRC.paramType, SCS.caseType, TPM.bound, SV.ofType, PV.ofType,
+SCH.valueType, FIX.recursionType, FN.foreignType. The emitter assigns
+each nested form a synthetic id and inserts the declaration:
 
     APP mul [n (APP recurse [(APP sub [n 1])])]
+    PRC "x" (PRM Int)
+    SCS "Cons" (PRD [headField tailField])
 
-The above lowers to three Applications plus the literal 1 — five
-declarations in canonical form, one line in density v4. Nested expressions
-combine with auto-VarRef so `n` is a bare PRC name pointing at a parameter
-in scope.
+The first lowers to three Applications plus the literal 1 — five
+declarations in canonical form, one line in density v4. The second
+inlines a PrimitiveType into a ParameterDecl's paramType slot. The
+third inlines a ProductType into a SumTypeCase's caseType slot.
+
+**RS cannot be nested.** RecursiveSelf is type-only and the synthesized
+standalone `__expr<n> RS` form would lose its lexical RT binder context
+at canonical-encoding time. Declare RS as a standalone node and
+reference it by id from inside the lexical RT subtree:
+
+    selfRef RS                          # standalone RS
+    tailField PRF "tail" selfRef        # PRF references it by id
+    payload PRD [headField tailField]
+    consCase SCS "Cons" payload
+    nilCase SCS "Nil" _
+    listSum SUM [consCase nilCase]
+    listT RT listSum                    # lexical RT wraps the SUM
+
+Structural codes (PRC, MC, Pattern variants, EFC, EFD, ESE/ESI/ESO,
+SCH, INV, SCS, PRF, TR) are rejected when nested — declare those as
+standalone nodes.
+
+Nested expressions combine with auto-VarRef so a bare PRC name like
+`n` lowers to a VarRef on the parameter in scope. WHEN case binders
+(`Cons(p) -> ...`) ARE now in scope inside nested expressions in the
+case body, so `Cons(p) -> (APP add [(PFG p "head") (PFG p "tail")])`
+works directly — `p` resolves to the synthesized PVR for the case.
+
+**Compact-LAM param names must be unique across Lambdas in the same
+program.** Two `LAM [xs:T1]` and `LAM [xs:T2]` declarations with
+different `T1` and `T2` produce an `ArgShapeMismatch` error because
+the synthesized PRC would silently alias to the later declaration.
+Rename one of the params (`xs_inner` vs `xs_outer`, or similar) so
+each Lambda has its own PRC.
 
 ## Worked examples
 

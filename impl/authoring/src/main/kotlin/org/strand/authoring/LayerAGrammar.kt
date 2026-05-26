@@ -67,17 +67,33 @@ object LayerAGrammar {
          * Pattern variants, MC, EFC, ...) are false.
          */
         val producesValue: Boolean = false,
+        /**
+         * True if this code produces a *type*, so it may legally appear
+         * in a `(CODE args...)` nested expression at a TYPE-position
+         * reference slot (one whose FieldSpec.acceptsType is true).
+         * Type-only codes — PRM, PRD, SUM, FNT, TPM, FAL, RT, RS — are
+         * marked here. The nested-expression validator distinguishes
+         * value- vs type-position slots and rejects type codes in value
+         * slots, so `APP add [1 (PRM Int)]` still surfaces as a
+         * structured `ArgShapeMismatch` instead of falling through to
+         * the verifier.
+         */
+        val producesType: Boolean = false,
     )
 
     /**
      * One positional field. [kind] is the expected [Arg] subclass; [jsonField]
-     * is the dag-json field name the value flows into; [emit] is the
-     * arg → JsonElement transformation.
+     * is the dag-json field name the value flows into. [acceptsType]
+     * marks slots that conceptually hold a type reference (e.g.,
+     * PRF.fieldType, PRC.paramType, FNT.parameters/result) — those
+     * accept nested `(CODE args...)` forms whose code is type-producing
+     * in addition to the usual value-producing codes.
      */
     data class FieldSpec(
         val name: String,
         val kind: ArgKind,
         val jsonField: String,
+        val acceptsType: Boolean = false,
     )
 
     enum class ArgKind {
@@ -442,42 +458,51 @@ object LayerAGrammar {
         "PRM" to CodeSchema(
             jsonType = "PrimitiveType",
             required = listOf(FieldSpec("kind", ArgKind.KEYWORD, "kind")),
+            producesType = true,
         ),
         "PRD" to CodeSchema(
             jsonType = "ProductType",
             required = listOf(FieldSpec("fields", ArgKind.LIST_REF, "fields")),
+            producesType = true,
         ),
         "PRF" to CodeSchema(
             jsonType = "ProductTypeField",
             required = listOf(
                 FieldSpec("name", ArgKind.STRING, "name"),
-                FieldSpec("fieldType", ArgKind.REFERENCE, "fieldType"),
+                FieldSpec("fieldType", ArgKind.REFERENCE, "fieldType", acceptsType = true),
             ),
+            // PRF is structural (not directly a type), but it's used as a
+            // type component; leave producesType=false so nesting bare PRF
+            // is still rejected — the agent should nest the field type
+            // (PRM/RS/...) rather than the field declaration itself.
         ),
         "SUM" to CodeSchema(
             jsonType = "SumType",
             required = listOf(FieldSpec("cases", ArgKind.LIST_REF, "cases")),
+            producesType = true,
         ),
         "SCS" to CodeSchema(
             jsonType = "SumTypeCase",
             required = listOf(
                 FieldSpec("name", ArgKind.STRING, "name"),
-                FieldSpec("caseType", ArgKind.NULLABLE_REF, "caseType"),
+                FieldSpec("caseType", ArgKind.NULLABLE_REF, "caseType", acceptsType = true),
             ),
         ),
         "FNT" to CodeSchema(
             jsonType = "FunctionType",
             required = listOf(
-                FieldSpec("parameters", ArgKind.LIST_REF, "parameters"),
-                FieldSpec("result", ArgKind.REFERENCE, "result"),
+                FieldSpec("parameters", ArgKind.LIST_REF, "parameters", acceptsType = true),
+                FieldSpec("result", ArgKind.REFERENCE, "result", acceptsType = true),
             ),
             optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),
+            producesType = true,
         ),
         "TPM" to CodeSchema(
             jsonType = "TypeParameter",
             required = listOf(FieldSpec("name", ArgKind.STRING, "name")),
             // bound is rarely used and goes here when present
-            optional = listOf(FieldSpec("bound", ArgKind.REFERENCE, "bound")),
+            optional = listOf(FieldSpec("bound", ArgKind.REFERENCE, "bound", acceptsType = true)),
+            producesType = true,
         ),
 
         // Functions and binding.
@@ -510,7 +535,7 @@ object LayerAGrammar {
             // JsonIngest error (the canonical JSON schema still requires
             // the field).
             optional = listOf(
-                FieldSpec("paramType", ArgKind.REFERENCE, "paramType"),
+                FieldSpec("paramType", ArgKind.REFERENCE, "paramType", acceptsType = true),
             ),
         ),
         "APP" to CodeSchema(
@@ -562,6 +587,7 @@ object LayerAGrammar {
                 FieldSpec("typeParameters", ArgKind.LIST_REF, "typeParameters"),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
+            producesType = true,
         ),
 
         // Effects and capabilities (Layer 3)
@@ -591,7 +617,7 @@ object LayerAGrammar {
             jsonType = "ForeignNode",
             required = listOf(
                 FieldSpec("target", ArgKind.STRING, "target"),
-                FieldSpec("foreignType", ArgKind.REFERENCE, "foreignType"),
+                FieldSpec("foreignType", ArgKind.REFERENCE, "foreignType", acceptsType = true),
             ),
             optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),
             producesValue = true,
@@ -704,7 +730,7 @@ object LayerAGrammar {
         "FIX" to CodeSchema(
             jsonType = "Fixpoint",
             required = listOf(
-                FieldSpec("recursionType", ArgKind.REFERENCE, "recursionType"),
+                FieldSpec("recursionType", ArgKind.REFERENCE, "recursionType", acceptsType = true),
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
             producesValue = true,
@@ -717,7 +743,7 @@ object LayerAGrammar {
         "PV" to CodeSchema(
             jsonType = "ProductValue",
             required = listOf(
-                FieldSpec("ofType", ArgKind.REFERENCE, "ofType"),
+                FieldSpec("ofType", ArgKind.REFERENCE, "ofType", acceptsType = true),
                 FieldSpec("fields", ArgKind.FIELD_LIST, "fields"),
             ),
             producesValue = true,
@@ -740,7 +766,7 @@ object LayerAGrammar {
         "SV" to CodeSchema(
             jsonType = "SumValue",
             required = listOf(
-                FieldSpec("ofType", ArgKind.REFERENCE, "ofType"),
+                FieldSpec("ofType", ArgKind.REFERENCE, "ofType", acceptsType = true),
                 FieldSpec("caseName", ArgKind.STRING, "caseName"),
                 FieldSpec("payload", ArgKind.NULLABLE_REF, "payload"),
             ),
@@ -751,10 +777,19 @@ object LayerAGrammar {
         "RT" to CodeSchema(
             jsonType = "RecursiveType",
             required = listOf(FieldSpec("body", ArgKind.REFERENCE, "body")),
+            producesType = true,
         ),
         "RS" to CodeSchema(
             jsonType = "RecursiveSelf",
             required = emptyList(),
+            // RS is type-producing but CANNOT be safely nested via the
+            // `(CODE args...)` form: the synthesized standalone RS node
+            // loses its lexical RT binder context (the canonical encoder
+            // walks RT's body in source position to compute the de Bruijn
+            // depth; a RS reachable only via cross-reference reads as
+            // unbound). Authors must declare RS as a standalone node and
+            // reference it by id from inside the lexical RT body.
+            producesType = false,
         ),
 
         // Handler (Layer 3 step 3)
@@ -834,7 +869,7 @@ object LayerAGrammar {
             jsonType = "Schema",
             required = listOf(
                 FieldSpec("schemaName", ArgKind.STRING, "schemaName"),
-                FieldSpec("valueType", ArgKind.REFERENCE, "valueType"),
+                FieldSpec("valueType", ArgKind.REFERENCE, "valueType", acceptsType = true),
                 FieldSpec("invariants", ArgKind.LIST_REF, "invariants"),
             ),
         ),

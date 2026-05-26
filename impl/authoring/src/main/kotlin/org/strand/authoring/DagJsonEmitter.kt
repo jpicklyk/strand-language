@@ -116,6 +116,7 @@ object DagJsonEmitter {
         var ifCounter: Int = 0
         var whenCounter: Int = 0
         var exprCounter: Int = 0
+        var lamPrcCounter: Int = 0
         val synthesized: LinkedHashMap<String, JsonObject> = linkedMapOf()
         val document: LayerADocument = doc
 
@@ -145,27 +146,77 @@ object DagJsonEmitter {
          *
          * Slice 5 (v2): compact-form LAM params `[x:intT y:intT]`
          * synthesize PRCs whose author id IS the parameter name. The
-         * pre-pass below adds those names to binderIds so the auto-
-         * VarRef rule fires correctly when the Lambda body references
-         * the parameter by name.
+         * pre-pass below adds those names to topLevelBinders so the
+         * auto-VarRef rule fires correctly when the Lambda body
+         * references the parameter by name.
+         *
+         * The set is the *static* fallback layer of the binder resolver
+         * (see [resolveBinder]). For PRC binders, the lookup name and
+         * the binder id are identical, so the set stores just the name
+         * and [resolveBinder] returns name == id when the lookup hits.
          */
-        val binderIds: Set<String> = run {
+        val topLevelBinders: Set<String> = run {
             val ids = mutableSetOf<String>()
             for (node in doc.nodes) {
                 if (node.code == "PRC") ids += node.id
-                // Slice 5: scan LAM's parameters list for compact-form
-                // entries (`name:typeRef`) and treat each `name` as a
-                // binder. Legacy bare-ref entries are already covered by
-                // the PRC NodeDecl scan above.
+                // Slice 5: scan LAM's parameters list for binder names. A
+                // compact-form entry is either `name:typeRef` (typed) or a
+                // bare `name` (typed by Elaborator inference — recursion-
+                // slot, call-site, etc.). Legacy bare-ref entries that
+                // point at a separately-declared PRC are already covered
+                // by the PRC NodeDecl scan above; for those, adding the id
+                // again is a no-op.
                 if (node.code == "LAM") {
                     val params = node.args.firstOrNull() as? Arg.Listing ?: continue
                     for (entry in params.items) {
                         val text = (entry as? Arg.Bare)?.text ?: continue
-                        if (':' in text) ids += text.substringBefore(':')
+                        if (text == "_") continue  // anonymous slot
+                        ids += if (':' in text) text.substringBefore(':') else text
                     }
                 }
             }
             ids
+        }
+
+        /**
+         * Stack of locally-introduced binder scopes for WHEN case
+         * bodies. The author writes `Cons(p) -> body`; the WHEN
+         * expander synthesizes a Pattern (variable kind) node with a
+         * synthetic id like `__when0_bind_p`, then resolves the body
+         * with `p -> __when0_bind_p` pushed onto this stack. Auto-
+         * VarRef lookups for `p` inside the body (and inside any
+         * nested expressions in the body) return the PVR id as the
+         * binder target. Innermost scope wins on lookup, so nested
+         * WHENs and PRC-shadowing-by-case-binder both work correctly.
+         */
+        val binderScopes: ArrayDeque<Map<String, String>> = ArrayDeque()
+
+        /**
+         * Resolve [name] to a binder id, walking [binderScopes]
+         * innermost-first and falling back to [topLevelBinders].
+         * Returns null when [name] is not a binder in any scope.
+         */
+        fun resolveBinder(name: String): String? {
+            for (i in binderScopes.indices.reversed()) {
+                binderScopes[i][name]?.let { return it }
+            }
+            return if (name in topLevelBinders) name else null
+        }
+
+        /**
+         * Run [block] with a single-entry binder scope pushed onto
+         * [binderScopes]. The scope is popped before this method
+         * returns, even if [block] throws. Used by the WHEN expander
+         * to make a case binder visible inside the case body without
+         * leaking into sibling cases or sibling nodes.
+         */
+        inline fun <R> withCaseBinder(name: String, binderId: String, block: () -> R): R {
+            binderScopes.addLast(mapOf(name to binderId))
+            try {
+                return block()
+            } finally {
+                binderScopes.removeLast()
+            }
         }
 
         fun freshLitId(): String = "__lit${litCounter++}"
@@ -173,6 +224,13 @@ object DagJsonEmitter {
         fun freshIfPrefix(): String = "__if${ifCounter++}"
         fun freshWhenPrefix(): String = "__when${whenCounter++}"
         fun freshExprId(): String = "__expr${exprCounter++}"
+        /**
+         * Mint a unique synthesized PRC id for a compact-LAM param. The
+         * naming pattern `__lamprc<n>_<name>` keeps the parameter name
+         * visible in debug output without colliding when two Lambdas
+         * use the same compact param name with different types.
+         */
+        fun freshLamPrcId(paramName: String): String = "__lamprc${lamPrcCounter++}_$paramName"
     }
 
     /**
@@ -479,6 +537,17 @@ object DagJsonEmitter {
             // binder is allowed. Mismatch is a verifier-level error; we
             // pass through whatever the user wrote and let the verifier
             // reject if needed.
+            //
+            // Substitute RecursiveSelf with the WHEN's named sumType
+            // (the RT) so a binder over a recursive-sum case carries a
+            // patternType that is closed — i.e., has no free RS — and
+            // verifies in the depth-0 context of the PVR. For non-
+            // recursive sums (or recursive sums whose case has no RS
+            // inside its caseType) the walker memoizes everything as
+            // unchanged and returns the original caseType id.
+            val resolvedPatternType = caseType?.let {
+                substituteRecursiveSelf(it, sumTypeId, prefix, ctx)
+            }
 
             // Synthesize PVR (if the user wrote a binder).
             val pvrId: String? = whenCase.binder?.let { binderName ->
@@ -486,7 +555,7 @@ object DagJsonEmitter {
                 ctx.synthesized[id] = buildJsonObject {
                     put("type", "Pattern")
                     put("kind", "variable")
-                    put("patternType", caseType ?: "unknownT")
+                    put("patternType", resolvedPatternType ?: "unknownT")
                     put("name", binderName)
                 }
                 id
@@ -504,16 +573,28 @@ object DagJsonEmitter {
                 }
             }
 
-            // Resolve the body. The case's binder is in scope only inside
-            // this body; resolveWhenBody handles the precedence.
-            val bodyId = resolveWhenBody(
-                bodyText = whenCase.body,
-                caseBinder = whenCase.binder,
-                caseBinderPvrId = pvrId,
-                line = node.line,
-                errors = errors,
-                ctx = ctx,
-            ) ?: return null
+            // Resolve the body with the case's binder pushed onto the
+            // ctx scope stack. The binder is in scope only inside this
+            // body — not in sibling cases, sibling nodes, or even
+            // sibling case-pattern/PCN slots. The scope is popped by
+            // withCaseBinder's finally block before the next iteration.
+            val bodyId = if (whenCase.binder != null && pvrId != null) {
+                ctx.withCaseBinder(whenCase.binder, pvrId) {
+                    resolveWhenBody(
+                        bodyText = whenCase.body,
+                        line = node.line,
+                        errors = errors,
+                        ctx = ctx,
+                    )
+                }
+            } else {
+                resolveWhenBody(
+                    bodyText = whenCase.body,
+                    line = node.line,
+                    errors = errors,
+                    ctx = ctx,
+                )
+            } ?: return null
 
             // Synthesize MC.
             val mcId = "${prefix}_case_${whenCase.caseName}"
@@ -599,18 +680,29 @@ object DagJsonEmitter {
     /**
      * Build a `caseName -> caseTypeId` map for the named SumType. Walks
      * the document's NodeDecls to find:
-     *   1. The SUM node with id matching [sumTypeId]
-     *   2. Each SCS in its `cases` list
+     *   1. The SUM node with id matching [sumTypeId], following any RT
+     *      (RecursiveType) wrappers — `listT RT listSumT` lets a WHEN
+     *      whose sumType arg names `listT` still resolve to `listSumT`'s
+     *      cases for binder type inference.
+     *   2. Each SCS in its `cases` list.
      *
      * Returns an empty map if [sumTypeId] doesn't resolve to a declared
-     * SUM — the WHEN's PVR patterns then use a "unknownT" placeholder
-     * (which the verifier will reject; the LLM must add the SUM decl or
-     * the user mistyped a case name).
+     * SUM (after RT-unwrapping) — the WHEN's PVR patterns then use a
+     * "unknownT" placeholder (which the verifier will reject; the LLM
+     * must add the SUM decl or the user mistyped a case name).
      */
     private fun buildCaseTypeMap(sumTypeId: String, ctx: EmitContext): Map<String, String?> {
-        val sumNode = ctx.document.nodes.firstOrNull {
-            it.code == "SUM" && it.id == sumTypeId
-        } ?: return emptyMap()
+        // Follow RT wrappers (bounded depth to defend against pathological cycles).
+        var currentId = sumTypeId
+        var currentNode = ctx.document.nodes.firstOrNull { it.id == currentId }
+        var hops = 0
+        while (currentNode?.code == "RT" && hops < 8) {
+            val bodyRef = (currentNode.args.firstOrNull() as? Arg.Bare)?.text ?: break
+            currentId = bodyRef
+            currentNode = ctx.document.nodes.firstOrNull { it.id == currentId }
+            hops++
+        }
+        val sumNode = currentNode?.takeIf { it.code == "SUM" } ?: return emptyMap()
         val casesList = (sumNode.args.firstOrNull() as? Arg.Listing)?.items ?: return emptyMap()
         val scsIds = casesList.mapNotNull { (it as? Arg.Bare)?.text }.toSet()
         val out = mutableMapOf<String, String?>()
@@ -627,26 +719,236 @@ object DagJsonEmitter {
     }
 
     /**
+     * Walk the subgraph rooted at [caseTypeId] (typically a PRD, but
+     * also PRM / SUM / FNT / SCS / PRF) and synthesize a structurally-
+     * equivalent subgraph in which every [RecursiveSelf] reference
+     * reachable without crossing a [RecursiveType] boundary is
+     * rewritten to point at [rtId]. Returns the id of the rewritten
+     * subgraph's root, or [caseTypeId] unchanged when no RS reference
+     * was reachable.
+     *
+     * Motivation: WHEN sugar over a recursive sum (`μ. Cons({head:
+     * Int, tail: <self>}) | Nil`) reads the SCS's caseType to type the
+     * binder PVR. The caseType references RS for the recursive field
+     * (the `<self>`), which is bound by the enclosing RT. But the PVR
+     * is synthesized outside any RT context, so the verifier rejects
+     * the standalone RS as [UnboundRecursiveSelf]. Substitute RS with
+     * the RT id (which IS the recursive type) so the PVR's patternType
+     * is closed and verifier-clean.
+     *
+     * The substitution is structural — both the original and the
+     * rewritten subgraph canonical-hash to the same bytes under the
+     * equirecursive equality the encoder implements, so semantics are
+     * unchanged. The new ids carry the `[prefix]_outer_` prefix so they
+     * don't collide with the original NodeDecls; the prefix is the WHEN
+     * sugar's per-WHEN counter (`__when<n>`).
+     *
+     * Boundaries: nested RT subgraphs introduce their own binder, so
+     * RS references inside them belong to the inner RT and must be
+     * left alone. The walker recognizes RT nodes and returns the
+     * original id without descent.
+     */
+    private fun substituteRecursiveSelf(
+        caseTypeId: String,
+        rtId: String,
+        prefix: String,
+        ctx: EmitContext,
+    ): String {
+        val byId = ctx.document.nodes.associateBy { it.id }
+        val memo = mutableMapOf<String, String>()
+        fun walk(id: String): String {
+            memo[id]?.let { return it }
+            val node = byId[id] ?: run {
+                memo[id] = id
+                return id
+            }
+            // RecursiveSelf — the substitution target. Replace with rtId.
+            if (node.code == "RS") {
+                memo[id] = rtId
+                return rtId
+            }
+            // RT introduces a new binder; its RS refs belong to that
+            // inner RT, not the outer one we're substituting away. Pass
+            // through unchanged.
+            if (node.code == "RT") {
+                memo[id] = id
+                return id
+            }
+            // Structural type nodes — recurse into the fields that
+            // carry type references and rebuild only when at least one
+            // reference rewrote to a different id.
+            return when (node.code) {
+                "PRD" -> {
+                    val items = (node.args.firstOrNull() as? Arg.Listing)?.items
+                        ?: run { memo[id] = id; return id }
+                    val fieldIds = items.mapNotNull { (it as? Arg.Bare)?.text }
+                    if (fieldIds.size != items.size) {
+                        memo[id] = id
+                        return id
+                    }
+                    val rewritten = fieldIds.map(::walk)
+                    if (rewritten == fieldIds) {
+                        memo[id] = id; return id
+                    }
+                    val newId = "${prefix}_outer_$id"
+                    ctx.synthesized[newId] = buildJsonObject {
+                        put("type", "ProductType")
+                        put("fields", JsonArray(rewritten.map { JsonPrimitive(it) }))
+                    }
+                    memo[id] = newId
+                    newId
+                }
+                "PRF" -> {
+                    val name = (node.args.getOrNull(0) as? Arg.Str)?.value
+                        ?: run { memo[id] = id; return id }
+                    val fieldTypeId = (node.args.getOrNull(1) as? Arg.Bare)?.text
+                        ?: run { memo[id] = id; return id }
+                    val rewritten = walk(fieldTypeId)
+                    if (rewritten == fieldTypeId) {
+                        memo[id] = id; return id
+                    }
+                    val newId = "${prefix}_outer_$id"
+                    ctx.synthesized[newId] = buildJsonObject {
+                        put("type", "ProductTypeField")
+                        put("name", name)
+                        put("fieldType", rewritten)
+                    }
+                    memo[id] = newId
+                    newId
+                }
+                "SUM" -> {
+                    val items = (node.args.firstOrNull() as? Arg.Listing)?.items
+                        ?: run { memo[id] = id; return id }
+                    val caseIds = items.mapNotNull { (it as? Arg.Bare)?.text }
+                    if (caseIds.size != items.size) {
+                        memo[id] = id; return id
+                    }
+                    val rewritten = caseIds.map(::walk)
+                    if (rewritten == caseIds) {
+                        memo[id] = id; return id
+                    }
+                    val newId = "${prefix}_outer_$id"
+                    ctx.synthesized[newId] = buildJsonObject {
+                        put("type", "SumType")
+                        put("cases", JsonArray(rewritten.map { JsonPrimitive(it) }))
+                    }
+                    memo[id] = newId
+                    newId
+                }
+                "SCS" -> {
+                    val name = (node.args.getOrNull(0) as? Arg.Str)?.value
+                        ?: run { memo[id] = id; return id }
+                    val caseTypeRef = (node.args.getOrNull(1) as? Arg.Bare)?.text
+                    if (caseTypeRef == null) {
+                        memo[id] = id; return id
+                    }
+                    val rewritten = walk(caseTypeRef)
+                    if (rewritten == caseTypeRef) {
+                        memo[id] = id; return id
+                    }
+                    val newId = "${prefix}_outer_$id"
+                    ctx.synthesized[newId] = buildJsonObject {
+                        put("type", "SumTypeCase")
+                        put("name", name)
+                        put("caseType", rewritten)
+                    }
+                    memo[id] = newId
+                    newId
+                }
+                "FNT" -> {
+                    val paramItems = (node.args.getOrNull(0) as? Arg.Listing)?.items
+                        ?: run { memo[id] = id; return id }
+                    val paramIds = paramItems.mapNotNull { (it as? Arg.Bare)?.text }
+                    if (paramIds.size != paramItems.size) {
+                        memo[id] = id; return id
+                    }
+                    val resultId = (node.args.getOrNull(1) as? Arg.Bare)?.text
+                        ?: run { memo[id] = id; return id }
+                    val rewrittenParams = paramIds.map(::walk)
+                    val rewrittenResult = walk(resultId)
+                    if (rewrittenParams == paramIds && rewrittenResult == resultId) {
+                        memo[id] = id; return id
+                    }
+                    val effects = (node.args.getOrNull(2) as? Arg.Listing)?.items
+                        ?.mapNotNull { (it as? Arg.Bare)?.text }
+                        ?: emptyList()
+                    val newId = "${prefix}_outer_$id"
+                    ctx.synthesized[newId] = buildJsonObject {
+                        put("type", "FunctionType")
+                        put("parameters", JsonArray(rewrittenParams.map { JsonPrimitive(it) }))
+                        put("result", rewrittenResult)
+                        if (effects.isNotEmpty()) {
+                            put("effects", JsonArray(effects.map { JsonPrimitive(it) }))
+                        }
+                    }
+                    memo[id] = newId
+                    newId
+                }
+                // Type nodes that cannot transitively contain RS via the
+                // type-position fields we track (PRM, TPM, FAL).
+                else -> {
+                    memo[id] = id
+                    id
+                }
+            }
+        }
+        return walk(caseTypeId)
+    }
+
+    /**
      * Slice 9 case-body resolver. Handles:
-     *   * literal token: parse as Int/Float/Bool and synthesize literal
-     *     node, return its id. (StringLit support: requires recognizing
-     *     `"..."` inside the body text; deferred — bodies needing a
-     *     StringLit declare it as a separate node.)
-     *   * bare identifier matching the case's [caseBinder]: synthesize a
-     *     VarRef pointing at the case's PVR, return VarRef id.
-     *   * bare identifier matching a PRC binder in scope: synthesize a
-     *     VarRef pointing at the PRC, return VarRef id.
-     *   * any other bare identifier: pass through as a reference (must be
-     *     a declared NodeDecl id; the verifier rejects unresolved refs).
+     *   * Nested expression `(CODE args...)`: tokenize the body via
+     *     [LayerAParser.tokenizeLine] and synthesize a child node
+     *     through [synthesizeNestedIfNested]. The case binder (if
+     *     any) is visible inside the nested expression because the
+     *     caller (`expandWhenSugar`) has pushed it onto
+     *     `ctx.binderScopes` via `withCaseBinder` before invoking
+     *     this resolver.
+     *   * Literal token: parse as Int/Float/Bool and synthesize a
+     *     literal node, return its id. (StringLit support requires
+     *     recognizing `"..."` inside the body text; deferred —
+     *     bodies needing a StringLit declare it as a separate node.)
+     *   * Bare identifier matching a binder in scope: synthesize a
+     *     VarRef pointing at the binder id. The binder may be either
+     *     the WHEN case binder (resolved through the pushed scope) or
+     *     a top-level PRC (resolved through `topLevelBinders`).
+     *   * Any other bare identifier: pass through as a reference
+     *     (must be a declared NodeDecl id; the verifier rejects
+     *     unresolved refs).
      */
     private fun resolveWhenBody(
         bodyText: String,
-        caseBinder: String?,
-        caseBinderPvrId: String?,
         line: Int,
         errors: MutableList<AuthoringError>,
         ctx: EmitContext,
     ): String? {
+        // Nested expression: bodyText of the form `(CODE args...)`.
+        // Tokenize via LayerAParser so nesting composes (Slice 10 v4).
+        // We tokenize the body fragment; if it yields exactly one
+        // Arg.Nested we synthesize a child node and return its id.
+        if (bodyText.startsWith("(")) {
+            val parseErrors = mutableListOf<AuthoringError>()
+            val tokens = LayerAParser.tokenizeLine(bodyText, line, parseErrors)
+            if (parseErrors.isNotEmpty()) {
+                errors.addAll(parseErrors)
+                return null
+            }
+            if (tokens.size == 1) {
+                val token = tokens[0]
+                if (token is Arg.Nested) {
+                    // Reuse the standard nested-expression synthesizer; it
+                    // applies the same producesValue/producesType check as
+                    // the rest of the emitter and synthesizes the child.
+                    return synthesizeNestedIfNested(token, "WHEN", 2, line, errors, ctx)
+                }
+            }
+            errors += AuthoringError.ArgShapeMismatch(
+                line = line, code = "WHEN", position = 2,
+                expectedKind = "WHEN case body: single nested `(CODE args...)` expression",
+                actualKind = "fragment `$bodyText` did not parse as a single nested expression",
+            )
+            return null
+        }
         // Try literal first.
         val asInt = bodyText.toLongOrNull()
         if (asInt != null) {
@@ -674,21 +976,15 @@ object DagJsonEmitter {
             }
             return id
         }
-        // Case binder reference.
-        if (caseBinder != null && bodyText == caseBinder && caseBinderPvrId != null) {
+        // Binder reference (case binder or PRC). Both routes resolve
+        // through ctx.resolveBinder, which checks the WHEN-case scope
+        // first (pushed by expandWhenSugar's withCaseBinder) and then
+        // falls back to the static top-level PRC set.
+        ctx.resolveBinder(bodyText)?.let { binderId ->
             val id = ctx.freshVarRefId()
             ctx.synthesized[id] = buildJsonObject {
                 put("type", "VarRef")
-                put("binder", caseBinderPvrId)
-            }
-            return id
-        }
-        // PRC binder reference (auto-VarRef on the body).
-        if (bodyText in ctx.binderIds) {
-            val id = ctx.freshVarRefId()
-            ctx.synthesized[id] = buildJsonObject {
-                put("type", "VarRef")
-                put("binder", bodyText)
+                put("binder", binderId)
             }
             return id
         }
@@ -729,11 +1025,12 @@ object DagJsonEmitter {
             return null
         }
         val resolvedAnon = resolveAtLast(text, line, parentCode, errors, ctx) ?: return null
-        return if (resolvedAnon in ctx.binderIds) {
+        val binderId = ctx.resolveBinder(resolvedAnon)
+        return if (binderId != null) {
             val varId = ctx.freshVarRefId()
             ctx.synthesized[varId] = buildJsonObject {
                 put("type", "VarRef")
-                put("binder", resolvedAnon)
+                put("binder", binderId)
             }
             varId
         } else resolvedAnon
@@ -759,12 +1056,14 @@ object DagJsonEmitter {
         }
         // Slice 7: resolve `@last` to the most-recent anonymous id.
         val resolved = resolveAtLast(text, line, code, errors, ctx) ?: return null
-        // Treat the slot as value-position; auto-VarRef PRC binders.
-        return if (resolved in ctx.binderIds) {
+        // Treat the slot as value-position; auto-VarRef binder names
+        // through the scope-aware resolver (PRC + WHEN case binder).
+        val binderId = ctx.resolveBinder(resolved)
+        return if (binderId != null) {
             val id = ctx.freshVarRefId()
             ctx.synthesized[id] = buildJsonObject {
                 put("type", "VarRef")
-                put("binder", resolved)
+                put("binder", binderId)
             }
             id
         } else resolved
@@ -947,27 +1246,66 @@ object DagJsonEmitter {
                         resolvedValue = resolved
                         idx += 2
                     } else {
-                        // Slice 8: single-token form `name=ref`.
+                        // Slice 8: single-token form `name=value`. Value
+                        // is either an inline literal (Int / Float / Bool /
+                        // String — Slice 2 composition) or a bare ref.
                         name = text.substringBefore('=')
                         val valueRef = text.substringAfter('=')
                         if (name.isEmpty() || valueRef.isEmpty()) {
                             errors += AuthoringError.ArgShapeMismatch(
                                 line = line, code = code, position = position,
-                                expectedKind = "compact field `name=ref`",
+                                expectedKind = "compact field `name=value`",
                                 actualKind = "malformed `$text`",
                             )
                             return null
                         }
-                        val resolvedAnon = resolveAtLast(valueRef, line, code, errors, ctx)
-                            ?: return null
-                        resolvedValue = if (resolvedAnon in ctx.binderIds) {
-                            val varId = ctx.freshVarRefId()
-                            ctx.synthesized[varId] = buildJsonObject {
-                                put("type", "VarRef")
-                                put("binder", resolvedAnon)
+                        // Try parsing `valueRef` as an inline literal first
+                        // (Slice 2 composition). Strings would need to be
+                        // quoted; the tokenizer doesn't preserve quotes in
+                        // bare tokens, so only numeric and boolean literals
+                        // are recognized here. Quoted-string field values
+                        // come through the split-token form above.
+                        val asInt = valueRef.toLongOrNull()
+                        val asFloat = if ('.' in valueRef) valueRef.toDoubleOrNull() else null
+                        resolvedValue = when {
+                            asInt != null -> {
+                                val litId = ctx.freshLitId()
+                                ctx.synthesized[litId] = buildJsonObject {
+                                    put("type", "IntLit")
+                                    put("value", asInt)
+                                }
+                                litId
                             }
-                            varId
-                        } else resolvedAnon
+                            asFloat != null -> {
+                                val litId = ctx.freshLitId()
+                                ctx.synthesized[litId] = buildJsonObject {
+                                    put("type", "FloatLit")
+                                    put("value", asFloat)
+                                }
+                                litId
+                            }
+                            valueRef == "true" || valueRef == "false" -> {
+                                val litId = ctx.freshLitId()
+                                ctx.synthesized[litId] = buildJsonObject {
+                                    put("type", "BoolLit")
+                                    put("value", valueRef == "true")
+                                }
+                                litId
+                            }
+                            else -> {
+                                val resolvedAnon = resolveAtLast(valueRef, line, code, errors, ctx)
+                                    ?: return null
+                                val binderId = ctx.resolveBinder(resolvedAnon)
+                                if (binderId != null) {
+                                    val varId = ctx.freshVarRefId()
+                                    ctx.synthesized[varId] = buildJsonObject {
+                                        put("type", "VarRef")
+                                        put("binder", binderId)
+                                    }
+                                    varId
+                                } else resolvedAnon
+                            }
+                        }
                         idx++
                     }
                     // Synthesize a PFV node with an internal author id.
@@ -1020,6 +1358,29 @@ object DagJsonEmitter {
                     // a user error (don't mix compact + explicit form for the
                     // same name). The synthesized PRC's canonical bytes match
                     // a hand-authored `<name> PRC "<name>" <typeRef>`.
+                    //
+                    // Cross-LAM collision check: if two distinct LAMs each
+                    // declare a compact param with the same name but
+                    // different paramTypes, the second synthesis would
+                    // silently overwrite the first. The surviving PRC's
+                    // paramType is wrong for the first LAM, and if the
+                    // paramType creates a Schema↔Invariant→Lambda back-
+                    // reference (Q-035 pattern), the canonical encoder
+                    // infinite-recurses and blows the stack. Emit a
+                    // structured error here so the agent can rename one
+                    // of the conflicting params instead.
+                    val existing = ctx.synthesized[name]
+                    if (existing != null) {
+                        val existingParamType = (existing["paramType"] as? JsonPrimitive)?.content
+                        if (existingParamType != null && existingParamType != typeRef) {
+                            errors += AuthoringError.ArgShapeMismatch(
+                                line = line, code = code, position = position,
+                                expectedKind = "unique compact-LAM param name across Lambdas",
+                                actualKind = "compact param `$name:$typeRef` collides with a prior compact `$name:$existingParamType` — the synthesized PRC would silently alias to the most recent declaration. Rename one of the params (e.g., `${name}_v2`) so each LAM has its own PRC.",
+                            )
+                            return null
+                        }
+                    }
                     ctx.synthesized[name] = buildJsonObject {
                         put("type", "ParameterDecl")
                         put("name", name)
@@ -1134,10 +1495,25 @@ object DagJsonEmitter {
             errors += AuthoringError.UnknownCode(line = line, code = arg.code)
             return null
         }
-        if (!schema.producesValue) {
+        // Distinguish value-position from type-position slots so a nested
+        // type code (PRM, PRD, SUM, FNT, RT, RS, ...) is only legal in
+        // slots that conceptually carry a type reference. The parent's
+        // FieldSpec.acceptsType bit is the gate; absent that bit the
+        // nested code must be value-producing.
+        val parentSpec = LayerAGrammar.codes[parentCode]
+            ?.let { it.required + it.optional }
+            ?.getOrNull(position)
+        val slotAcceptsType = parentSpec?.acceptsType ?: false
+        val allowed = schema.producesValue || (schema.producesType && slotAcceptsType)
+        if (!allowed) {
+            val hint = when {
+                arg.code == "RS" -> " (code `RS` is type-only and cannot be nested — declare a standalone `id RS` node inside the lexical RT body and reference it by id, otherwise the synthesized node loses its RecursiveType binder context and the verifier reports `UnboundRecursiveSelf`)"
+                schema.producesType && !slotAcceptsType -> " (code `${arg.code}` produces a type but slot `${parentSpec?.jsonField ?: "?"}` carries a value)"
+                else -> " (code `${arg.code}` is type-only or structural — declare it as a standalone node and reference by id)"
+            }
             errors += AuthoringError.ArgShapeMismatch(
                 line = line, code = parentCode, position = position,
-                expectedKind = "value-producing nested expression (code `${arg.code}` is type-only or structural)",
+                expectedKind = "value-producing nested expression$hint",
                 actualKind = "nested `(${arg.code} ...)`",
             )
             return null
@@ -1176,12 +1552,12 @@ object DagJsonEmitter {
         parentSpec: LayerAGrammar.FieldSpec,
         ctx: EmitContext,
     ): String {
-        if (refText !in ctx.binderIds) return refText
+        val binderId = ctx.resolveBinder(refText) ?: return refText
         if (!isValuePositionRefSlot(parentCode, parentSpec.jsonField)) return refText
         val id = ctx.freshVarRefId()
         ctx.synthesized[id] = buildJsonObject {
             put("type", "VarRef")
-            put("binder", refText)
+            put("binder", binderId)
         }
         return id
     }

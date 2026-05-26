@@ -1,6 +1,7 @@
 # Task 01 — Factorial
 
-Implement the factorial function for non-negative integers.
+Implement the factorial function for non-negative integers and apply
+it to `5` so the program produces `120`.
 
 ```
 factorial(0) = 1
@@ -12,6 +13,9 @@ The reference implementation must:
 - Return its factorial.
 - Recurse via the language's standard fixpoint mechanism (no iteration).
 - Match on `n == 0` for the base case.
+- The program's final value is `factorial(5) = 120`. For Python, `main()`
+  should `print(factorial(5))`. For Strand, the root Application is
+  `APP fact [5]`.
 
 This task exercises: function definition, recursion / fixpoint, integer
 literals, Match dispatch, conditional dispatch on a primitive value.
