@@ -451,6 +451,8 @@ def cmd_report(args: argparse.Namespace) -> int:
             converged_at_attempt=cell["converged_at_attempt"],
             total_input_tokens=cell["total_input_tokens"],
             total_output_tokens=cell["total_output_tokens"],
+            total_cache_read_tokens=cell.get("total_cache_read_tokens", 0),
+            total_cache_creation_tokens=cell.get("total_cache_creation_tokens", 0),
             total_cost_usd=cell["total_cost_usd"],
         )
         tm.verify_results = [VerifyResult(ok=ok) for ok in cell.get("verify_oks", [])]

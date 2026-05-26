@@ -140,4 +140,6 @@ class MockedBackend(EmissionBackend):
             latency_ms=int(response.get("latency_ms", 0)),
             finish_reason=response.get("stop_reason") or response.get("finish_reason") or "stop",
             raw_response=response,
+            cache_read_input_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
+            cache_creation_input_tokens=int(usage.get("cache_creation_input_tokens", 0) or 0),
         )

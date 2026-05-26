@@ -46,6 +46,8 @@ def _emission_to_dict(em: EmissionResult) -> dict[str, Any]:
         "usage": {
             "input_tokens": em.input_tokens,
             "output_tokens": em.output_tokens,
+            "cache_read_input_tokens": em.cache_read_input_tokens,
+            "cache_creation_input_tokens": em.cache_creation_input_tokens,
         },
     }
 
@@ -126,6 +128,8 @@ def _serialize_task_metrics(tm: TaskMetrics) -> dict[str, Any]:
         "num_emissions": len(tm.emissions),
         "total_input_tokens": tm.total_input_tokens,
         "total_output_tokens": tm.total_output_tokens,
+        "total_cache_read_tokens": tm.total_cache_read_tokens,
+        "total_cache_creation_tokens": tm.total_cache_creation_tokens,
         "total_cost_usd": tm.total_cost_usd,
         "verify_oks": [vr.ok for vr in tm.verify_results],
         "run_ok": tm.run_result.ok if tm.run_result else None,

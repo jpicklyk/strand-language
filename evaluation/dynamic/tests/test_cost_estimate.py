@@ -12,7 +12,13 @@ from strand_eval.metrics import (
 from strand_eval.types import TaskMetrics
 
 
-def _metrics(input_tokens: int, output_tokens: int, model: str = "claude-sonnet-4-6") -> TaskMetrics:
+def _metrics(
+    input_tokens: int,
+    output_tokens: int,
+    model: str = "claude-sonnet-4-6",
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> TaskMetrics:
     return TaskMetrics(
         task_id="t",
         config="c",
@@ -22,6 +28,8 @@ def _metrics(input_tokens: int, output_tokens: int, model: str = "claude-sonnet-
         converged_at_attempt=0,
         total_input_tokens=input_tokens,
         total_output_tokens=output_tokens,
+        total_cache_read_tokens=cache_read_tokens,
+        total_cache_creation_tokens=cache_creation_tokens,
     )
 
 
@@ -67,3 +75,39 @@ def test_project_cost_scales_with_cells():
 
 def test_zero_tokens_costs_zero():
     assert estimate_cost(_metrics(0, 0), "claude-sonnet-4-6") == 0.0
+
+
+def test_sonnet_4_7_pricing_matches_4_6():
+    # Sonnet 4.7 launches at the same public prices as 4.6.
+    cost = estimate_cost(_metrics(1_000_000, 0), "claude-sonnet-4-7")
+    assert cost == pytest.approx(3.0, abs=1e-6)
+
+
+def test_cache_read_priced_at_one_tenth_of_input():
+    # 1M cache-read tokens on Sonnet 4.7 cost $0.30 (10% of $3/M).
+    m = _metrics(0, 0, model="claude-sonnet-4-7", cache_read_tokens=1_000_000)
+    cost = estimate_cost(m, "claude-sonnet-4-7")
+    assert cost == pytest.approx(0.30, abs=1e-6)
+
+
+def test_cache_write_priced_at_one_and_quarter_input():
+    # 1M cache-write tokens on Sonnet 4.7 cost $3.75 (1.25 × $3/M).
+    m = _metrics(0, 0, model="claude-sonnet-4-7", cache_creation_tokens=1_000_000)
+    cost = estimate_cost(m, "claude-sonnet-4-7")
+    assert cost == pytest.approx(3.75, abs=1e-6)
+
+
+def test_mixed_cache_input_output_cost():
+    # 100K uncached input + 1M cache read + 200K cache write + 50K output on Sonnet 4.7:
+    #   100k/1M × 3.00 = 0.30
+    #   1M/1M × 0.30 = 0.30
+    #   200k/1M × 3.75 = 0.75
+    #   50k/1M × 15.00 = 0.75
+    # = 2.10
+    m = _metrics(
+        100_000, 50_000,
+        model="claude-sonnet-4-7",
+        cache_read_tokens=1_000_000,
+        cache_creation_tokens=200_000,
+    )
+    assert estimate_cost(m, "claude-sonnet-4-7") == pytest.approx(2.10, abs=1e-6)

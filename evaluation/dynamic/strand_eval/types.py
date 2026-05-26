@@ -45,7 +45,15 @@ class Message:
 
 @dataclass
 class EmissionResult:
-    """One model call's output, normalized across backends."""
+    """One model call's output, normalized across backends.
+
+    ``input_tokens`` is the *uncached* input token count for the call
+    (what the Anthropic API also calls "input_tokens"). Cached prefix
+    tokens that hit the prompt cache appear under
+    ``cache_read_input_tokens``; tokens written into the cache on the
+    first call of a window appear under ``cache_creation_input_tokens``.
+    Backends that don't support caching populate both as 0.
+    """
 
     content: str
     input_tokens: int
@@ -54,6 +62,8 @@ class EmissionResult:
     latency_ms: int
     finish_reason: str
     raw_response: Optional[dict[str, Any]] = None
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 @dataclass
@@ -105,7 +115,13 @@ class RunConfig:
 
 @dataclass
 class TaskMetrics:
-    """Per-(task, config, sample) metrics emitted by the orchestrator."""
+    """Per-(task, config, sample) metrics emitted by the orchestrator.
+
+    ``total_input_tokens`` tracks only uncached input. ``total_cache_read_tokens``
+    and ``total_cache_creation_tokens`` track the prompt-cache token flow
+    separately; the cost calculator in `metrics.py` prices them at their
+    respective rates ($0.30/M read, $3.75/M write on Sonnet 4.7).
+    """
 
     task_id: str
     config: str
@@ -116,6 +132,8 @@ class TaskMetrics:
     emissions: list[EmissionResult] = field(default_factory=list)
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
     total_cost_usd: float = 0.0
     verify_results: list[VerifyResult] = field(default_factory=list)
     run_result: Optional[RunResult] = None

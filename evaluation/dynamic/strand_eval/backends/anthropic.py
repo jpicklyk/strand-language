@@ -56,14 +56,23 @@ class AnthropicBackend(EmissionBackend):
             elif msg.role == Role.ASSISTANT:
                 api_messages.append({"role": "assistant", "content": msg.content})
 
+        # Wrap the system prompt as a list-of-blocks with ephemeral cache_control
+        # so subsequent calls within the 5-minute cache window pay cache-read
+        # rates ($0.30/M on Sonnet 4.7) instead of full input rates ($3/M).
+        # Cache writes ($3.75/M) happen on the first call of a window.
+        # On Sonnet 4.7 prompt caching is GA — no beta header needed.
+        system_blocks = self._build_system_blocks(system_text)
+        api_kwargs: dict = {
+            "model": model,
+            "max_tokens": self._max_tokens,
+            "temperature": self._temperature,
+            "messages": api_messages,
+        }
+        if system_blocks:
+            api_kwargs["system"] = system_blocks
+
         t0 = time.monotonic()
-        response = self._client.messages.create(
-            model=model,
-            max_tokens=self._max_tokens,
-            temperature=self._temperature,
-            system=system_text,
-            messages=api_messages,
-        )
+        response = self._client.messages.create(**api_kwargs)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         # Concatenate text blocks; tool-use blocks are ignored at this layer.
@@ -75,8 +84,13 @@ class AnthropicBackend(EmissionBackend):
         content = "".join(text_parts)
 
         usage = response.usage
+        # input_tokens excludes cache reads/writes on the Anthropic API. The
+        # cached-block token counts come back as separate fields that may be
+        # None when the request didn't touch the cache.
         input_tokens = getattr(usage, "input_tokens", 0) or 0
         output_tokens = getattr(usage, "output_tokens", 0) or 0
+        cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
         stop_reason = response.stop_reason or "unknown"
 
         # The raw response is captured for fixture recording. We dump the
@@ -87,9 +101,23 @@ class AnthropicBackend(EmissionBackend):
             try:
                 raw = response.model_dump()  # type: ignore[assignment]
             except Exception:
-                raw = self._fallback_dump(response, content, input_tokens, output_tokens)
+                raw = self._fallback_dump(
+                    response,
+                    content,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                )
         else:
-            raw = self._fallback_dump(response, content, input_tokens, output_tokens)
+            raw = self._fallback_dump(
+                response,
+                content,
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            )
 
         return EmissionResult(
             content=content,
@@ -99,10 +127,37 @@ class AnthropicBackend(EmissionBackend):
             latency_ms=latency_ms,
             finish_reason=stop_reason,
             raw_response=raw,
+            cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
         )
 
     @staticmethod
-    def _fallback_dump(response, content: str, input_tokens: int, output_tokens: int) -> dict:
+    def _build_system_blocks(system_text: str) -> list[dict]:
+        """Wrap the system prompt in a single text block with ephemeral caching.
+
+        Returns an empty list when there is no system text so the
+        `system` kwarg can be omitted entirely (the API rejects an empty
+        list with cache_control set).
+        """
+        if not system_text:
+            return []
+        return [
+            {
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+    @staticmethod
+    def _fallback_dump(
+        response,
+        content: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_input_tokens: int = 0,
+        cache_creation_input_tokens: int = 0,
+    ) -> dict:
         return {
             "id": getattr(response, "id", None),
             "model": getattr(response, "model", None),
@@ -111,5 +166,7 @@ class AnthropicBackend(EmissionBackend):
             "usage": {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "cache_read_input_tokens": cache_read_input_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
             },
         }

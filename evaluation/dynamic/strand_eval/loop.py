@@ -125,6 +125,8 @@ def run_task(
         metrics.emissions.append(emission)
         metrics.total_input_tokens += emission.input_tokens
         metrics.total_output_tokens += emission.output_tokens
+        metrics.total_cache_read_tokens += emission.cache_read_input_tokens
+        metrics.total_cache_creation_tokens += emission.cache_creation_input_tokens
 
         assistant_msg = Message(role=Role.ASSISTANT, content=emission.content)
         messages.append(assistant_msg)

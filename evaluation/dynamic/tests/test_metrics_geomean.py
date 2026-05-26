@@ -127,3 +127,106 @@ def test_aggregate_table_emits_na_for_no_converged_samples():
     by_cfg: dict[str, list] = {"baseline": cells[:1], "broken": cells[1:]}
     md = aggregate_table(by_cfg, baseline_config="baseline")
     assert "n/a" in md
+
+
+# --------------------------------------------------------------------------
+# Bootstrap CI / CellStat
+# --------------------------------------------------------------------------
+
+def test_cell_stat_single_sample_no_brackets():
+    from strand_eval.metrics import cell_stat, _cell_tokens_value
+
+    cell = [_make_metrics("t1", "c", 0, True, 1000)]
+    stat = cell_stat(cell, _cell_tokens_value)
+    assert stat is not None
+    assert stat.n == 1
+    assert stat.mean == 1000.0
+    # render should not contain CI brackets
+    rendered = stat.render()
+    assert "[" not in rendered
+    assert "1,000" in rendered
+
+
+def test_cell_stat_multiple_samples_render_includes_brackets():
+    from strand_eval.metrics import cell_stat, _cell_tokens_value
+
+    cells = [
+        _make_metrics("t1", "c", 0, True, 900),
+        _make_metrics("t1", "c", 1, True, 1000),
+        _make_metrics("t1", "c", 2, True, 1100),
+    ]
+    stat = cell_stat(cells, _cell_tokens_value)
+    assert stat is not None
+    assert stat.n == 3
+    assert stat.mean == pytest.approx(1000.0, abs=1e-3)
+    rendered = stat.render()
+    assert "[" in rendered and "]" in rendered
+
+
+def test_cell_stat_only_success_filter():
+    from strand_eval.metrics import cell_stat, _cell_tokens_value
+
+    cells = [
+        _make_metrics("t1", "c", 0, True, 1000),
+        _make_metrics("t1", "c", 1, False, 50000),  # excluded
+    ]
+    stat = cell_stat(cells, _cell_tokens_value, only_success=True)
+    assert stat is not None
+    assert stat.n == 1  # only the converged sample
+    assert stat.mean == 1000.0
+
+
+def test_cell_stat_no_eligible_samples_returns_none():
+    from strand_eval.metrics import cell_stat, _cell_tokens_value
+
+    cells = [_make_metrics("t1", "c", 0, False, 100)]
+    stat = cell_stat(cells, _cell_tokens_value, only_success=True)
+    assert stat is None
+
+
+def test_per_task_table_shows_ci_for_multi_sample():
+    cells = [
+        _make_metrics("t1", "candidate", i, True, 1000 + 50 * i)
+        for i in range(5)
+    ] + [_make_metrics("t1", "baseline", 0, True, 1000)]
+    by_cfg = {"baseline": cells[-1:], "candidate": cells[:-1]}
+    md = per_task_table("t1", by_cfg, baseline_config="baseline")
+    # Multi-sample candidate row must include CI brackets.
+    cand_line = [line for line in md.splitlines() if line.startswith("| candidate")][0]
+    assert "[" in cand_line and "]" in cand_line
+    # Single-sample baseline row must NOT.
+    base_line = [line for line in md.splitlines() if line.startswith("| baseline")][0]
+    assert "[" not in base_line
+
+
+def test_per_task_table_shows_cost_column():
+    cells = [_make_metrics("t1", "baseline", 0, True, 1000)]
+    by_cfg = {"baseline": cells}
+    md = per_task_table("t1", by_cfg, baseline_config="baseline")
+    assert "Cost/success" in md
+    # the helper sets total_cost_usd=0.01 so the rendered cost ends in "0100"
+    assert "$0.0100" in md
+
+
+def test_aggregate_table_shows_cache_hit_rate_when_present():
+    cells_baseline = [_make_metrics("t1", "baseline", 0, True, 1000)]
+    cand = _make_metrics("t1", "candidate", 0, True, 1000)
+    cand.total_cache_read_tokens = 4000
+    cand.total_cache_creation_tokens = 0
+    # _make_metrics splits 1000 into input/output as 500/500.
+    # Total input across config "candidate" = 500 uncached + 4000 cache_read = 4500
+    # Cache hit = 4000/4500 = 88.9%
+    by_cfg = {"baseline": cells_baseline, "candidate": [cand]}
+    md = aggregate_table(by_cfg, baseline_config="baseline")
+    assert "Cache hit rate" in md
+    assert "88.9%" in md
+
+
+def test_aggregate_table_omits_cache_column_when_no_cache_traffic():
+    cells = [
+        _make_metrics("t1", "baseline", 0, True, 1000),
+        _make_metrics("t1", "candidate", 0, True, 2000),
+    ]
+    by_cfg = {"baseline": cells[:1], "candidate": cells[1:]}
+    md = aggregate_table(by_cfg, baseline_config="baseline")
+    assert "Cache hit rate" not in md
