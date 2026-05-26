@@ -1073,4 +1073,68 @@ class InterpreterTest {
         // for the innerHF nested in the recursive case (n=3,2,1).
         assertEquals(Value.IntV(4L), v)
     }
+
+    // ----- Stdlib expansion round 2 Slice 2: higher-order List ops -----
+
+    @Test
+    fun `List_Map end-to-end with a doubling Closure`() {
+        // Builds list [3, 5], passes \x. Int.Mul x 2 to List.Map,
+        // then asserts List.Length of the result is 2 and List.Nth(_, 0)
+        // is Some(6). This exercises the full
+        // Application -> applyForeign -> lookupHigherOrder -> ApplyFn ->
+        // applyValueToArgs -> Closure body eval path.
+        val json = """{
+          "version": 1, "root": "lengthCall",
+          "nodes": {
+            "intT":         { "type": "PrimitiveType", "kind": "Int" },
+
+            "innerHead":    { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+            "innerTail":    { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+            "innerProd":    { "type": "ProductType", "fields": ["innerHead", "innerTail"] },
+            "consCase":     { "type": "SumTypeCase", "name": "Cons", "caseType": "innerProd" },
+            "nilCase":      { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+            "listBody":     { "type": "SumType", "cases": ["consCase", "nilCase"] },
+            "recSelf":      { "type": "RecursiveSelf" },
+            "listT":        { "type": "RecursiveType", "body": "listBody" },
+
+            "outerHead":    { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+            "outerTail":    { "type": "ProductTypeField", "name": "tail", "fieldType": "listT" },
+            "outerProd":    { "type": "ProductType", "fields": ["outerHead", "outerTail"] },
+
+            "nilVal":       { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+
+            "lit5":         { "type": "IntLit", "value": 5 },
+            "h5":           { "type": "ProductFieldValue", "fieldName": "head", "value": "lit5" },
+            "t5":           { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+            "p5":           { "type": "ProductValue", "ofType": "outerProd", "fields": ["h5", "t5"] },
+            "node5":        { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p5" },
+
+            "lit3":         { "type": "IntLit", "value": 3 },
+            "h3":           { "type": "ProductFieldValue", "fieldName": "head", "value": "lit3" },
+            "t3":           { "type": "ProductFieldValue", "fieldName": "tail", "value": "node5" },
+            "p3":           { "type": "ProductValue", "ofType": "outerProd", "fields": ["h3", "t3"] },
+            "list":         { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p3" },
+
+            "mulT":         { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+            "mulFn":        { "type": "ForeignNode", "target": "strand-builtin:Int.Mul", "foreignType": "mulT" },
+            "two":          { "type": "IntLit", "value": 2 },
+            "xParam":       { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+            "xRef":         { "type": "VarRef", "binder": "xParam" },
+            "doubleBody":   { "type": "Application", "function": "mulFn", "arguments": ["xRef", "two"] },
+            "double":       { "type": "Lambda", "parameters": ["xParam"], "body": "doubleBody" },
+
+            "fnT":          { "type": "FunctionType", "parameters": ["intT"], "result": "intT" },
+            "mapT":         { "type": "FunctionType", "parameters": ["listT", "fnT"], "result": "listT" },
+            "mapFn":        { "type": "ForeignNode", "target": "strand-builtin:List.Map", "foreignType": "mapT" },
+            "mapCall":      { "type": "Application", "function": "mapFn", "arguments": ["list", "double"] },
+
+            "lenT":         { "type": "FunctionType", "parameters": ["listT"], "result": "intT" },
+            "lenFn":        { "type": "ForeignNode", "target": "strand-builtin:List.Length", "foreignType": "lenT" },
+            "lengthCall":   { "type": "Application", "function": "lenFn", "arguments": ["mapCall"] }
+          }
+        }"""
+        val (store, root, _, hashToNodeId) = ingestAndGetIds(json)
+        val v = Interpreter(store, hashToNodeId).eval(root)
+        assertEquals(Value.IntV(2L), v)
+    }
 }

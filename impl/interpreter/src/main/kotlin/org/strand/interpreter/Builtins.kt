@@ -33,6 +33,35 @@ object Builtins {
     }
 
     /**
+     * Continuation passed to higher-order builtins (Slice 2 of stdlib
+     * expansion round 2). Lets a builtin invoke a user-supplied
+     * callable (a Strand [Value.Closure], [Value.FixpointFn], or
+     * [Value.ForeignFn]) with a list of pre-evaluated arguments,
+     * returning the result Value.
+     *
+     * The interpreter constructs an [ApplyFn] that closes over the
+     * current capability context and handler stack at the
+     * higher-order builtin's call site, so callback evaluations see
+     * the same environment the surrounding code sees.
+     *
+     * Closures must have exactly `args.size` parameters; fixpoints
+     * have `args.size + 1` (the first is the recursive self-slot).
+     */
+    fun interface ApplyFn {
+        fun apply(fn: Value, args: List<Value>): Value
+    }
+
+    /**
+     * Higher-order foreign callable: receives an [ApplyFn] alongside
+     * the standard argument list so it can call user-supplied
+     * callables. Distinct from [Fn] so the dispatcher knows to thread
+     * the callback through.
+     */
+    fun interface FnH {
+        fun invoke(args: List<Value>, apply: ApplyFn): Value
+    }
+
+    /**
      * Pluggable clock for the `Time.*` builtins. Default is [SystemClock]
      * (real wall-clock time and real sleep). Tests that need
      * deterministic timestamps install [FixedClock] in setup and reset
@@ -1183,11 +1212,145 @@ object Builtins {
         },
     )
 
+    /**
+     * Higher-order builtins. Separate registry from the standard
+     * [registry] so the dispatcher can branch on which lookup path
+     * found the target. A given target name appears in at most one
+     * registry — the lookups are checked in order (higher-order
+     * first) by callers.
+     *
+     * Populated by Slice 2 of stdlib expansion round 2 (List.Map,
+     * List.Filter, List.Fold, List.Find, List.Any, List.All).
+     */
+    private val higherOrderRegistry: Map<String, FnH> = mapOf(
+        // Stdlib expansion round 2, Slice 2.2 — higher-order List ops.
+        // Each takes the canonical Cons/Nil SumV-encoded list as the
+        // first arg and a callable (Closure / FixpointFn / ForeignFn)
+        // as the lambda. Lambda arity matches the operation
+        // (Map/Filter/Find/Any/All take a 1-arg fn; Fold takes a 2-arg
+        // fn over (accumulator, element)). The interpreter's
+        // [ApplyFn] callback closes over the surrounding capability
+        // context, so lambdas inherit the caller's effects.
+
+        "strand-builtin:List.Map" to FnH { args, apply ->
+            // (list, fn: A -> B) -> List<B>
+            require(args.size == 2) { "List.Map expects 2 args (list, fn), got ${args.size}" }
+            val fn = args[1]
+            val transformed = mutableListOf<Value>()
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                transformed += apply.apply(fn, listOf(payload.fields.getValue("head")))
+                cur = payload.fields.getValue("tail")
+            }
+            var result: Value = Value.SumV("Nil", null)
+            for (h in transformed.reversed()) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to h, "tail" to result)))
+            }
+            result
+        },
+
+        "strand-builtin:List.Filter" to FnH { args, apply ->
+            // (list, predicate: A -> Bool) -> List<A>
+            require(args.size == 2) { "List.Filter expects 2 args (list, predicate), got ${args.size}" }
+            val pred = args[1]
+            val kept = mutableListOf<Value>()
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                val head = payload.fields.getValue("head")
+                val include = apply.apply(pred, listOf(head)) as Value.BoolV
+                if (include.v) kept += head
+                cur = payload.fields.getValue("tail")
+            }
+            var result: Value = Value.SumV("Nil", null)
+            for (h in kept.reversed()) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to h, "tail" to result)))
+            }
+            result
+        },
+
+        "strand-builtin:List.Fold" to FnH { args, apply ->
+            // (list, init, fn: (acc, elem) -> acc) -> acc
+            require(args.size == 3) { "List.Fold expects 3 args (list, init, fn), got ${args.size}" }
+            val fn = args[2]
+            var acc: Value = args[1]
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                val head = payload.fields.getValue("head")
+                acc = apply.apply(fn, listOf(acc, head))
+                cur = payload.fields.getValue("tail")
+            }
+            acc
+        },
+
+        "strand-builtin:List.Find" to FnH { args, apply ->
+            // (list, predicate: A -> Bool) -> Option<A>
+            require(args.size == 2) { "List.Find expects 2 args (list, predicate), got ${args.size}" }
+            val pred = args[1]
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                val head = payload.fields.getValue("head")
+                val match = apply.apply(pred, listOf(head)) as Value.BoolV
+                if (match.v) return@FnH Value.SumV("Some", head)
+                cur = payload.fields.getValue("tail")
+            }
+            Value.SumV("None", null)
+        },
+
+        "strand-builtin:List.Any" to FnH { args, apply ->
+            // (list, predicate: A -> Bool) -> Bool. Short-circuits on first true.
+            require(args.size == 2) { "List.Any expects 2 args (list, predicate), got ${args.size}" }
+            val pred = args[1]
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                if ((apply.apply(pred, listOf(payload.fields.getValue("head"))) as Value.BoolV).v) {
+                    return@FnH Value.BoolV(true)
+                }
+                cur = payload.fields.getValue("tail")
+            }
+            Value.BoolV(false)
+        },
+
+        "strand-builtin:List.All" to FnH { args, apply ->
+            // (list, predicate: A -> Bool) -> Bool. Short-circuits on first false.
+            require(args.size == 2) { "List.All expects 2 args (list, predicate), got ${args.size}" }
+            val pred = args[1]
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                if (!(apply.apply(pred, listOf(payload.fields.getValue("head"))) as Value.BoolV).v) {
+                    return@FnH Value.BoolV(false)
+                }
+                cur = payload.fields.getValue("tail")
+            }
+            Value.BoolV(true)
+        },
+    )
+
     /** Look up a builtin by its target identifier; null if unknown. */
     fun lookup(target: String): Fn? = registry[target]
 
-    /** Snapshot of all registered target identifiers. */
-    fun registeredTargets(): Set<String> = registry.keys
+    /** Look up a higher-order builtin by target identifier; null if unknown. */
+    fun lookupHigherOrder(target: String): FnH? = higherOrderRegistry[target]
+
+    /** Snapshot of all registered target identifiers across both registries. */
+    fun registeredTargets(): Set<String> = registry.keys + higherOrderRegistry.keys
 
     /**
      * A fixed Unix-millis timestamp returned by `strand-builtin:Time.Now`.

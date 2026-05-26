@@ -613,6 +613,21 @@ class Interpreter(
         checkCapabilities(id, fn.node.effects, instances, context)
         val args = app.arguments.map { eval(it, env, context, handlers) }
         foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
+        // Higher-order lookup wins over standard lookup; the registries
+        // are disjoint so this ordering is conservative.
+        val higherOrder = Builtins.lookupHigherOrder(fn.node.target)
+        if (higherOrder != null) {
+            val apply = Builtins.ApplyFn { callable, callbackArgs ->
+                applyValueToArgs(id, callable, callbackArgs, context, handlers)
+            }
+            return try {
+                higherOrder.invoke(args, apply)
+            } catch (io: IoFailure) {
+                throw InterpretException(
+                    InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
+                )
+            }
+        }
         val builtin = Builtins.lookup(fn.node.target)
             ?: throw InterpretException(
                 InterpretError.UnknownForeignTarget(at = id, target = fn.node.target)
@@ -625,6 +640,87 @@ class Interpreter(
             // InterpretError carrying the call-site NodeId.
             throw InterpretException(
                 InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
+            )
+        }
+    }
+
+    /**
+     * Apply a runtime [Value] callable to pre-evaluated [args] without
+     * an enclosing Application node. Used by higher-order builtins
+     * (Slice 2 of stdlib expansion round 2) to invoke user-supplied
+     * lambdas on each element of a collection.
+     *
+     * Reuses the current [context] and [handlers] from the enclosing
+     * higher-order builtin's call site — the verifier guarantees that
+     * the surrounding Application's effect declarations cover the
+     * callback's effects (the higher-order builtin's signature
+     * propagates the callable's effects to its own).
+     *
+     * Effect-instance evaluation is skipped because the callback has
+     * no per-call Application node and therefore no `effectInstances`
+     * to evaluate — refinement checking for parameterized effects
+     * inside higher-order callbacks is a follow-up (current
+     * higher-order builtins only deal with collections of plain
+     * values).
+     *
+     * @param id NodeId of the enclosing higher-order builtin call (used
+     *           for error reporting if [callable] is not callable or
+     *           has wrong arity).
+     */
+    private fun applyValueToArgs(
+        id: NodeId,
+        callable: Value,
+        args: List<Value>,
+        context: CapabilitySet,
+        handlers: List<ActiveHandler>,
+    ): Value {
+        return when (callable) {
+            is Value.Closure -> {
+                if (callable.lambda.parameters.size != args.size) {
+                    throw InterpretException(InterpretError.ArityMismatch(
+                        at = id, expected = callable.lambda.parameters.size, actual = args.size,
+                    ))
+                }
+                var callEnv = callable.env
+                for ((paramId, value) in callable.lambda.parameters.zip(args)) {
+                    callEnv = callEnv + (paramId to value)
+                }
+                eval(callable.lambda.body, callEnv, context, handlers)
+            }
+            is Value.FixpointFn -> {
+                // Body has args.size + 1 parameters: param[0] is the self-slot.
+                val userArity = callable.bodyLambda.parameters.size - 1
+                if (userArity != args.size) {
+                    throw InterpretException(InterpretError.ArityMismatch(
+                        at = id, expected = userArity, actual = args.size,
+                    ))
+                }
+                var callEnv = callable.env + (callable.bodyLambda.parameters[0] to callable)
+                for ((i, paramId) in callable.bodyLambda.parameters.drop(1).withIndex()) {
+                    callEnv = callEnv + (paramId to args[i])
+                }
+                eval(callable.bodyLambda.body, callEnv, context, handlers)
+            }
+            is Value.ForeignFn -> {
+                // Dispatch directly to the builtin registry. ForeignFn
+                // callbacks (passing e.g. Bool.Not as a List.Map fn) are
+                // rare but legitimate — and they don't recurse into the
+                // higher-order machinery because Bool.Not is a standard Fn.
+                foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
+                val builtin = Builtins.lookup(callable.node.target)
+                    ?: throw InterpretException(
+                        InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
+                    )
+                try {
+                    builtin.invoke(args)
+                } catch (io: IoFailure) {
+                    throw InterpretException(
+                        InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
+                    )
+                }
+            }
+            else -> throw InterpretException(
+                InterpretError.NotCallable(at = id, gotKind = callable::class.simpleName ?: "Value")
             )
         }
     }
