@@ -137,14 +137,12 @@ These wait on architectural work that is not stdlib-shaped.
 
 ## Agent-native and Strand-distinctive capabilities
 
-Not stdlib gaps in the conventional sense. These are capabilities specific to Strand's positioning as a language for AI agents, and they may shape stdlib and node-algebra requirements before the rest of this catalog ships. Investigation tracked across two sibling proposals: [`agent-native-capabilities.md`](agent-native-capabilities.md) (Q-037, revised 2026-05-26 after five-call analysis pass — per-provider ForeignNodes for LLM generation and embedding) and [`agent-native-vector-stores.md`](agent-native-vector-stores.md) (Q-038, drafted 2026-05-26 — per-provider ForeignNodes for vector storage and similarity search). In scope of those proposals:
+Not stdlib gaps in the conventional sense. These are capabilities specific to Strand's positioning as a language for AI agents. **Phase 1 of both proposals landed 2026-05-26** in parallel-worktree commits merged at `3c8271b`: [`implemented/agent-native-capabilities.md`](implemented/agent-native-capabilities.md) (Q-037 — per-provider LLM ForeignNodes for Anthropic / OpenAI / Gemini under E-035 LLM.Generate{provider, model} + E-036 LLM.Embed{provider, model}) and [`implemented/agent-native-vector-stores.md`](implemented/agent-native-vector-stores.md) (Q-038 — per-provider vector-store ForeignNodes for Pinecone + Chroma under E-037 Vector.Read + E-038 Vector.Write on a Read/Write split). 18 new builtins, 58 new tests, all pass. Phase 2+ remain (agent-pattern documentation + reference corpus for Q-037; pgvector / FAISS + Weaviate / Qdrant + RAG demo for Q-038). Categories not directly addressed by Q-037 / Q-038 Phase 1:
 
-- `LLM.*` — generation, embedding, structured-output, tool-use calls as first-class builtins
-- `Vector.*` / `Embedding.*` — vector storage and similarity search for retrieval workflows
-- Agent-state primitives — long-running memory, prompt caches, conversation handles
-- Model routing and provider abstraction
-
-The investigation is expected to surface implications for at least: capability-context shape (model-API keys as a new effect category), `Memory.MutableState` (long-running memory may demand it), schema design (structured-output calls intersect with N-032 / N-033), and the runtime resource model (`ResourceTable` for conversation and cache handles).
+- Agent-state primitives — long-running memory, prompt caches, conversation handles. Q-037 § 3.5 confirms state machines are the model; the `llm_conversation` ResourceTable kind is reserved but its Open/Close builtins are deferred. `Memory.MutableState` (E-017) stays absent.
+- Embedding model coverage beyond Anthropic / OpenAI / Gemini — Voyage AI as a dedicated provider (Anthropic's recommended embeddings backend; Q-037's `AnthropicEmbed` currently surfaces a stub IoFailure recommending it).
+- Multi-modal LLM input (vision, audio, video) — handled today via `Block.Image(Bytes, mediaType)` and `Block.Document(Bytes, mediaType)` in the existing GenerateRequest shape; further refinement may emerge from real workloads.
+- Streaming LLM outputs — Q-037 § 4.6 sketches the path (a `Resource(kind = "llm_stream")` returned from a streaming builtin variant, drained via `*.Stream.Receive`); not implemented in Phase 1.
 
 ## References
 
