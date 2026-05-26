@@ -398,6 +398,63 @@ object Builtins {
             Value.UnitV
         },
 
+        // Http.Request convenience builtin (Phase 2 #6). Wraps
+        // java.net.URL + HttpURLConnection so simple HTTP/HTTPS
+        // calls don't require manual socket framing. HTTP/1.1 only;
+        // HTTPS via the JVM's default truststore. Returns a
+        // ProductV with fields: {status: Int, body: Bytes}.
+        // Response headers are not exposed in this initial slice —
+        // most use cases need just status + body. A follow-up can
+        // add headers as a SumV-encoded List<{name, value}>.
+        //
+        // Effect categories: declares E-001 Network.Connect, E-003
+        // Network.Send, E-004 Network.Receive when used. Programs
+        // typically combine the three under one CapabilityScope.
+
+        "strand-builtin:Http.Request" to Fn { args ->
+            // (method: String, url: String, body: Bytes) -> {status: Int, body: Bytes}
+            // body may be empty Bytes for GET/DELETE etc.
+            require(args.size == 3) {
+                "Http.Request expects 3 args (method: String, url: String, body: Bytes), got ${args.size}"
+            }
+            val method = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV method, got ${args[0]::class.simpleName}")
+            val urlStr = (args[1] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV url, got ${args[1]::class.simpleName}")
+            val body = (args[2] as? Value.BytesV)?.v
+                ?: throw IoFailure("http-request", "expected BytesV body, got ${args[2]::class.simpleName}")
+            try {
+                val url = java.net.URI(urlStr).toURL()
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = method.uppercase()
+                conn.doInput = true
+                if (body.isNotEmpty()) {
+                    conn.doOutput = true
+                    conn.outputStream.use { it.write(body) }
+                }
+                val status = conn.responseCode
+                val responseBody = try {
+                    (if (status in 200..299) conn.inputStream else conn.errorStream)
+                        ?.readBytes() ?: ByteArray(0)
+                } catch (_: java.io.IOException) {
+                    ByteArray(0)
+                }
+                conn.disconnect()
+                Value.ProductV(mapOf(
+                    "status" to Value.IntV(status.toLong()),
+                    "body" to Value.BytesV(responseBody),
+                ))
+            } catch (e: java.net.MalformedURLException) {
+                throw IoFailure("http-request", "$urlStr: malformed URL: ${e.message}")
+            } catch (e: java.net.URISyntaxException) {
+                throw IoFailure("http-request", "$urlStr: URI syntax: ${e.message}")
+            } catch (e: java.io.IOException) {
+                throw IoFailure("http-request", "$urlStr: ${e.message}")
+            } catch (e: SecurityException) {
+                throw IoFailure("http-request", "$urlStr: ${e.message}")
+            }
+        },
+
         // Layer 4 step 2 — Process + env builtins. Spawn/Wait use
         // java.lang.ProcessBuilder; inherited stdio (child's stdout/
         // stderr go to the runtime's stdout/stderr). Captured output

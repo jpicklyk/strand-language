@@ -235,6 +235,108 @@ class BuiltinsIoTest {
         }
     }
 
+    // ---------- HTTP ----------
+
+    @Test
+    fun `Http_Request GET against a local HTTP server returns status and body`() {
+        // Spin up a tiny HTTP/1.0 server on an ephemeral port, hand-frame
+        // the response. We can't rely on any external network in CI.
+        val server = java.net.ServerSocket(0)
+        try {
+            val port = server.localPort
+            val serverThread = Thread {
+                server.accept().use { client ->
+                    // Consume the request line + headers (until \r\n\r\n).
+                    val input = client.getInputStream().bufferedReader(Charsets.UTF_8)
+                    while (true) {
+                        val line = input.readLine() ?: break
+                        if (line.isEmpty()) break
+                    }
+                    val payload = "hello from strand"
+                    val response = "HTTP/1.0 200 OK\r\nContent-Length: ${payload.length}\r\n\r\n$payload"
+                    client.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
+                    client.getOutputStream().flush()
+                }
+            }
+            serverThread.start()
+
+            val fn = Builtins.lookup("strand-builtin:Http.Request")!!
+            val result = fn.invoke(listOf(
+                Value.StringV("GET"),
+                Value.StringV("http://127.0.0.1:$port/"),
+                Value.BytesV(ByteArray(0)),
+            )) as Value.ProductV
+            assertEquals(Value.IntV(200L), result.fields["status"])
+            val body = (result.fields["body"] as Value.BytesV).v
+            assertEquals("hello from strand", String(body, Charsets.UTF_8))
+            serverThread.join(2000)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `Http_Request POST with body echoes via local server`() {
+        val server = java.net.ServerSocket(0)
+        try {
+            val port = server.localPort
+            val serverThread = Thread {
+                server.accept().use { client ->
+                    val input = client.getInputStream()
+                    // Read headers until \r\n\r\n; track Content-Length.
+                    val headerBuf = StringBuilder()
+                    while (!headerBuf.endsWith("\r\n\r\n")) {
+                        val b = input.read()
+                        if (b < 0) break
+                        headerBuf.append(b.toChar())
+                    }
+                    val contentLength = headerBuf.lineSequence()
+                        .firstOrNull { it.lowercase().startsWith("content-length:") }
+                        ?.substringAfter(":")?.trim()?.toIntOrNull() ?: 0
+                    val body = ByteArray(contentLength)
+                    var read = 0
+                    while (read < contentLength) {
+                        val n = input.read(body, read, contentLength - read)
+                        if (n < 0) break
+                        read += n
+                    }
+                    val response = "HTTP/1.0 201 Created\r\nContent-Length: $read\r\n\r\n"
+                    client.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
+                    client.getOutputStream().write(body, 0, read)
+                    client.getOutputStream().flush()
+                }
+            }
+            serverThread.start()
+
+            val fn = Builtins.lookup("strand-builtin:Http.Request")!!
+            val payload = "post payload from strand".toByteArray(Charsets.UTF_8)
+            val result = fn.invoke(listOf(
+                Value.StringV("POST"),
+                Value.StringV("http://127.0.0.1:$port/"),
+                Value.BytesV(payload),
+            )) as Value.ProductV
+            assertEquals(Value.IntV(201L), result.fields["status"])
+            val echoed = (result.fields["body"] as Value.BytesV).v
+            assertEquals(payload.toList(), echoed.toList())
+            serverThread.join(2000)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `Http_Request with malformed URL raises IoFailure`() {
+        val fn = Builtins.lookup("strand-builtin:Http.Request")!!
+        val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
+            fn.invoke(listOf(
+                Value.StringV("GET"),
+                Value.StringV("not a url at all"),
+                Value.BytesV(ByteArray(0)),
+            ))
+        }
+        assertEquals("http-request", ex.kind)
+    }
+
     // ---------- Process ----------
 
     @Test
