@@ -525,6 +525,186 @@ object Builtins {
             else Value.SumV(case = "None", payload = null)
         },
 
+        // Layer 4 step 2 — String stdlib builtins. Pure (no declared
+        // effects). All UTF-8 semantics; ParseInt/ParseFloat return
+        // the standard Option<T> sum encoding (SumV "Some" / "None").
+
+        "strand-builtin:String.Length" to Fn { args ->
+            require(args.size == 1) { "String.Length expects 1 arg, got ${args.size}" }
+            Value.IntV((args[0] as Value.StringV).v.length.toLong())
+        },
+
+        "strand-builtin:String.Substring" to Fn { args ->
+            // (s: String, start: Int, end: Int) -> String
+            // start inclusive, end exclusive. Clamped to [0, length].
+            require(args.size == 3) { "String.Substring expects 3 args (s, start, end), got ${args.size}" }
+            val s = (args[0] as Value.StringV).v
+            val start = (args[1] as Value.IntV).v.toInt().coerceIn(0, s.length)
+            val end = (args[2] as Value.IntV).v.toInt().coerceIn(start, s.length)
+            Value.StringV(s.substring(start, end))
+        },
+
+        "strand-builtin:String.IndexOf" to Fn { args ->
+            // (haystack: String, needle: String) -> Int (-1 if not found)
+            require(args.size == 2) { "String.IndexOf expects 2 args, got ${args.size}" }
+            val haystack = (args[0] as Value.StringV).v
+            val needle = (args[1] as Value.StringV).v
+            Value.IntV(haystack.indexOf(needle).toLong())
+        },
+
+        "strand-builtin:String.Contains" to Fn { args ->
+            require(args.size == 2) { "String.Contains expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.StringV).v.contains((args[1] as Value.StringV).v))
+        },
+
+        "strand-builtin:String.Replace" to Fn { args ->
+            // (s: String, find: String, replace: String) -> String. Literal, not regex.
+            require(args.size == 3) { "String.Replace expects 3 args, got ${args.size}" }
+            Value.StringV((args[0] as Value.StringV).v
+                .replace((args[1] as Value.StringV).v, (args[2] as Value.StringV).v))
+        },
+
+        "strand-builtin:String.Split" to Fn { args ->
+            // (s: String, sep: String) -> List<String>
+            // Returns the SumV-encoded Cons/Nil list. Empty separator
+            // is rejected (would otherwise loop indefinitely).
+            require(args.size == 2) { "String.Split expects 2 args, got ${args.size}" }
+            val s = (args[0] as Value.StringV).v
+            val sep = (args[1] as Value.StringV).v
+            require(sep.isNotEmpty()) { "String.Split separator must be non-empty" }
+            val parts = s.split(sep)
+            var listValue: Value = Value.SumV(case = "Nil", payload = null)
+            for (part in parts.reversed()) {
+                listValue = Value.SumV(case = "Cons", payload = Value.ProductV(
+                    mapOf("head" to Value.StringV(part), "tail" to listValue)
+                ))
+            }
+            listValue
+        },
+
+        "strand-builtin:String.Join" to Fn { args ->
+            // (parts: List<String>, sep: String) -> String
+            require(args.size == 2) { "String.Join expects 2 args, got ${args.size}" }
+            val sep = (args[1] as Value.StringV).v
+            val parts = mutableListOf<String>()
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                parts += (payload.fields.getValue("head") as Value.StringV).v
+                cur = payload.fields.getValue("tail")
+            }
+            Value.StringV(parts.joinToString(sep))
+        },
+
+        "strand-builtin:String.ToUpper" to Fn { args ->
+            require(args.size == 1) { "String.ToUpper expects 1 arg, got ${args.size}" }
+            Value.StringV((args[0] as Value.StringV).v.uppercase())
+        },
+
+        "strand-builtin:String.ToLower" to Fn { args ->
+            require(args.size == 1) { "String.ToLower expects 1 arg, got ${args.size}" }
+            Value.StringV((args[0] as Value.StringV).v.lowercase())
+        },
+
+        "strand-builtin:String.Trim" to Fn { args ->
+            require(args.size == 1) { "String.Trim expects 1 arg, got ${args.size}" }
+            Value.StringV((args[0] as Value.StringV).v.trim())
+        },
+
+        "strand-builtin:String.ParseInt" to Fn { args ->
+            // (s: String) -> Option<Int>
+            require(args.size == 1) { "String.ParseInt expects 1 arg, got ${args.size}" }
+            val n = (args[0] as Value.StringV).v.toLongOrNull()
+            if (n != null) Value.SumV("Some", Value.IntV(n))
+            else Value.SumV("None", null)
+        },
+
+        "strand-builtin:String.ParseFloat" to Fn { args ->
+            // (s: String) -> Option<Float>
+            require(args.size == 1) { "String.ParseFloat expects 1 arg, got ${args.size}" }
+            val n = (args[0] as Value.StringV).v.toDoubleOrNull()
+            if (n != null) Value.SumV("Some", Value.FloatV(n))
+            else Value.SumV("None", null)
+        },
+
+        "strand-builtin:String.FromInt" to Fn { args ->
+            // (n: Int) -> String. Convenience for formatting.
+            require(args.size == 1) { "String.FromInt expects 1 arg, got ${args.size}" }
+            Value.StringV((args[0] as Value.IntV).v.toString())
+        },
+
+        "strand-builtin:String.FromFloat" to Fn { args ->
+            require(args.size == 1) { "String.FromFloat expects 1 arg, got ${args.size}" }
+            Value.StringV((args[0] as Value.FloatV).v.toString())
+        },
+
+        "strand-builtin:String.FromBool" to Fn { args ->
+            require(args.size == 1) { "String.FromBool expects 1 arg, got ${args.size}" }
+            Value.StringV(if ((args[0] as Value.BoolV).v) "true" else "false")
+        },
+
+        // Layer 4 step 2 — Bytes stdlib builtins. Bytes are runtime-
+        // opaque ByteArrays; these helpers cover the common
+        // serialization tasks (length, slice, concat, UTF-8 round-trip,
+        // base64).
+
+        "strand-builtin:Bytes.Length" to Fn { args ->
+            require(args.size == 1) { "Bytes.Length expects 1 arg, got ${args.size}" }
+            Value.IntV((args[0] as Value.BytesV).v.size.toLong())
+        },
+
+        "strand-builtin:Bytes.Slice" to Fn { args ->
+            // (b: Bytes, start: Int, end: Int) -> Bytes
+            require(args.size == 3) { "Bytes.Slice expects 3 args, got ${args.size}" }
+            val b = (args[0] as Value.BytesV).v
+            val start = (args[1] as Value.IntV).v.toInt().coerceIn(0, b.size)
+            val end = (args[2] as Value.IntV).v.toInt().coerceIn(start, b.size)
+            Value.BytesV(b.copyOfRange(start, end))
+        },
+
+        "strand-builtin:Bytes.Concat" to Fn { args ->
+            require(args.size == 2) { "Bytes.Concat expects 2 args, got ${args.size}" }
+            val a = (args[0] as Value.BytesV).v
+            val b = (args[1] as Value.BytesV).v
+            Value.BytesV(a + b)
+        },
+
+        "strand-builtin:Bytes.ParseUtf8" to Fn { args ->
+            // (b: Bytes) -> Option<String>. None on invalid UTF-8.
+            require(args.size == 1) { "Bytes.ParseUtf8 expects 1 arg, got ${args.size}" }
+            val bytes = (args[0] as Value.BytesV).v
+            try {
+                val decoder = Charsets.UTF_8.newDecoder()
+                val text = decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+                Value.SumV("Some", Value.StringV(text))
+            } catch (_: java.nio.charset.CharacterCodingException) {
+                Value.SumV("None", null)
+            }
+        },
+
+        "strand-builtin:Bytes.FromUtf8" to Fn { args ->
+            // (s: String) -> Bytes. UTF-8 encoding always succeeds.
+            require(args.size == 1) { "Bytes.FromUtf8 expects 1 arg, got ${args.size}" }
+            Value.BytesV((args[0] as Value.StringV).v.toByteArray(Charsets.UTF_8))
+        },
+
+        "strand-builtin:Bytes.FormatBase64" to Fn { args ->
+            require(args.size == 1) { "Bytes.FormatBase64 expects 1 arg, got ${args.size}" }
+            Value.StringV(java.util.Base64.getEncoder().encodeToString((args[0] as Value.BytesV).v))
+        },
+
+        "strand-builtin:Bytes.ParseBase64" to Fn { args ->
+            // (s: String) -> Option<Bytes>. None on invalid base64.
+            require(args.size == 1) { "Bytes.ParseBase64 expects 1 arg, got ${args.size}" }
+            try {
+                Value.SumV("Some", Value.BytesV(java.util.Base64.getDecoder().decode((args[0] as Value.StringV).v)))
+            } catch (_: IllegalArgumentException) {
+                Value.SumV("None", null)
+            }
+        },
+
         // Test-only no-op effectful builtin. Returns IntV(0) for any
         // single StringV argument. Used by tests that want to exercise
         // the effect-handler / capability machinery without touching
