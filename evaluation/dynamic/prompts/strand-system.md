@@ -306,6 +306,86 @@ Unwrap-with-default via Match:
 Or with explicit MAT for non-WHEN-sugared code, the standard
 Cons-style constructor pattern with a variable-binding payload.
 
+## Stdlib expansion round 2
+
+Pure-utility additions on top of the Layer 4 step 2 IO surface.
+None require new effect categories — `Random.*` declares the
+existing `E-024 Crypto.RandomBytes`.
+
+### Math (`Math.*`) and Int↔Float coercion
+
+Pure (no declared effects required). Int-typed compose with the
+existing arithmetic surface; Float-typed are irreducibly real;
+Floor/Ceil/Round take Float and return Int.
+
+    strand-builtin:Math.Abs(n: Int) -> Int
+    strand-builtin:Math.Sign(n: Int) -> Int      -- -1, 0, or 1
+    strand-builtin:Math.Min(a, b: Int) -> Int
+    strand-builtin:Math.Max(a, b: Int) -> Int
+    strand-builtin:Math.Mod(a, b: Int) -> Int    -- true modulo (always >= 0 for b > 0)
+    strand-builtin:Math.Floor(f: Float) -> Int   -- round toward -infinity
+    strand-builtin:Math.Ceil(f: Float) -> Int    -- round toward +infinity
+    strand-builtin:Math.Round(f: Float) -> Int   -- half-to-even
+    strand-builtin:Math.Sqrt(f: Float) -> Float
+    strand-builtin:Math.Pow(base, exp: Float) -> Float
+    strand-builtin:Math.Log(f: Float) -> Float   -- natural log
+    strand-builtin:Math.Exp(f: Float) -> Float
+    strand-builtin:Math.Sin(f: Float) -> Float
+    strand-builtin:Math.Cos(f: Float) -> Float
+    strand-builtin:Math.Tan(f: Float) -> Float
+
+    strand-builtin:Float.FromInt(n: Int) -> Float
+    strand-builtin:Int.FromFloatTrunc(f: Float) -> Int  -- truncate toward zero
+
+`Math.Mod` is distinct from `Int.Mod` (the JVM `%` semantics with
+sign-of-dividend); use `Math.Mod` when you want the mathematical
+"always-non-negative for positive divisors" behavior.
+
+### Hash (`Hash.*`)
+
+Pure. All take Bytes and return Bytes (raw digest, no multi-hash
+prefix). Compose with `Bytes.FormatHex` if you need a hex string.
+
+    strand-builtin:Hash.Blake3(b: Bytes) -> Bytes   -- 32-byte digest
+    strand-builtin:Hash.Sha256(b: Bytes) -> Bytes   -- 32-byte digest
+    strand-builtin:Hash.Md5(b: Bytes) -> Bytes      -- 16-byte digest
+
+### List primitives (`List.*`)
+
+Pure. Walk the canonical Cons/Nil SumV encoding (the same shape
+`Fs.List`, `String.Split`, `Process.Spawn` args use). Polymorphic
+in head type. Higher-order operations (Map / Filter / Fold / Find /
+Any / All) are a separate slice that needs lambda-callback infra.
+
+    strand-builtin:List.Empty() -> List<T>             -- returns Nil
+    strand-builtin:List.IsEmpty(list) -> Bool
+    strand-builtin:List.Length(list) -> Int
+    strand-builtin:List.Reverse(list) -> list
+    strand-builtin:List.Take(list, n: Int) -> list
+    strand-builtin:List.Drop(list, n: Int) -> list
+    strand-builtin:List.Concat(a, b) -> list
+    strand-builtin:List.Nth(list, i: Int) -> Option<T>
+
+### Json.Stringify and Bytes hex codecs
+
+    strand-builtin:Json.Stringify(j: JsonValue) -> String  -- handles 4 primitive cases
+    strand-builtin:Bytes.FormatHex(b: Bytes) -> String     -- lowercase
+    strand-builtin:Bytes.ParseHex(s: String) -> Option<Bytes>  -- case-insensitive input
+
+`Json.Stringify` is the inverse of `Json.Parse` for primitive
+cases. Until round 3 lifts the nested-μ blocker, both stay
+primitive-only.
+
+### Random (`Random.*`)
+
+Effectful. Declare `EFC "Crypto.RandomBytes"` (E-024). All read
+from a cryptographically-secure entropy source (SecureRandom in
+production; tests inject a seeded Random for reproducibility).
+
+    strand-builtin:Random.Int(min, max: Int) -> Int   -- inclusive min, exclusive max
+    strand-builtin:Random.Float() -> Float            -- uniform in [0.0, 1.0)
+    strand-builtin:Random.Bytes(n: Int) -> Bytes      -- exactly n bytes
+
 ## Density sugars
 
 These shorthand forms produce byte-identical canonical JSON to their
