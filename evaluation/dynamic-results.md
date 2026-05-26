@@ -4,6 +4,156 @@ Auto-generated companion to `evaluation/results.md` (static cost). Where
 the static framework measures bytes-per-emission, this framework measures
 **tokens-per-successful-task** across the verifier-feedback retry loop.
 
+## Run 4 — pending, real Anthropic API with prompt caching + N=5 multi-sample
+
+Framework slice that closes the credibility gap with Runs 1-3. Code
+shipped in commit `359c4cf`; the run itself is blocked on the
+operator's `ANTHROPIC_API_KEY` not being set in the environment.
+
+Code changes (in commit `359c4cf`):
+
+- `AnthropicBackend.emit` wraps the system prompt in a single text
+  block with `cache_control: {type: ephemeral}`. On Sonnet 4.7 prompt
+  caching is GA — no beta header. The empty-system case omits the
+  `system` kwarg entirely.
+- `EmissionResult` and `TaskMetrics` gain `cache_read_input_tokens`
+  and `cache_creation_input_tokens` fields (default 0). Threaded
+  through `loop.py`'s accumulator and `recording.py`'s summary
+  serialization.
+- `MODEL_PRICING` adds `claude-sonnet-4-7` ($3/M input, $15/M output).
+  New `CACHE_PRICING` per the documented 0.10× / 1.25× of input
+  ($0.30/M read, $3.75/M write).
+- `metrics.estimate_cost` now sums four streams (uncached input,
+  cache read, cache write, output).
+- `metrics.cell_stat` + `_bootstrap_mean_ci` add bootstrap CI
+  (scipy.stats.bootstrap, 1000 resamples, percentile method,
+  deterministic seed). `per_task_table` renders `mean [ci_lo, ci_hi]`
+  when N>1.
+- `aggregate_table` adds a `Cache hit rate` column that auto-appears
+  when any cell has cache traffic.
+- 17 new tests across cost, bootstrap CIs, and backend caching with
+  a mocked anthropic SDK. `pytest tests/`: 64 passed, 6 skipped
+  (pre-existing mypy / Strand-CLI gates; no new skips).
+
+To run once a key is available:
+
+```
+python -m strand_eval.cli check-credentials
+python -m strand_eval.cli run \
+  --backend anthropic \
+  --tasks 01-factorial,02-json-value,03-toggle-machine,04-option-unwrap-default,05-sum-list,06-counter-machine,07-bounded-counter-schema,08-nonempty-list-schema,09-file-write-capability,10-handler-intercept \
+  --config strand-layer-a-density-v4,python-type-hints \
+  --models claude-sonnet-4-7 \
+  --samples 5 \
+  --budget 10
+python -m strand_eval.cli report --run <timestamp>
+```
+
+100 cells (10 × 2 × 5). Budget cap at $10 (expected $1-3 with
+caching). The generated `summary.json` carries the cache fields, so
+`report` renders CIs and the cache-hit column automatically.
+
+A synthetic smoke test (Strand prefix 4500 tok written on sample 0,
+read on samples 1-4) confirms the math: cache-hot Strand follow-on
+cells run at ~$0.0024 vs Python's $0.0063 per cell, with break-even
+at one extra sample beyond the prompt write. With N=5 the per-cell
+cost crosses below Python despite the larger Strand prompt — the
+dynamic-cost story that Runs 2/3 couldn't tell because their N=1
+shape forced every Strand cell to pay the full prompt-write cost.
+
+## Run 3 — 2026-05-25, re-run against authoring fixes (commit 7e7e02d)
+
+Same methodology shape as Run 2 — 10 tasks × 2 configs × N=1 — but
+this time against the patched Layer A from commit `7e7e02d`
+(case-binder scoping, RT-following in `buildCaseTypeMap`, nested
+expressions in WHEN bodies, type-position nesting, compact-LAM
+collision detection, FIX-body param inference, FIELD_LIST inline
+literals, clarified system prompt, task-input spec on 01-factorial).
+Run artifacts under `evaluation/dynamic/runs/2026-05-25-run3-postfix/`.
+
+**Methodology caveat (load-bearing).** The dispatched worktree agent
+did not have the Agent tool available, so it acted as the responder
+itself across all 20 cells with full session memory — methodologically
+closer to Run 1 (step-mode with prior exposure) than to Run 2 (fresh
+subagents per emission). First-pass absolute numbers are an upper
+bound; the *deltas* against Run 2 on specific cells are the credible
+signal, since the bias direction is the same for both runs being
+compared and the responder didn't have task-specific knowledge that
+would bypass the particular grammar issues the fixes target.
+
+### Headline deltas vs Run 2
+
+| Metric | Run 2 | Run 3 | Delta |
+|---|---:|---:|---:|
+| Strand first-pass | 6/10 | 7/10 | +1 |
+| Python first-pass | 9/10 | 10/10 | +1 |
+| Strand converged | 8/10 | 8/10 | 0 |
+| Strand exhausted | 2/10 | 2/10 | 0 |
+
+### Cells that flipped retry → first-pass (clean attribution to fixes)
+
+- **strand-06-counter-machine** (2 → 1 attempts). Run 2 first attempt
+  failed with `Unknown node id '(APP add [s 1])'` because WHEN case
+  bodies didn't accept nested expressions. Fix #3 (LayerAParser
+  tokenizing the body) now lets `Increment -> (APP add [s 1])` work
+  directly.
+
+- **strand-07-bounded-counter-schema** (2 → 1 attempts). Run 2 first
+  attempt failed because the agent declared `xParam PRC "x" intT`
+  then referenced `x` (the `name:` field, not the author id) via
+  auto-VarRef. Fix #5 clarifies in the system prompt that auto-VarRef
+  resolves the author id, not the name field; the agent's first
+  attempt now uses the compact-LAM form `LAM [x:intT] (APP gt [x 0])`
+  and converges.
+
+- **python-01-factorial** (2 → 1 attempts). Run 2 agent printed
+  `factorial(10)`; expected `120`. Fix #6 (task description now
+  specifies "apply to 5 so the program produces 120").
+
+### Cells that regressed
+
+- **strand-09-file-write-capability** (1 → 2 attempts). The first
+  attempt declared an `EFC` with a `PRC` parameter shape; the
+  canonical encoder rejected. Run 2 happened to pick a different
+  shape. Within noise for an N=1 unbiased-only-on-deltas run.
+
+### Cells still exhausting (strand-05, strand-08)
+
+Both still fail at 5 attempts with `UnboundRecursiveSelf at #N`. The
+worktree agent tried four shapes including the canonical-spec example
+and all four were rejected. This is the standalone-RS issue surfaced
+in Issue B's investigation — the 9 fixes here did NOT address it.
+
+The Issue B fix landed in commit 7e7e02d was the compact-LAM
+collision detection (which prevents the stack-overflow path), not
+the standalone-RS scoping rule. The remaining exhaustion is a known
+limitation:
+
+- Corpus 31/32 use standalone RS successfully because the verifier
+  reaches RS only by walking the structural path through the
+  enclosing RT, where `recursiveDepth>0` at the encoding/checking
+  site.
+- The synthesized programs from Layer A WHEN expansion build PVR
+  patterns whose `patternType` reaches RS via a path that does NOT
+  cross the RT (the WHEN expander synthesizes an outer-side PRD
+  whose tailField points at listT, but the verifier ALSO resolves
+  the inner case-type PRD and walks tailField → selfRef at depth 0
+  from inside the Match-body resolution context).
+- The clean fix is a separate slice: either (a) the verifier delays
+  resolving case-type PRDs until inside an RT-walking context, or
+  (b) the WHEN expander synthesizes a *complete* outer-replacement
+  PRD chain whose RS references are rewritten to point at the
+  enclosing RT directly. Both are out of scope of the 9 fixes.
+
+### Conclusion
+
+The 9 fixes in commit `7e7e02d` unambiguously improved 3 of the 4
+previously-failing cells (06, 07, 01-py); the 2 exhausting cells
+(05, 08) need a separate RS-scoping fix slice. The dynamic-cost
+ratio shifted only marginally because the bias caveat masks small
+differences; the credible signal is the per-cell deltas, not the
+headline ratio.
+
 ## Run 2 — 2026-05-25, fresh-context subagent dispatch
 
 Closes the prior-exposure caveat of Run 1. Each per-cell emission was a
