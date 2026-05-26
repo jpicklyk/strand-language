@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "line 4: code 'PRF' at position 1 expected value-producing nested expression (code `RS` is type-only or structural) but got nested `(RS ...)`",
+  "error_json": {
+    "phase": "compile",
+    "errors": [
+      {
+        "phase": "compile",
+        "line": 4,
+        "error_class": "LayerACompileError",
+        "detail": "code 'PRF' at position 1 expected value-producing nested expression (code `RS` is type-only or structural) but got nested `(RS ...)`"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

@@ -4,6 +4,131 @@ Auto-generated companion to `evaluation/results.md` (static cost). Where
 the static framework measures bytes-per-emission, this framework measures
 **tokens-per-successful-task** across the verifier-feedback retry loop.
 
+## Run 2 — 2026-05-25, fresh-context subagent dispatch
+
+Closes the prior-exposure caveat of Run 1. Each per-cell emission was a
+fresh sub-agent (Claude Code Agent tool, `claude` subtype) invoked with
+exactly the prompt the framework generated — no prior corpus exposure,
+no conversational history shared with the orchestrator. Sub-agents were
+constrained to a single `Read` of the prompt file and zero other tool
+use, structurally equivalent to a one-shot API completion.
+
+Run metadata:
+- Date: 2026-05-25
+- Model: claude-sonnet-4-7 (via Agent tool sub-agents)
+- Backend: step-mode (file-IPC), with sub-agent dispatch per emission
+- Samples per task: 1
+- Tasks: 10
+- Baselines: Strand Layer A density v4, Python+type-hints
+- Max retries per cell: 5
+- Convergence: 18/20 cells (90%); 2 Strand cells exhausted at 5 attempts
+
+### Per-task results
+
+Per-cell totals (sum across all retry attempts):
+
+| Task | Strand attempts | Strand status | Strand in | Strand out | Python attempts | Python status | Python in | Python out |
+|------|------:|------|------:|------:|------:|------|------:|------:|
+| 01-factorial | 1 | converged | 4459 | 46 | 2 | converged | 3011 | 119 |
+| 02-json-value | 1 | converged | 4526 | 104 | 1 | converged | 1512 | 121 |
+| 03-toggle-machine | 1 | converged | 4567 | 107 | 1 | converged | 1552 | 119 |
+| 04-option-unwrap-default | 1 | converged | 4570 | 43 | 1 | converged | 1556 | 120 |
+| 05-sum-list | 5 | **exhausted** | 25455 | 870 | 1 | converged | 1552 | 128 |
+| 06-counter-machine | 2 | converged | 9609 | 324 | 1 | converged | 1604 | 243 |
+| 07-bounded-counter-schema | 2 | converged | 9551 | 154 | 1 | converged | 1616 | 113 |
+| 08-nonempty-list-schema | 5 | **exhausted** | 26044 | 736 | 1 | converged | 1627 | 215 |
+| 09-file-write-capability | 1 | converged | 4639 | 56 | 1 | converged | 1625 | 103 |
+| 10-handler-intercept | 1 | converged | 4713 | 58 | 1 | converged | 1699 | 217 |
+| **TOTAL** | — | 8 conv / 2 exh | **98133** | **2498** | — | 10 conv | **17354** | **1498** |
+
+Estimated cost (Claude Sonnet 4.7 at $3/M input, $15/M output, no caching):
+- Strand: $0.3319
+- Python: $0.0745
+
+### Headline numbers
+
+| Metric | Strand Layer A density v4 | Python+type-hints |
+|---|---:|---:|
+| First-pass verification rate | **6/10 (60%)** | **9/10 (90%)** |
+| Convergence rate (within 5 attempts) | 8/10 (80%) | 10/10 (100%) |
+| Total tokens (in+out) | 100,631 | 18,852 |
+| Tokens-per-successful-task | 12,579 | 1,885 |
+| Cost-per-successful-task | $0.0415 | $0.0075 |
+| **Ratio (Strand / Python)** | — | — |
+| Tokens-per-successful-task ratio | **6.67×** | 1.00× |
+| Cost-per-successful-task ratio | **5.53×** | 1.00× |
+
+Excluding the two exhausted Strand cells (which consumed 51,499 input + 1,606 output across 10 wasted retries):
+
+| Metric (8 converged Strand vs 10 Python) | Strand | Python | Ratio |
+|---|---:|---:|---:|
+| Avg input per converged cell | 5,829 | 1,735 | 3.36× |
+| Avg output per converged cell | 112 | 150 | 0.75× |
+| Avg total per converged cell | 5,941 | 1,885 | 3.15× |
+
+### What converged, what didn't
+
+**Strand first-pass converged** (6): factorial, json-value, toggle-machine, option-unwrap, file-write-capability, handler-intercept. The first three matched the system prompt's worked examples almost verbatim; the last three are also simple shape-matches with minor variations.
+
+**Strand converged on retry** (2): counter-machine (attempt 2, fixed nested-expression in WHEN body), bounded-counter-schema (attempt 2, fixed auto-VarRef-vs-PRC-name mismatch).
+
+**Strand exhausted** (2): sum-list and nonempty-list-schema. Both hit real WHEN-sugar limitations:
+- `Cons(c) -> true` constructor pattern can't infer `c`'s payload type when the SumType is wrapped in a RecursiveType — the WHEN parser emits a synthetic `unknownT` patternType reference.
+- The WHEN sugar's scrutinee position doesn't auto-VarRef compact-LAM-synthesized binder names. The agent eventually falls back to explicit MAT/PCN/PVR for 08, but runs out of attempts.
+
+The agents made structural progress across retries (`(RS)` → explicit `RS`; nested `(APP ...)` in WHEN body → hoisted; explicit MAT/PCN/PVR for case patterns) but hit the 5-retry budget cap before fully converging on these two cells.
+
+**Python first-pass converged** (9): all except 01-factorial.
+
+**Python converged on retry** (1): 01-factorial. The task description doesn't specify which input to compute, so the agent guessed `factorial(10)`; expected output is `120` (factorial of 5). One retry fixed it.
+
+### Comparison with Run 1 (step-mode, prior-exposure caveat)
+
+The headline ratio went from **2.74× → 6.67×** Strand/Python total tokens, and first-pass rate dropped from **100% → 60%** for Strand and **100% → 90%** for Python.
+
+| Metric | Run 1 (prior exposure) | Run 2 (fresh subagents) | Delta |
+|---|---:|---:|---:|
+| Strand first-pass | 10/10 | 6/10 | -4 |
+| Python first-pass | 10/10 | 9/10 | -1 |
+| Strand tokens (in+out) | 47,096 | 100,631 | +2.14× |
+| Python tokens (in+out) | 17,193 | 18,852 | +1.10× |
+| Total-token ratio | 2.74× | 6.67× | +2.44× |
+
+Run 1's 100% first-pass was an artifact of the orchestrating Claude Code session having seen the corpus in working memory. Run 2 removes that bias — every emission is from a fresh model context that has only seen the system prompt + task description. The drop in Strand first-pass (and the two exhausted cells) is the *real* dynamic-cost picture for a model with no Strand exposure beyond a one-shot prompt.
+
+Python's first-pass also dropped by one cell (01-factorial), which is the value-mismatch issue independent of language — the task descriptions don't specify the test input. The previous run dodged this because the orchestrator knew from the corpus that `factorial(5)` was expected.
+
+### Implications
+
+The dynamic-cost claim Strand wants to make — "verifier feedback converges in fewer total tokens than runtime-error iteration in Python" — is **not supported by this measurement**. Even excluding the two exhausted cells, Strand cost 3.15× more per converged cell. The verifier-feedback advantage didn't materialize because most cells converged on first attempt anyway (the easy cases), and the cells that needed retries hit real grammar limitations rather than soft type errors.
+
+What this run *does* establish honestly:
+1. **The 100% first-pass figure from Run 1 was a measurement artifact**, not a real model capability. Fresh-context first-pass for an unfamiliar language is in the 60-80% range, not 100%.
+2. **System-prompt input is the dominant cost** (4500 tokens for Strand vs 1500 for Python). This will amortize substantially under prompt caching but caching is not yet wired in `evaluation/dynamic/strand_eval/backends/anthropic.py`.
+3. **WHEN-sugar limitations are real and exploitable as eval targets** — the framework caught two cases where the agent couldn't progress through grammar constraints within 5 retries. These would be good targets for Layer A grammar tightening or richer Elaborator inference cases.
+4. **Per-emission output cost is comparable**, mirroring the static measurement: Strand output is ~75% of Python output per converged cell.
+
+### Open follow-ups
+
+- **Wire prompt caching into the Anthropic backend.** Currently the `system` field is sent as a plain string; structured-block with `cache_control` markers would let per-emission cost amortize across samples.
+- **Make mypy optional in the Python adapter.** [`evaluation/dynamic/strand_eval/languages/python.py:103`](evaluation/dynamic/strand_eval/languages/python.py) hard-fails when mypy is not on PATH. Fallback to `python -m py_compile` (syntax-only) or skip verify entirely would let runs proceed on stock Python installs.
+- **Specify expected inputs in task descriptions.** Tasks like `01-factorial` don't tell the model which number to compute. The expected.yaml has `120`, the reference uses `factorial(5)`, but the prompt is silent — the agent guesses. Either specify the input explicitly in the task or accept any "correct factorial" output.
+- **Investigate WHEN-sugar payload-type inference.** The 05/08 exhaustion cases hit a real gap: `Cons(c) -> ...` doesn't propagate the case's payload type into the synthesized PVR binder. This is either a documentation fix (tell the agent to fall back to PCN+PVR for nested-payload binders) or an Elaborator extension.
+- **Multi-sample with caching** for statistical confidence — N=1 per cell is sufficient to demonstrate the gap from Run 1, but real claims need bootstrap CIs over multiple samples.
+
+### How this run was produced
+
+1. `pip install -e evaluation/dynamic` to install the strand-eval package.
+2. `mkdir runs/2026-05-25-subagent-sweep` and init 20 sessions via `strand-eval step --init` for each (task, config) cell.
+3. Dispatched 20 sub-agents in parallel via the Claude Code Agent tool (`claude` subtype). Each agent was constrained to one `Read` of its prompt.md and zero other tool use, structurally equivalent to a one-shot API completion.
+4. Wrote each agent response to its session's `turn-NN/response.md`.
+5. Ran `strand-eval step --session <dir>` per cell to advance through the retry loop. Repeat dispatch + advance for any cell needing retries, up to max_retries=5.
+6. Each per-cell `summary.json` is the source of truth for the numbers in the table above. All 20 session directories are under `evaluation/dynamic/runs/2026-05-25-subagent-sweep/`.
+
+## Run 1 — 2026-05-25, step-mode with prior-exposure caveat
+
+> **Note (2026-05-25):** Run 2 above supersedes the headline numbers in this section. The "100% first-pass" result was an artifact of the orchestrating Claude Code session having prior corpus exposure. The narrative and methodology below are retained for historical reference.
+
 Caveats: this is the project's first dynamic-cost run, executed
 end-to-end against Claude Sonnet 4.7 via `strand-eval step` (Claude Code
 session as the agent under test). The agent had access to the system
@@ -24,7 +149,7 @@ Run metadata:
 - All 20 cells converged at attempt 1 (no retries needed)
 - First-pass verification rate: 100% across both baselines
 
-## Per-task results
+### Per-task results
 
 | Task | Strand input | Strand output | Strand total | Python input | Python output | Python total | Strand/Python total |
 |------|------:|------:|------:|------:|------:|------:|------:|
@@ -44,9 +169,9 @@ Estimated cost (Claude Sonnet 4.7 at $3/M input, $15/M output, no caching):
 - Strand: $0.1553
 - Python: $0.0685
 
-## Analysis
+### Analysis
 
-### Headline ratio: 2.74x
+#### Headline ratio: 2.74x
 
 Across the 10-task suite, an LLM emitting Strand density-v4 programs
 through a single emission per task uses **2.74x more tokens than the same
@@ -54,7 +179,7 @@ LLM emitting Python+type-hints programs**. This is the inverse of the
 static-cost ratio (0.81x Strand/Python on bytes); the explanation is
 the system prompt.
 
-### Output-only ratio: 0.83x
+#### Output-only ratio: 0.83x
 
 Strand's output tokens (1166) are smaller than Python's (1406):
 
@@ -68,7 +193,7 @@ bytes-as-proxy-for-tokens). The model emits less Strand than Python for
 the same task once it knows how. **The verbosity gap is entirely in the
 TEACHING side, not the AUTHORING side.**
 
-### What drives the total ratio: the system prompt
+#### What drives the total ratio: the system prompt
 
 | Component | Strand | Python | Notes |
 |-----------|--------|--------|-------|
@@ -82,7 +207,7 @@ cheatsheet + worked examples. Python's system prompt is smaller because
 the model already knows Python; the prompt only states style conventions
 and the output convention (~3x smaller).
 
-### What changes this picture
+#### What changes this picture
 
 The first emission's input cost is paid once and then becomes
 **cacheable**. Anthropic's prompt-caching API (and equivalents from
@@ -104,7 +229,7 @@ Effective Strand-vs-Python ratio with caching, for an N-sample run:
 (Rough estimates. Real numbers require running with caching enabled —
 this measurement was uncached.)
 
-### First-pass verification rate
+#### First-pass verification rate
 
 All 20 cells (10 Strand + 10 Python) converged on the first emission.
 Caveat: the Claude Code session running this evaluation had been
@@ -121,7 +246,7 @@ framework works, the numbers are real, but the agent isn't blind**. A
 proper Phase 1 measurement would use the Anthropic API backend with a
 fresh model context per task.
 
-## Comparison with the static framework
+### Comparison with the static framework
 
 | Form | Static (bytes/Python geomean) | Dynamic (tokens, 1 sample, no cache) |
 |------|------:|------:|
@@ -144,7 +269,7 @@ The reconciliation:
    first-pass correctness — but this run can't measure that because both
    baselines converged on the first try.
 
-## How this run was produced
+### How this run was produced
 
 ```
 # For each task in 01-factorial..10-handler-intercept:
@@ -160,7 +285,7 @@ Each session's `summary.json` is the source of truth for the numbers in
 the per-task table above. The session directories are committed under
 `evaluation/dynamic/runs/strand-*` and `evaluation/dynamic/runs/python-*`.
 
-## Open follow-ups
+### Open follow-ups
 
 - **Real first-pass numbers.** Run a fresh model context (Anthropic API
   backend, fresh conversation) on the same task suite. The Claude Code

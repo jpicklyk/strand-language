@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "error_prose": "Exception in thread \"main\" org.strand.core.IngestError: Unknown node id 'x' referenced from node 'isPosBody'.arguments[0]\n\tat org.strand.core.JsonIngest$parse$resolver$1.invoke-pXsIjU0(Json.kt:141)\n\tat org.strand.core.JsonIngest$parse$resolver$1.invoke(Json.kt:139)\n\tat org.strand.core.JsonKt.requireRefList(Json.kt:565)\n\tat org.strand.core.JsonKt.access$requireRefList(Json.kt:1)\n\tat org.strand.core.JsonIngest.buildNode(Json.kt:263)\n\tat org.strand.core.JsonIngest.buildStored(Json.kt:197)\n\tat org.strand.core.JsonIngest.parse(Json.kt:145)\n\tat org.strand.core.JsonIngest.parse(Json.kt:103)\n\tat org.strand.cli.MainKt.loadFinalizedWithIngest(Main.kt:42)\n\tat org.strand.cli.MainKt.loadFinalized(Main.kt:54)\n\tat org.strand.cli.MainKt.runAuthor(Main.kt:463)\n\tat org.strand.cli.MainKt.main(Main.kt:101)",
+  "error_json": {
+    "phase": "unknown",
+    "stderr": "Exception in thread \"main\" org.strand.core.IngestError: Unknown node id 'x' referenced from node 'isPosBody'.arguments[0]\n\tat org.strand.core.JsonIngest$parse$resolver$1.invoke-pXsIjU0(Json.kt:141)\n\tat org.strand.core.JsonIngest$parse$resolver$1.invoke(Json.kt:139)\n\tat org.strand.core.JsonKt.requireRefList(Json.kt:565)\n\tat org.strand.core.JsonKt.access$requireRefList(Json.kt:1)\n\tat org.strand.core.JsonIngest.buildNode(Json.kt:263)\n\tat org.strand.core.JsonIngest.buildStored(Json.kt:197)\n\tat org.strand.core.JsonIngest.parse(Json.kt:145)\n\tat org.strand.core.JsonIngest.parse(Json.kt:103)\n\tat org.strand.cli.MainKt.loadFinalizedWithIngest(Main.kt:42)\n\tat org.strand.cli.MainKt.loadFinalized(Main.kt:54)\n\tat org.strand.cli.MainKt.runAuthor(Main.kt:463)\n\tat org.strand.cli.MainKt.main(Main.kt:101)\n",
+    "returncode": 1
+  },
+  "canonical_dag_json": null
+}

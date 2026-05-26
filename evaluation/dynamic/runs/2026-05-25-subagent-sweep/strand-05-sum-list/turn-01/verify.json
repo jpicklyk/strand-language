@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "line 3: code 'RT' at position 0 expected value-producing nested expression (code `SUM` is type-only or structural) but got nested `(SUM ...)`",
+  "error_json": {
+    "phase": "compile",
+    "errors": [
+      {
+        "phase": "compile",
+        "line": 3,
+        "error_class": "LayerACompileError",
+        "detail": "code 'RT' at position 0 expected value-producing nested expression (code `SUM` is type-only or structural) but got nested `(SUM ...)`"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}
