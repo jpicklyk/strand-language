@@ -180,6 +180,15 @@ class CorpusTest {
             ),
             "Slice 3: post-blocker JsonValue with spliced JsonArrayCons/JsonArrayNil and JsonObjectCons/JsonObjectNil variants inside a single RecursiveType. The depth-field extension is sound but doesn't compose with value construction across nested μ; the spliced-variants approach keeps the type self-contained while still expressing arrays and objects. arrayValue [JsonNumber(1), JsonNumber(2)] round-trips through the identity Lambda unchanged.",
         ),
+        // Q-038 Phase 1 — Pinecone vector-store builtin graph shape.
+        // Verify-only: the program demonstrates the structural pattern
+        // an agent emits for a Pinecone upsert + query workflow under
+        // Vector.Read{provider: "pinecone", store: "main"} + Vector.Write
+        // capabilities. Runtime execution requires mocked HTTP transport
+        // and a registered Resource handle; that path is exercised
+        // end-to-end by BuiltinsPineconeTest in the interpreter module.
+        Case("/corpus/67-vector-pinecone-upsert-query.json", null,
+            "Q-038 Phase 1: verify-only structural exemplar for Pinecone upsert + query. Open declares both Vector.Read and Vector.Write; Upsert declares only Vector.Write; Query declares only Vector.Read. provider parameter pinned to literal \"pinecone\", store parameter to literal \"main\". The runtime end-to-end roundtrip lives in BuiltinsPineconeTest with mocked HTTP transport."),
     )
 
     /**

@@ -267,8 +267,10 @@ Inventory specified in [`design/effects-and-capabilities.md`](design/effects-and
 | E-032 | Log.Write | Diagnostic |
 | E-033 | OS.Read | Host environment |
 | E-034 | System.Exit | Host environment |
+| E-037 | Vector.Read | Vector storage |
+| E-038 | Vector.Write | Vector storage |
 
-New effect categories receive higher numbers; existing numbers are not reused.
+E-035 and E-036 are reserved for Q-037 (`LLM.Generate`, `LLM.Embed`); E-037 and E-038 are reserved for Q-038 (vector storage). New effect categories receive higher numbers; existing numbers are not reused.
 
 ### Open questions (Q-NNN)
 

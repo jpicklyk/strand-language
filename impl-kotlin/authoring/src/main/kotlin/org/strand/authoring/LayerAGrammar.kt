@@ -1182,6 +1182,183 @@ object LayerAGrammar {
             stringFields = mapOf("target" to "strand-builtin:Regex.Replace"),
             refFields = mapOf("foreignType" to "reReplaceT"),
         ),
+
+        // ===== Q-038 Phase 1 — Vector store effect categories =====
+        // Read and Write split mirroring Filesystem.Read / Filesystem.Write.
+        // Both parameterized by (provider: String, store: String). Vector
+        // store builtins (Pinecone.*, Chroma.*) declare these at the
+        // ForeignNode level with `provider` pinned to the binding's
+        // string literal ("pinecone" / "chroma") and `store` bound to the
+        // call site's store argument.
+        "vectorReadFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Vector.Read"),
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+        ),
+        "vectorWriteFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Vector.Write"),
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+        ),
+
+        // ===== Q-038 Phase 1 — Vector store ForeignNodes =====
+        // Twelve ForeignNodes total: six for Pinecone, six for Chroma.
+        // Each operation has its own FunctionType reserved entry.
+        //
+        // Surface-type pattern: handles + structured payload arguments
+        // are represented with `bytesT` placeholder types per the
+        // opaque-handle convention used by Map.* (the Strand type
+        // system has no parametric Handle<K> / Record<...> primitives
+        // today). Runtime dispatch validates at the Value level.
+        //
+        // Open declares BOTH Vector.Read and Vector.Write: the
+        // returned handle supports both directions; the proposal
+        // § 3.2 states this explicitly. Per-operation builtins
+        // declare only the direction they exercise.
+
+        // Pinecone — function types
+        "pineconeOpenT" to ReservedNodeSpec(
+            // (config: PineconeIndexConfig) -> pineconeHandle (Int)
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "pineconeCloseT" to ReservedNodeSpec(
+            // (handle: pineconeHandle) -> Unit
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+        "pineconeUpsertT" to ReservedNodeSpec(
+            // (handle: pineconeHandle, items: List<UpsertItem>) -> Unit
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+        "pineconeQueryT" to ReservedNodeSpec(
+            // (handle: pineconeHandle, request: QueryRequest) -> List<QueryHit>
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "pineconeDeleteT" to ReservedNodeSpec(
+            // (handle: pineconeHandle, ids: List<String>) -> Unit
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+        "pineconeFetchT" to ReservedNodeSpec(
+            // (handle: pineconeHandle, ids: List<String>) -> List<QueryHit>
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+
+        // Pinecone — ForeignNodes
+        "pineconeOpen" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Pinecone.Index.Open"),
+            refFields = mapOf("foreignType" to "pineconeOpenT"),
+            refListFields = mapOf("effects" to listOf("vectorReadFx", "vectorWriteFx")),
+        ),
+        "pineconeClose" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Pinecone.Index.Close"),
+            refFields = mapOf("foreignType" to "pineconeCloseT"),
+        ),
+        "pineconeUpsert" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Pinecone.Index.Upsert"),
+            refFields = mapOf("foreignType" to "pineconeUpsertT"),
+            refListFields = mapOf("effects" to listOf("vectorWriteFx")),
+        ),
+        "pineconeQuery" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Pinecone.Index.Query"),
+            refFields = mapOf("foreignType" to "pineconeQueryT"),
+            refListFields = mapOf("effects" to listOf("vectorReadFx")),
+        ),
+        "pineconeDelete" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Pinecone.Index.Delete"),
+            refFields = mapOf("foreignType" to "pineconeDeleteT"),
+            refListFields = mapOf("effects" to listOf("vectorWriteFx")),
+        ),
+        "pineconeFetch" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Pinecone.Index.Fetch"),
+            refFields = mapOf("foreignType" to "pineconeFetchT"),
+            refListFields = mapOf("effects" to listOf("vectorReadFx")),
+        ),
+
+        // Chroma — function types (same shape as Pinecone's)
+        "chromaOpenT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "chromaCloseT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+        "chromaAddT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+        "chromaQueryT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "chromaDeleteT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+        "chromaGetT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+
+        // Chroma — ForeignNodes
+        "chromaOpen" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Chroma.Collection.Open"),
+            refFields = mapOf("foreignType" to "chromaOpenT"),
+            refListFields = mapOf("effects" to listOf("vectorReadFx", "vectorWriteFx")),
+        ),
+        "chromaClose" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Chroma.Collection.Close"),
+            refFields = mapOf("foreignType" to "chromaCloseT"),
+        ),
+        "chromaAdd" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Chroma.Collection.Add"),
+            refFields = mapOf("foreignType" to "chromaAddT"),
+            refListFields = mapOf("effects" to listOf("vectorWriteFx")),
+        ),
+        "chromaQuery" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Chroma.Collection.Query"),
+            refFields = mapOf("foreignType" to "chromaQueryT"),
+            refListFields = mapOf("effects" to listOf("vectorReadFx")),
+        ),
+        "chromaDelete" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Chroma.Collection.Delete"),
+            refFields = mapOf("foreignType" to "chromaDeleteT"),
+            refListFields = mapOf("effects" to listOf("vectorWriteFx")),
+        ),
+        "chromaGet" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Chroma.Collection.Get"),
+            refFields = mapOf("foreignType" to "chromaGetT"),
+            refListFields = mapOf("effects" to listOf("vectorReadFx")),
+        ),
     )
 
     /**

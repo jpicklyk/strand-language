@@ -21,6 +21,16 @@ import java.util.concurrent.atomic.AtomicLong
  * increasing and never reused within a JVM run; correlating an id to
  * an actual resource that's already been closed surfaces as a clean
  * lookup miss.
+ *
+ * Known resource kinds (each builtin registers its handles under a
+ * stable kind string for runtime validation in [get]):
+ *
+ *   - "socket"             java.net.Socket (Net.Connect)
+ *   - "process"            java.lang.Process (Process.Spawn)
+ *   - "http-server"        Builtins.HttpServerHolder (Http.Listen)
+ *   - "http-pending"       Builtins.HttpPending (Http.Accept)
+ *   - "pinecone_index"     PineconeIndexHandle (Pinecone.Index.Open — Q-038)
+ *   - "chroma_collection"  ChromaCollectionHandle (Chroma.Collection.Open — Q-038)
  */
 object ResourceTable {
     private val table = ConcurrentHashMap<Long, Holder>()
