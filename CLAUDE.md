@@ -6,7 +6,6 @@ The design corpus (Wave 1–3) is substantially complete. Active work is the Kot
 
 ## Read these before doing anything substantive
 
-- [`CONTINUATION.md`](CONTINUATION.md) — full project handoff: context, conventions, locked judgment calls.
 - [`INDEX.md`](INDEX.md) — document tree, concept index, and the **authoritative identifier registry** (ADR-NNN, N-NNN, E-NNN, Q-NNN). Read INDEX before assuming what exists.
 - [`impl/README.md`](impl/README.md) — implementation state, layer scope, module layout.
 - [`impl/CLAUDE.md`](impl/CLAUDE.md) — implementation-side conventions, loaded when working inside `impl/`.
@@ -38,7 +37,7 @@ These conventions apply to documents in the design corpus (root, `decisions/`, `
 
 - He expects substantive engagement, not validation. Push back when you disagree; bring independent thinking.
 - He prefers concrete artifacts to discussion — explore briefly, then commit to code or documentation.
-- He prefers **batched work** with independent research on Strand, not per-step review gates. (This overrides the older per-ADR gate language in `CONTINUATION.md`.)
+- He prefers **batched work** with independent research on Strand, not per-step review gates.
 - Strand is research and is **distinct from his commercial Android work**. Do not import Android conventions (MVVM, lifecycle, Activity/Fragment, multi-module-because-Android) into Strand. The "high-level first, add complexity as needed" preference still applies.
 
 ## What not to do

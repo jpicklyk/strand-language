@@ -102,7 +102,6 @@ For navigation and current state:
 - [`INDEX.md`](INDEX.md) — document tree, alphabetical concept index, identifier registry (ADR-NNN, N-NNN, E-NNN, Q-NNN)
 - [`open-questions.md`](open-questions.md) — unresolved design issues
 - [`proposals/README.md`](proposals/README.md) — draft and implemented proposals
-- [`CONTINUATION.md`](CONTINUATION.md) — project handoff to a new session
 
 ## Document organization
 

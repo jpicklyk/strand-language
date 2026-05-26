@@ -1,7 +1,7 @@
 # Strand reference implementation — Layer 1
 
 This directory holds the Kotlin/JVM reference implementation of Strand. The
-goals and conventions are set in `../CONTINUATION.md`; this README covers
+goals and conventions are set in `../CLAUDE.md`; this README covers
 only what is specific to the implementation.
 
 ## Layer 1 scope
