@@ -100,6 +100,15 @@ The initial effect taxonomy is a small set of category groups. Categories within
 | E-033 | OS.Read | (none) | Observe stable host-environment state (hostname, platform, working directory) |
 | E-034 | System.Exit | (none) | Terminate the current evaluation with a host-level exit code |
 
+### Language-model effects (E-035 through E-036)
+
+| ID | Category | Parameters | Description |
+|----|----------|-----------|-------------|
+| E-035 | LLM.Generate | provider: String, model: String | Invoke a language model for text or structured generation |
+| E-036 | LLM.Embed | provider: String, model: String | Compute an embedding from text |
+
+Both categories are operation-shaped: `LLM.Generate` is one effect category whether Anthropic, OpenAI, Gemini, or a future provider executes it. The `provider` and `model` parameters discriminate at the refinement-lattice level — `LLM.Generate{provider: "anthropic", model: *}` is a finer capability than `LLM.Generate{provider: *, model: *}`. This mirrors `Network.Connect{host}` (E-001) and `Filesystem.Read{path}` (E-006): the category names the kind of side effect; refinement parameters name the specific resource. Per-provider ForeignNodes (`Anthropic.Messages.Create`, `OpenAI.Chat.Completions`, etc.) sit at the binding layer; each pins the `provider` parameter to a string literal so the verifier sees provider identity in the effect closure without it needing its own category. The design rationale, prior-art survey, and tool-dispatch semantics are documented in [`proposals/agent-native-capabilities.md`](../proposals/agent-native-capabilities.md).
+
 This inventory is intentionally bounded but extensible. New categories may be added as new platform integrations are required; the category-tag space accommodates growth in the same way as node categories ([node-algebra.md](node-algebra.md), versioning section).
 
 ## Effect closure semantics {#effect-closure}
