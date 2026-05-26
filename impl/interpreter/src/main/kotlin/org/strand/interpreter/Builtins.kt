@@ -901,6 +901,36 @@ object Builtins {
             Value.IntV((args[0] as Value.FloatV).v.toLong())
         },
 
+        // Stdlib expansion round 2 — Hash.* builtins. Pure. All take
+        // Bytes and return Bytes; programs that want hex output
+        // compose with Bytes.FormatHex. Blake3 uses the same library
+        // and prefix-free output as the project's content-addressing
+        // hasher; Sha256 and Md5 use java.security.MessageDigest.
+
+        "strand-builtin:Hash.Blake3" to Fn { args ->
+            // (b: Bytes) -> Bytes (32-byte BLAKE3 digest, no multi-hash prefix)
+            require(args.size == 1) { "Hash.Blake3 expects 1 arg (b: Bytes), got ${args.size}" }
+            val hasher = io.github.rctcwyvrn.blake3.Blake3.newInstance()
+            hasher.update((args[0] as Value.BytesV).v)
+            Value.BytesV(hasher.digest())
+        },
+
+        "strand-builtin:Hash.Sha256" to Fn { args ->
+            // (b: Bytes) -> Bytes (32-byte SHA-256 digest)
+            require(args.size == 1) { "Hash.Sha256 expects 1 arg (b: Bytes), got ${args.size}" }
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            Value.BytesV(md.digest((args[0] as Value.BytesV).v))
+        },
+
+        "strand-builtin:Hash.Md5" to Fn { args ->
+            // (b: Bytes) -> Bytes (16-byte MD5 digest). Not cryptographically
+            // secure — included for integrity/identity use cases where SHA-256
+            // is overkill (cache keys, content fingerprinting on trusted input).
+            require(args.size == 1) { "Hash.Md5 expects 1 arg (b: Bytes), got ${args.size}" }
+            val md = java.security.MessageDigest.getInstance("MD5")
+            Value.BytesV(md.digest((args[0] as Value.BytesV).v))
+        },
+
         // Test-only no-op effectful builtin. Returns IntV(0) for any
         // single StringV argument. Used by tests that want to exercise
         // the effect-handler / capability machinery without touching
