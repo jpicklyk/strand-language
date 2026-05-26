@@ -23,6 +23,35 @@ import java.util.concurrent.atomic.AtomicLong
  * lookup miss.
  */
 object ResourceTable {
+
+    /**
+     * Canonical resource-kind strings registered by the runtime. Builtins
+     * pass these to [register]/[get]; future Open/Close builtins reach
+     * them by name. The set is open — provider bindings may register
+     * additional kinds — but having a registry of well-known ones in
+     * one place keeps the wiring legible.
+     *
+     * `KIND_LLM_CONVERSATION` (Q-037 § 3.6) backs the opt-in provider-
+     * side conversation handles. The first slice ships only the kind
+     * registration; the Open/Close builtins are deferred per the
+     * proposal call. When they land, the underlying object will be a
+     * provider-specific conversation identifier (Anthropic conversation
+     * token, OpenAI thread id, Gemini cached-context name, etc.) — the
+     * host-side library knows the originating provider from the open-
+     * time configuration.
+     *
+     * `KIND_VECTOR_STORE` (Q-038, parallel sibling proposal) backs the
+     * opt-in vector-store handles. Same opt-in pattern as conversation
+     * handles. Listed here so the kind registry is in one place; the
+     * vector-store-specific builtins live in the Q-038 implementation.
+     */
+    const val KIND_SOCKET: String = "socket"
+    const val KIND_PROCESS: String = "process"
+    const val KIND_HTTP_SERVER: String = "http-server"
+    const val KIND_HTTP_PENDING: String = "http-pending"
+    const val KIND_LLM_CONVERSATION: String = "llm_conversation"
+    const val KIND_VECTOR_STORE: String = "vector_store"
+
     private val table = ConcurrentHashMap<Long, Holder>()
     private val nextId = AtomicLong(1)
 

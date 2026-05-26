@@ -180,6 +180,17 @@ class CorpusTest {
             ),
             "Slice 3: post-blocker JsonValue with spliced JsonArrayCons/JsonArrayNil and JsonObjectCons/JsonObjectNil variants inside a single RecursiveType. The depth-field extension is sound but doesn't compose with value construction across nested μ; the spliced-variants approach keeps the type self-contained while still expressing arrays and objects. arrayValue [JsonNumber(1), JsonNumber(2)] round-trips through the identity Lambda unchanged.",
         ),
+        // Q-037 Phase 1 — agent-native LLM ForeignNodes. Corpus 67 is
+        // a verify-only demonstrator of the agent-as-state-machine
+        // pattern: a StateMachine whose transition function calls
+        // Anthropic.Messages.Create with a GenerateRequest ProductV,
+        // pinning the LLM.Generate{provider, model} refinement at the
+        // call site. Verify-only because the GenerateRequest payload
+        // uses opaque Bytes placeholders for the messages and tools
+        // lists (the full Strand-side product/sum types are agent-
+        // chosen and out of scope for a single corpus demo).
+        Case("/corpus/67-llm-state-machine-with-tool.json", null,
+            "verify-only; state machine calling Anthropic.Messages.Create with an EffectDecl pinning provider='anthropic'"),
     )
 
     /**

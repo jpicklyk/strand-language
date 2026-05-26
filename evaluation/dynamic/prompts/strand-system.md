@@ -155,7 +155,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (68):
+FunctionType signatures (70):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -206,8 +206,10 @@ FunctionType signatures (68):
     hostT platT cwdT                — () -> String  (OS.Hostname/Platform/Cwd)
     exitT                           — (Int) -> Unit  (System.Exit)
     reReplaceT                      — (String, String, String) -> String  (Regex.Replace pattern, input, replacement)
+    llmGenerateT                    — (Bytes) -> Bytes  (opaque GenerateRequest placeholder — see "Per-provider LLM" below)
+    llmEmbedT                       — (Bytes) -> Bytes  (opaque EmbedRequest placeholder)
 
-Foreign-node builtins (76):
+Foreign-node builtins (82):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
@@ -234,8 +236,11 @@ Foreign-node builtins (76):
     hostname platform cwd                       — OS.* (effectful; each declares osReadFx for E-033 OS.Read)
     exit                                        — System.Exit(code: Int) -> Unit (effectful; declares exitFx for E-034 System.Exit; terminates the host process in production, captured in tests)
     reReplace                                   — Regex.Replace (pure; supports `$1`/`$2` backrefs to groups via java.util.regex semantics). The other Regex.* builtins (Match/FindAll/Split) stay explicit at the use site — see "NOT in the prelude" below.
+    anthropicGenerate anthropicEmbed            — Anthropic.Messages.Create / Anthropic.Embeddings.Create (effectful; each declares llmGenerateFx / llmEmbedFx with provider="anthropic" — see "Per-provider LLM" below). anthropicEmbed surfaces an IoFailure ("anthropic-embed-not-supported") — Anthropic recommends Voyage AI for embeddings.
+    openaiGenerate openaiEmbed                  — OpenAI.Chat.Completions / OpenAI.Embeddings.Create (effectful; declare llmGenerateFx / llmEmbedFx with provider="openai")
+    geminiGenerate geminiEmbed                  — Gemini.GenerateContent / Gemini.EmbedContent (effectful; declare llmGenerateFx / llmEmbedFx with provider="gemini")
 
-Effect categories (16):
+Effect categories (18):
 
     receiveFx     — StateMachine.Receive (every state machine needs this)
     sendFx        — StateMachine.Send (state machines with outputs need this)
@@ -253,6 +258,8 @@ Effect categories (16):
     logFx         — Log.Write (declared by every Log.* call)
     osReadFx      — OS.Read (declared by every OS.* call)
     exitFx        — System.Exit (declared by exit)
+    llmGenerateFx — LLM.Generate(provider: String, model: String) — declared by Anthropic/OpenAI/Gemini Generate ForeignNodes
+    llmEmbedFx    — LLM.Embed(provider: String, model: String) — declared by Anthropic/OpenAI/Gemini Embed ForeignNodes
 
 A state machine with input streams must declare `receiveFx` in its `effects`
 list. A state machine with output streams must also declare `sendFx`.
@@ -351,6 +358,126 @@ Persist a Map across runs via Map.Entries → serialize the
 List<{key, value}> → reconstruct via fold of Map.Put. Maps
 themselves never enter the canonical store (runtime-only, like
 Closure / Resource).
+
+### Per-provider LLM (Q-037 Phase 1)
+
+Six ForeignNodes — three Generate, three Embed — under operation-shaped
+E-035 `LLM.Generate{provider: String, model: String}` and E-036
+`LLM.Embed{provider: String, model: String}` effect categories.
+Provider identity is encoded by which ForeignNode is called; the
+EffectDecl at the call site pins the `provider` parameter to a string
+literal (`"anthropic"` / `"openai"` / `"gemini"`) and `model` to the
+request's model field.
+
+    strand-builtin:Anthropic.Messages.Create(req: GenerateRequest) -> GenerateResult
+    strand-builtin:Anthropic.Embeddings.Create(req: EmbedRequest)  -> Bytes
+        -- declares llmGenerateFx / llmEmbedFx with provider="anthropic"
+        -- Anthropic does NOT ship embeddings; this surfaces a structured
+        -- IoFailure recommending Voyage AI.
+    strand-builtin:OpenAI.Chat.Completions(req: GenerateRequest)   -> GenerateResult
+    strand-builtin:OpenAI.Embeddings.Create(req: EmbedRequest)     -> Bytes
+        -- declares llmGenerateFx / llmEmbedFx with provider="openai"
+    strand-builtin:Gemini.GenerateContent(req: GenerateRequest)    -> GenerateResult
+    strand-builtin:Gemini.EmbedContent(req: EmbedRequest)          -> Bytes
+        -- declares llmGenerateFx / llmEmbedFx with provider="gemini"
+
+**Request shape (`GenerateRequest`)** — a Strand ProductV constructed by
+the agent. Field order is unconstrained (the canonical encoder sorts
+by field name). Use the prelude EffectCategory `llmGenerateFx` /
+`llmEmbedFx` and the ForeignNode short names `anthropicGenerate` /
+`openaiGenerate` / `geminiGenerate` / `anthropicEmbed` / `openaiEmbed` /
+`geminiEmbed`.
+
+    GenerateRequest = {
+      model: String,                              -- e.g., "claude-opus-4-7"
+      messages: List<Message>,                    -- Cons/Nil chain
+      system: Option<String>,                     -- system prompt
+      maxTokens: Option<Int>,                     -- output token budget
+      tools: List<ToolDef>,                       -- (empty list when no tools)
+      responseSchema: Option<JsonValue>,          -- JSON Schema for constrained output
+      temperature: Option<Float>,
+      providerExtras: Option<JsonValue>           -- pass-through provider-native fields
+    }
+
+    Message = User(content: List<Block>)
+            | Assistant(content: List<Block>)
+            | ToolResult(toolUseId: String, content: Bytes)
+
+    Block = Text(String)
+          | ToolUse(id: String, name: String, input: JsonValue)
+          | Image(bytes: Bytes, mediaType: String)
+          | Document(bytes: Bytes, mediaType: String)
+
+    ToolDef = {
+      name: String,
+      description: String,
+      parameterSchema: JsonValue,                 -- JSON Schema (see § 3.8.1)
+      implementation: <callable>                  -- Lambda or ForeignNode
+    }
+
+The Generate builtin runs the tool-use loop internally (proposal § 3.8 /
+§ 6): on each iteration, if the model emits a `ToolUse` block, the loop
+parses the input JSON to a Strand `JsonValue`, invokes the named tool's
+`implementation` callable with that value, appends a `ToolResult`
+message, and re-calls the provider. Bounded at 10 iterations by default;
+a `ToolUseLimit` stop reason indicates the cap fired.
+
+    GenerateResult = {
+      content: List<Block>,                       -- final assistant blocks
+      stopReason: EndTurn | MaxTokens | StopSequence | ToolUseLimit,
+      usage: {inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens},
+      finalMessages: List<Message>                -- conversation incl. tool turns
+    }
+
+**Tool parameter schemas** (proposal § 3.8.1) must use the irreducible
+JSON-Schema-expressible TypeExpr subset: Primitives, Products (all
+fields required), Sums (tag discriminator or `Option<T>`-as-nullable),
+Recursives (`$defs`/`$ref`). `FunctionType`, `ForallType`, and unbound
+type parameters are rejected — agents that pass a tool whose
+parameterSchema's valueType contains one of those rejected variants
+will see a `ToolParamTypeUnsupported` verifier error.
+
+**Embed shape (`EmbedRequest`)** — agent constructs a ProductV:
+
+    EmbedRequest = { model: String, text: String, dimensions: Option<Int> }
+
+Returns IEEE 754 float32 little-endian Bytes (`4 * dimensions` length).
+Pass these Bytes through to a vector-store ForeignNode (Q-038) or
+compute cosine similarity host-side.
+
+**Credentials** flow through `Builtins.credentialProvider` (default
+reads `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /
+`GOOGLE_API_KEY`). They are NOT part of the capability lattice — a
+capability authorizes a category, the credential authorizes the
+actual host call.
+
+**Layer A emission example.** A minimal Anthropic generation under a
+wildcard capability:
+
+    intT PRM Int
+    strT PRM String
+    bytesT PRM Bytes
+    llmGenFx EFC "LLM.Generate" [strT strT]
+    -- declare the unified GenerateRequest product (model + messages + tools fields)
+    modelFieldT PRF "model" strT
+    messagesFldT PRF "messages" bytesT
+    toolsFldT PRF "tools" bytesT
+    reqT PRD [modelFieldT messagesFldT toolsFldT]
+    resT PRD []
+    -- ForeignNode wired through the prelude:
+    -- "anthropicGenerate" reaches the registered builtin under llmGenerateFx
+    providerLit STR "anthropic"
+    modelLit STR "claude-opus-4-7"
+    callDecl EFD llmGenFx [providerLit modelLit]
+    -- build the GenerateRequest ProductV at the call site
+    -- (real corpus programs use messagesV / toolsV from earlier nodes)
+    callApp APP anthropicGenerate [requestV] _ [callDecl]
+
+**Provider scoping example.** A graph that holds only
+`LLM.Generate{provider: "anthropic", model: *}` cannot dispatch through
+`openaiGenerate` — the runtime raises `RefinementViolation`. A graph
+that holds the wildcard `LLM.Generate{provider: *, model: *}` works
+with any of the six bindings; the cost is the broader trust grant.
 
 ## Layer 4 step 2 builtins (real IO + stdlib)
 

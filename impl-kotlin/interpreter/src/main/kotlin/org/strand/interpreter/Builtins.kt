@@ -178,6 +178,41 @@ object Builtins {
     var exitHandler: ExitHandler = RealExitHandler
 
     /**
+     * Pluggable credential provider for the agent-native LLM and
+     * vector-store builtins (Q-037 / Q-038). Default reads from
+     * environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+     * `GEMINI_API_KEY` / `GOOGLE_API_KEY`). Tests install a
+     * [StaticCredentialProvider] to avoid the host's env-var state.
+     *
+     * Credentials are NOT capabilities — the capability
+     * `LLM.Generate{provider: "anthropic", model: *}` authorizes calling
+     * Anthropic models but does not carry the API key. See the
+     * agent-native-capabilities proposal § 4.4 for the rationale.
+     */
+    @Volatile
+    var credentialProvider: CredentialProvider = EnvCredentialProvider
+
+    /**
+     * Pluggable HTTP transport for the LLM provider bindings. Default
+     * is [DefaultLlmHttpClient] which uses [java.net.HttpURLConnection]
+     * (same surface as `Http.Request`). Tests install a mock client
+     * that records the outgoing request and returns a canned response;
+     * the per-provider tests cover the wire-format translation without
+     * any real network call.
+     */
+    @Volatile
+    var llmHttpClient: LlmHttpClient = DefaultLlmHttpClient
+
+    /**
+     * Maximum number of tool-use iterations the per-provider Generate
+     * builtin will run before halting and returning [StopReason.ToolUseLimit].
+     * Bounded at 10 by default (proposal § 6 — keeps the per-call budget
+     * in the builtin rather than relying on agent-side bookkeeping).
+     */
+    @Volatile
+    var toolLoopLimit: Int = 10
+
+    /**
      * Per-server state for the `Http.Listen` / `Http.Accept` builtins.
      * The handler thread enqueues a [HttpPending] for each request and
      * blocks on its latch until Strand calls Http.Respond. The queue
@@ -1773,6 +1808,85 @@ object Builtins {
             }
             acc
         },
+
+        // ===== Q-037 Phase 1 — agent-native LLM ForeignNodes =====
+        // Per-provider Generate + Embed builtins under operation-shaped
+        // E-035 LLM.Generate{provider, model} / E-036 LLM.Embed{provider,
+        // model} effect categories. Live in the higher-order registry
+        // because Generate runs the tool-use loop and must dispatch
+        // agent-supplied tool callables via Interpreter.applyValueToArgs
+        // (the ApplyFn passed to higher-order builtins).
+        //
+        // Request/result Strand shape (proposal § 3.3):
+        //   GenerateRequest = {
+        //     model: String, messages: List<Message>, system: Option<String>,
+        //     maxTokens: Option<Int>, tools: List<ToolDef>,
+        //     responseSchema: Option<JsonValue>, temperature: Option<Float>,
+        //     providerExtras: Option<JsonValue>
+        //   }
+        // The agent constructs this as a Strand ProductV; the builtin
+        // walks it into the unified [GenerateRequest], runs the per-
+        // provider library plus tool loop, and converts the result back
+        // to a ProductV. Conversion helpers live below as private
+        // funs in this companion (productField / parseStrandMessages / ...).
+
+        "strand-builtin:Anthropic.Messages.Create" to FnH { args, apply ->
+            require(args.size == 1) {
+                "Anthropic.Messages.Create expects 1 arg (GenerateRequest), got ${args.size}"
+            }
+            runGenerateLoop(args[0] as Value.ProductV, AnthropicProvider::generate, apply)
+        },
+
+        "strand-builtin:Anthropic.Embeddings.Create" to FnH { args, _ ->
+            require(args.size == 1) {
+                "Anthropic.Embeddings.Create expects 1 arg (EmbedRequest), got ${args.size}"
+            }
+            // Anthropic does not ship native embeddings — surfaces an
+            // IoFailure routed through the interpreter so the agent's
+            // feedback is structured. See AnthropicProvider.embed.
+            try {
+                val bytes = AnthropicProvider.embed(parseEmbedRequest(args[0] as Value.ProductV))
+                Value.BytesV(bytes)
+            } catch (io: IoFailure) {
+                throw io
+            }
+        },
+
+        "strand-builtin:OpenAI.Chat.Completions" to FnH { args, apply ->
+            require(args.size == 1) {
+                "OpenAI.Chat.Completions expects 1 arg (GenerateRequest), got ${args.size}"
+            }
+            runGenerateLoop(args[0] as Value.ProductV, OpenAIProvider::generate, apply)
+        },
+
+        "strand-builtin:OpenAI.Embeddings.Create" to FnH { args, _ ->
+            require(args.size == 1) {
+                "OpenAI.Embeddings.Create expects 1 arg (EmbedRequest), got ${args.size}"
+            }
+            Value.BytesV(OpenAIProvider.embed(
+                parseEmbedRequest(args[0] as Value.ProductV),
+                llmHttpClient,
+                credentialProvider,
+            ))
+        },
+
+        "strand-builtin:Gemini.GenerateContent" to FnH { args, apply ->
+            require(args.size == 1) {
+                "Gemini.GenerateContent expects 1 arg (GenerateRequest), got ${args.size}"
+            }
+            runGenerateLoop(args[0] as Value.ProductV, GeminiProvider::generate, apply)
+        },
+
+        "strand-builtin:Gemini.EmbedContent" to FnH { args, _ ->
+            require(args.size == 1) {
+                "Gemini.EmbedContent expects 1 arg (EmbedRequest), got ${args.size}"
+            }
+            Value.BytesV(GeminiProvider.embed(
+                parseEmbedRequest(args[0] as Value.ProductV),
+                llmHttpClient,
+                credentialProvider,
+            ))
+        },
     )
 
     /**
@@ -1886,6 +2000,403 @@ object Builtins {
             out.toString()
         }
         else -> "null"
+    }
+
+    // ====================================================================
+    // Q-037 Phase 1 — Strand ↔ unified LLM shape conversion + tool loop
+    // ====================================================================
+
+    /**
+     * Optional field accessor: returns the field value when it is
+     * `Some(v)` (a Strand `Option<T>` SumV), otherwise null. The
+     * provider builtins use this to honor opt-in fields like `system`,
+     * `maxTokens`, `temperature` without forcing the agent to supply
+     * every position.
+     */
+    private fun optField(product: Value.ProductV, fieldName: String): Value? {
+        val v = product.fields[fieldName] ?: return null
+        return when (v) {
+            is Value.SumV -> if (v.case == "Some") v.payload else null
+            else -> v  // tolerate non-Option-wrapped fields (treated as always-present)
+        }
+    }
+
+    /**
+     * Required field accessor: returns the field's Value, throwing
+     * [IoFailure] if absent. Used for `model`, `messages`, `tools`
+     * etc. that the proposal marks "required" in the request shape.
+     */
+    private fun reqField(product: Value.ProductV, fieldName: String, where: String): Value {
+        return product.fields[fieldName]
+            ?: throw IoFailure("$where-malformed", "missing required field '$fieldName'")
+    }
+
+    /**
+     * Walk a Strand `List<Message>` (Cons/Nil SumV chain) into a
+     * Kotlin list of unified [LlmMessage]. Each `Message` is a SumV
+     * with cases `User(content: List<Block>) | Assistant(content:
+     * List<Block>) | ToolResult(toolUseId: String, content: Bytes)`.
+     */
+    private fun parseStrandMessages(listValue: Value): List<LlmMessage> {
+        val out = mutableListOf<LlmMessage>()
+        var cur = listValue
+        while (cur is Value.SumV && cur.case == "Cons") {
+            val payload = cur.payload as Value.ProductV
+            val msg = payload.fields.getValue("head") as Value.SumV
+            out += when (msg.case) {
+                "User" -> LlmMessage.User(parseStrandBlocks((msg.payload as Value.ProductV).fields.getValue("content")))
+                "Assistant" -> LlmMessage.Assistant(parseStrandBlocks((msg.payload as Value.ProductV).fields.getValue("content")))
+                "ToolResult" -> {
+                    val p = msg.payload as Value.ProductV
+                    LlmMessage.ToolResult(
+                        toolUseId = (p.fields.getValue("toolUseId") as Value.StringV).v,
+                        content = (p.fields.getValue("content") as Value.BytesV).v,
+                    )
+                }
+                else -> throw IoFailure("llm-message-malformed", "unknown Message case '${msg.case}'")
+            }
+            cur = payload.fields.getValue("tail")
+        }
+        return out
+    }
+
+    /**
+     * Walk a Strand `List<Block>` (Cons/Nil SumV chain) into a Kotlin
+     * list of unified [LlmBlock]. Each `Block` is a SumV with cases
+     * `Text(String) | ToolUse(id, name, input: JsonValue) |
+     * Image(Bytes, mediaType: String) | Document(Bytes, mediaType: String)`.
+     */
+    private fun parseStrandBlocks(listValue: Value): List<LlmBlock> {
+        val out = mutableListOf<LlmBlock>()
+        var cur = listValue
+        while (cur is Value.SumV && cur.case == "Cons") {
+            val payload = cur.payload as Value.ProductV
+            val block = payload.fields.getValue("head") as Value.SumV
+            out += when (block.case) {
+                "Text" -> LlmBlock.Text((block.payload as Value.StringV).v)
+                "ToolUse" -> {
+                    val p = block.payload as Value.ProductV
+                    LlmBlock.ToolUse(
+                        id = (p.fields.getValue("id") as Value.StringV).v,
+                        name = (p.fields.getValue("name") as Value.StringV).v,
+                        input = strandJsonValueToElement(p.fields.getValue("input") as Value.SumV),
+                    )
+                }
+                "Image" -> {
+                    val p = block.payload as Value.ProductV
+                    LlmBlock.Image(
+                        bytes = (p.fields.getValue("bytes") as Value.BytesV).v,
+                        mediaType = (p.fields.getValue("mediaType") as Value.StringV).v,
+                    )
+                }
+                "Document" -> {
+                    val p = block.payload as Value.ProductV
+                    LlmBlock.Document(
+                        bytes = (p.fields.getValue("bytes") as Value.BytesV).v,
+                        mediaType = (p.fields.getValue("mediaType") as Value.StringV).v,
+                    )
+                }
+                else -> throw IoFailure("llm-block-malformed", "unknown Block case '${block.case}'")
+            }
+            cur = payload.fields.getValue("tail")
+        }
+        return out
+    }
+
+    /**
+     * Walk a Strand `List<ToolDef>` (Cons/Nil SumV chain) into a Kotlin
+     * list of unified [LlmToolDef]. Each `ToolDef` is a ProductV
+     * `{name, description, parameterSchema, implementation}` where
+     * `parameterSchema` is a Strand JsonValue (already projected — see
+     * corpus 66 for the JsonValue shape) and `implementation` is a
+     * Strand callable (Closure / ForeignFn / FixpointFn) the tool-
+     * dispatch loop invokes via the surrounding [ApplyFn].
+     */
+    private fun parseStrandTools(listValue: Value): List<LlmToolDef> {
+        val out = mutableListOf<LlmToolDef>()
+        var cur = listValue
+        while (cur is Value.SumV && cur.case == "Cons") {
+            val payload = cur.payload as Value.ProductV
+            val toolDef = payload.fields.getValue("head") as Value.ProductV
+            out += LlmToolDef(
+                name = (toolDef.fields.getValue("name") as Value.StringV).v,
+                description = (toolDef.fields.getValue("description") as Value.StringV).v,
+                parameterSchema = strandJsonValueToElement(toolDef.fields.getValue("parameterSchema") as Value.SumV),
+                implementation = toolDef.fields.getValue("implementation"),
+            )
+            cur = payload.fields.getValue("tail")
+        }
+        return out
+    }
+
+    /**
+     * Convert a Strand JsonValue SumV (corpus 66 encoding) into a
+     * kotlinx-serialization JsonElement. Mirrors [jsonElementToValue].
+     */
+    private fun strandJsonValueToElement(v: Value.SumV): kotlinx.serialization.json.JsonElement {
+        return when (v.case) {
+            "JsonNull" -> kotlinx.serialization.json.JsonNull
+            "JsonBool" -> kotlinx.serialization.json.JsonPrimitive((v.payload as Value.BoolV).v)
+            "JsonNumber" -> kotlinx.serialization.json.JsonPrimitive((v.payload as Value.IntV).v)
+            "JsonString" -> kotlinx.serialization.json.JsonPrimitive((v.payload as Value.StringV).v)
+            "JsonArrayCons", "JsonArrayNil" -> {
+                val out = mutableListOf<kotlinx.serialization.json.JsonElement>()
+                var cur: Value = v
+                while (cur is Value.SumV && cur.case == "JsonArrayCons") {
+                    val payload = cur.payload as Value.ProductV
+                    out += strandJsonValueToElement(payload.fields.getValue("head") as Value.SumV)
+                    cur = payload.fields.getValue("tail")
+                }
+                kotlinx.serialization.json.JsonArray(out)
+            }
+            "JsonObjectCons", "JsonObjectNil" -> {
+                val out = linkedMapOf<String, kotlinx.serialization.json.JsonElement>()
+                var cur: Value = v
+                while (cur is Value.SumV && cur.case == "JsonObjectCons") {
+                    val payload = cur.payload as Value.ProductV
+                    val key = (payload.fields.getValue("key") as Value.StringV).v
+                    out[key] = strandJsonValueToElement(payload.fields.getValue("value") as Value.SumV)
+                    cur = payload.fields.getValue("tail")
+                }
+                kotlinx.serialization.json.JsonObject(out)
+            }
+            else -> kotlinx.serialization.json.JsonNull
+        }
+    }
+
+    /**
+     * Convert a kotlinx-serialization JsonElement to the Strand
+     * JsonValue SumV (the inverse of [strandJsonValueToElement]).
+     * Used to surface a model's tool-call `input` JSON as a Strand
+     * JsonValue inside the returned block. Numbers that don't fit a
+     * Long are represented as 0 with a JsonNull payload — agents that
+     * need full numeric range should parse the raw bytes via
+     * `Json.Parse` separately.
+     */
+    private fun jsonElementToStrand(el: kotlinx.serialization.json.JsonElement): Value.SumV {
+        return when (el) {
+            is kotlinx.serialization.json.JsonNull -> Value.SumV("JsonNull", null)
+            is kotlinx.serialization.json.JsonPrimitive -> {
+                if (el.isString) Value.SumV("JsonString", Value.StringV(el.content))
+                else when (el.content.lowercase()) {
+                    "true" -> Value.SumV("JsonBool", Value.BoolV(true))
+                    "false" -> Value.SumV("JsonBool", Value.BoolV(false))
+                    else -> Value.SumV("JsonNumber", Value.IntV(el.content.toLongOrNull() ?: 0L))
+                }
+            }
+            is kotlinx.serialization.json.JsonArray -> {
+                var chain: Value = Value.SumV("JsonArrayNil", null)
+                for (entry in el.reversed()) {
+                    chain = Value.SumV("JsonArrayCons", Value.ProductV(mapOf(
+                        "head" to jsonElementToStrand(entry),
+                        "tail" to chain,
+                    )))
+                }
+                chain as Value.SumV
+            }
+            is kotlinx.serialization.json.JsonObject -> {
+                var chain: Value = Value.SumV("JsonObjectNil", null)
+                for ((key, value) in el.entries.reversed()) {
+                    chain = Value.SumV("JsonObjectCons", Value.ProductV(mapOf(
+                        "key" to Value.StringV(key),
+                        "value" to jsonElementToStrand(value),
+                        "tail" to chain,
+                    )))
+                }
+                chain as Value.SumV
+            }
+        }
+    }
+
+    /**
+     * Parse a Strand GenerateRequest ProductV into the unified [GenerateRequest].
+     * Mandatory: `model` (StringV), `messages` (Cons/Nil list).
+     * Optional: `system`, `maxTokens`, `tools` (defaults to []),
+     *           `responseSchema`, `temperature`, `providerExtras`.
+     */
+    private fun parseGenerateRequest(p: Value.ProductV): GenerateRequest {
+        val model = (reqField(p, "model", "llm-generate") as Value.StringV).v
+        val messages = parseStrandMessages(reqField(p, "messages", "llm-generate"))
+        val system = (optField(p, "system") as? Value.StringV)?.v
+        val maxTokens = (optField(p, "maxTokens") as? Value.IntV)?.v?.toInt()
+        val temperature = (optField(p, "temperature") as? Value.FloatV)?.v
+        val toolsList = p.fields["tools"] ?: Value.SumV("Nil", null)
+        val tools = parseStrandTools(toolsList)
+        val responseSchema = (optField(p, "responseSchema") as? Value.SumV)?.let { strandJsonValueToElement(it) }
+        val providerExtras = (optField(p, "providerExtras") as? Value.SumV)?.let { strandJsonValueToElement(it) }
+        return GenerateRequest(
+            model = model,
+            messages = messages,
+            system = system,
+            maxTokens = maxTokens,
+            tools = tools,
+            responseSchema = responseSchema,
+            temperature = temperature,
+            providerExtras = providerExtras,
+        )
+    }
+
+    private fun parseEmbedRequest(p: Value.ProductV): EmbedRequest {
+        val model = (reqField(p, "model", "llm-embed") as Value.StringV).v
+        val text = (reqField(p, "text", "llm-embed") as Value.StringV).v
+        val dimensions = (optField(p, "dimensions") as? Value.IntV)?.v?.toInt()
+        return EmbedRequest(model = model, text = text, dimensions = dimensions)
+    }
+
+    /**
+     * Convert one [LlmBlock] to a Strand `Block` SumV (Cons chain
+     * cell head). Inverse of [parseStrandBlocks].
+     */
+    private fun blockToStrand(b: LlmBlock): Value.SumV = when (b) {
+        is LlmBlock.Text -> Value.SumV("Text", Value.StringV(b.text))
+        is LlmBlock.ToolUse -> Value.SumV("ToolUse", Value.ProductV(mapOf(
+            "id" to Value.StringV(b.id),
+            "name" to Value.StringV(b.name),
+            "input" to jsonElementToStrand(b.input),
+        )))
+        is LlmBlock.Image -> Value.SumV("Image", Value.ProductV(mapOf(
+            "bytes" to Value.BytesV(b.bytes),
+            "mediaType" to Value.StringV(b.mediaType),
+        )))
+        is LlmBlock.Document -> Value.SumV("Document", Value.ProductV(mapOf(
+            "bytes" to Value.BytesV(b.bytes),
+            "mediaType" to Value.StringV(b.mediaType),
+        )))
+    }
+
+    /** Encode a list of [LlmBlock]s as the Strand `List<Block>` Cons/Nil chain. */
+    private fun blocksToStrand(blocks: List<LlmBlock>): Value {
+        var chain: Value = Value.SumV("Nil", null)
+        for (b in blocks.reversed()) {
+            chain = Value.SumV("Cons", Value.ProductV(mapOf(
+                "head" to blockToStrand(b),
+                "tail" to chain,
+            )))
+        }
+        return chain
+    }
+
+    /** Encode a list of [LlmMessage]s as the Strand `List<Message>` chain. */
+    private fun messagesToStrand(messages: List<LlmMessage>): Value {
+        var chain: Value = Value.SumV("Nil", null)
+        for (m in messages.reversed()) {
+            val head: Value = when (m) {
+                is LlmMessage.User -> Value.SumV("User", Value.ProductV(mapOf(
+                    "content" to blocksToStrand(m.content),
+                )))
+                is LlmMessage.Assistant -> Value.SumV("Assistant", Value.ProductV(mapOf(
+                    "content" to blocksToStrand(m.content),
+                )))
+                is LlmMessage.ToolResult -> Value.SumV("ToolResult", Value.ProductV(mapOf(
+                    "toolUseId" to Value.StringV(m.toolUseId),
+                    "content" to Value.BytesV(m.content),
+                )))
+            }
+            chain = Value.SumV("Cons", Value.ProductV(mapOf(
+                "head" to head,
+                "tail" to chain,
+            )))
+        }
+        return chain
+    }
+
+    private fun stopReasonToStrand(s: StopReason): Value.SumV = Value.SumV(s.name, null)
+
+    private fun usageToStrand(u: TokenUsage): Value.ProductV = Value.ProductV(mapOf(
+        "inputTokens" to Value.IntV(u.inputTokens),
+        "outputTokens" to Value.IntV(u.outputTokens),
+        "cacheReadTokens" to Value.IntV(u.cacheReadTokens),
+        "cacheWriteTokens" to Value.IntV(u.cacheWriteTokens),
+    ))
+
+    /**
+     * Drive the tool-use loop for a per-provider Generate ForeignNode.
+     *
+     * Algorithm (proposal § 3.8 / § 6):
+     *  1. Parse the Strand GenerateRequest ProductV into [GenerateRequest].
+     *  2. Call the provider's `generate(req)`.
+     *  3. Inspect the result blocks: if any are [LlmBlock.ToolUse],
+     *     dispatch the named tool via [Builtins.ApplyFn] against the
+     *     tool's `implementation` callable with the parsed input value.
+     *  4. Append `ToolResult` messages to the conversation and call
+     *     the provider again. Cap iterations at [toolLoopLimit].
+     *  5. Return when no tool use is requested (or limit hit) — the
+     *     final blocks, stopReason, usage, and the rewritten message
+     *     list become the GenerateResult ProductV.
+     *
+     * Tool result encoding: the tool's returned [Value] is serialized
+     * to UTF-8 bytes for the [LlmMessage.ToolResult]'s `content` field.
+     * StringV / BytesV serialize directly; everything else routes
+     * through `toString()`. The agent author can wrap a richer result
+     * in their tool implementation.
+     */
+    private fun runGenerateLoop(
+        requestProduct: Value.ProductV,
+        generate: (GenerateRequest, LlmHttpClient, CredentialProvider) -> GenerateResult,
+        apply: ApplyFn,
+    ): Value {
+        var req = parseGenerateRequest(requestProduct)
+        var loops = 0
+        var lastResult: GenerateResult
+        val workingMessages = req.messages.toMutableList()
+        var lastBlocks: List<LlmBlock> = emptyList()
+        var lastUsage = TokenUsage()
+        var lastStop = StopReason.EndTurn
+        while (true) {
+            lastResult = generate(req, llmHttpClient, credentialProvider)
+            lastBlocks = lastResult.content
+            lastUsage = TokenUsage(
+                inputTokens = lastUsage.inputTokens + lastResult.usage.inputTokens,
+                outputTokens = lastUsage.outputTokens + lastResult.usage.outputTokens,
+                cacheReadTokens = lastUsage.cacheReadTokens + lastResult.usage.cacheReadTokens,
+                cacheWriteTokens = lastUsage.cacheWriteTokens + lastResult.usage.cacheWriteTokens,
+            )
+            lastStop = lastResult.stopReason
+            val toolUses = lastBlocks.filterIsInstance<LlmBlock.ToolUse>()
+            if (toolUses.isEmpty()) break
+            // Append the assistant message that requested the tool uses.
+            workingMessages += LlmMessage.Assistant(lastBlocks)
+            for (tu in toolUses) {
+                val tool = req.tools.find { it.name == tu.name }
+                val toolResultBytes: ByteArray = if (tool == null) {
+                    "tool '${tu.name}' not found".toByteArray(Charsets.UTF_8)
+                } else {
+                    // Convert the tool-use input JSON to a Strand
+                    // JsonValue SumV; the implementation takes a single
+                    // JsonValue parameter and returns a Value the loop
+                    // serializes. Agent-author convention.
+                    val inputAsStrand = jsonElementToStrand(tu.input)
+                    val resultValue = apply.apply(tool.implementation, listOf(inputAsStrand))
+                    valueToToolResultBytes(resultValue)
+                }
+                workingMessages += LlmMessage.ToolResult(tu.id, toolResultBytes)
+            }
+            loops++
+            if (loops >= toolLoopLimit) {
+                lastStop = StopReason.ToolUseLimit
+                break
+            }
+            req = req.copy(messages = workingMessages.toList())
+        }
+        return Value.ProductV(mapOf(
+            "content" to blocksToStrand(lastBlocks),
+            "stopReason" to stopReasonToStrand(lastStop),
+            "usage" to usageToStrand(lastUsage),
+            "finalMessages" to messagesToStrand(workingMessages),
+        ))
+    }
+
+    /**
+     * Serialize a tool-implementation result to the bytes the next
+     * provider call carries as `ToolResult.content`. Common cases:
+     * StringV → UTF-8 bytes; BytesV → identity; everything else →
+     * value's `toString()` UTF-8 bytes. Agent authors who need a
+     * richer encoding wrap the result in their implementation.
+     */
+    private fun valueToToolResultBytes(v: Value): ByteArray = when (v) {
+        is Value.StringV -> v.v.toByteArray(Charsets.UTF_8)
+        is Value.BytesV -> v.v
+        else -> v.toString().toByteArray(Charsets.UTF_8)
     }
 
     /** Look up a builtin by its target identifier; null if unknown. */

@@ -267,6 +267,8 @@ Inventory specified in [`design/effects-and-capabilities.md`](design/effects-and
 | E-032 | Log.Write | Diagnostic |
 | E-033 | OS.Read | Host environment |
 | E-034 | System.Exit | Host environment |
+| E-035 | LLM.Generate | Language model |
+| E-036 | LLM.Embed | Language model |
 
 New effect categories receive higher numbers; existing numbers are not reused.
 

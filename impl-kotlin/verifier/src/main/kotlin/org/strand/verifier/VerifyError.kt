@@ -683,6 +683,32 @@ sealed class VerifyError {
         val schema: NodeId,
         val reason: String
     ) : VerifyError()
+
+    // ----- Q-037 Phase 1: agent-native LLM ForeignNodes -----
+
+    /**
+     * A `ToolDef.parameterSchema`'s `valueType` cannot be projected to
+     * JSON Schema for the provider boundary (proposal § 3.8.1). The
+     * provider-side constrained-decoding requires the parameter type
+     * to be in the irreducible JSON-Schema-expressible subset:
+     * `FunctionType`, `ForallType`, and unbound `TypeParameter`
+     * references are rejected because JSON Schema has no representation
+     * for callbacks, parametric polymorphism, or free type variables.
+     *
+     * [at] is the call-site NodeId (the LLM.Generate Application);
+     * [toolDefId] is reserved for a future static toolset projection
+     * to identify which ToolDef contained the offending type — when
+     * tools are computed at runtime (a List value), the verifier
+     * cannot pinpoint a specific source node and [toolDefId] equals
+     * [at] (the Application itself). [reason] mirrors
+     * [org.strand.interpreter.JsonSchemaProjection.Result.Reason].
+     */
+    data class ToolParamTypeUnsupported(
+        override val at: NodeId,
+        val toolDefId: NodeId,
+        val rejectedType: TypeExpr,
+        val reason: String,
+    ) : VerifyError()
 }
 
 /** Outcome of verification: either a successful inference or one or more structured errors. */

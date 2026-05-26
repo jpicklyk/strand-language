@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "root": "agentMachine",
+  "nodes": {
+    "intT":             { "type": "PrimitiveType", "kind": "Int" },
+    "strT":             { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":           { "type": "PrimitiveType", "kind": "Bytes" },
+
+    "llmGenFx":         { "type": "EffectCategory", "categoryName": "LLM.Generate",
+                          "parameters": ["strT", "strT"] },
+    "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "sendFx":           { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
+
+    "modelFieldT":      { "type": "ProductTypeField", "name": "model",    "fieldType": "strT" },
+    "messagesFieldT":   { "type": "ProductTypeField", "name": "messages", "fieldType": "bytesT" },
+    "toolsFieldT":      { "type": "ProductTypeField", "name": "tools",    "fieldType": "bytesT" },
+    "generateRequestT": { "type": "ProductType", "fields": ["modelFieldT", "messagesFieldT", "toolsFieldT"] },
+
+    "contentFieldT":    { "type": "ProductTypeField", "name": "content",       "fieldType": "bytesT" },
+    "stopReasonFldT":   { "type": "ProductTypeField", "name": "stopReason",    "fieldType": "bytesT" },
+    "usageFieldT":      { "type": "ProductTypeField", "name": "usage",         "fieldType": "bytesT" },
+    "finalMessagesFlT": { "type": "ProductTypeField", "name": "finalMessages", "fieldType": "bytesT" },
+    "generateResultT":  { "type": "ProductType",
+                          "fields": ["contentFieldT", "stopReasonFldT", "usageFieldT", "finalMessagesFlT"] },
+
+    "addT":             { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+
+    "anthropicGenT":    { "type": "FunctionType", "parameters": ["generateRequestT"],
+                          "result": "generateResultT", "effects": ["llmGenFx"] },
+    "anthropicGen":     { "type": "ForeignNode", "target": "strand-builtin:Anthropic.Messages.Create",
+                          "foreignType": "anthropicGenT", "effects": ["llmGenFx"] },
+
+    "someStrCase":      { "type": "SumTypeCase", "name": "Some", "caseType": "strT" },
+    "noneStrCase":      { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionStrT":       { "type": "SumType", "cases": ["someStrCase", "noneStrCase"] },
+
+    "stateFieldT":      { "type": "ProductTypeField", "name": "state",    "fieldType": "strT" },
+    "output0FieldT":    { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionStrT" },
+    "outputBatchT":     { "type": "ProductType", "fields": ["output0FieldT"] },
+    "outputsFieldT":    { "type": "ProductTypeField", "name": "outputs",  "fieldType": "outputBatchT" },
+    "transitionResT":   { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
+
+    "stateParam":       { "type": "ParameterDecl", "name": "convo",   "paramType": "strT" },
+    "eventParam":       { "type": "ParameterDecl", "name": "userMsg", "paramType": "strT" },
+    "eventParamRef":    { "type": "VarRef", "binder": "eventParam" },
+
+    "modelLit1":        { "type": "StringLit", "value": "claude-opus-4-7" },
+    "modelLit2":        { "type": "StringLit", "value": "claude-opus-4-7" },
+    "providerLit":      { "type": "StringLit", "value": "anthropic" },
+    "callDecl":         { "type": "EffectDecl", "effectType": "llmGenFx",
+                          "parameters": ["providerLit", "modelLit1"] },
+
+    "emptyBytes":       { "type": "BytesLit", "value": "" },
+    "modelFV":          { "type": "ProductFieldValue", "fieldName": "model",    "value": "modelLit2" },
+    "messagesFV":       { "type": "ProductFieldValue", "fieldName": "messages", "value": "emptyBytes" },
+    "toolsFV":          { "type": "ProductFieldValue", "fieldName": "tools",    "value": "emptyBytes" },
+    "requestValue":     { "type": "ProductValue", "ofType": "generateRequestT",
+                          "fields": ["modelFV", "messagesFV", "toolsFV"] },
+
+    "callApp":          { "type": "Application", "function": "anthropicGen",
+                          "arguments": ["requestValue"], "effectInstances": ["callDecl"] },
+
+    "stateParamRef":    { "type": "VarRef", "binder": "stateParam" },
+    "noneOutput":       { "type": "SumValue", "ofType": "optionStrT", "caseName": "None" },
+    "newStateFV":       { "type": "ProductFieldValue", "fieldName": "state",    "value": "eventParamRef" },
+    "newOutput0FV":     { "type": "ProductFieldValue", "fieldName": "output_0", "value": "noneOutput" },
+    "newOutputBatch":   { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["newOutput0FV"] },
+    "newOutputsFV":     { "type": "ProductFieldValue", "fieldName": "outputs",  "value": "newOutputBatch" },
+    "transitionResult": { "type": "ProductValue", "ofType": "transitionResT",
+                          "fields": ["newStateFV", "newOutputsFV"] },
+
+    "letCall":          { "type": "Let", "name": "_callResult",
+                          "value": "callApp", "body": "transitionResult" },
+
+    "transitionLambda": { "type": "Lambda", "parameters": ["stateParam", "eventParam"],
+                          "body": "letCall", "effects": ["llmGenFx"] },
+
+    "initialState":     { "type": "StringLit", "value": "" },
+
+    "inputStream":      { "type": "EventStream", "eventType": "strT", "streamKind": "external" },
+    "outputStream":     { "type": "EventStream", "eventType": "strT", "streamKind": "output" },
+
+    "agentMachine":     {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": ["outputStream"],
+      "effects": ["llmGenFx", "receiveFx", "sendFx"]
+    }
+  }
+}

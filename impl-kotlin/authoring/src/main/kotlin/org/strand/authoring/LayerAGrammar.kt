@@ -1182,6 +1182,90 @@ object LayerAGrammar {
             stringFields = mapOf("target" to "strand-builtin:Regex.Replace"),
             refFields = mapOf("foreignType" to "reReplaceT"),
         ),
+
+        // ===== Q-037 Phase 1 — agent-native LLM ForeignNodes =====
+        // Per-provider Generate + Embed under the operation-shaped
+        // E-035 LLM.Generate / E-036 LLM.Embed effect categories.
+        //
+        // The Strand-side request / result types are agent-built
+        // ProductV / SumV towers (proposal § 3.3) — they don't fit
+        // any monomorphic prelude FunctionType cleanly. Following the
+        // Map.* surface-type convention, the prelude uses `bytesT` as
+        // an opaque placeholder for the request and result types; the
+        // runtime checks shape at dispatch and produces a structured
+        // error if the value isn't a ProductV with the expected fields.
+        // Agents that want a precise FunctionType emit explicit FNT +
+        // FRN at the use site. The prelude exists primarily so the
+        // EffectCategory entries (`llmGenerateFx`, `llmEmbedFx`) and
+        // the ForeignNode targets are easy to reach by short name.
+
+        "llmGenerateFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "LLM.Generate"),
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+        ),
+        "llmEmbedFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "LLM.Embed"),
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+        ),
+
+        // Function types — opaque (request: Bytes) -> Bytes placeholder.
+        // Agents construct the real GenerateRequest / EmbedRequest /
+        // GenerateResult products at the call site and either use a
+        // local FNT to type the call precisely or pass the prelude
+        // shape through the runtime's structural dispatch.
+        "llmGenerateT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "llmEmbedT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+
+        // ForeignNode entries — six per-provider bindings. Each pins
+        // its `provider` refinement parameter via the EffectCategory
+        // it declares; the verifier sees provider identity in the
+        // effect closure even though the category is operation-shaped.
+        "anthropicGenerate" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Anthropic.Messages.Create"),
+            refFields = mapOf("foreignType" to "llmGenerateT"),
+            refListFields = mapOf("effects" to listOf("llmGenerateFx")),
+        ),
+        "anthropicEmbed" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Anthropic.Embeddings.Create"),
+            refFields = mapOf("foreignType" to "llmEmbedT"),
+            refListFields = mapOf("effects" to listOf("llmEmbedFx")),
+        ),
+        "openaiGenerate" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:OpenAI.Chat.Completions"),
+            refFields = mapOf("foreignType" to "llmGenerateT"),
+            refListFields = mapOf("effects" to listOf("llmGenerateFx")),
+        ),
+        "openaiEmbed" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:OpenAI.Embeddings.Create"),
+            refFields = mapOf("foreignType" to "llmEmbedT"),
+            refListFields = mapOf("effects" to listOf("llmEmbedFx")),
+        ),
+        "geminiGenerate" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Gemini.GenerateContent"),
+            refFields = mapOf("foreignType" to "llmGenerateT"),
+            refListFields = mapOf("effects" to listOf("llmGenerateFx")),
+        ),
+        "geminiEmbed" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Gemini.EmbedContent"),
+            refFields = mapOf("foreignType" to "llmEmbedT"),
+            refListFields = mapOf("effects" to listOf("llmEmbedFx")),
+        ),
     )
 
     /**
