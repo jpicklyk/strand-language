@@ -418,6 +418,34 @@ object LayerAGrammar {
             stringFields = mapOf("categoryName" to "Crypto.RandomBytes"),
         ),
 
+        // Layer 4 step 2 backfill — effect categories for Fs.* /
+        // Net.* / Process.* / Time.Sleep. Each Layer 4 step 2
+        // builtin's ForeignNode entry below references one of these
+        // (plus, for some, the existing writeFx / connectFx).
+        // Naming: "netSendFx" / "netRecvFx" stay distinct from
+        // StateMachine.Send/Receive (sendFx / receiveFx) to avoid
+        // collision.
+        "readFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Filesystem.Read"),
+        ),
+        "netSendFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Network.Send"),
+        ),
+        "netRecvFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Network.Receive"),
+        ),
+        "procWaitFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Process.Wait"),
+        ),
+        "sleepFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Time.Sleep"),
+        ),
+
         // Stdlib expansion round 2 — Math.* function types.
         // Sharing FNT shape across multiple names (e.g., absT and
         // signT are both (Int)->Int) follows the existing
@@ -685,6 +713,357 @@ object LayerAGrammar {
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Bytes.FormatHex"),
             refFields = mapOf("foreignType" to "hexOfT"),
+        ),
+
+        // ===== Layer 4 step 2 backfill (2026-05-26) =====
+        // Prelude entries for the round-1 monomorphic IO + stdlib
+        // builtins that originally shipped without reserved names.
+        // The "When adding a new builtin" checklist now requires
+        // prelude entries with every builtin slice; this block fills
+        // the historical gap. Skipped: Fs.List (returns List<String>),
+        // Process.Spawn (takes List<String>), Process.EnvVar (returns
+        // Option<String>), Json.Parse / Json.Stringify / Markdown.Parse
+        // (typed against a specific JsonValue / MarkdownDocument), and
+        // String.Split / String.Join / String.ParseInt / String.ParseFloat
+        // / Bytes.ParseUtf8 / Bytes.ParseHex / Bytes.ParseBase64
+        // (polymorphic or Option-returning). Those keep the explicit
+        // FNT + FRN form at the use site per the documented exceptions.
+
+        // Function types — filesystem
+        "fsReadT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "fsWriteT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "bytesT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "fsAppendT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "bytesT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "fsExistsT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "fsDeleteT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+
+        // Function types — network sockets. Socket handles are
+        // represented as Int at the Strand surface (Layer 4 step 2
+        // design call: opaque-handle representation, runtime
+        // dispatch on Value.Resource.kind).
+        "netConnectT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "netSendT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "bytesT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "netRecvT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "netCloseT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+
+        // Http.Request returns a fixed ProductType {status: Int, body: Bytes}.
+        // Encoding the product type in the prelude requires three
+        // pieces: the two ProductTypeField entries + the ProductType
+        // itself. Names prefixed `http` for clarity.
+        "httpRespStatusField" to ReservedNodeSpec(
+            jsonType = "ProductTypeField",
+            stringFields = mapOf("name" to "status"),
+            refFields = mapOf("fieldType" to "intT"),
+        ),
+        "httpRespBodyField" to ReservedNodeSpec(
+            jsonType = "ProductTypeField",
+            stringFields = mapOf("name" to "body"),
+            refFields = mapOf("fieldType" to "bytesT"),
+        ),
+        "httpRespT" to ReservedNodeSpec(
+            jsonType = "ProductType",
+            refListFields = mapOf("fields" to listOf("httpRespStatusField", "httpRespBodyField")),
+        ),
+        "httpReqT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT", "bytesT")),
+            refFields = mapOf("result" to "httpRespT"),
+        ),
+
+        // Function types — process + time
+        "procWaitT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "sleepT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+
+        // Function types — String stdlib (monomorphic only). Several
+        // FNTs share shape — kept distinct per the addT/subT precedent.
+        "strLenT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "subStrT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT", "intT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "indexOfT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "containsT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "replaceT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "upperT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "lowerT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "trimT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "intToStrT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "floatToStrT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "boolToStrT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("boolT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+
+        // Function types — Bytes stdlib (monomorphic only).
+        "bytesLenT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "bytesSliceT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT", "intT", "intT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "bytesCatT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT", "bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "fromUtf8T" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "b64OfT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+
+        // ForeignNode entries — filesystem
+        "fsRead" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Fs.Read"),
+            refFields = mapOf("foreignType" to "fsReadT"),
+            refListFields = mapOf("effects" to listOf("readFx")),
+        ),
+        "fsWrite" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Fs.Write"),
+            refFields = mapOf("foreignType" to "fsWriteT"),
+            refListFields = mapOf("effects" to listOf("writeFx")),
+        ),
+        "fsAppend" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Fs.Append"),
+            refFields = mapOf("foreignType" to "fsAppendT"),
+            refListFields = mapOf("effects" to listOf("writeFx")),
+        ),
+        "fsExists" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Fs.Exists"),
+            refFields = mapOf("foreignType" to "fsExistsT"),
+            refListFields = mapOf("effects" to listOf("readFx")),
+        ),
+        "fsDelete" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Fs.Delete"),
+            refFields = mapOf("foreignType" to "fsDeleteT"),
+            refListFields = mapOf("effects" to listOf("writeFx")),
+        ),
+
+        // ForeignNode entries — network sockets + HTTP
+        "netConnect" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Net.Connect"),
+            refFields = mapOf("foreignType" to "netConnectT"),
+            refListFields = mapOf("effects" to listOf("connectFx")),
+        ),
+        "netSend" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Net.Send"),
+            refFields = mapOf("foreignType" to "netSendT"),
+            refListFields = mapOf("effects" to listOf("netSendFx")),
+        ),
+        "netRecv" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Net.Receive"),
+            refFields = mapOf("foreignType" to "netRecvT"),
+            refListFields = mapOf("effects" to listOf("netRecvFx")),
+        ),
+        "netClose" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Net.Close"),
+            refFields = mapOf("foreignType" to "netCloseT"),
+        ),
+        // Http.Request declares all three Network.* effects since the
+        // underlying implementation establishes a connection, sends
+        // the request, and reads the response.
+        "httpReq" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Http.Request"),
+            refFields = mapOf("foreignType" to "httpReqT"),
+            refListFields = mapOf("effects" to listOf("connectFx", "netSendFx", "netRecvFx")),
+        ),
+
+        // ForeignNode entries — process + time
+        "procWait" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Process.Wait"),
+            refFields = mapOf("foreignType" to "procWaitT"),
+            refListFields = mapOf("effects" to listOf("procWaitFx")),
+        ),
+        "sleep" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Time.Sleep"),
+            refFields = mapOf("foreignType" to "sleepT"),
+            refListFields = mapOf("effects" to listOf("sleepFx")),
+        ),
+
+        // ForeignNode entries — String stdlib. All pure.
+        "strLen" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Length"),
+            refFields = mapOf("foreignType" to "strLenT"),
+        ),
+        "subStr" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Substring"),
+            refFields = mapOf("foreignType" to "subStrT"),
+        ),
+        "indexOf" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.IndexOf"),
+            refFields = mapOf("foreignType" to "indexOfT"),
+        ),
+        "contains" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Contains"),
+            refFields = mapOf("foreignType" to "containsT"),
+        ),
+        "replace" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Replace"),
+            refFields = mapOf("foreignType" to "replaceT"),
+        ),
+        "upper" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.ToUpper"),
+            refFields = mapOf("foreignType" to "upperT"),
+        ),
+        "lower" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.ToLower"),
+            refFields = mapOf("foreignType" to "lowerT"),
+        ),
+        "trim" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Trim"),
+            refFields = mapOf("foreignType" to "trimT"),
+        ),
+        "intToStr" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.FromInt"),
+            refFields = mapOf("foreignType" to "intToStrT"),
+        ),
+        "floatToStr" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.FromFloat"),
+            refFields = mapOf("foreignType" to "floatToStrT"),
+        ),
+        "boolToStr" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.FromBool"),
+            refFields = mapOf("foreignType" to "boolToStrT"),
+        ),
+
+        // ForeignNode entries — Bytes stdlib. All pure.
+        "bytesLen" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bytes.Length"),
+            refFields = mapOf("foreignType" to "bytesLenT"),
+        ),
+        "bytesSlice" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bytes.Slice"),
+            refFields = mapOf("foreignType" to "bytesSliceT"),
+        ),
+        "bytesCat" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bytes.Concat"),
+            refFields = mapOf("foreignType" to "bytesCatT"),
+        ),
+        "fromUtf8" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bytes.FromUtf8"),
+            refFields = mapOf("foreignType" to "fromUtf8T"),
+        ),
+        "b64Of" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bytes.FormatBase64"),
+            refFields = mapOf("foreignType" to "b64OfT"),
         ),
     )
 

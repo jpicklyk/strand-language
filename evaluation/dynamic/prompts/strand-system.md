@@ -155,7 +155,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (34):
+FunctionType signatures (62):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -177,8 +177,33 @@ FunctionType signatures (34):
     randFloatT                      — () -> Float
     randBytesT                      — (Int) -> Bytes
     hexOfT                          — (Bytes) -> String
+    fsReadT                         — (String) -> Bytes
+    fsWriteT fsAppendT              — (String, Bytes) -> Int
+    fsExistsT fsDeleteT             — (String) -> Bool
+    netConnectT                     — (String, Int) -> Int  (socket handle)
+    netSendT                        — (Int, Bytes) -> Int
+    netRecvT                        — (Int, Int) -> Bytes
+    netCloseT                       — (Int) -> Unit
+    httpReqT                        — (String, String, Bytes) -> httpRespT
+    httpRespT                       — ProductType {status: Int, body: Bytes}
+    procWaitT                       — (Int) -> Int
+    sleepT                          — (Int) -> Unit
+    strLenT                         — (String) -> Int
+    subStrT                         — (String, Int, Int) -> String
+    indexOfT                        — (String, String) -> Int
+    containsT                       — (String, String) -> Bool
+    replaceT                        — (String, String, String) -> String
+    upperT lowerT trimT             — (String) -> String
+    intToStrT                       — (Int) -> String
+    floatToStrT                     — (Float) -> String
+    boolToStrT                      — (Bool) -> String
+    bytesLenT                       — (Bytes) -> Int
+    bytesSliceT                     — (Bytes, Int, Int) -> Bytes
+    bytesCatT                       — (Bytes, Bytes) -> Bytes
+    fromUtf8T                       — (String) -> Bytes
+    b64OfT                          — (Bytes) -> String
 
-Foreign-node builtins (40):
+Foreign-node builtins (68):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
@@ -192,31 +217,48 @@ Foreign-node builtins (40):
     blake3 sha256 md5               — Hash.* digests (Bytes -> Bytes, raw output, no multi-hash prefix)
     randInt randFloat randBytes     — Random.* (effectful; each declares cryptoFx for E-024 Crypto.RandomBytes)
     hexOf                           — Bytes.FormatHex (lowercase output)
+    fsRead fsWrite fsAppend fsExists fsDelete   — Fs.* filesystem (effectful; readFx for Read/Exists, writeFx for Write/Append/Delete)
+    netConnect netSend netRecv netClose         — Net.* sockets (effectful; netConnect→connectFx, netSend→netSendFx, netRecv→netRecvFx, netClose has no effect — closing the dual of opening)
+    httpReq                                     — Http.Request → {status: Int, body: Bytes} (effectful; declares connectFx, netSendFx, netRecvFx)
+    procWait                                    — Process.Wait → exit code Int (effectful; declares procWaitFx)
+    sleep                                       — Time.Sleep (effectful; declares sleepFx)
+    strLen subStr indexOf contains replace      — String.* core (pure)
+    upper lower trim                            — String.* casing/trim (pure)
+    intToStr floatToStr boolToStr               — String.FromInt / FromFloat / FromBool coercions
+    bytesLen bytesSlice bytesCat fromUtf8 b64Of — Bytes.* core (pure; b64Of is FormatBase64)
 
-Effect categories (8):
+Effect categories (13):
 
     receiveFx     — StateMachine.Receive (every state machine needs this)
     sendFx        — StateMachine.Send (state machines with outputs need this)
     spawnFx       — StateMachine.Spawn
     terminateFx   — StateMachine.Terminate
     nowFx         — Time.Now
-    writeFx       — Filesystem.Write
-    connectFx     — Network.Connect
+    writeFx       — Filesystem.Write (declared by Fs.Write/Append/Delete)
+    connectFx     — Network.Connect (declared by Net.Connect and Http.Request)
     cryptoFx      — Crypto.RandomBytes (declared by every Random.* call)
+    readFx        — Filesystem.Read (declared by Fs.Read/Exists)
+    netSendFx     — Network.Send (declared by Net.Send and Http.Request); distinct from sendFx (StateMachine.Send)
+    netRecvFx     — Network.Receive (declared by Net.Receive and Http.Request); distinct from receiveFx
+    procWaitFx    — Process.Wait (declared by procWait)
+    sleepFx       — Time.Sleep (declared by sleep)
 
 A state machine with input streams must declare `receiveFx` in its `effects`
 list. A state machine with output streams must also declare `sendFx`.
 
-**Round-2 builtins NOT in the prelude (require explicit FN + FNT declarations
+**Builtins NOT in the prelude (require explicit FN + FNT declarations
 at the use site):** the polymorphic / Option-returning / blessed-library-typed
-ones — `List.*` operations (Map/Filter/Fold/Find/Any/All/Length/Reverse/etc.,
-all polymorphic in element type), `String.ParseInt/ParseFloat/Length/...`
-(polymorphic or Option-returning), `Bytes.ParseHex/ParseBase64/ParseUtf8`
-(Option-returning), `Json.Parse/Stringify` (typed against a specific JsonValue
-schema), filesystem / network / process / HTTP builtins (typed against agent
-choice of payload). When using these, declare the FN with target like
-`"strand-builtin:List.Map"` plus the appropriate FNT for the concrete type
-at this call site.
+ones — `List.*` operations (Map / Filter / Fold / Find / Any / All / Length /
+Reverse / Take / Drop / Concat / Nth, all polymorphic in element type),
+`Fs.List` (returns List<String>), `Process.Spawn` (takes List<String>),
+`Process.EnvVar` / `String.ParseInt` / `String.ParseFloat` /
+`Bytes.ParseUtf8` / `Bytes.ParseHex` / `Bytes.ParseBase64` (Option-returning),
+`String.Split` / `String.Join` (polymorphic List<String>),
+`Json.Parse` / `Json.Stringify` (typed against a specific JsonValue schema
+— corpus 54 flat or corpus 66 JsonValueFull), `Markdown.Parse` (typed against
+the corpus 61 MarkdownDocument schema). When using these, declare the FN with
+the appropriate target string and an FNT for the concrete type at this call
+site.
 
 ## Layer 4 step 2 builtins (real IO + stdlib)
 
