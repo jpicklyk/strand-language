@@ -1,6 +1,9 @@
 package org.strand.interpreter
 
 import kotlinx.serialization.json.Json
+import org.strand.core.NodeId
+import org.strand.core.Primitive
+import org.strand.verifier.TypeExpr
 
 /**
  * Shared helpers for the per-provider LLM builtin tests. Centralizes
@@ -10,6 +13,38 @@ import kotlinx.serialization.json.Json
 internal object LlmTestSupport {
 
     val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * Synthetic schema NodeId used by [requestWithTool] when the test
+     * doesn't drive the verifier explicitly. The N-044 ToolDef
+     * dispatch path looks up `parameterSchemaId` in
+     * [Builtins.verifierNodeTypes] to recover the SchemaType for
+     * JSON Schema projection; tests install a minimal entry pointing
+     * at this NodeId before invoking the builtin.
+     */
+    val syntheticSchemaId: NodeId = NodeId(-100)
+
+    /**
+     * Install the synthetic schema's SchemaType in
+     * [Builtins.verifierNodeTypes] so the LLM.Generate tool-dispatch
+     * path can project it to JSON Schema. Returns the prior map (if
+     * any) for restoration in @AfterEach. Tests call this in @BeforeEach.
+     */
+    fun installSyntheticToolSchema(): Map<NodeId, TypeExpr>? {
+        val prior = Builtins.verifierNodeTypes
+        val syntheticValueType = TypeExpr.Product(
+            origin = NodeId(-101),
+            fields = emptyList(),  // empty product matches the {type:"object", properties:{}} schema
+        )
+        Builtins.verifierNodeTypes = mapOf(
+            syntheticSchemaId to TypeExpr.SchemaType(
+                schemaId = syntheticSchemaId,
+                valueType = syntheticValueType,
+                invariants = emptyList(),
+            )
+        )
+        return prior
+    }
 
     /**
      * Build a Strand `GenerateRequest` ProductV with a single user
@@ -47,18 +82,18 @@ internal object LlmTestSupport {
         toolDescription: String,
         toolImpl: Value,
     ): Value.ProductV {
-        // ParameterSchema: minimal object {type: "object"} encoded as JsonValue.
-        val schema = Value.SumV("JsonObjectCons", Value.ProductV(mapOf(
-            "key" to Value.StringV("type"),
-            "value" to Value.SumV("JsonString", Value.StringV("object")),
-            "tail" to Value.SumV("JsonObjectNil", null),
-        )))
-        val toolDef = Value.ProductV(mapOf(
-            "name" to Value.StringV(toolName),
-            "description" to Value.StringV(toolDescription),
-            "parameterSchema" to schema,
-            "implementation" to toolImpl,
-        ))
+        // Build a real [Value.ToolDefV] — the N-044 graph-node-backed
+        // convention. The tool's parameterSchema is the synthetic
+        // [syntheticSchemaId]; tests should call [installSyntheticToolSchema]
+        // in @BeforeEach so the dispatch path can project the schema
+        // to JSON Schema.
+        val toolDef = Value.ToolDefV(
+            self = NodeId(-200),  // synthetic ToolDef NodeId (negative so it doesn't collide with any real store entry)
+            name = toolName,
+            description = toolDescription,
+            parameterSchemaId = syntheticSchemaId,
+            implementation = toolImpl,
+        )
         val toolsList = Value.SumV("Cons", Value.ProductV(mapOf(
             "head" to toolDef,
             "tail" to Value.SumV("Nil", null),

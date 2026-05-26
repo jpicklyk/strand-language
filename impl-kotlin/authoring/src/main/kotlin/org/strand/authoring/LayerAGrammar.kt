@@ -1911,5 +1911,25 @@ object LayerAGrammar {
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
         ),
+
+        // Agent-native capabilities (N-044 ToolDef)
+        //
+        // TLD <name: STRING> <description: STRING> <parameterSchema: REFERENCE> <implementation: REFERENCE>
+        //
+        // The parameterSchema reference must point at a Schema (N-032 SCH);
+        // the implementation reference is an expression evaluating to a
+        // callable (typically a Lambda or ForeignNode reference). ToolDef
+        // is value-producing (it evaluates to a Value.ToolDefV at runtime
+        // and slots into a tools list as the head of a Cons cell).
+        "TLD" to CodeSchema(
+            jsonType = "ToolDef",
+            required = listOf(
+                FieldSpec("name", ArgKind.STRING, "name"),
+                FieldSpec("description", ArgKind.STRING, "description"),
+                FieldSpec("parameterSchema", ArgKind.REFERENCE, "parameterSchema"),
+                FieldSpec("implementation", ArgKind.REFERENCE, "implementation"),
+            ),
+            producesValue = true,
+        ),
     )
 }

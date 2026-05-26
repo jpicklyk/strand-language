@@ -422,19 +422,28 @@ by field name). Use the prelude EffectCategory `llmGenerateFx` /
           | Image(bytes: Bytes, mediaType: String)
           | Document(bytes: Bytes, mediaType: String)
 
-    ToolDef = {
-      name: String,
-      description: String,
-      parameterSchema: JsonValue,                 -- JSON Schema (see § 3.8.1)
-      implementation: <callable>                  -- Lambda or ForeignNode
-    }
+**Tool definitions** are first-class graph nodes (N-044 ToolDef).
+Each tool is a `ToolDef` node with four edges:
+
+    ToolDef:
+      name: String                                -- metadata, forwarded to provider
+      description: String                         -- metadata, forwarded to provider
+      parameterSchema: Schema (N-032)             -- structural schema for the tool input
+      implementation: Lambda | ForeignNode        -- callable of type `parameterSchema.valueType -> R`
+
+The Layer A code is `TLD <name> <description> <parameterSchema> <implementation>`.
+The `parameterSchema` reference MUST point at a `SCH` (Schema) node;
+the verifier statically checks that the schema's `valueType` projects
+to JSON Schema (else `ToolParamTypeUnsupported`). The implementation's
+type must agree: `(parameterSchema.valueType) -> R` for some `R`.
 
 The Generate builtin runs the tool-use loop internally (proposal § 3.8 /
 § 6): on each iteration, if the model emits a `ToolUse` block, the loop
-parses the input JSON to a Strand `JsonValue`, invokes the named tool's
-`implementation` callable with that value, appends a `ToolResult`
-message, and re-calls the provider. Bounded at 10 iterations by default;
-a `ToolUseLimit` stop reason indicates the cap fired.
+parses the input JSON to a value of `parameterSchema.valueType`, invokes
+the named tool's `implementation` callable with that value, appends a
+`ToolResult` message, and re-calls the provider. Bounded at 10
+iterations by default; a `ToolUseLimit` stop reason indicates the cap
+fired.
 
     GenerateResult = {
       content: List<Block>,                       -- final assistant blocks
@@ -447,9 +456,10 @@ a `ToolUseLimit` stop reason indicates the cap fired.
 JSON-Schema-expressible TypeExpr subset: Primitives, Products (all
 fields required), Sums (tag discriminator or `Option<T>`-as-nullable),
 Recursives (`$defs`/`$ref`). `FunctionType`, `ForallType`, and unbound
-type parameters are rejected — agents that pass a tool whose
-parameterSchema's valueType contains one of those rejected variants
-will see a `ToolParamTypeUnsupported` verifier error.
+type parameters are rejected — the verifier statically rejects any
+`TLD` whose `parameterSchema`'s valueType contains one of those
+variants, raising `ToolParamTypeUnsupported`. The check fires on every
+ToolDef at admission, not just at provider call time.
 
 **Embed shape (`EmbedRequest`)** — agent constructs a ProductV:
 
@@ -465,8 +475,8 @@ reads `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` /
 capability authorizes a category, the credential authorizes the
 actual host call.
 
-**Layer A emission example.** A minimal Anthropic generation under a
-wildcard capability:
+**Layer A emission example.** A minimal Anthropic generation with one
+tool. The tool's parameterSchema declares its input shape structurally:
 
     intT PRM Int
     strT PRM String
@@ -477,14 +487,23 @@ wildcard capability:
     messagesFldT PRF "messages" bytesT
     toolsFldT PRF "tools" bytesT
     reqT PRD [modelFieldT messagesFldT toolsFldT]
-    resT PRD []
+    -- declare the tool's input shape (city: String) as a Schema, plus
+    -- the implementation Lambda and the ToolDef node
+    cityFldT PRF "city" strT
+    cityT PRD [cityFldT]
+    lookupSchema SCH "lookup-input" cityT []
+    lookupParam PRC "params" cityT
+    lookupBody STR "sunny, 72F"
+    lookupImpl LAM [lookupParam] lookupBody
+    lookupTool TLD "lookup" "Look up the weather" lookupSchema lookupImpl
     -- ForeignNode wired through the prelude:
     -- "anthropicGenerate" reaches the registered builtin under llmGenerateFx
     providerLit STR "anthropic"
     modelLit STR "claude-opus-4-7"
     callDecl EFD llmGenFx [providerLit modelLit]
     -- build the GenerateRequest ProductV at the call site
-    -- (real corpus programs use messagesV / toolsV from earlier nodes)
+    -- (real corpus programs use messagesV / toolsV from earlier nodes
+    -- and reference lookupTool in the tools list via a NodeRef)
     callApp APP anthropicGenerate [requestV] _ [callDecl]
 
 **Provider scoping example.** A graph that holds only

@@ -1,4 +1,4 @@
-package org.strand.interpreter
+package org.strand.verifier
 
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -6,7 +6,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import org.strand.core.Primitive
-import org.strand.verifier.TypeExpr
 
 /**
  * Translator from Strand [TypeExpr] to JSON Schema for the agent-native

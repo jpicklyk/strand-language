@@ -25,6 +25,7 @@ class ToolDispatchLoopTest {
 
     private val savedClient = Builtins.llmHttpClient
     private val savedCredentials = Builtins.credentialProvider
+    private var savedNodeTypes: Map<org.strand.core.NodeId, org.strand.verifier.TypeExpr>? = null
     private lateinit var captured: RecordingHttpClient
 
     @BeforeEach
@@ -32,12 +33,14 @@ class ToolDispatchLoopTest {
         captured = RecordingHttpClient()
         Builtins.llmHttpClient = captured
         Builtins.credentialProvider = StaticCredentialProvider(mapOf("anthropic" to "sk-test"))
+        savedNodeTypes = LlmTestSupport.installSyntheticToolSchema()
     }
 
     @AfterEach
     fun tearDown() {
         Builtins.llmHttpClient = savedClient
         Builtins.credentialProvider = savedCredentials
+        Builtins.verifierNodeTypes = savedNodeTypes
     }
 
     @Test

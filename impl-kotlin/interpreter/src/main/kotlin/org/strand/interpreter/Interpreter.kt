@@ -242,6 +242,21 @@ class Interpreter(
             is Node.ProductFieldGet -> evalProductFieldGet(id, node, env, context, handlers)
             is Node.SumValue -> evalSumValue(node, env, context, handlers)
 
+            is Node.ToolDef -> {
+                // Eagerly evaluate the implementation expression — typically
+                // a Lambda or ForeignNode, which produces a callable value
+                // without firing effects (effects are released at the
+                // tool-dispatch sites inside the provider's loop, not here).
+                val implValue = eval(node.implementation, env, context, handlers)
+                Value.ToolDefV(
+                    self = id,
+                    name = node.name,
+                    description = node.description,
+                    parameterSchemaId = node.parameterSchema,
+                    implementation = implValue,
+                )
+            }
+
             // Type, effect-declaration, MatchCase, Pattern, and
             // ProductFieldValue nodes are not standalone expressions. The
             // verifier should have caught this; we report it here

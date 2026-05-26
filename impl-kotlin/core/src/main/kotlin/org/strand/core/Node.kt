@@ -249,6 +249,46 @@ sealed class Node {
         val body: NodeId         // an Expression
     ) : Node()
 
+    /**
+     * N-044. A first-class declaration of a tool the LLM-generation builtins
+     * (`Anthropic.Messages.Create`, `OpenAI.Chat.Completions`,
+     * `Gemini.GenerateContent`) may invoke at runtime.
+     *
+     * Edges:
+     *  - [parameterSchema] points at an N-032 Schema describing the input
+     *    value the tool accepts. The Schema's `valueType` must project to
+     *    JSON Schema via `JsonSchemaProjection` (verified statically — else
+     *    `ToolParamTypeUnsupported`).
+     *  - [implementation] is the Strand callable the runtime dispatches when
+     *    the model emits a tool-use block matching this tool. Its type must
+     *    be `parameterSchema.valueType -> R` for some result `R`; the
+     *    verifier checks this shape.
+     *
+     * Content fields:
+     *  - [name] and [description] are metadata-only UTF-8 strings used at
+     *    the provider boundary (Anthropic/OpenAI/Gemini all accept `name`
+     *    and `description` on tool definitions). They are NOT included in
+     *    the canonical encoding (consistent with ParameterDecl.name
+     *    treatment). Two ToolDefs that share parameterSchema and
+     *    implementation but differ only in name or description hash
+     *    identically.
+     *
+     * Structural identity: the canonical encoding depends only on the
+     * `parameterSchema` and `implementation` edges (per
+     * `design/node-algebra.md` § Agent-native capabilities). The metadata
+     * exclusion lets agents rename a tool without churning the program's
+     * hash.
+     *
+     * See `proposals/implemented/agent-native-capabilities.md` § 3.8 for
+     * the tool-use protocol semantics.
+     */
+    data class ToolDef(
+        val name: String,
+        val description: String,
+        val parameterSchema: NodeId,    // a Schema (N-032)
+        val implementation: NodeId,     // an Expression (Lambda, ForeignNode, or TypeAbstraction over one)
+    ) : Node()
+
     // ----- Functions and binding (N-014 through N-018, plus N-034) -----
 
     /**

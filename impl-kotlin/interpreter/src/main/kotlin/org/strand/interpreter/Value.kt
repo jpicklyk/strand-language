@@ -112,4 +112,38 @@ sealed class Value {
      * inverse construction).
      */
     data class MapV(val entries: kotlinx.collections.immutable.PersistentMap<Value, Value>) : Value()
+
+    /**
+     * A first-class tool declaration (N-044). Produced when the
+     * interpreter evaluates a [Node.ToolDef] (typically reached via a
+     * NodeRef inside a `tools` list at an LLM.Generate call site).
+     *
+     * Carries:
+     *  - [self]: the NodeId of the originating ToolDef, so the runtime
+     *    can fetch the verifier's [SchemaType] when projecting the
+     *    parameterSchema to JSON Schema at dispatch time.
+     *  - [name] and [description]: the metadata strings agents declared,
+     *    forwarded verbatim to the provider's tool-definition shape.
+     *  - [parameterSchemaId]: the NodeId of the [Node.Schema] declaring
+     *    the input value shape. The LLM.Generate builtin resolves this
+     *    through the verifier's `nodeTypes` map to obtain a
+     *    [org.strand.verifier.TypeExpr.SchemaType], then runs
+     *    [org.strand.verifier.JsonSchemaProjection] to produce the
+     *    JSON Schema the provider expects.
+     *  - [implementation]: the resolved Strand callable (Closure /
+     *    ForeignFn / FixpointFn) invoked when the model emits a
+     *    matching tool-use block.
+     *
+     * Like [Closure] / [ForeignFn] / [FixpointFn], `ToolDefV` is a
+     * runtime-only value — it never enters the canonical store.
+     * Equality is by identity (NodeId), matching the other callable
+     * carriers.
+     */
+    data class ToolDefV(
+        val self: NodeId,
+        val name: String,
+        val description: String,
+        val parameterSchemaId: NodeId,
+        val implementation: Value,
+    ) : Value()
 }

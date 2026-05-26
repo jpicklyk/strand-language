@@ -239,6 +239,8 @@ internal class CanonicalEncoder(
 
         is Node.Schema -> encodeSchema(node, stack)
         is Node.Invariant -> encodeInvariant(node, stack)
+
+        is Node.ToolDef -> encodeToolDef(node, stack)
     }
 
     // ----- Type-position encodings -----
@@ -810,6 +812,28 @@ internal class CanonicalEncoder(
             CanonicalCbor.encodeBytes(node.schemaName.toByteArray(Charsets.UTF_8)),
             CanonicalCbor.encodeBytes(hash(node.valueType, stack)),
             CanonicalCbor.encodeArray(invariantHashes),
+        ))
+    }
+
+    // ----- Agent-native capabilities (N-044) -----
+
+    private fun encodeToolDef(node: Node.ToolDef, stack: BinderStack): ByteArray {
+        // [tag=44, parameterSchema-hash, implementation-hash].
+        //
+        // `name` and `description` are metadata content fields and are
+        // intentionally EXCLUDED from the canonical encoding (consistent
+        // with ParameterDecl.name treatment). Two ToolDefs that share
+        // parameterSchema and implementation but differ only in name or
+        // description hash identically — letting agents rename a tool
+        // without churning the program's hash.
+        //
+        // Both edges are positional (fixed order parameterSchema then
+        // implementation); their identity is fully structural so two
+        // ToolDefs with the same (parameterSchema, implementation) pair
+        // hash byte-identically.
+        return encodeWithTag(CategoryTag.ToolDef, listOf(
+            CanonicalCbor.encodeBytes(hash(node.parameterSchema, stack)),
+            encodeExpressionChild(node.implementation, stack),
         ))
     }
 

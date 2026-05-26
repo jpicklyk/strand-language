@@ -66,6 +66,10 @@ import kotlinx.serialization.json.longOrNull
  * References:
  *   NodeRef       { "type": "NodeRef", "target": <id> }
  *
+ * Agent-native capabilities:
+ *   ToolDef      { "type": "ToolDef", "name": <string>, "description": <string>,
+ *                  "parameterSchema": <Schema id>, "implementation": <Expression id> }
+ *
  * State machines (excerpt — full schema in impl/CLAUDE.md):
  *   EventStream  { "type": "EventStream", "eventType": <id>,
  *                  "streamKind": "external|internal|output",
@@ -388,8 +392,15 @@ object JsonIngest {
                 body = obj.requireRef("body", ctx, resolve)
             )
 
+            "ToolDef" -> Node.ToolDef(
+                name = obj.requireString("name", ctx),
+                description = obj.requireString("description", ctx),
+                parameterSchema = obj.requireRef("parameterSchema", ctx, resolve),
+                implementation = obj.requireRef("implementation", ctx, resolve)
+            )
+
             else -> throw IngestError(
-                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-043)"
+                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-044)"
             )
         }
     }

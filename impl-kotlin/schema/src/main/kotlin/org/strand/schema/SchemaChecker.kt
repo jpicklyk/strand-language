@@ -218,6 +218,7 @@ class SchemaChecker(
             is Node.RecursiveSelf,
             is Node.Schema,
             is Node.Invariant,
+            is Node.ToolDef,
             is Node.StateMachine,
             is Node.EventStream,
             is Node.Transition -> null

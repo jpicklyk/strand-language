@@ -695,19 +695,69 @@ sealed class VerifyError {
      * references are rejected because JSON Schema has no representation
      * for callbacks, parametric polymorphism, or free type variables.
      *
-     * [at] is the call-site NodeId (the LLM.Generate Application);
-     * [toolDefId] is reserved for a future static toolset projection
-     * to identify which ToolDef contained the offending type — when
-     * tools are computed at runtime (a List value), the verifier
-     * cannot pinpoint a specific source node and [toolDefId] equals
-     * [at] (the Application itself). [reason] mirrors
-     * [org.strand.interpreter.JsonSchemaProjection.Result.Reason].
+     * [at] is the offending node's id (the ToolDef when the rule fires
+     * statically on a graph-node ToolDef; the LLM.Generate Application
+     * when the rule fires via the call-site walk). [toolDefId] identifies
+     * the specific ToolDef whose parameterSchema's valueType is
+     * unsupported — for the static case it equals [at]; for the
+     * call-site walk it points at the offending tool. [reason] mirrors
+     * [org.strand.verifier.JsonSchemaProjection.Result.Reason].
      */
     data class ToolParamTypeUnsupported(
         override val at: NodeId,
         val toolDefId: NodeId,
         val rejectedType: TypeExpr,
         val reason: String,
+    ) : VerifyError()
+
+    /**
+     * A `ToolDef.implementation` has a `Forall` type rather than a
+     * monomorphic `Fun` type. Polymorphic tool implementations must be
+     * monomorphized at the ToolDef construction site — at the LLM
+     * tool-use protocol boundary the provider expects a single
+     * concrete JSON Schema, which a polymorphic implementation cannot
+     * supply without an explicit type-argument list (which ToolDef
+     * does not carry).
+     */
+    data class ToolImplementationOverPolymorphic(
+        override val at: NodeId,
+        val residual: TypeExpr
+    ) : VerifyError()
+
+    /**
+     * A `ToolDef.implementation` has a non-function type. The
+     * implementation must be a callable (Lambda or ForeignNode) the
+     * runtime can dispatch when the model emits a matching tool-use
+     * block.
+     */
+    data class ToolImplementationNotAFunction(
+        override val at: NodeId,
+        val gotType: TypeExpr
+    ) : VerifyError()
+
+    /**
+     * A `ToolDef.implementation` is a function but its arity is not 1.
+     * Strand tools accept exactly one argument — the parsed input value
+     * matching the parameterSchema's valueType. Multi-argument helpers
+     * must wrap their parameters in a ProductType.
+     */
+    data class ToolImplementationArityMismatch(
+        override val at: NodeId,
+        val expected: Int,
+        val actual: Int,
+    ) : VerifyError()
+
+    /**
+     * A `ToolDef.implementation` is a 1-argument function but its
+     * parameter type does not match the parameterSchema's `valueType`.
+     * The two must agree because the runtime parses the model's
+     * tool-use input as a value of `parameterSchema.valueType` and
+     * passes it directly to the implementation.
+     */
+    data class ToolImplementationParameterTypeMismatch(
+        override val at: NodeId,
+        val expected: TypeExpr,
+        val actual: TypeExpr,
     ) : VerifyError()
 }
 
@@ -776,4 +826,5 @@ internal fun categoryName(node: Node?): String = when (node) {
     is Node.Transition -> "Transition"
     is Node.Schema -> "Schema"
     is Node.Invariant -> "Invariant"
+    is Node.ToolDef -> "ToolDef"
 }

@@ -233,6 +233,7 @@ class Verifier(
                 is Node.ProductFieldGet -> inferProductFieldGet(id, node, scope, typeParams)
                 is Node.SumValue -> inferSumValue(id, node, scope, typeParams)
                 is Node.Handler -> inferHandler(id, node, scope, typeParams)
+                is Node.ToolDef -> inferToolDef(id, node, scope, typeParams)
 
                 is Node.StateMachine -> inferStateMachine(id, node, scope, typeParams)
                 is Node.Transition -> {
@@ -1356,10 +1357,141 @@ class Verifier(
                     is Node.EffectCategory, is Node.EffectDecl, is Node.Pattern,
                     is Node.RecursiveType, is Node.RecursiveSelf,
                     is Node.StateMachine, is Node.EventStream, is Node.Transition,
-                    is Node.Schema, is Node.Invariant -> Unit
+                    is Node.Schema, is Node.Invariant, is Node.ToolDef -> Unit
                 }
             }
             visit(bodyId)
+        }
+
+        /**
+         * Type-check a ToolDef (N-044) per `agent-native-capabilities.md`
+         * § 3.8 and `node-algebra.md` § Agent-native capabilities.
+         *
+         * Rules:
+         *  1. `parameterSchema` must resolve to a [Node.Schema] (else
+         *     [VerifyError.CategoryMismatch]).
+         *  2. The Schema's `valueType` (the type inputs the tool accepts
+         *     at the provider boundary) must project to JSON Schema via
+         *     [JsonSchemaProjection.project]. On `Rejected`, report
+         *     [VerifyError.ToolParamTypeUnsupported] with the rejection
+         *     reason — this is the static enforcement of proposal § 3.8.1.
+         *  3. `implementation` must type-check to a monomorphic function
+         *     `parameterSchema.valueType -> R` for some result type `R`
+         *     (a [TypeExpr.Forall] is rejected as
+         *     `ToolImplementationOverPolymorphic`; any other shape as
+         *     `ToolImplementationNotAFunction`; a function whose first
+         *     parameter type doesn't equal the schema's valueType as
+         *     `ToolImplementationParameterTypeMismatch`).
+         *
+         * The ToolDef's own value-level type is opaque (returned as
+         * `Bytes`) — matching the existing convention for
+         * runtime-only structures like `Value.Resource` and `Value.MapV`.
+         * Agents declare `tools: List<ToolDef>` in the GenerateRequest
+         * using `bytesT` as the surface placeholder; at runtime, the
+         * LLM.Generate builtin walks the list looking for ToolDef
+         * NodeRef shapes via [Value.ToolDefV].
+         *
+         * Effect closure of a ToolDef is empty — constructing the
+         * declaration does not exercise any effect. The implementation's
+         * declared effects are released only at the tool's call site
+         * during the provider's tool-use loop, where the surrounding
+         * capability context governs.
+         */
+        private fun inferToolDef(
+            id: NodeId,
+            node: Node.ToolDef,
+            scope: Map<NodeId, TypeExpr>,
+            typeParams: Set<NodeId>
+        ): TypeExpr {
+            // 1. parameterSchema must point at a Schema.
+            val schemaNode = store.getOrNull(node.parameterSchema)
+                ?: reportFatal(VerifyError.DanglingReference(
+                    at = id, missing = node.parameterSchema,
+                    fromField = "ToolDef.parameterSchema"
+                ))
+            if (schemaNode !is Node.Schema) {
+                report(VerifyError.CategoryMismatch(
+                    at = id, field = "ToolDef.parameterSchema",
+                    expectedCategory = "Schema",
+                    actualCategory = categoryName(schemaNode)
+                ))
+                throw VerifyAbort()
+            }
+            // Resolve the Schema in type position to obtain its SchemaType.
+            val schemaType = resolveType(node.parameterSchema, typeParams)
+            if (schemaType !is TypeExpr.SchemaType) {
+                // resolveSchema returns SchemaType so this should not
+                // happen — defensive guard.
+                report(VerifyError.CategoryMismatch(
+                    at = id, field = "ToolDef.parameterSchema (resolved)",
+                    expectedCategory = "SchemaType",
+                    actualCategory = schemaType::class.simpleName ?: "?"
+                ))
+                throw VerifyAbort()
+            }
+
+            // 2. The schema's valueType must project to JSON Schema.
+            //    This is the static enforcement of ToolParamTypeUnsupported
+            //    promised by proposal § 3.8.1 / § 5.
+            when (val projection = JsonSchemaProjection.project(schemaType.valueType)) {
+                is JsonSchemaProjection.Result.Success -> Unit
+                is JsonSchemaProjection.Result.Rejected -> {
+                    report(VerifyError.ToolParamTypeUnsupported(
+                        at = id,
+                        toolDefId = id,
+                        rejectedType = projection.type,
+                        reason = projection.reason.name,
+                    ))
+                    throw VerifyAbort()
+                }
+            }
+
+            // 3. implementation must have type `valueType -> R`. We accept
+            //    any callable shape (Lambda, ForeignNode, FixpointFn) by
+            //    requiring the implementation expression's type to be a
+            //    monomorphic Fun whose first parameter equals valueType.
+            //    Polymorphic implementations (TypeAbstraction whose body is
+            //    a Lambda) must be monomorphized at the ToolDef construction
+            //    site — they are rejected here.
+            val implType = infer(node.implementation, scope, typeParams)
+            val implFun: TypeExpr.Fun = when (implType) {
+                is TypeExpr.Fun -> implType
+                is TypeExpr.Forall -> {
+                    report(VerifyError.ToolImplementationOverPolymorphic(
+                        at = id, residual = implType
+                    ))
+                    throw VerifyAbort()
+                }
+                else -> {
+                    report(VerifyError.ToolImplementationNotAFunction(
+                        at = id, gotType = implType
+                    ))
+                    throw VerifyAbort()
+                }
+            }
+            if (implFun.parameters.size != 1) {
+                report(VerifyError.ToolImplementationArityMismatch(
+                    at = id, expected = 1, actual = implFun.parameters.size
+                ))
+                throw VerifyAbort()
+            }
+            if (!typesCompatible(schemaType.valueType, implFun.parameters[0])) {
+                report(VerifyError.ToolImplementationParameterTypeMismatch(
+                    at = id,
+                    expected = schemaType.valueType,
+                    actual = implFun.parameters[0],
+                ))
+                throw VerifyAbort()
+            }
+
+            // Constructing a ToolDef declaration exercises no effects.
+            // The implementation's effects fire only at tool-dispatch
+            // sites during the provider's loop; the surrounding
+            // capability context covers them there.
+            recordClosure(id, emptySet())
+            // Surface type: opaque Bytes (Strand-side opaque-handle
+            // convention, matching Resource / MapV).
+            return TypeExpr.Prim(Primitive.Bytes)
         }
 
         /**

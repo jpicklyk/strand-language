@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.strand.core.NodeId
 import org.strand.core.Primitive
+import org.strand.verifier.JsonSchemaProjection
 import org.strand.verifier.TypeExpr
 
 /**

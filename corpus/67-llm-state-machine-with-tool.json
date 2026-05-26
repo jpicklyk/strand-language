@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "root": "agentMachine",
+  "root": "rootLet",
   "nodes": {
     "intT":             { "type": "PrimitiveType", "kind": "Int" },
     "strT":             { "type": "PrimitiveType", "kind": "String" },
@@ -23,9 +23,6 @@
     "generateResultT":  { "type": "ProductType",
                           "fields": ["contentFieldT", "stopReasonFldT", "usageFieldT", "finalMessagesFlT"] },
 
-    "addT":             { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
-    "addFn":            { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
-
     "anthropicGenT":    { "type": "FunctionType", "parameters": ["generateRequestT"],
                           "result": "generateResultT", "effects": ["llmGenFx"] },
     "anthropicGen":     { "type": "ForeignNode", "target": "strand-builtin:Anthropic.Messages.Create",
@@ -40,6 +37,20 @@
     "outputBatchT":     { "type": "ProductType", "fields": ["output0FieldT"] },
     "outputsFieldT":    { "type": "ProductTypeField", "name": "outputs",  "fieldType": "outputBatchT" },
     "transitionResT":   { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
+
+    "cityParamFldT":    { "type": "ProductTypeField", "name": "city", "fieldType": "strT" },
+    "lookupParamsT":    { "type": "ProductType", "fields": ["cityParamFldT"] },
+    "lookupSchema":     { "type": "Schema", "schemaName": "LookupParams",
+                          "valueType": "lookupParamsT", "invariants": [] },
+
+    "lookupImplParam":  { "type": "ParameterDecl", "name": "params", "paramType": "lookupParamsT" },
+    "lookupResultLit":  { "type": "StringLit", "value": "sunny, 72F" },
+    "lookupImpl":       { "type": "Lambda", "parameters": ["lookupImplParam"], "body": "lookupResultLit" },
+
+    "lookupTool":       { "type": "ToolDef", "name": "lookup",
+                          "description": "Look up the weather for a given city.",
+                          "parameterSchema": "lookupSchema",
+                          "implementation": "lookupImpl" },
 
     "stateParam":       { "type": "ParameterDecl", "name": "convo",   "paramType": "strT" },
     "eventParam":       { "type": "ParameterDecl", "name": "userMsg", "paramType": "strT" },
@@ -88,6 +99,13 @@
       "inputStreams": ["inputStream"],
       "outputStreams": ["outputStream"],
       "effects": ["llmGenFx", "receiveFx", "sendFx"]
+    },
+
+    "rootLet": {
+      "type": "Let",
+      "name": "_tool",
+      "value": "lookupTool",
+      "body": "agentMachine"
     }
   }
 }

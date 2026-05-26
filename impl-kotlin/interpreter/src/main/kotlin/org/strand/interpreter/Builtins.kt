@@ -213,6 +213,24 @@ object Builtins {
     var toolLoopLimit: Int = 10
 
     /**
+     * The verifier's `nodeTypes` map for the currently-executing
+     * program. Set by the interpreter at program startup so the
+     * tool-dispatch path can resolve a [Value.ToolDefV.parameterSchemaId]
+     * to its [org.strand.verifier.TypeExpr.SchemaType] (N-044). Cleared
+     * when the program completes.
+     *
+     * This is a single-program global rather than a per-call argument
+     * because the LLM.Generate builtin is dispatched via the
+     * higher-order builtin registry whose signature is fixed
+     * `(args, applyFn) -> Value` — there is no slot for a typing
+     * context. The pattern mirrors [llmHttpClient] / [credentialProvider]
+     * / [clock] / [random]: a singleton @Volatile that tests install
+     * around their setup/teardown.
+     */
+    @Volatile
+    var verifierNodeTypes: Map<org.strand.core.NodeId, org.strand.verifier.TypeExpr>? = null
+
+    /**
      * Per-server state for the `Http.Listen` / `Http.Accept` builtins.
      * The handler thread enqueues a [HttpPending] for each request and
      * blocks on its latch until Strand calls Http.Respond. The queue
@@ -2286,28 +2304,81 @@ object Builtins {
 
     /**
      * Walk a Strand `List<ToolDef>` (Cons/Nil SumV chain) into a Kotlin
-     * list of unified [LlmToolDef]. Each `ToolDef` is a ProductV
-     * `{name, description, parameterSchema, implementation}` where
-     * `parameterSchema` is a Strand JsonValue (already projected — see
-     * corpus 66 for the JsonValue shape) and `implementation` is a
-     * Strand callable (Closure / ForeignFn / FixpointFn) the tool-
-     * dispatch loop invokes via the surrounding [ApplyFn].
+     * list of unified [LlmToolDef]. Each list head is a
+     * [Value.ToolDefV] — produced when the interpreter evaluates a
+     * [Node.ToolDef] graph node (N-044). Each ToolDefV carries:
+     *  - `name` and `description` (forwarded to provider's tool-def shape)
+     *  - `parameterSchemaId` (the NodeId of the Schema whose valueType
+     *    projects to JSON Schema via [verifierContext] + [nodeTypes])
+     *  - `implementation` (the resolved Strand callable; Closure /
+     *    ForeignFn / FixpointFn)
+     *
+     * The JSON Schema is computed at dispatch time by projecting the
+     * Schema's TypeExpr.SchemaType.valueType via
+     * [JsonSchemaProjection.project]. The verifier has already enforced
+     * that the projection succeeds (else `ToolParamTypeUnsupported`
+     * would have fired at admission), so we treat the static rejection
+     * as defensive and fall back to an empty schema.
      */
     private fun parseStrandTools(listValue: Value): List<LlmToolDef> {
         val out = mutableListOf<LlmToolDef>()
         var cur = listValue
         while (cur is Value.SumV && cur.case == "Cons") {
             val payload = cur.payload as Value.ProductV
-            val toolDef = payload.fields.getValue("head") as Value.ProductV
-            out += LlmToolDef(
-                name = (toolDef.fields.getValue("name") as Value.StringV).v,
-                description = (toolDef.fields.getValue("description") as Value.StringV).v,
-                parameterSchema = strandJsonValueToElement(toolDef.fields.getValue("parameterSchema") as Value.SumV),
-                implementation = toolDef.fields.getValue("implementation"),
-            )
+            when (val head = payload.fields.getValue("head")) {
+                is Value.ToolDefV -> out += toolDefFrom(head)
+                is Value.ProductV -> {
+                    // Backward-compatibility path for the deprecated
+                    // pre-N-044 convention (JsonValue parameterSchema as a
+                    // SumV; ProductV-shaped ToolDef). Some tests and
+                    // older corpus emission may still produce this shape;
+                    // accept it for the transition window.
+                    out += LlmToolDef(
+                        name = (head.fields.getValue("name") as Value.StringV).v,
+                        description = (head.fields.getValue("description") as Value.StringV).v,
+                        parameterSchema = strandJsonValueToElement(head.fields.getValue("parameterSchema") as Value.SumV),
+                        implementation = head.fields.getValue("implementation"),
+                    )
+                }
+                else -> throw IoFailure(
+                    "tool-def-malformed",
+                    "expected ToolDefV or ProductV in tools list head, got ${head::class.simpleName}"
+                )
+            }
             cur = payload.fields.getValue("tail")
         }
         return out
+    }
+
+    /**
+     * Convert a runtime [Value.ToolDefV] into the unified [LlmToolDef]
+     * the provider libraries consume. Projects the Schema's valueType
+     * to JSON Schema via [JsonSchemaProjection]; on a rejection (which
+     * the verifier should have caught), falls back to an empty schema
+     * so the loop can still proceed and the failure surfaces as a
+     * provider-side rejection rather than a runtime crash.
+     */
+    private fun toolDefFrom(t: Value.ToolDefV): LlmToolDef {
+        // Look up the Schema's TypeExpr.SchemaType in the verifier's
+        // nodeTypes map (carried by the Interpreter via verifierContext).
+        // The SchemaChecker uses the same lookup; we treat the absence
+        // of an entry as a defensive fallback rather than a hard error.
+        val schemaType = verifierNodeTypes?.get(t.parameterSchemaId) as? org.strand.verifier.TypeExpr.SchemaType
+        val jsonSchema: kotlinx.serialization.json.JsonElement = if (schemaType != null) {
+            when (val r = org.strand.verifier.JsonSchemaProjection.project(schemaType.valueType)) {
+                is org.strand.verifier.JsonSchemaProjection.Result.Success -> r.schema
+                is org.strand.verifier.JsonSchemaProjection.Result.Rejected ->
+                    kotlinx.serialization.json.JsonObject(emptyMap())  // defensive
+            }
+        } else {
+            kotlinx.serialization.json.JsonObject(emptyMap())
+        }
+        return LlmToolDef(
+            name = t.name,
+            description = t.description,
+            parameterSchema = jsonSchema,
+            implementation = t.implementation,
+        )
     }
 
     /**
