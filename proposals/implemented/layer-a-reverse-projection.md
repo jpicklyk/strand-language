@@ -1,10 +1,89 @@
 # Reverse projection: canonical dag-json to Layer A
 
-**Document:** `proposals/layer-a-reverse-projection.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/layer-a-reverse-projection.md`
+**Status:** Implemented 2026-05-25 across five git commits per the proposal's §9 shipping order: Step 1 canonical-form translator + renderer ([`dc5c3e4`](https://example.invalid)), Step 1 round-trip coverage extended to all 64 corpus programs ([`aea52ed`](https://example.invalid)), Step 2 static SAFE elaboration omission for recursion-slot `paramType` ([`75accdd`](https://example.invalid)), Step 3 probe-and-fallback omission for the BORDERLINE inference cases ([`24c58b6`](https://example.invalid)), Step 4 density-sugar projection across all 10 slices ([`8fc6a56`](https://example.invalid) for Slice 1 implicit prelude, [`a4d84ab`](https://example.invalid) for Slices 2–5/8/10, [`df6d015`](https://example.invalid) for Slice 9 WHEN), and Step 5 the `strand translate` CLI subcommand ([`4f015d4`](https://example.invalid)).
 **Date:** 2026-05-25
-**Concerns:** [`proposals/implemented/llm-authoring-layer.md`](implemented/llm-authoring-layer.md), [`proposals/implemented/layer-a-density.md`](implemented/layer-a-density.md), [`impl/authoring/`](../impl/authoring/), [Q-021](../open-questions.md#Q-021), [Q-034](../open-questions.md#Q-034), [Q-036](../open-questions.md#Q-036), [`decisions/ADR-001-graph-not-text.md`](../decisions/ADR-001-graph-not-text.md), [`decisions/ADR-002-no-human-projection.md`](../decisions/ADR-002-no-human-projection.md), [`decisions/ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md)
+**Concerns:** [`proposals/implemented/llm-authoring-layer.md`](llm-authoring-layer.md), [`proposals/implemented/layer-a-density.md`](layer-a-density.md), [`impl/authoring/`](../../impl/authoring/), [Q-021](../../open-questions.md#Q-021), [Q-034](../../open-questions.md#Q-034), [Q-036](../../open-questions.md#Q-036), [`decisions/ADR-001-graph-not-text.md`](../../decisions/ADR-001-graph-not-text.md), [`decisions/ADR-002-no-human-projection.md`](../../decisions/ADR-002-no-human-projection.md), [`decisions/ADR-003-content-addressing.md`](../../decisions/ADR-003-content-addressing.md)
 **Scope:** Medium
+
+> **Implementation note (2026-05-25).** The full proposal shipped in one
+> extended session across the five commits noted above. The reverse-
+> projection surface ships as three pieces in `impl/authoring/`:
+> [`LayerATranslator`](../../impl/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt)
+> (1,340 lines — canonical dag-json walk + omission passes + density-sugar
+> projection in a single object with one private method per sugar),
+> [`LayerARenderer`](../../impl/authoring/src/main/kotlin/org/strand/authoring/LayerARenderer.kt)
+> (77 lines — straight `LayerADocument` → text formatting), and the
+> `Authoring.projectFromDagJson(canonical: String): String` public entry
+> point. The `strand translate <file.json>` CLI subcommand
+> ([`Main.kt:102,484-509`](../../impl/cli/src/main/kotlin/org/strand/cli/Main.kt))
+> reads canonical dag-json from disk and writes Layer A text to stdout.
+>
+> Correctness is asserted by
+> [`LayerAReverseRoundTripTest`](../../impl/corpus/src/test/kotlin/org/strand/corpus/LayerAReverseRoundTripTest.kt):
+> for each of **64 canonical corpus programs**, project to text,
+> recompile through the forward pipeline, assert root-hash equality.
+> All 64 pass — `forward_compile(render(translate(canonical))) == canonical`
+> byte-for-byte across the full corpus.
+>
+> **Deviations from the plan worth recording.**
+>
+> *(1) The separate `ElaborationOmission.kt` module the plan sketched
+> doesn't exist as its own file.* The SAFE-omission, probe-and-fallback,
+> and per-sugar passes are private methods on
+> [`LayerATranslator`](../../impl/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt)
+> (`omitSafelyInferableFields`, `probeAndOmit`, then `applyImplicitPrelude`
+> → `applyIfSugar` → `applyCompactLam` → `applyInlineSubstitutions` →
+> `applyInlinePfv` → `applyWhenSugar` → `applyNestedExpressions`). Folding
+> them into the translator kept the data flow linear (each pass takes a
+> `LayerADocument`, returns a `LayerADocument`) and avoided the
+> cross-file plumbing the plan implied. No information-hiding case for
+> the split surfaced during implementation.
+>
+> *(2) The `Lambda.effects` static SAFE rule the plan sketched in §4.2
+> demoted to BORDERLINE during Step 2.* Three corpus programs (12, 13, 14
+> plus the explicit `14-pure-lambda-with-overdeclared-effect`)
+> legitimately over-declare a Lambda's effects beyond the body's closure;
+> the Elaborator's case 1 only fires on *non-empty* body closures and
+> inserts the closure, not the declared set, so blanket static omission
+> would change canonical bytes on those programs. The demoted case is
+> handled by probe-and-fallback like the other BORDERLINE cases. The §4.5
+> classification-evolution policy ("demotion is immediate on any
+> round-trip failure") fired exactly as written.
+>
+> *(3) A new `FORCE_ALL_OPTIONALS = setOf("APP")` rule was added that
+> wasn't in the plan.* Application's case-2 effectInstances defaulting
+> can pick an EffectDecl whose parameter VarRefs reference binders out of
+> scope at the call site — corpus programs 33–35 exhibit this and the
+> Elaborator's fix is gated on `node.args.size !in 2..3`. The translator
+> always emits Application's `effectInstances` field explicitly (empty
+> list when absent in source) so the short-circuit fires and the
+> inference doesn't run. The canonical CBOR encoder gates effectInstances
+> on non-empty, so byte equality holds.
+>
+> *(4) The renderer is much smaller than the plan's ~250-line estimate
+> (77 lines).* The plan assumed the renderer would carry layout decisions
+> (line breaks, indentation, nested-expression line layout). In practice
+> the `LayerADocument` IR's existing `argToText` machinery handles all
+> per-line formatting; the renderer is straight document-walk + line
+> join. The Slice 10 nested-expression layout follows the IR's
+> `Arg.Nested.toString()` directly. A future pretty-printer (mentioned
+> in §8 as deferred) would be the place layout heuristics live, not the
+> bare renderer.
+>
+> *(5) Slice 7 anonymous `_` projection is implemented but rarely fires
+> in practice.* Slice 10's nested-expression form subsumes it on most
+> programs (a single-use value-position node inlines as nested before
+> falling back to `_ + @last`). The `_` path was kept for the structural-
+> slot edge cases the plan called out, but the corpus does not currently
+> exercise it.
+>
+> The two SAFE/UNSAFE static rules and the eight probe-and-fallback
+> cases together produce density-v4 output that hash-equals every
+> corresponding `density-v4` fixture in `corpus/layer-a/`, so the
+> round-trip property holds in both directions — Layer A density-v4
+> author input forward-compiles to canonical bytes that the reverse
+> projection re-renders to the same Layer A text.
 
 Q-034's four-layer emission stack closes the forward direction: an LLM emits Layer A density-v4 text, which the Elaborator and DagJsonEmitter convert into canonical dag-json for the verifier. The reverse direction — taking a canonical dag-json program out of the store and presenting it as Layer A text an LLM can read — was a small `LayerATranslator` utility that the 2026-05-25 cleanup pass retired once it stopped being load-bearing. This proposal specifies a replacement that produces *density-v4* Layer A output, not the verbose canonical form the deleted translator emitted, so that an LLM consuming an existing Strand program sees the same compact representation it would itself emit. The forward direction, the Elaborator, the verifier, and the canonical CBOR encoding are all unchanged.
 
@@ -224,16 +303,16 @@ Not applicable — the projection is build-time, not runtime.
 ## References
 
 **Outgoing references:**
-- [`proposals/implemented/llm-authoring-layer.md`](implemented/llm-authoring-layer.md) — Q-034 step 1 establishes the forward direction and the four-layer stack that this proposal closes the reverse of
-- [`proposals/implemented/layer-a-density.md`](implemented/layer-a-density.md) — the 10 density sugars whose reverse-projection rules this proposal specifies; also the cleanup pass that retired the old `LayerATranslator`
-- [`decisions/ADR-001-graph-not-text.md`](../decisions/ADR-001-graph-not-text.md) — graph remains the source; Layer A is a tool-layer affordance, not a parallel source language
-- [`decisions/ADR-002-no-human-projection.md`](../decisions/ADR-002-no-human-projection.md) — preserved: Layer A is for LLM emission and consumption, not for human authoring; the proposal does not introduce a human-readable projection layer
-- [`decisions/ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) — canonical CBOR encoding and BLAKE3 hashing are unchanged; round-trip correctness is asserted by hash equality
-- [`impl/authoring/`](../impl/authoring/) — the module the new code lives in
-- [`open-questions.md`](../open-questions.md) — Q-021, Q-034, Q-036
-- [`impl/CLAUDE.md`](../impl/CLAUDE.md) — implementation orientation for the next session
+- [`proposals/implemented/llm-authoring-layer.md`](llm-authoring-layer.md) — Q-034 step 1 establishes the forward direction and the four-layer stack that this proposal closes the reverse of
+- [`proposals/implemented/layer-a-density.md`](layer-a-density.md) — the 10 density sugars whose reverse-projection rules this proposal specifies; also the cleanup pass that retired the old `LayerATranslator`
+- [`decisions/ADR-001-graph-not-text.md`](../../decisions/ADR-001-graph-not-text.md) — graph remains the source; Layer A is a tool-layer affordance, not a parallel source language
+- [`decisions/ADR-002-no-human-projection.md`](../../decisions/ADR-002-no-human-projection.md) — preserved: Layer A is for LLM emission and consumption, not for human authoring; the proposal does not introduce a human-readable projection layer
+- [`decisions/ADR-003-content-addressing.md`](../../decisions/ADR-003-content-addressing.md) — canonical CBOR encoding and BLAKE3 hashing are unchanged; round-trip correctness is asserted by hash equality
+- [`impl/authoring/`](../../impl/authoring/) — the module the new code lives in
+- [`open-questions.md`](../../open-questions.md) — Q-021, Q-034, Q-036
+- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — implementation orientation for the next session
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-036 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl/CLAUDE.md`](../impl/CLAUDE.md) — Known gaps section will reference this proposal
+- [`open-questions.md`](../../open-questions.md) — Q-036 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — Known gaps section will reference this proposal

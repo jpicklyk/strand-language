@@ -180,7 +180,9 @@ The `impl/` subtree is created when Milestone 2.1 scaffolding begins. The design
 
 These proposals are written to the "ready to implement" level of detail and sit under `proposals/` (not `implemented/`). They are explicitly deferred — not because of design uncertainty, but because each represents a discrete shipping unit whose scope exceeds the available session budget. They remain on the roadmap; the deferrals are sequencing, not abandonment.
 
-(All Wave-3+ implementation proposals have landed and moved to `proposals/implemented/`. The next drafted proposal will appear here if it ships partially or requires explicit deferral.)
+- **`proposals/model-api-integration.md`** — partially shipped 2026-05-25. The `strand-eval` Python framework, Anthropic + step-mode (Claude Code) backends, Python language adapter, 10 tasks, and a first end-to-end dynamic-cost measurement run (recorded in [`evaluation/dynamic-results.md`](evaluation/dynamic-results.md)) all ship. Outstanding follow-ups: (1) an Anthropic-backend run with fresh model contexts — the first run used step-mode against a session that had prior corpus exposure, so first-pass=100% is an upper bound, not a real measurement; (2) prompt-caching measurement so the per-emission cost amortizes properly; (3) multi-sample statistical aggregation (N>1 per cell with bootstrap CIs); (4) retry-loop-exercising tasks (all 20 cells converged on attempt 1, making the verifier-feedback advantage invisible); (5) the remaining four Q-021 baselines (Kotlin Coroutines, Rust, TypeScript-strict, SimPy/ShortCoder).
+
+(All Wave-3+ implementation proposals have landed and moved to `proposals/implemented/`. Only the partially-shipped model-API-integration proposal remains in `proposals/`.)
 
 These deferrals are recorded here, not in `proposals/<topic>.md` headers, so the proposal files remain "ready to implement" at the slice level when their gating milestones arrive.
 
@@ -225,6 +227,30 @@ positions. All work lives in `impl/authoring/`; the verifier, canonical
 CBOR encoder, and runtime are untouched. See
 [`proposals/implemented/layer-a-density.md`](proposals/implemented/layer-a-density.md)
 for the implementation record.
+
+## Q-036 reverse projection landed 2026-05-25
+
+The reverse direction of the Layer A authoring stack — canonical
+dag-json back to Layer A density-v4 text — shipped across five git
+commits per the proposal's §9 shipping order: Step 1 canonical-form
+translator + renderer, Step 1 round-trip coverage extended to all 64
+corpus programs, Step 2 static SAFE elaboration omission for the
+recursion-slot `paramType` case, Step 3 probe-and-fallback for the
+BORDERLINE inference cases, Step 4 density-sugar projection across all
+10 slices, Step 5 the `strand translate <file.json>` CLI subcommand.
+`LayerAReverseRoundTripTest` asserts
+`forward_compile(render(translate(canonical))) == canonical`
+byte-for-byte across the entire 64-program corpus. Three deviations
+from the literal proposal are recorded in the implementation note at
+[`proposals/implemented/layer-a-reverse-projection.md`](proposals/implemented/layer-a-reverse-projection.md):
+`ElaborationOmission.kt` folded into `LayerATranslator` as private
+methods, `Lambda.effects` demoted SAFE→BORDERLINE because corpus 12/13/14
+legitimately over-declare effects, and a new `FORCE_ALL_OPTIONALS =
+setOf("APP")` rule added to short-circuit the Elaborator's effectInstances
+defaulting on out-of-scope EffectDecl picks in corpus 33-35. This closes
+the agent-reading-existing-Strand-code half of Q-034 — agents loading,
+modifying, or inspecting existing programs now see the same compact
+representation they emit.
 
 The items that remain open after this work:
 
