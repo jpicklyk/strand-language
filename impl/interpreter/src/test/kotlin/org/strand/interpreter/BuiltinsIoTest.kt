@@ -158,6 +158,62 @@ class BuiltinsIoTest {
         }
     }
 
+    // ---------- Process ----------
+
+    @Test
+    fun `Process_EnvVar returns Some when the variable is set`() {
+        val fn = Builtins.lookup("strand-builtin:Process.EnvVar")!!
+        // PATH is virtually always set in CI environments + dev machines.
+        val v = fn.invoke(listOf(Value.StringV("PATH")))
+        assertTrue(v is Value.SumV && (v as Value.SumV).case == "Some")
+        val payload = (v as Value.SumV).payload as Value.StringV
+        assertTrue(payload.v.isNotEmpty(), "PATH should be non-empty")
+    }
+
+    @Test
+    fun `Process_EnvVar returns None when the variable is unset`() {
+        val fn = Builtins.lookup("strand-builtin:Process.EnvVar")!!
+        // A name we're confident isn't set.
+        val v = fn.invoke(listOf(Value.StringV("STRAND_TEST_UNSET_${System.nanoTime()}")))
+        assertTrue(v is Value.SumV && (v as Value.SumV).case == "None")
+        assertEquals(null, (v as Value.SumV).payload)
+    }
+
+    @Test
+    fun `Process_Spawn and Process_Wait run a simple command`() {
+        // Pick a portable command. On Windows: `cmd /c exit 0`; on POSIX:
+        // `true`. Detect via os.name. This test exercises Spawn → Wait
+        // round-trip; the inheritIO stdio model means the child's
+        // (empty) output goes to the test runner.
+        val (cmd, argList) = if (System.getProperty("os.name").lowercase().contains("windows")) {
+            "cmd" to listOf("/c", "exit", "0")
+        } else {
+            "true" to emptyList()
+        }
+        val nil: Value = Value.SumV(case = "Nil", payload = null)
+        val argChain: Value = argList.foldRight(nil) { s, acc ->
+            Value.SumV(case = "Cons", payload = Value.ProductV(
+                mapOf("head" to Value.StringV(s), "tail" to acc)
+            ))
+        }
+        val spawnFn = Builtins.lookup("strand-builtin:Process.Spawn")!!
+        val handle = spawnFn.invoke(listOf(Value.StringV(cmd), argChain)) as Value.Resource
+        assertEquals("process", handle.kind)
+        val waitFn = Builtins.lookup("strand-builtin:Process.Wait")!!
+        val exit = waitFn.invoke(listOf(handle))
+        assertEquals(Value.IntV(0L), exit)
+    }
+
+    @Test
+    fun `Process_Spawn on missing command raises IoFailure`() {
+        val nil: Value = Value.SumV(case = "Nil", payload = null)
+        val spawnFn = Builtins.lookup("strand-builtin:Process.Spawn")!!
+        val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
+            spawnFn.invoke(listOf(Value.StringV("strand-no-such-command-${System.nanoTime()}"), nil))
+        }
+        assertEquals("process-spawn", ex.kind)
+    }
+
     @Test
     fun `Time_Sleep under FixedClock is a no-op`() {
         val saved = Builtins.clock

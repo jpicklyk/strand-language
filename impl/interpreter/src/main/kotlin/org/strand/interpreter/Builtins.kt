@@ -311,6 +311,76 @@ object Builtins {
             Value.IntV(1)  // TODO: real socket — Phase 2 #5
         },
 
+        // Layer 4 step 2 — Process + env builtins. Spawn/Wait use
+        // java.lang.ProcessBuilder; inherited stdio (child's stdout/
+        // stderr go to the runtime's stdout/stderr). Captured output
+        // (via Process.SpawnCapture returning Bytes) is a follow-up.
+
+        "strand-builtin:Process.Spawn" to Fn { args ->
+            // (cmd: String, args: List<String>) -> ProcessHandle
+            // The args parameter is a SumV-encoded Cons/Nil chain of
+            // StringV — matches the convention used by Fs.List.
+            require(args.size == 2) {
+                "Process.Spawn expects 2 args (cmd: String, args: List<String>), got ${args.size}"
+            }
+            val cmd = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("process-spawn", "expected StringV cmd, got ${args[0]::class.simpleName}")
+            val argList = mutableListOf<String>()
+            var cur = args[1]
+            while (cur is Value.SumV && cur.case == "Cons") {
+                val payload = cur.payload as? Value.ProductV
+                    ?: throw IoFailure("process-spawn",
+                        "Process.Spawn args list Cons payload not a ProductV (kind=${cur.payload?.let { it::class.simpleName }})")
+                val head = payload.fields["head"] as? Value.StringV
+                    ?: throw IoFailure("process-spawn",
+                        "Process.Spawn args list head not StringV (kind=${payload.fields["head"]?.let { it::class.simpleName }})")
+                argList += head.v
+                cur = payload.fields["tail"]
+                    ?: throw IoFailure("process-spawn", "Process.Spawn args list missing tail")
+            }
+            try {
+                val builder = ProcessBuilder(listOf(cmd) + argList).inheritIO()
+                val proc = builder.start()
+                ResourceTable.register("process", proc)
+            } catch (e: java.io.IOException) {
+                throw IoFailure("process-spawn", "$cmd: ${e.message}")
+            } catch (e: SecurityException) {
+                throw IoFailure("process-spawn", "$cmd: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Process.Wait" to Fn { args ->
+            // (handle: ProcessHandle) -> Int (exit code)
+            require(args.size == 1) {
+                "Process.Wait expects 1 arg (handle: ProcessHandle), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("process-wait", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val proc = ResourceTable.get(handle, "process") as Process
+            val exitCode = try {
+                proc.waitFor()
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IoFailure("process-wait", "interrupted waiting for process #${handle.id}")
+            }
+            ResourceTable.remove(handle)
+            Value.IntV(exitCode.toLong())
+        },
+
+        "strand-builtin:Process.EnvVar" to Fn { args ->
+            // (name: String) -> Option<String>
+            // Returns SumV "Some" payload=StringV when set, SumV "None"
+            // payload=null when missing. Standard Option convention.
+            require(args.size == 1) {
+                "Process.EnvVar expects 1 arg (name: String), got ${args.size}"
+            }
+            val name = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("process-envvar", "expected StringV name, got ${args[0]::class.simpleName}")
+            val value = System.getenv(name)
+            if (value != null) Value.SumV(case = "Some", payload = Value.StringV(value))
+            else Value.SumV(case = "None", payload = null)
+        },
+
         // Test-only no-op effectful builtin. Returns IntV(0) for any
         // single StringV argument. Used by tests that want to exercise
         // the effect-handler / capability machinery without touching
