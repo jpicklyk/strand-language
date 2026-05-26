@@ -1060,6 +1060,56 @@ object Builtins {
             Value.SumV("None", null)
         },
 
+        // Stdlib expansion round 2 — Json.Stringify (Phase 4 #1).
+        // Inverse of Json.Parse. Takes a JsonValue SumV and produces
+        // the canonical JSON text. The four primitive cases
+        // (JsonNull, JsonBool, JsonNumber, JsonString) are handled
+        // exhaustively; any other case (defensive against future
+        // additions before round 3 lifts the nested-μ blocker for
+        // arrays/objects) falls back to the JSON null literal.
+
+        "strand-builtin:Json.Stringify" to Fn { args ->
+            require(args.size == 1) { "Json.Stringify expects 1 arg (json: JsonValue), got ${args.size}" }
+            val v = args[0] as Value.SumV
+            val text = when (v.case) {
+                "JsonNull" -> "null"
+                "JsonBool" -> if ((v.payload as Value.BoolV).v) "true" else "false"
+                "JsonNumber" -> (v.payload as Value.IntV).v.toString()
+                "JsonString" -> {
+                    val s = (v.payload as Value.StringV).v
+                    kotlinx.serialization.json.JsonPrimitive(s).toString()  // proper escaping
+                }
+                else -> "null"  // unreachable until round 3 adds array/object cases
+            }
+            Value.StringV(text)
+        },
+
+        // Stdlib expansion round 2 — Bytes hex codecs (Phase 4 #2).
+        // Mirrors Bytes.FormatBase64 / Bytes.ParseBase64. Lowercase
+        // hex on output; case-insensitive on input. Round-trips byte
+        // arrays of any length.
+
+        "strand-builtin:Bytes.FormatHex" to Fn { args ->
+            require(args.size == 1) { "Bytes.FormatHex expects 1 arg (b: Bytes), got ${args.size}" }
+            val bytes = (args[0] as Value.BytesV).v
+            Value.StringV(bytes.joinToString("") { "%02x".format(it) })
+        },
+
+        "strand-builtin:Bytes.ParseHex" to Fn { args ->
+            // (s: String) -> Option<Bytes>. None on odd length or non-hex.
+            require(args.size == 1) { "Bytes.ParseHex expects 1 arg (s: String), got ${args.size}" }
+            val s = (args[0] as Value.StringV).v
+            if (s.length % 2 != 0) return@Fn Value.SumV("None", null)
+            val out = ByteArray(s.length / 2)
+            for (i in out.indices) {
+                val hi = Character.digit(s[i * 2], 16)
+                val lo = Character.digit(s[i * 2 + 1], 16)
+                if (hi < 0 || lo < 0) return@Fn Value.SumV("None", null)
+                out[i] = ((hi shl 4) or lo).toByte()
+            }
+            Value.SumV("Some", Value.BytesV(out))
+        },
+
         // Test-only no-op effectful builtin. Returns IntV(0) for any
         // single StringV argument. Used by tests that want to exercise
         // the effect-handler / capability machinery without touching
