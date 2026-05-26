@@ -413,6 +413,279 @@ object LayerAGrammar {
             jsonType = "EffectCategory",
             stringFields = mapOf("categoryName" to "Network.Connect"),
         ),
+        "cryptoFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Crypto.RandomBytes"),
+        ),
+
+        // Stdlib expansion round 2 — Math.* function types.
+        // Sharing FNT shape across multiple names (e.g., absT and
+        // signT are both (Int)->Int) follows the existing
+        // negT/notT pattern: distinct names for readability even
+        // when the underlying type structure is identical.
+        "absT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "signT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "minT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "maxT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "mmodT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "floorT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "ceilT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "roundT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "sqrtT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "powT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "lnT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "expT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "sinT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "cosT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "tanT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "toFloatT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "toIntTruncT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+
+        // Hash.* function types — all (Bytes) -> Bytes.
+        "blake3T" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "sha256T" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "md5T" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+
+        // Random.* function types. Random.* declares the existing
+        // E-024 Crypto.RandomBytes effect category at the call site;
+        // the ForeignNode entries below reference `cryptoFx`.
+        "randIntT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "randFloatT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to emptyList()),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "randBytesT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+
+        // Bytes.FormatHex function type (monomorphic). The other
+        // round-2 Bytes builtins (ParseHex, ParseBase64, ParseUtf8)
+        // return Option<T> — pending a blessed Option<T> in the
+        // prelude, those keep the explicit FNT + FRN form.
+        "hexOfT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+
+        // Stdlib expansion round 2 — ForeignNode entries. Pure (no
+        // effects) except Random.* which declares [cryptoFx]
+        // (E-024 Crypto.RandomBytes).
+        "abs" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Abs"),
+            refFields = mapOf("foreignType" to "absT"),
+        ),
+        "sign" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Sign"),
+            refFields = mapOf("foreignType" to "signT"),
+        ),
+        "min" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Min"),
+            refFields = mapOf("foreignType" to "minT"),
+        ),
+        "max" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Max"),
+            refFields = mapOf("foreignType" to "maxT"),
+        ),
+        // `mmod` (mathematical modulo, always non-negative for positive
+        // divisors) avoids clashing with the existing `mod` reserved
+        // name which targets `strand-builtin:Int.Mod` (JVM `%`,
+        // sign-of-dividend). The two are different functions; the
+        // distinct reserved names make the choice explicit.
+        "mmod" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Mod"),
+            refFields = mapOf("foreignType" to "mmodT"),
+        ),
+        "floor" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Floor"),
+            refFields = mapOf("foreignType" to "floorT"),
+        ),
+        "ceil" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Ceil"),
+            refFields = mapOf("foreignType" to "ceilT"),
+        ),
+        "round" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Round"),
+            refFields = mapOf("foreignType" to "roundT"),
+        ),
+        "sqrt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Sqrt"),
+            refFields = mapOf("foreignType" to "sqrtT"),
+        ),
+        "pow" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Pow"),
+            refFields = mapOf("foreignType" to "powT"),
+        ),
+        "ln" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Log"),
+            refFields = mapOf("foreignType" to "lnT"),
+        ),
+        "exp" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Exp"),
+            refFields = mapOf("foreignType" to "expT"),
+        ),
+        "sin" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Sin"),
+            refFields = mapOf("foreignType" to "sinT"),
+        ),
+        "cos" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Cos"),
+            refFields = mapOf("foreignType" to "cosT"),
+        ),
+        "tan" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Math.Tan"),
+            refFields = mapOf("foreignType" to "tanT"),
+        ),
+        "toFloat" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.FromInt"),
+            refFields = mapOf("foreignType" to "toFloatT"),
+        ),
+        "toIntTrunc" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Int.FromFloatTrunc"),
+            refFields = mapOf("foreignType" to "toIntTruncT"),
+        ),
+        "blake3" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Hash.Blake3"),
+            refFields = mapOf("foreignType" to "blake3T"),
+        ),
+        "sha256" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Hash.Sha256"),
+            refFields = mapOf("foreignType" to "sha256T"),
+        ),
+        "md5" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Hash.Md5"),
+            refFields = mapOf("foreignType" to "md5T"),
+        ),
+        "randInt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Random.Int"),
+            refFields = mapOf("foreignType" to "randIntT"),
+            refListFields = mapOf("effects" to listOf("cryptoFx")),
+        ),
+        "randFloat" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Random.Float"),
+            refFields = mapOf("foreignType" to "randFloatT"),
+            refListFields = mapOf("effects" to listOf("cryptoFx")),
+        ),
+        "randBytes" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Random.Bytes"),
+            refFields = mapOf("foreignType" to "randBytesT"),
+            refListFields = mapOf("effects" to listOf("cryptoFx")),
+        ),
+        "hexOf" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bytes.FormatHex"),
+            refFields = mapOf("foreignType" to "hexOfT"),
+        ),
     )
 
     /**

@@ -141,7 +141,7 @@ positional arguments, and a tiny example.
 
 ## Implicit prelude
 
-The following 49 names are pre-bound — you may reference them in any node
+The following names are pre-bound — you may reference them in any node
 without declaring them locally. A local declaration with the same id
 shadows the implicit one. Because Strand is content-addressed by structure,
 the local and implicit forms hash identically.
@@ -155,7 +155,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures for builtins (17):
+FunctionType signatures (34):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -165,16 +165,35 @@ FunctionType signatures for builtins (17):
     concatT                         — (String, String) -> String
     eqStrT                          — (String, String) -> Bool
     nowT                            — () -> Int
+    absT signT                      — (Int) -> Int
+    minT maxT mmodT                 — (Int, Int) -> Int
+    floorT ceilT roundT             — (Float) -> Int
+    sqrtT lnT expT sinT cosT tanT   — (Float) -> Float
+    powT                            — (Float, Float) -> Float
+    toFloatT                        — (Int) -> Float
+    toIntTruncT                     — (Float) -> Int
+    blake3T sha256T md5T            — (Bytes) -> Bytes
+    randIntT                        — (Int, Int) -> Int
+    randFloatT                      — () -> Float
+    randBytesT                      — (Int) -> Bytes
+    hexOfT                          — (Bytes) -> String
 
-Foreign-node builtins (17):
+Foreign-node builtins (40):
 
-    add sub mul div mod neg         — Int arithmetic
+    add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
     not and or                      — Bool combinators
     concat eqStr                    — String operations
     now                             — Time.Now (effectful; declares nowFx)
+    abs sign min max mmod           — Math.* Int operations (mmod is true math modulo, always >= 0 for positive divisor)
+    floor ceil round                — Math.* Float -> Int rounding
+    sqrt pow ln exp sin cos tan     — Math.* Float -> Float
+    toFloat toIntTrunc              — Float.FromInt / Int.FromFloatTrunc coercions
+    blake3 sha256 md5               — Hash.* digests (Bytes -> Bytes, raw output, no multi-hash prefix)
+    randInt randFloat randBytes     — Random.* (effectful; each declares cryptoFx for E-024 Crypto.RandomBytes)
+    hexOf                           — Bytes.FormatHex (lowercase output)
 
-Effect categories (7):
+Effect categories (8):
 
     receiveFx     — StateMachine.Receive (every state machine needs this)
     sendFx        — StateMachine.Send (state machines with outputs need this)
@@ -183,9 +202,21 @@ Effect categories (7):
     nowFx         — Time.Now
     writeFx       — Filesystem.Write
     connectFx     — Network.Connect
+    cryptoFx      — Crypto.RandomBytes (declared by every Random.* call)
 
 A state machine with input streams must declare `receiveFx` in its `effects`
 list. A state machine with output streams must also declare `sendFx`.
+
+**Round-2 builtins NOT in the prelude (require explicit FN + FNT declarations
+at the use site):** the polymorphic / Option-returning / blessed-library-typed
+ones — `List.*` operations (Map/Filter/Fold/Find/Any/All/Length/Reverse/etc.,
+all polymorphic in element type), `String.ParseInt/ParseFloat/Length/...`
+(polymorphic or Option-returning), `Bytes.ParseHex/ParseBase64/ParseUtf8`
+(Option-returning), `Json.Parse/Stringify` (typed against a specific JsonValue
+schema), filesystem / network / process / HTTP builtins (typed against agent
+choice of payload). When using these, declare the FN with target like
+`"strand-builtin:List.Map"` plus the appropriate FNT for the concrete type
+at this call site.
 
 ## Layer 4 step 2 builtins (real IO + stdlib)
 
