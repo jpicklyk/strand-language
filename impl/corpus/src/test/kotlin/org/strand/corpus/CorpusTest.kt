@@ -1,7 +1,9 @@
 package org.strand.corpus
 
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 import org.strand.core.JsonIngest
@@ -21,8 +23,27 @@ import org.strand.verifier.VerifyResult
  *  - every program ingests cleanly,
  *  - every program verifies without errors,
  *  - programs marked "runnable" evaluate to the expected value.
+ *
+ * Corpus 16 and 17 exercise the Time.Now builtin and assert against
+ * [Builtins.FIXED_REPLAY_TIMESTAMP]. To keep that deterministic after
+ * Layer 4 step 2's "Time.Now reads from the active clock" change, this
+ * suite installs [Builtins.FixedClock] in @BeforeAll and restores
+ * [Builtins.SystemClock] in @AfterAll.
  */
 class CorpusTest {
+
+    companion object {
+        @JvmStatic
+        @BeforeAll
+        fun installFixedClock() {
+            Builtins.clock = Builtins.FixedClock(Builtins.FIXED_REPLAY_TIMESTAMP)
+        }
+        @JvmStatic
+        @AfterAll
+        fun restoreSystemClock() {
+            Builtins.clock = Builtins.SystemClock
+        }
+    }
 
     private data class Case(
         val resource: String,

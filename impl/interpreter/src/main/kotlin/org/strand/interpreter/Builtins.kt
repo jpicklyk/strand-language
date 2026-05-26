@@ -30,6 +30,37 @@ object Builtins {
         fun invoke(args: List<Value>): Value
     }
 
+    /**
+     * Pluggable clock for the `Time.*` builtins. Default is [SystemClock]
+     * (real wall-clock time and real sleep). Tests that need
+     * deterministic timestamps install [FixedClock] in setup and reset
+     * to [SystemClock] in teardown. Thread safety: this is a global
+     * mutable field; tests that mutate it must not run in parallel
+     * with each other or with code that reads it. Per-interpreter
+     * clock injection is a future refactor if parallelism becomes a
+     * concern.
+     */
+    interface Clock {
+        fun nowMillis(): Long
+        fun sleep(millis: Long)
+    }
+
+    object SystemClock : Clock {
+        override fun nowMillis(): Long = System.currentTimeMillis()
+        override fun sleep(millis: Long) {
+            if (millis > 0) Thread.sleep(millis)
+        }
+    }
+
+    class FixedClock(private val time: Long) : Clock {
+        override fun nowMillis(): Long = time
+        override fun sleep(millis: Long) = Unit  // no-op in replay mode
+    }
+
+    /** The active clock. Production default: real system time. */
+    @Volatile
+    var clock: Clock = SystemClock
+
     private val registry: Map<String, Fn> = mapOf(
         // Pure arithmetic (no declared effects expected).
         "strand-builtin:Int.Add" to Fn { args ->
@@ -114,12 +145,26 @@ object Builtins {
             Value.BoolV((args[0] as Value.StringV).v == (args[1] as Value.StringV).v)
         },
 
-        // Effectful: nominally exercises Time.Now. Returns a fixed timestamp
-        // so replay determinism holds during testing. A production runtime
-        // would substitute a real clock here.
+        // Effectful: Time.Now reads from the active [clock]. Default
+        // is [SystemClock] (System.currentTimeMillis()). Tests install
+        // [FixedClock] to get deterministic timestamps; the existing
+        // FIXED_REPLAY_TIMESTAMP constant remains as the canonical
+        // fixed value for tests that compare against a known Now.
         "strand-builtin:Time.Now" to Fn { args ->
             require(args.isEmpty()) { "Time.Now expects 0 args, got ${args.size}" }
-            Value.IntV(FIXED_REPLAY_TIMESTAMP)
+            Value.IntV(clock.nowMillis())
+        },
+
+        // Effectful: Time.Sleep(millis) suspends the current thread for
+        // the requested duration via [clock.sleep]. Default SystemClock
+        // calls Thread.sleep; FixedClock is a no-op so tests don't
+        // actually wait. Returns UnitV.
+        "strand-builtin:Time.Sleep" to Fn { args ->
+            require(args.size == 1) { "Time.Sleep expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            require(millis >= 0) { "Time.Sleep millis must be non-negative, got $millis" }
+            clock.sleep(millis)
+            Value.UnitV
         },
 
         // Q-031 reference targets: Filesystem.Write and Network.Connect.

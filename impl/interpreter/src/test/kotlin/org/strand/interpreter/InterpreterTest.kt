@@ -1,5 +1,7 @@
 package org.strand.interpreter
 
+import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 import org.strand.core.Hash
@@ -9,6 +11,30 @@ import org.strand.core.NodeStore
 import org.strand.hashing.Hasher
 
 class InterpreterTest {
+
+    /**
+     * Install a [Builtins.FixedClock] for the duration of this test class
+     * so the `Time.Now` builtin returns a deterministic value. Tests that
+     * assert on `Time.Now` results compare against [Builtins.FIXED_REPLAY_TIMESTAMP].
+     * Restored to [Builtins.SystemClock] in @AfterAll so other test
+     * classes that need real time aren't affected.
+     *
+     * NOTE: this is global mutable state on the Builtins singleton; tests
+     * across classes must not run in parallel with each other. Gradle's
+     * default forks JVMs per test class, so this works in practice.
+     */
+    companion object {
+        @JvmStatic
+        @BeforeAll
+        fun installFixedClock() {
+            Builtins.clock = Builtins.FixedClock(Builtins.FIXED_REPLAY_TIMESTAMP)
+        }
+        @JvmStatic
+        @AfterAll
+        fun restoreSystemClock() {
+            Builtins.clock = Builtins.SystemClock
+        }
+    }
 
     /**
      * Result of `ingestAndGetIds`: the finalized canonical [NodeStore] (with
