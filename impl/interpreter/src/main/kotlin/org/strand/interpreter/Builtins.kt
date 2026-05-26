@@ -300,6 +300,9 @@ object Builtins {
             }
         },
 
+        // Legacy stub kept for backwards-compat with the seed corpus
+        // (programs 33, 34 and test fixtures). Real network sockets use
+        // the `strand-builtin:Net.*` target namespace (Phase 2 #5).
         "strand-builtin:Network.Connect" to Fn { args ->
             require(args.size == 2) {
                 "Network.Connect expects 2 args (host: String, port: Int), got ${args.size}"
@@ -308,7 +311,91 @@ object Builtins {
                 "Network.Connect expects StringV host + IntV port, got " +
                     "(${args[0]::class.simpleName}, ${args[1]::class.simpleName})"
             }
-            Value.IntV(1)  // TODO: real socket — Phase 2 #5
+            Value.IntV(1)  // connection id; legacy stub semantics
+        },
+
+        // Layer 4 step 2 — Network builtins under the `Net.*` target
+        // namespace. Synchronous JVM Socket-based I/O. Async wrapping
+        // into the state-machine actor loop is a follow-up.
+        //
+        // Effect categories: Net.Connect → E-001 Network.Connect;
+        // Net.Send → E-003 Network.Send; Net.Receive → E-004
+        // Network.Receive. Net.Close has no specific effect (closing
+        // an opened resource is the dual of opening it).
+
+        "strand-builtin:Net.Connect" to Fn { args ->
+            // (host: String, port: Int) -> SocketHandle
+            require(args.size == 2) {
+                "Net.Connect expects 2 args (host: String, port: Int), got ${args.size}"
+            }
+            val host = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("network-connect", "expected StringV host, got ${args[0]::class.simpleName}")
+            val port = (args[1] as? Value.IntV)?.v
+                ?: throw IoFailure("network-connect", "expected IntV port, got ${args[1]::class.simpleName}")
+            try {
+                val socket = java.net.Socket(host, port.toInt())
+                ResourceTable.register("socket", socket)
+            } catch (e: java.io.IOException) {
+                throw IoFailure("network-connect", "$host:$port: ${e.message}")
+            } catch (e: SecurityException) {
+                throw IoFailure("network-connect", "$host:$port: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Net.Send" to Fn { args ->
+            // (handle: SocketHandle, bytes: Bytes) -> Int (bytes written)
+            require(args.size == 2) {
+                "Net.Send expects 2 args (handle: SocketHandle, bytes: Bytes), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("network-send", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val bytes = (args[1] as? Value.BytesV)?.v
+                ?: throw IoFailure("network-send", "expected BytesV content, got ${args[1]::class.simpleName}")
+            val socket = ResourceTable.get(handle, "socket") as java.net.Socket
+            try {
+                socket.getOutputStream().write(bytes)
+                socket.getOutputStream().flush()
+                Value.IntV(bytes.size.toLong())
+            } catch (e: java.io.IOException) {
+                throw IoFailure("network-send", "socket #${handle.id}: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Net.Receive" to Fn { args ->
+            // (handle: SocketHandle, maxBytes: Int) -> Bytes
+            // Reads up to maxBytes; returns empty Bytes on EOF.
+            require(args.size == 2) {
+                "Net.Receive expects 2 args (handle: SocketHandle, maxBytes: Int), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("network-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+                ?: throw IoFailure("network-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
+            require(maxBytes >= 0) { "Net.Receive maxBytes must be non-negative, got $maxBytes" }
+            val socket = ResourceTable.get(handle, "socket") as java.net.Socket
+            try {
+                val buf = ByteArray(maxBytes)
+                val n = socket.getInputStream().read(buf)
+                if (n <= 0) Value.BytesV(ByteArray(0))
+                else Value.BytesV(buf.copyOf(n))
+            } catch (e: java.io.IOException) {
+                throw IoFailure("network-receive", "socket #${handle.id}: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Net.Close" to Fn { args ->
+            // (handle: SocketHandle) -> Unit
+            require(args.size == 1) {
+                "Net.Close expects 1 arg (handle: SocketHandle), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("network-close", "expected Resource handle, got ${args[0]::class.simpleName}")
+            // Idempotent: remove from table even if close throws.
+            val obj = ResourceTable.remove(handle)
+            if (obj is java.net.Socket) {
+                try { obj.close() } catch (_: java.io.IOException) { /* ignore — already closed */ }
+            }
+            Value.UnitV
         },
 
         // Layer 4 step 2 — Process + env builtins. Spawn/Wait use

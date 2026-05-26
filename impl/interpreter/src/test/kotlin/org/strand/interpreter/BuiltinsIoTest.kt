@@ -158,6 +158,83 @@ class BuiltinsIoTest {
         }
     }
 
+    // ---------- Network ----------
+
+    @Test
+    fun `Net round-trip via local ServerSocket`() {
+        val server = java.net.ServerSocket(0)  // ephemeral port
+        try {
+            val port = server.localPort
+            val message = "hello, strand network".toByteArray(Charsets.UTF_8)
+            // Spawn a thread that accepts one connection, echoes the payload.
+            val echoThread = Thread {
+                server.accept().use { client ->
+                    val buf = ByteArray(1024)
+                    val n = client.getInputStream().read(buf)
+                    if (n > 0) {
+                        client.getOutputStream().write(buf, 0, n)
+                        client.getOutputStream().flush()
+                    }
+                }
+            }
+            echoThread.start()
+
+            val connect = Builtins.lookup("strand-builtin:Net.Connect")!!
+            val send = Builtins.lookup("strand-builtin:Net.Send")!!
+            val receive = Builtins.lookup("strand-builtin:Net.Receive")!!
+            val close = Builtins.lookup("strand-builtin:Net.Close")!!
+
+            val handle = connect.invoke(listOf(Value.StringV("127.0.0.1"), Value.IntV(port.toLong()))) as Value.Resource
+            assertEquals("socket", handle.kind)
+
+            val sent = send.invoke(listOf(handle, Value.BytesV(message))) as Value.IntV
+            assertEquals(message.size.toLong(), sent.v)
+
+            val received = receive.invoke(listOf(handle, Value.IntV(1024L))) as Value.BytesV
+            assertEquals(message.toList(), received.v.toList())
+
+            close.invoke(listOf(handle))
+            echoThread.join(2000)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `Net_Connect on unreachable port raises IoFailure`() {
+        // Port 1 is privileged on most systems and not listening.
+        // We can't be 100% sure no service is on it, so use a port in
+        // the registered range that's likely closed; a random high
+        // port that the OS just gave us and we never bound is safer.
+        val server = java.net.ServerSocket(0)
+        val port = server.localPort
+        server.close()  // close so the port is no longer listening
+        val connect = Builtins.lookup("strand-builtin:Net.Connect")!!
+        val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
+            connect.invoke(listOf(Value.StringV("127.0.0.1"), Value.IntV(port.toLong())))
+        }
+        assertEquals("network-connect", ex.kind)
+    }
+
+    @Test
+    fun `Net_Close is idempotent`() {
+        val server = java.net.ServerSocket(0)
+        try {
+            val port = server.localPort
+            val acceptThread = Thread { server.accept().close() }
+            acceptThread.start()
+            val connect = Builtins.lookup("strand-builtin:Net.Connect")!!
+            val close = Builtins.lookup("strand-builtin:Net.Close")!!
+            val handle = connect.invoke(listOf(Value.StringV("127.0.0.1"), Value.IntV(port.toLong()))) as Value.Resource
+            close.invoke(listOf(handle))
+            // Second close: shouldn't throw.
+            close.invoke(listOf(handle))
+            acceptThread.join(2000)
+        } finally {
+            server.close()
+        }
+    }
+
     // ---------- Process ----------
 
     @Test
