@@ -268,9 +268,53 @@ Reverse / Take / Drop / Concat / Nth, all polymorphic in element type),
 `Json.Parse` / `Json.Stringify` (typed against a specific JsonValue schema
 — corpus 54 flat or corpus 66 JsonValueFull), `Markdown.Parse` (typed against
 the corpus 61 MarkdownDocument schema), `Regex.Match` (Option<String>) /
-`Regex.FindAll` (List<String>) / `Regex.Split` (List<String>). When using
+`Regex.FindAll` (List<String>) / `Regex.Split` (List<String>),
+`Map.Empty` / `Map.Get` / `Map.Put` / `Map.Remove` / `Map.Has` / `Map.Size` /
+`Map.Keys` / `Map.Values` / `Map.Entries` / `Map.Fold` (opaque-handle Map<K,V>
+— see the Map.* block below for the surface-type pattern). When using
 these, declare the FN with the appropriate target string and an FNT for the
 concrete type at this call site.
+
+### Map.* (opaque persistent map)
+
+`Map<K, V>` is an opaque persistent value backed by an immutable
+hash trie. O(log n) reads and writes; path-copy persistence (writes
+return a new Map without mutating the input).
+
+**Surface-type pattern.** Strand has no parametric `Map<K, V>`
+primitive type today. Agents declare Map values using `bytesT` as
+the placeholder surface type (mirrors the opaque-handle pattern
+that sockets / processes use). The runtime checks the actual
+Value.MapV at dispatch; passing a non-Map value of type Bytes will
+throw at the call site, not at verify time.
+
+    -- declaring a Map.Get use site:
+    mapGetT FNT [bytesT stringT] optionStringT
+    mapGet FN "strand-builtin:Map.Get" mapGetT
+    result APP mapGet [someMap someKey]
+
+The full set:
+
+    strand-builtin:Map.Empty()                        -> Map<K,V>
+    strand-builtin:Map.Get(map, key)                  -> Option<V>
+    strand-builtin:Map.Put(map, key, value)           -> Map<K,V>
+    strand-builtin:Map.Remove(map, key)               -> Map<K,V>
+    strand-builtin:Map.Has(map, key)                  -> Bool
+    strand-builtin:Map.Size(map)                      -> Int
+    strand-builtin:Map.Keys(map)                      -> List<K>
+    strand-builtin:Map.Values(map)                    -> List<V>
+    strand-builtin:Map.Entries(map)                   -> List<{key, value}>
+    strand-builtin:Map.Fold(map, init, fn)            -> acc
+        -- fn: (acc, key, value) -> acc; iterated in insertion order
+
+Key ordering for Keys / Values / Entries / Fold is insertion order
+(deterministic for replay). Two maps with the same key/value pairs
+are structurally equal (Value-equality walks the structure).
+
+Persist a Map across runs via Map.Entries → serialize the
+List<{key, value}> → reconstruct via fold of Map.Put. Maps
+themselves never enter the canonical store (runtime-only, like
+Closure / Resource).
 
 ## Layer 4 step 2 builtins (real IO + stdlib)
 

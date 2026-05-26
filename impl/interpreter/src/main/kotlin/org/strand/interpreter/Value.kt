@@ -85,4 +85,31 @@ sealed class Value {
      * doing the per-kind dispatch on this Resource wrapping).
      */
     data class Resource(val id: Long, val kind: String) : Value()
+
+    /**
+     * Opaque persistent map value. Backed by a
+     * [kotlinx.collections.immutable.PersistentMap]; the per-operation
+     * `Map.*` builtins (Map.Empty / Get / Put / Remove / Has / Size /
+     * Keys / Values / Fold) preserve persistence via path-copy on
+     * writes.
+     *
+     * **Surface-type caveat.** Strand has no parametric `Map<K, V>`
+     * primitive today. Agents declare `Map.*` builtin types using
+     * `bytesT` as the surface placeholder for the Map argument /
+     * result (mirrors the opaque-handle pattern Resource uses for
+     * sockets/processes). The runtime checks at dispatch that the
+     * value is actually a MapV. A first-class parametric Map type
+     * is a future node-algebra extension.
+     *
+     * Equality is by content (PersistentMap's equals walks the
+     * structure). Two Maps with the same key/value pairs in any
+     * insertion order compare equal.
+     *
+     * MapV values never enter the canonical store — they're runtime
+     * values like Closure / FixpointFn / Resource. Programs that
+     * need to persist a Map across runs serialize it through an
+     * association list `List<{key, value}>` shape (Map.Entries /
+     * inverse construction).
+     */
+    data class MapV(val entries: kotlinx.collections.immutable.PersistentMap<Value, Value>) : Value()
 }

@@ -1232,6 +1232,106 @@ object Builtins {
             Value.BytesV(out)
         },
 
+        // Stdlib expansion round 3 phase 3 — Map.* (opaque-handle
+        // persistent map). Backed by kotlinx.collections.immutable's
+        // PersistentMap<Value, Value>. Polymorphic in key + value
+        // types from the agent's perspective; the runtime walks Value
+        // equality structurally (Value's data-class equals).
+        //
+        // **Surface-type caveat.** Agents declare Map arguments and
+        // results with `bytesT` as the placeholder surface type —
+        // this matches the opaque-handle pattern Resource uses for
+        // sockets / processes. Type-checking can't distinguish Map
+        // from Bytes today; the runtime checks Value.MapV at dispatch
+        // and throws ClassCastException if the wrong value flows in.
+        // A future node-algebra extension can add a real parametric
+        // Map<K, V> primitive type.
+        //
+        // All operations are pure: PersistentMap's put/remove return
+        // new instances via path-copy. No effect category required.
+
+        "strand-builtin:Map.Empty" to Fn { args ->
+            require(args.isEmpty()) { "Map.Empty expects 0 args, got ${args.size}" }
+            Value.MapV(kotlinx.collections.immutable.persistentMapOf())
+        },
+
+        "strand-builtin:Map.Get" to Fn { args ->
+            // (map, key) -> Option<V>. Some(v) on hit, None on miss.
+            require(args.size == 2) { "Map.Get expects 2 args (map, key), got ${args.size}" }
+            val map = (args[0] as Value.MapV).entries
+            val v = map[args[1]]
+            if (v != null) Value.SumV("Some", v) else Value.SumV("None", null)
+        },
+
+        "strand-builtin:Map.Put" to Fn { args ->
+            // (map, key, value) -> Map. Replaces the prior binding for
+            // key if any; returns a new MapV (path-copy persistence).
+            require(args.size == 3) { "Map.Put expects 3 args (map, key, value), got ${args.size}" }
+            val map = (args[0] as Value.MapV).entries
+            Value.MapV(map.put(args[1], args[2]))
+        },
+
+        "strand-builtin:Map.Remove" to Fn { args ->
+            // (map, key) -> Map. No-op if key is absent.
+            require(args.size == 2) { "Map.Remove expects 2 args (map, key), got ${args.size}" }
+            val map = (args[0] as Value.MapV).entries
+            Value.MapV(map.remove(args[1]))
+        },
+
+        "strand-builtin:Map.Has" to Fn { args ->
+            // (map, key) -> Bool.
+            require(args.size == 2) { "Map.Has expects 2 args (map, key), got ${args.size}" }
+            Value.BoolV((args[0] as Value.MapV).entries.containsKey(args[1]))
+        },
+
+        "strand-builtin:Map.Size" to Fn { args ->
+            // (map) -> Int.
+            require(args.size == 1) { "Map.Size expects 1 arg (map), got ${args.size}" }
+            Value.IntV((args[0] as Value.MapV).entries.size.toLong())
+        },
+
+        "strand-builtin:Map.Keys" to Fn { args ->
+            // (map) -> List<K>. Order is insertion-order under
+            // PersistentMap (deterministic for replay).
+            require(args.size == 1) { "Map.Keys expects 1 arg (map), got ${args.size}" }
+            val map = (args[0] as Value.MapV).entries
+            var listValue: Value = Value.SumV("Nil", null)
+            for (key in map.keys.reversed()) {
+                listValue = Value.SumV("Cons", Value.ProductV(mapOf(
+                    "head" to key, "tail" to listValue,
+                )))
+            }
+            listValue
+        },
+
+        "strand-builtin:Map.Values" to Fn { args ->
+            // (map) -> List<V>. Order matches Map.Keys.
+            require(args.size == 1) { "Map.Values expects 1 arg (map), got ${args.size}" }
+            val map = (args[0] as Value.MapV).entries
+            var listValue: Value = Value.SumV("Nil", null)
+            for (v in map.values.reversed()) {
+                listValue = Value.SumV("Cons", Value.ProductV(mapOf(
+                    "head" to v, "tail" to listValue,
+                )))
+            }
+            listValue
+        },
+
+        "strand-builtin:Map.Entries" to Fn { args ->
+            // (map) -> List<{key, value}>. The canonical serializable
+            // form — round-trips back to a Map via repeated Map.Put.
+            require(args.size == 1) { "Map.Entries expects 1 arg (map), got ${args.size}" }
+            val map = (args[0] as Value.MapV).entries
+            var listValue: Value = Value.SumV("Nil", null)
+            for ((k, v) in map.entries.reversed()) {
+                val entry = Value.ProductV(mapOf("key" to k, "value" to v))
+                listValue = Value.SumV("Cons", Value.ProductV(mapOf(
+                    "head" to entry, "tail" to listValue,
+                )))
+            }
+            listValue
+        },
+
         // Stdlib expansion round 3 phase 2 — Regex.*. Uses Kotlin's
         // kotlin.text.Regex (java.util.regex.Pattern under the hood).
         // All pure. Pattern-compile failures throw IoFailure with
@@ -1515,6 +1615,23 @@ object Builtins {
                 cur = payload.fields.getValue("tail")
             }
             Value.BoolV(true)
+        },
+
+        // Stdlib expansion round 3 phase 3 — Map.Fold (higher-order).
+        // The non-higher-order Map.* builtins are in the standard
+        // registry above; Map.Fold lives here because it takes a
+        // user-supplied 3-arg fn `(acc, key, value) -> acc`.
+        "strand-builtin:Map.Fold" to FnH { args, apply ->
+            // (map, init, fn: (acc, key, value) -> acc) -> acc
+            // Iterates entries in insertion order (deterministic).
+            require(args.size == 3) { "Map.Fold expects 3 args (map, init, fn), got ${args.size}" }
+            val map = (args[0] as Value.MapV).entries
+            val fn = args[2]
+            var acc: Value = args[1]
+            for ((k, v) in map.entries) {
+                acc = apply.apply(fn, listOf(acc, k, v))
+            }
+            acc
         },
     )
 
