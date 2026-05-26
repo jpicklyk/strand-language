@@ -386,6 +386,48 @@ production; tests inject a seeded Random for reproducibility).
     strand-builtin:Random.Float() -> Float            -- uniform in [0.0, 1.0)
     strand-builtin:Random.Bytes(n: Int) -> Bytes      -- exactly n bytes
 
+### RecursiveSelf depth field
+
+`RecursiveSelf` accepts an optional `depth: Int = 0` field. Default 0
+behaves identically to the bare form — the reference resolves to the
+innermost enclosing `RecursiveType`. A non-zero depth resolves to the
+N-th outer binder (de Bruijn index against the recursive-binder stack).
+
+    { "type": "RecursiveSelf", "depth": 1 }   -- the next-outer enclosing RT
+
+**Practical caveat.** The depth field is a sound type-algebra primitive
+but doesn't currently compose with value construction across nested
+RecursiveTypes. An inner μ-type with a depth>0 reference is correct
+only when traversed *as part of* its enclosing outer μ; a direct
+construction site like `SumValue.ofType = innerType` resolves the
+inner standalone and fails `UnboundRecursiveSelf`. For nested-list
+shapes (JSON arrays inside JsonValue, trees, etc.) use the spliced-
+variants pattern instead — see the JsonValueFull section below.
+
+### JsonValueFull and the spliced-variants pattern
+
+The blessed `JsonValueFull` schema (corpus 66) extends the original
+flat `JsonValue` (corpus 54, four primitive cases) to handle arrays
+and objects without nested μ-types. Eight cases:
+
+    JsonValueFull = μ jv.
+        JsonNull | JsonBool(Bool) | JsonNumber(Int) | JsonString(String) |
+        JsonArrayCons(head: jv, tail: jv) | JsonArrayNil |
+        JsonObjectCons(key: String, value: jv, tail: jv) | JsonObjectNil
+
+The four primitives match the corpus-54 shape. Arrays use spliced
+`JsonArrayCons` / `JsonArrayNil` instead of a separate Cons/Nil μ.
+Objects use `JsonObjectCons(key, value, tail) | JsonObjectNil`.
+
+`Json.Parse` builds the spliced encoding directly: `[1,2]` becomes
+`JsonArrayCons(JsonNumber(1), JsonArrayCons(JsonNumber(2), JsonArrayNil))`.
+`Json.Stringify` walks the chain back to canonical JSON text. Both
+round-trip cleanly for arbitrary nesting.
+
+The four primitive cases of corpus 54 stay legal under both blessed
+shapes — agents that only handle primitives can keep using the flat
+`JsonValue`; agents that need arrays / objects use `JsonValueFull`.
+
 ### Higher-order List ops (`List.Map/Filter/Fold/Find/Any/All`)
 
 These take a Strand lambda (a `LAM` or, less commonly, a `FXP`)
