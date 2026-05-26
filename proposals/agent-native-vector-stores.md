@@ -274,10 +274,10 @@ Three phases. Each is self-contained and ships independently.
 |------|--------|-------|
 | `design/effects-and-capabilities.md` | Add E-037 Vector.Read, E-038 Vector.Write (operation-shaped, with `provider: String, store: String` parameters) | small |
 | `INDEX.md` | Register E-037, E-038 | small |
-| `impl/interpreter/Builtins.kt` | Add Pinecone.* and Chroma.* builtins, each declaring `Vector.Read{provider="X"}` or `Vector.Write{provider="X"}` with `store` bound to the call argument | medium |
-| `impl/interpreter/PineconeProvider.kt`, `ChromaProvider.kt` (new) | Per-provider Kotlin objects | medium |
-| `impl/interpreter/ResourceTable.kt` | Register `pinecone_index`, `chroma_collection` kinds | small |
-| `impl/authoring/LayerAGrammar.kt` | Add prelude entries for E-037 / E-038 and the initial ForeignNodes | small |
+| `impl-kotlin/interpreter/Builtins.kt` | Add Pinecone.* and Chroma.* builtins, each declaring `Vector.Read{provider="X"}` or `Vector.Write{provider="X"}` with `store` bound to the call argument | medium |
+| `impl-kotlin/interpreter/PineconeProvider.kt`, `ChromaProvider.kt` (new) | Per-provider Kotlin objects | medium |
+| `impl-kotlin/interpreter/ResourceTable.kt` | Register `pinecone_index`, `chroma_collection` kinds | small |
+| `impl-kotlin/authoring/LayerAGrammar.kt` | Add prelude entries for E-037 / E-038 and the initial ForeignNodes | small |
 | `evaluation/dynamic/prompts/strand-system.md` | Document the Pinecone + Chroma surface | small |
 | Tests | `BuiltinsPineconeTest`, `BuiltinsChromaTest` with mock backends, plus a `VectorRefinementTest` covering provider/store scoping | medium |
 | Corpus | RAG-style retrieve-then-generate state machine | small |
@@ -288,9 +288,9 @@ Estimated effort: 1.5 sessions.
 
 | File | Change | Scope |
 |------|--------|-------|
-| `impl/interpreter/Builtins.kt` | Pgvector.* and FAISS.* builtins | medium |
-| `impl/interpreter/PgvectorProvider.kt`, `FaissProvider.kt` (new) | Per-provider Kotlin objects | medium |
-| `impl/interpreter/ResourceTable.kt` | Register `pgvector_connection`, `faiss_index` kinds | small |
+| `impl-kotlin/interpreter/Builtins.kt` | Pgvector.* and FAISS.* builtins | medium |
+| `impl-kotlin/interpreter/PgvectorProvider.kt`, `FaissProvider.kt` (new) | Per-provider Kotlin objects | medium |
+| `impl-kotlin/interpreter/ResourceTable.kt` | Register `pgvector_connection`, `faiss_index` kinds | small |
 | Tests | `BuiltinsPgvectorTest`, `BuiltinsFaissTest` | medium |
 
 Estimated effort: 1 session.
@@ -299,8 +299,8 @@ Estimated effort: 1 session.
 
 | File | Change | Scope |
 |------|--------|-------|
-| `impl/interpreter/Builtins.kt` | Weaviate.* and Qdrant.* builtins | medium |
-| `impl/interpreter/WeaviateProvider.kt`, `QdrantProvider.kt` (new) | Per-provider Kotlin objects | medium |
+| `impl-kotlin/interpreter/Builtins.kt` | Weaviate.* and Qdrant.* builtins | medium |
+| `impl-kotlin/interpreter/WeaviateProvider.kt`, `QdrantProvider.kt` (new) | Per-provider Kotlin objects | medium |
 | Corpus | Multi-store dispatch Lambda demo | small |
 | `evaluation/dynamic/tasks/` | RAG-shaped tasks for dynamic evaluation | small |
 

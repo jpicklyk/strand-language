@@ -2,7 +2,7 @@
 
 Use these as starting points for each file touched in step 5 of the main workflow. Patterns are taken from how Match, Fixpoint, ProductValue, SumValue, and RecursiveType were added.
 
-## `impl/core/src/main/kotlin/org/strand/core/Node.kt`
+## `impl-kotlin/core/src/main/kotlin/org/strand/core/Node.kt`
 
 Add the data class (or `object` for content-free nodes) to the sealed `Node` hierarchy, in the appropriate group section. Group order matches the N-NNN ranges roughly.
 
@@ -35,7 +35,7 @@ object NodeName : Node() {
 
 Sealed sub-hierarchies (like the `Pattern` variants) follow the same shape but nest inside an intermediate `sealed class`.
 
-## `impl/core/src/main/kotlin/org/strand/core/Json.kt`
+## `impl-kotlin/core/src/main/kotlin/org/strand/core/Json.kt`
 
 Add an ingest case in `buildNode`'s `when (type)` block, alphabetically near related nodes.
 
@@ -61,7 +61,7 @@ Then update two things:
 1. The "Unknown node type" rejection message's identifier range at the end of the `when` block
 2. The schema documentation comment block at the top of the file — if the new node is user-visible, add a one-line schema entry under the appropriate section header
 
-## `impl/hashing/src/main/kotlin/org/strand/hashing/CategoryTag.kt`
+## `impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/CategoryTag.kt`
 
 Add the tag constant matching the N-NNN, grouped with related tags. Comment with the N-NNN identifier.
 
@@ -75,7 +75,7 @@ val SumValue = CategoryTag(40)
 val NodeName = CategoryTag(NNN)
 ```
 
-## `impl/hashing/src/main/kotlin/org/strand/hashing/CanonicalEncoder.kt`
+## `impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/CanonicalEncoder.kt`
 
 Two changes: add to the dispatch table, then add a per-node encoder.
 
@@ -178,7 +178,7 @@ private fun encodeNodeName(node: Node.NodeName, stack: BinderStack): ByteArray {
 }
 ```
 
-## `impl/hashing/src/main/kotlin/org/strand/hashing/Hasher.kt`
+## `impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/Hasher.kt`
 
 Two changes possible: the early-return list at the top of `walk`, and a case in the main `when`.
 
@@ -197,7 +197,7 @@ if (node is Node.ParameterDecl
 
 For MatchCase-style nodes that introduce binders via patterns, use `collectPatternBinders(store, ...)` to gather all VariablePatterns reachable from the pattern tree into a single binder frame.
 
-## `impl/verifier/src/main/kotlin/org/strand/verifier/Verifier.kt`
+## `impl-kotlin/verifier/src/main/kotlin/org/strand/verifier/Verifier.kt`
 
 ### Expression nodes
 
@@ -268,7 +268,7 @@ is Node.NodeName ->  // your structural node here
     ))
 ```
 
-## `impl/verifier/src/main/kotlin/org/strand/verifier/VerifyError.kt`
+## `impl-kotlin/verifier/src/main/kotlin/org/strand/verifier/VerifyError.kt`
 
 Add sealed-class data variants for each new error condition. Group with related errors by feature.
 
@@ -292,7 +292,7 @@ is Node.NodeName -> "NodeName"
 is Node.Pattern.NewPatternVariant -> "NewPatternVariant"
 ```
 
-## `impl/interpreter/src/main/kotlin/org/strand/interpreter/Interpreter.kt`
+## `impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Interpreter.kt`
 
 ### Value-producing expression
 
@@ -346,7 +346,7 @@ is Node.NodeName ->
     throw InterpretException(InterpretError.NotCallable(at = id, gotKind = node::class.simpleName ?: "Type"))
 ```
 
-## `impl/interpreter/src/main/kotlin/org/strand/interpreter/InterpretError.kt`
+## `impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/InterpretError.kt`
 
 Add sealed-class variants for new runtime errors:
 
@@ -360,7 +360,7 @@ data class NewRuntimeError(
 ) : InterpretError()
 ```
 
-## `impl/corpus/src/test/kotlin/org/strand/corpus/CorpusTest.kt`
+## `impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/CorpusTest.kt`
 
 Register each new program in the `cases` list:
 
@@ -375,6 +375,6 @@ If the program requires a capability context (declared effects), also add to `ca
 "/corpus/NN-program-name.json" to listOf("authorIdOfEffectCategory1", "authorIdOfEffectCategory2"),
 ```
 
-## `impl/corpus/src/test/kotlin/org/strand/corpus/CorpusHashingTest.kt`
+## `impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/CorpusHashingTest.kt`
 
 Register the program in the `corpusResources` list — that's it. The hashing test exercises every listed resource.

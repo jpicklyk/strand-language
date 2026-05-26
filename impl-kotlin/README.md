@@ -32,7 +32,7 @@ What is **deliberately deferred** to later layers:
 ## Module layout
 
 ```
-impl/
+impl-kotlin/
 ├── build.gradle.kts              shared build configuration
 ├── settings.gradle.kts           module list
 ├── gradle.properties             daemon and toolchain flags
@@ -43,7 +43,7 @@ impl/
 ├── verifier/                     Well-formedness + explicit-instantiation type checking
 ├── interpreter/                  Tree-walking evaluator
 ├── cli/                          'strand verify|run <file.json>'
-├── corpus/                       Seed corpus + end-to-end tests
+├── corpus/                       End-to-end tests (wires in top-level ../corpus/)
 └── README.md
 ```
 
@@ -102,9 +102,13 @@ Layer 2 is that author ids are replaced by hashes.
 
 ## Seed corpus
 
-The seed corpus is at `corpus/src/main/resources/corpus/`. See
-`corpus/src/main/resources/corpus/README.md` for the per-program
-descriptions.
+The seed corpus lives at the repo's top-level `../corpus/` directory so it
+can be shared across reference implementations. See
+[`../corpus/README.md`](../corpus/README.md) for the per-program descriptions.
+The Kotlin `:corpus` module wires this in via `processResources`
+(see [`corpus/build.gradle.kts`](corpus/build.gradle.kts)) so the test
+classpath resolves `getResourceAsStream("/corpus/NN-...")` against the
+shared directory.
 
 Programs run by `CorpusTest`. Some are verify-only because Layer 1 has no
 constructors for product or sum values; the type nodes are wired up so the
@@ -210,11 +214,12 @@ On POSIX:
 ./gradlew test
 ```
 
-Run the CLI against a corpus program:
+Run the CLI against a corpus program (paths assume `impl-kotlin/` is the
+working directory; the corpus lives one level up at `../corpus/`):
 
 ```sh
 ./gradlew :cli:installDist
-./cli/build/install/cli/bin/cli run corpus/src/main/resources/corpus/02-identity-applied.json
+./cli/build/install/cli/bin/cli run ../corpus/02-identity-applied.json
 ```
 
 ## Versions

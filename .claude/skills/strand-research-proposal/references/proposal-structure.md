@@ -102,7 +102,7 @@ Use this template for any new `proposals/<topic>.md` file. The structure is what
 **Incoming references:**
 - [`open-questions.md`](../open-questions.md) — Q-NNN points at this proposal
 - [`proposals/README.md`](README.md)
-- [`impl/CLAUDE.md`](../impl/CLAUDE.md) — Known gaps section
+- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
 ```
 
 ## Notes on each section

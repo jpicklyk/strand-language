@@ -363,13 +363,13 @@ Two phases. Each phase is self-contained and ships independently.
 |------|--------|-------|
 | `design/effects-and-capabilities.md` | Add E-035 LLM.Generate, E-036 LLM.Embed (operation-shaped, with `provider: String, model: String` parameters) | small |
 | `INDEX.md` | Register E-035, E-036 in the identifier table | small |
-| `impl/interpreter/Builtins.kt` | Add per-provider Generate + Embed builtins (Anthropic / OpenAI / Gemini) each declaring `LLM.Generate{provider="X", model=<varref>}` or `LLM.Embed{provider="X", model=<varref>}` | medium |
-| `impl/interpreter/AnthropicProvider.kt`, `OpenAIProvider.kt`, `GeminiProvider.kt` (new) | Per-provider Kotlin objects implementing HTTP/auth/translation | medium-large |
-| `impl/interpreter/CredentialProvider.kt` (new) | Credential resolution interface; env-var-backed default | small |
-| `impl/interpreter/ResourceTable.kt` | Register `llm_conversation` kind | small |
-| `impl/interpreter/JsonSchemaProjection.kt` (new) | TypeExpr → JSON Schema translator for the irreducible subset | medium |
-| `impl/verifier/Verifier.kt` | Add `ToolParamTypeUnsupported` rule | small |
-| `impl/authoring/LayerAGrammar.kt` | Add prelude entries for the two effect categories and the six initial ForeignNodes | small |
+| `impl-kotlin/interpreter/Builtins.kt` | Add per-provider Generate + Embed builtins (Anthropic / OpenAI / Gemini) each declaring `LLM.Generate{provider="X", model=<varref>}` or `LLM.Embed{provider="X", model=<varref>}` | medium |
+| `impl-kotlin/interpreter/AnthropicProvider.kt`, `OpenAIProvider.kt`, `GeminiProvider.kt` (new) | Per-provider Kotlin objects implementing HTTP/auth/translation | medium-large |
+| `impl-kotlin/interpreter/CredentialProvider.kt` (new) | Credential resolution interface; env-var-backed default | small |
+| `impl-kotlin/interpreter/ResourceTable.kt` | Register `llm_conversation` kind | small |
+| `impl-kotlin/interpreter/JsonSchemaProjection.kt` (new) | TypeExpr → JSON Schema translator for the irreducible subset | medium |
+| `impl-kotlin/verifier/Verifier.kt` | Add `ToolParamTypeUnsupported` rule | small |
+| `impl-kotlin/authoring/LayerAGrammar.kt` | Add prelude entries for the two effect categories and the six initial ForeignNodes | small |
 | `evaluation/dynamic/prompts/strand-system.md` | Document the per-provider builtin surface for agent prompts | small |
 | Tests | `BuiltinsAnthropicTest`, `BuiltinsOpenAITest`, `BuiltinsGeminiTest`, `JsonSchemaProjectionTest`, `ToolDispatchLoopTest`, `ProviderRefinementTest` | medium |
 | Corpus | One demo program: a state machine that answers a user prompt and uses one tool, parameterized to test against any provider | small |

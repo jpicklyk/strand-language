@@ -140,4 +140,4 @@ All three are extensions of the same Fixpoint-over-document pattern. Adding them
 **Incoming references:**
 - [`open-questions.md`](../../open-questions.md) — Q-026 lists this as part of the six-library set
 - [`proposals/README.md`](../README.md)
-- [`impl/CLAUDE.md`](../../impl/CLAUDE.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md)

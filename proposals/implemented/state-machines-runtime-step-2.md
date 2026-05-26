@@ -318,15 +318,15 @@ Step 2 does not yet ship a supervisor protocol that *responds* to failures — t
 | `verifier/src/main/kotlin/org/strand/verifier/VerifyError.kt` | Add the new error variants (`InternalStreamNoProducer`, `InternalStreamMultipleProducers`, `InternalStreamNoConsumer`, `MalformedMachineGroup`, `StateMachineMissingImplicitEffect`); remove `StateMachineInputStreamCountUnsupported` | Small |
 | `interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt` | Register `StateMachine.Send` and `StateMachine.Receive` as well-known EffectCategory bindings (no foreign-target impls — these are runtime-internal effects, not user-callable builtins) | Small |
 | `cli/src/main/kotlin/org/strand/cli/Main.kt` | Add `strand group <file.json> --events <events.json>` subcommand for driving a MachineGroup. Single-machine `strand machine` continues to use step 1's `runMachine`. | Small-Medium |
-| `corpus/src/main/resources/corpus/46-async-ping-pong.json` | Two-machine ping/pong (test 1) | Small |
-| `corpus/src/main/resources/corpus/47-async-multi-input-merge.json` | Multi-input-stream machine with tagged Event sum (test 2) | Small |
-| `corpus/src/main/resources/corpus/48-async-supervisor-one-for-one.json` | Supervisor capstone (test 7) | Medium |
-| `corpus/src/main/resources/corpus/49-async-tagged-output-list.json` | Multi-output emit-list example (test 8) | Small |
-| `corpus/src/main/resources/corpus/46..49-...events.json` | Per-program event lists | Small per program |
-| `corpus/src/main/resources/corpus/README.md` | Per-program descriptions for 46–49 | Small |
+| `corpus/46-async-ping-pong.json` | Two-machine ping/pong (test 1) | Small |
+| `corpus/47-async-multi-input-merge.json` | Multi-input-stream machine with tagged Event sum (test 2) | Small |
+| `corpus/48-async-supervisor-one-for-one.json` | Supervisor capstone (test 7) | Medium |
+| `corpus/49-async-tagged-output-list.json` | Multi-output emit-list example (test 8) | Small |
+| `corpus/46..49-...events.json` | Per-program event lists | Small per program |
+| `corpus/README.md` | Per-program descriptions for 46–49 | Small |
 | `corpus/src/test/kotlin/org/strand/corpus/AsyncCorpusTest.kt` | NEW — registers async corpus programs, runs them through MachineGroup, asserts on emitted events from external outputs, tests replay determinism via recorder | Medium |
 | `runtime/src/test/kotlin/org/strand/runtime/MachineGroupTest.kt` | NEW — unit tests for the topology builder, wiring validation, failure isolation, cancellation propagation | Medium |
-| `impl/CLAUDE.md` | Update Layer 6 step 2 status; document the MachineGroup API surface, the tagged-Event convention, the recorder mechanism, the deferred items | Small |
+| `impl-kotlin/CLAUDE.md` | Update Layer 6 step 2 status; document the MachineGroup API surface, the tagged-Event convention, the recorder mechanism, the deferred items | Small |
 
 **Order of work.**
 
@@ -352,4 +352,4 @@ Step 2 does not yet ship a supervisor protocol that *responds* to failures — t
 **Incoming references:**
 - [`open-questions.md`](../../open-questions.md) — Q-033 points at this proposal
 - [`proposals/README.md`](../README.md)
-- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — Known gaps section
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section

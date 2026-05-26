@@ -45,7 +45,7 @@ JsonValue = μ JV.
 
 Inside the inner `μ AL`, `tail` must reference `AL` (the list) and `head` must reference `JV` (JsonValue). But Strand's `RecursiveSelf` (N-042) is defined to always resolve to the **innermost** enclosing `RecursiveType` binder (per `Verifier.resolveType` and `Verifier.kt`'s comment "depth 0 is the canonical representation"). There is no way to write a `RecursiveSelf` that refers to the outer binder while inside an inner binder.
 
-The implementation note in `impl/CLAUDE.md` acknowledges this: "Mutual recursion between types. Currently encodable via single-product `RecursiveType` + projection (the textbook lowering); higher-arity recursive binders are a possible future extension if a corpus program needs more direct encoding." JSON is the corpus program that motivates the extension — but extending RecursiveSelf to support multi-binder positional references is a substantive design change that should be its own proposal, not bundled into the first blessed library.
+The implementation note in `impl-kotlin/CLAUDE.md` acknowledges this: "Mutual recursion between types. Currently encodable via single-product `RecursiveType` + projection (the textbook lowering); higher-arity recursive binders are a possible future extension if a corpus program needs more direct encoding." JSON is the corpus program that motivates the extension — but extending RecursiveSelf to support multi-binder positional references is a substantive design change that should be its own proposal, not bundled into the first blessed library.
 
 Three workarounds were considered and rejected:
 
@@ -57,7 +57,7 @@ The third option ships. The first two options are noted as design directions for
 
 ## 4. Implementation note
 
-The work is purely additive — no existing test breaks. Three new builtins (`Bool.And`, `Bool.Or`, `String.Eq`) in `interpreter/Builtins.kt`. Three new corpus programs (54, 55, 56) in `corpus/src/main/resources/corpus/`. Three new entries in `CorpusSchemaTest.kt`'s case list. README updates in the corpus and in `impl/CLAUDE.md`. All 303 pre-existing tests continue to pass alongside the 3 new ones.
+The work is purely additive — no existing test breaks. Three new builtins (`Bool.And`, `Bool.Or`, `String.Eq`) in `interpreter/Builtins.kt`. Three new corpus programs (54, 55, 56) in `corpus/`. Three new entries in `CorpusSchemaTest.kt`'s case list. README updates in the corpus and in `impl-kotlin/CLAUDE.md`. All 303 pre-existing tests continue to pass alongside the 3 new ones.
 
 The `unique_keys` invariant body is the most substantial single piece of Strand code in the seed corpus — it composes `Fixpoint`, `Match`, `ConstructorPattern`, `VariablePattern`, `ProductFieldGet`, four boolean/string builtins, and a nested `Fixpoint` helper. It is the existence proof that the Q-035 mechanism handles structural invariants on recursive types over non-trivial value structures, not just numeric bounds on primitives.
 
@@ -75,13 +75,13 @@ The `unique_keys` invariant body is the most substantial single piece of Strand 
 
 | File | Change | Size |
 |------|--------|------|
-| `impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt` | Add `Bool.And`, `Bool.Or`, `String.Eq` foreign callables | Small |
-| `impl/corpus/src/main/resources/corpus/54-json-value-primitives.json` | NEW — JsonValue schema demonstration | Small |
-| `impl/corpus/src/main/resources/corpus/55-json-object-unique-keys.json` | NEW — UniqueKeyJsonObject with 3 distinct keys; passes | Medium (large because the invariant body is a non-trivial `Fixpoint` + nested `Fixpoint` over recursive list) |
-| `impl/corpus/src/main/resources/corpus/56-json-object-duplicate-keys-fail.json` | NEW — UniqueKeyJsonObject with 2 duplicate keys; rejected | Medium |
-| `impl/corpus/src/test/kotlin/org/strand/corpus/CorpusSchemaTest.kt` | EXTEND — add 3 cases to the case list | Small |
-| `impl/corpus/src/main/resources/corpus/README.md` | EXTEND — describe 54, 55, 56 | Small |
-| `impl/CLAUDE.md` | EXTEND — Layer 7 step 1.5 status entry | Small |
+| `impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt` | Add `Bool.And`, `Bool.Or`, `String.Eq` foreign callables | Small |
+| `corpus/54-json-value-primitives.json` | NEW — JsonValue schema demonstration | Small |
+| `corpus/55-json-object-unique-keys.json` | NEW — UniqueKeyJsonObject with 3 distinct keys; passes | Medium (large because the invariant body is a non-trivial `Fixpoint` + nested `Fixpoint` over recursive list) |
+| `corpus/56-json-object-duplicate-keys-fail.json` | NEW — UniqueKeyJsonObject with 2 duplicate keys; rejected | Medium |
+| `impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/CorpusSchemaTest.kt` | EXTEND — add 3 cases to the case list | Small |
+| `corpus/README.md` | EXTEND — describe 54, 55, 56 | Small |
+| `impl-kotlin/CLAUDE.md` | EXTEND — Layer 7 step 1.5 status entry | Small |
 | `open-questions.md` | EXTEND — Q-026 noting JSON has shipped | Small |
 | `proposals/README.md` | EXTEND — add this proposal to implemented table | Trivial |
 | `proposals/implemented/json-blessed-library.md` | THIS DOCUMENT | Small |
@@ -94,9 +94,9 @@ The `unique_keys` invariant body is the most substantial single piece of Strand 
 - [`design/rendering-and-views.md`](../../design/rendering-and-views.md) — § Blessed library set names JsonValue as one of the six
 - [`design/node-algebra.md`](../../design/node-algebra.md) — N-041 RecursiveType / N-042 RecursiveSelf semantics that constrain the design
 - [`open-questions.md`](../../open-questions.md) — Q-026 (blessed library set), Q-035 (schema mechanism)
-- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — Layer 7 step 1.5 status
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Layer 7 step 1.5 status
 
 **Incoming references:**
 - [`open-questions.md`](../../open-questions.md) — Q-026 points at this proposal as the JSON implementation
 - [`proposals/README.md`](../README.md)
-- [`impl/CLAUDE.md`](../../impl/CLAUDE.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md)

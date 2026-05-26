@@ -1,6 +1,6 @@
 # Strand convention checks
 
-Conventions to enforce while adding a node category. These are settled per `CLAUDE.md` (root) and `impl/CLAUDE.md`. Don't relitigate without asking.
+Conventions to enforce while adding a node category. These are settled per `CLAUDE.md` (root) and `impl-kotlin/CLAUDE.md`. Don't relitigate without asking.
 
 ## Voice and formatting (design docs)
 

@@ -149,7 +149,7 @@ The investigation is expected to surface implications for at least: capability-c
 ## References
 
 **Outgoing references:**
-- [`impl/CLAUDE.md`](../impl/CLAUDE.md) — current builtin inventory and the `strand-add-builtin` skill workflow
+- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — current builtin inventory and the `strand-add-builtin` skill workflow
 - [`proposals/implemented/stdlib-expansion-round-2.md`](implemented/stdlib-expansion-round-2.md) — prior round template
 - [`proposals/implemented/layer-4-step-2-real-io.md`](implemented/layer-4-step-2-real-io.md) — real-IO builtin work
 

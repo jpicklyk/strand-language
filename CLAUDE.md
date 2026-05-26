@@ -2,13 +2,13 @@
 
 Strand is a research project to design and build a programming language for AI agents to **generate**, not for humans to author. Programs are content-addressed graphs of typed nodes with mandatory effect declarations. There is no concrete syntax. There is no human-readable projection layer.
 
-The design corpus (Wave 1–3) is substantially complete. Active work is the Kotlin/JVM reference implementation under `impl/`. Milestone 2.1, Layer 1 (pure-computation core, N-001..N-019) is the current slice.
+The design corpus (Wave 1–3) is substantially complete. Active work is the Kotlin/JVM reference implementation under `impl-kotlin/`. Milestone 2.1, Layer 1 (pure-computation core, N-001..N-019) is the current slice.
 
 ## Read these before doing anything substantive
 
 - [`INDEX.md`](INDEX.md) — document tree, concept index, and the **authoritative identifier registry** (ADR-NNN, N-NNN, E-NNN, Q-NNN). Read INDEX before assuming what exists.
-- [`impl/README.md`](impl/README.md) — implementation state, layer scope, module layout.
-- [`impl/CLAUDE.md`](impl/CLAUDE.md) — implementation-side conventions, loaded when working inside `impl/`.
+- [`impl-kotlin/README.md`](impl-kotlin/README.md) — implementation state, layer scope, module layout.
+- [`impl-kotlin/CLAUDE.md`](impl-kotlin/CLAUDE.md) — implementation-side conventions, loaded when working inside `impl-kotlin/`.
 - [`proposals/README.md`](proposals/README.md) — draft design proposals for unimplemented features (Q-030, Q-031, Q-032). The next session can advance any of them by reading the corresponding document, confirming with Jeff, and executing.
 
 For specific work, also read the documents most relevant to it. ADR-001 through ADR-004 and `design/node-algebra.md` are load-bearing for any verifier/interpreter work.
@@ -25,13 +25,13 @@ These are settled. Do not relitigate without asking.
 - **`INDEX.md` is updated in the same pass** that adds a document or assigns an identifier.
 - **No emoji. No headers ending in punctuation. No bullets where prose works.** The corpus reads like a research paper.
 
-These conventions apply to documents in the design corpus (root, `decisions/`, `design/`). They do **not** apply to implementation code under `impl/`, which follows standard Kotlin idioms.
+These conventions apply to documents in the design corpus (root, `decisions/`, `design/`). They do **not** apply to implementation code under `impl-kotlin/`, which follows standard Kotlin idioms.
 
 ## Locked implementation decisions
 
 - **Kotlin/JVM for the Milestone 2.1 prototype.** Iteration-speed choice over the research plan's Rust suggestion. Rust is still expected at Milestone 2.3 (bytecode VM); that rewrite is anticipated, not regretted.
 - **JSON for authoring and on-wire; canonical CBOR for the content hash.** IPLD dag-json ↔ dag-cbor pattern. BLAKE3 over canonical CBOR per ADR-003. Children appear by hash, not inlined (Merkle DAG).
-- **Implementation lives under `impl/`.** Design corpus at the root is untouched by implementation work.
+- **Implementation lives under `impl-kotlin/`.** Design corpus at the root is untouched by implementation work.
 
 ## How to work with Jeff
 

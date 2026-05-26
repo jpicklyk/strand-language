@@ -42,7 +42,7 @@ These are the concrete consequences of the representational choices above. Each 
 
 The design corpus is substantially complete: nine architectural decision records (ADR-001 through ADR-009) and seven design specifications covering node algebra, effects and capabilities, state machines, encryption, security, distribution, and rendering. The full document tree and identifier registry are in [`INDEX.md`](INDEX.md).
 
-The reference implementation lives under [`impl/`](impl/). It runs on the JVM as bytecode; a Rust port of the bytecode VM is planned for Milestone 2.3 per [`ADR-008`](decisions/ADR-008-compilation-target.md) and will not change the source-level language. Currently shipped:
+The reference implementation lives under [`impl-kotlin/`](impl-kotlin/). It runs on the JVM as bytecode; a Rust port of the bytecode VM is planned for Milestone 2.3 per [`ADR-008`](decisions/ADR-008-compilation-target.md) and will not change the source-level language. Currently shipped:
 
 | Layer | Scope | Status |
 |-------|-------|--------|
@@ -54,7 +54,7 @@ The reference implementation lives under [`impl/`](impl/). It runs on the JVM as
 | 6 | State machines — sync trace runtime, async multi-machine actors, backpressure, supervision, snapshots, broadcast streams | Complete |
 | 7 | Schema with verifier-checkable invariants; JSON (flat + nested-array/object), plain-text, and Markdown blessed libraries | Step 1 |
 
-A bytecode VM under [`impl/bytecode/`](impl/bytecode/) and [`impl/vm/`](impl/vm/) achieves interpreter-equivalence on 57 of 58 corpus programs. A four-layer LLM authoring stack under [`impl/authoring/`](impl/authoring/) — compact text projection, grammar-constrained decoding, bidirectional elaboration with eleven inference cases, and the canonical verifier — closes the gap between agent-friendly emission and the on-disk graph form. The implicit-prelude reserves 76 short names for primitive types, common builtins, and effect categories so agent emissions skip 2-3 nodes per stdlib reference.
+A bytecode VM under [`impl-kotlin/bytecode/`](impl-kotlin/bytecode/) and [`impl-kotlin/vm/`](impl-kotlin/vm/) achieves interpreter-equivalence on 57 of 58 corpus programs. A four-layer LLM authoring stack under [`impl-kotlin/authoring/`](impl-kotlin/authoring/) — compact text projection, grammar-constrained decoding, bidirectional elaboration with eleven inference cases, and the canonical verifier — closes the gap between agent-friendly emission and the on-disk graph form. The implicit-prelude reserves 76 short names for primitive types, common builtins, and effect categories so agent emissions skip 2-3 nodes per stdlib reference.
 
 The evaluation framework under [`evaluation/`](evaluation/) measures both static and dynamic cost as ratios against the same programs written in Python with type hints. Current results:
 
@@ -93,7 +93,7 @@ For an overview of the design:
 
 For the implementation:
 
-1. [`impl/README.md`](impl/README.md) — module layout, layer scope, JSON schema
+1. [`impl-kotlin/README.md`](impl-kotlin/README.md) — module layout, layer scope, JSON schema
 2. [`design/node-algebra.md`](design/node-algebra.md) — node types and well-formedness rules the verifier implements
 3. [`design/effects-and-capabilities.md`](design/effects-and-capabilities.md) — the effect system specification
 
@@ -113,14 +113,14 @@ The corpus is organized into six areas, from most general to most specific:
 | Decisions | `decisions/ADR-*.md` | Atomic architectural decisions with rationale |
 | Design | `design/*.md` | Detailed specifications of major components |
 | Meta | `INDEX.md`, `open-questions.md`, `research-plan.md`, `proposals/` | Navigation, research state, draft proposals |
-| Implementation | `impl/` | Reference implementation (JVM bytecode) |
+| Implementation | `impl-kotlin/` | Reference implementation (JVM bytecode) |
 | Evaluation | `evaluation/` | Static-cost measurement framework |
 
 Design documents use several conventions to remain navigable. Stable identifiers never change once assigned (ADR-NNN, N-NNN, E-NNN, Q-NNN). Major sections carry explicit anchors (`{#anchor-name}`) for cross-document linking. Each document ends with a References section listing outgoing and incoming citations, maintained in both directions. The master index at [`INDEX.md`](INDEX.md) provides three views of the corpus: an alphabetical concept index, a document tree, and the identifier registry. Unresolved questions live in [`open-questions.md`](open-questions.md) with Q-NNN identifiers and are referenced by id from spec documents, rather than carried as inline caveats.
 
 ## Voice and authority
 
-Design documents are written in neutral specification voice — they describe the design as it currently stands, not the process by which it was reached. The design is provisional in the sense that implementation work continues to surface issues; revisions are recorded in each document's history. These conventions apply to documents in the design corpus (the root, `decisions/`, `design/`). They do not apply to implementation code under `impl/`, which follows the host language's idioms.
+Design documents are written in neutral specification voice — they describe the design as it currently stands, not the process by which it was reached. The design is provisional in the sense that implementation work continues to surface issues; revisions are recorded in each document's history. These conventions apply to documents in the design corpus (the root, `decisions/`, `design/`). They do not apply to implementation code under `impl-kotlin/`, which follows the host language's idioms.
 
 ## License
 

@@ -2,7 +2,7 @@
 
 Use these as starting points for each file touched in the three coordinated steps. Patterns are taken from how the round-2 stdlib (Math.*, Hash.*, Random.*, Bytes.FormatHex) and the round-1 IO surface (Fs.*, Net.*, Process.*, Http.Request) were added.
 
-## Step 3: `impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`
+## Step 3: `impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`
 
 ### Pure monomorphic (most common)
 
@@ -85,7 +85,7 @@ Registered in the **separate** `higherOrderRegistry` (not `registry`). The `appl
 
 ### Unit tests
 
-Put in `impl/interpreter/src/test/kotlin/org/strand/interpreter/Builtins{Topic}Test.kt`. Use `Builtins.lookup(name)!!` (or `Builtins.lookupHigherOrder(name)!!`) to fetch the registered function.
+Put in `impl-kotlin/interpreter/src/test/kotlin/org/strand/interpreter/Builtins{Topic}Test.kt`. Use `Builtins.lookup(name)!!` (or `Builtins.lookupHigherOrder(name)!!`) to fetch the registered function.
 
 ```kotlin
 class BuiltinsMathTest {
@@ -100,7 +100,7 @@ class BuiltinsMathTest {
 
 For higher-order builtins, construct the `ApplyFn` directly in Kotlin to isolate the traversal logic from interpreter dispatch — see `BuiltinsListHoTest`.
 
-## Step 4: `impl/authoring/src/main/kotlin/org/strand/authoring/LayerAGrammar.kt`
+## Step 4: `impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerAGrammar.kt`
 
 Add entries in `reservedNodes` (the `linkedMapOf` near the top of the file). Group with related entries.
 
@@ -149,7 +149,7 @@ If the effect category is already in the prelude (e.g., `cryptoFx`, `nowFx`, `wr
 
 ### Verification test
 
-Add a test in `impl/authoring/src/test/kotlin/org/strand/authoring/` (extend `Round2PreludeTest` or create a new focused class). Verifies that a Layer A program using the reserved name compiles to a JSON tree whose synthesized nodes have the right `target`, `foreignType`, and `effects` fields.
+Add a test in `impl-kotlin/authoring/src/test/kotlin/org/strand/authoring/` (extend `Round2PreludeTest` or create a new focused class). Verifies that a Layer A program using the reserved name compiles to a JSON tree whose synthesized nodes have the right `target`, `foreignType`, and `effects` fields.
 
 ```kotlin
 @Test

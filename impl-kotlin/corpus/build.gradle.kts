@@ -20,7 +20,19 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
 
+// The seed-corpus JSON + Layer A programs live at the repo's top-level `corpus/`
+// directory so they can be shared by future implementations (e.g. impl-rust).
+// `processResources` copies them under `corpus/` on the test classpath so the
+// existing `getResourceAsStream("/corpus/NN-...")` lookups keep working without
+// any change to the Kotlin test code.
+private val sharedCorpusDir = rootProject.projectDir.parentFile.resolve("corpus")
+
+tasks.processResources {
+    from(sharedCorpusDir) {
+        into("corpus")
+    }
+}
+
 tasks.test {
-    // Make seed corpus JSON files available to tests via the classpath.
-    inputs.dir("src/main/resources")
+    inputs.dir(sharedCorpusDir)
 }

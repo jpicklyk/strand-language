@@ -3,24 +3,24 @@
 **Document:** `proposals/implemented/layer-a-reverse-projection.md`
 **Status:** Implemented 2026-05-25 across five git commits per the proposal's §9 shipping order: Step 1 canonical-form translator + renderer ([`dc5c3e4`](https://example.invalid)), Step 1 round-trip coverage extended to all 64 corpus programs ([`aea52ed`](https://example.invalid)), Step 2 static SAFE elaboration omission for recursion-slot `paramType` ([`75accdd`](https://example.invalid)), Step 3 probe-and-fallback omission for the BORDERLINE inference cases ([`24c58b6`](https://example.invalid)), Step 4 density-sugar projection across all 10 slices ([`8fc6a56`](https://example.invalid) for Slice 1 implicit prelude, [`a4d84ab`](https://example.invalid) for Slices 2–5/8/10, [`df6d015`](https://example.invalid) for Slice 9 WHEN), and Step 5 the `strand translate` CLI subcommand ([`4f015d4`](https://example.invalid)).
 **Date:** 2026-05-25
-**Concerns:** [`proposals/implemented/llm-authoring-layer.md`](llm-authoring-layer.md), [`proposals/implemented/layer-a-density.md`](layer-a-density.md), [`impl/authoring/`](../../impl/authoring/), [Q-021](../../open-questions.md#Q-021), [Q-034](../../open-questions.md#Q-034), [Q-036](../../open-questions.md#Q-036), [`decisions/ADR-001-graph-not-text.md`](../../decisions/ADR-001-graph-not-text.md), [`decisions/ADR-002-no-human-projection.md`](../../decisions/ADR-002-no-human-projection.md), [`decisions/ADR-003-content-addressing.md`](../../decisions/ADR-003-content-addressing.md)
+**Concerns:** [`proposals/implemented/llm-authoring-layer.md`](llm-authoring-layer.md), [`proposals/implemented/layer-a-density.md`](layer-a-density.md), [`impl-kotlin/authoring/`](../../impl-kotlin/authoring/), [Q-021](../../open-questions.md#Q-021), [Q-034](../../open-questions.md#Q-034), [Q-036](../../open-questions.md#Q-036), [`decisions/ADR-001-graph-not-text.md`](../../decisions/ADR-001-graph-not-text.md), [`decisions/ADR-002-no-human-projection.md`](../../decisions/ADR-002-no-human-projection.md), [`decisions/ADR-003-content-addressing.md`](../../decisions/ADR-003-content-addressing.md)
 **Scope:** Medium
 
 > **Implementation note (2026-05-25).** The full proposal shipped in one
 > extended session across the five commits noted above. The reverse-
-> projection surface ships as three pieces in `impl/authoring/`:
-> [`LayerATranslator`](../../impl/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt)
+> projection surface ships as three pieces in `impl-kotlin/authoring/`:
+> [`LayerATranslator`](../../impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt)
 > (1,340 lines — canonical dag-json walk + omission passes + density-sugar
 > projection in a single object with one private method per sugar),
-> [`LayerARenderer`](../../impl/authoring/src/main/kotlin/org/strand/authoring/LayerARenderer.kt)
+> [`LayerARenderer`](../../impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerARenderer.kt)
 > (77 lines — straight `LayerADocument` → text formatting), and the
 > `Authoring.projectFromDagJson(canonical: String): String` public entry
 > point. The `strand translate <file.json>` CLI subcommand
-> ([`Main.kt:102,484-509`](../../impl/cli/src/main/kotlin/org/strand/cli/Main.kt))
+> ([`Main.kt:102,484-509`](../../impl-kotlin/cli/src/main/kotlin/org/strand/cli/Main.kt))
 > reads canonical dag-json from disk and writes Layer A text to stdout.
 >
 > Correctness is asserted by
-> [`LayerAReverseRoundTripTest`](../../impl/corpus/src/test/kotlin/org/strand/corpus/LayerAReverseRoundTripTest.kt):
+> [`LayerAReverseRoundTripTest`](../../impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/LayerAReverseRoundTripTest.kt):
 > for each of **64 canonical corpus programs**, project to text,
 > recompile through the forward pipeline, assert root-hash equality.
 > All 64 pass — `forward_compile(render(translate(canonical))) == canonical`
@@ -31,7 +31,7 @@
 > *(1) The separate `ElaborationOmission.kt` module the plan sketched
 > doesn't exist as its own file.* The SAFE-omission, probe-and-fallback,
 > and per-sugar passes are private methods on
-> [`LayerATranslator`](../../impl/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt)
+> [`LayerATranslator`](../../impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt)
 > (`omitSafelyInferableFields`, `probeAndOmit`, then `applyImplicitPrelude`
 > → `applyIfSugar` → `applyCompactLam` → `applyInlineSubstitutions` →
 > `applyInlinePfv` → `applyWhenSugar` → `applyNestedExpressions`). Folding
@@ -236,7 +236,7 @@ Not applicable — the projection is build-time, not runtime.
 
 ## 7. Test scenarios
 
-1. **Round-trip every canonical corpus program.** For each `*.json` under `impl/corpus/src/main/resources/corpus/`, project to Layer A text, forward-compile the text, assert canonical hash equality. This is the primary correctness gate.
+1. **Round-trip every canonical corpus program.** For each `*.json` under `corpus/`, project to Layer A text, forward-compile the text, assert canonical hash equality. This is the primary correctness gate.
 
 2. **Round-trip every density-v4 fixture.** For each `*.layer-a` under `density-v4/`, forward-compile to canonical, project back, assert text equality. The density-v4 fixtures are the hand-tuned LLM-emission targets; the projection must reproduce them exactly.
 
@@ -270,14 +270,14 @@ Not applicable — the projection is build-time, not runtime.
 
 | File | Change | Size |
 |------|--------|------|
-| `impl/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt` | NEW — canonical dag-json → `LayerADocument` with density-sugar projection in bottom-up walk. Visit order, sugar dispatch, reference-count map, `nodeTypes` plumbing for Slice 9 WHEN. | Medium-Large (~500 lines) |
-| `impl/authoring/src/main/kotlin/org/strand/authoring/LayerARenderer.kt` | NEW — `LayerADocument` → Layer A text. Deterministic line ordering, density-v4 grammar tokens, nested-expression line layout. | Medium (~250 lines) |
-| `impl/authoring/src/main/kotlin/org/strand/authoring/ElaborationOmission.kt` | NEW — static SAFE/UNSAFE classification table for the 11 cases plus the probe-and-fallback loop driver. | Small-Medium (~150 lines) |
-| `impl/authoring/src/main/kotlin/org/strand/authoring/Authoring.kt` | EXTEND — add public entry `Authoring.projectFromDagJson(canonical: String, nodeTypes: Map<NodeId, TypeExpr>? = null): String` that orchestrates translator + renderer + omission probe. | Small (~50 lines added) |
-| `impl/authoring/src/test/kotlin/org/strand/authoring/LayerATranslatorTest.kt` | NEW — unit tests for each density sugar's projection rule (10 sugars × ~3 cases each) plus elaboration-omission unit tests (11 cases × probe/safe/unsafe variants). | Medium (~400 lines) |
-| `impl/corpus/src/test/kotlin/org/strand/corpus/LayerAReverseRoundTripTest.kt` | NEW — for every canonical corpus program: project to text, forward-compile, assert canonical hash equality. This is the primary regression net. | Small (~80 lines) |
-| `impl/cli/src/main/kotlin/org/strand/cli/Main.kt` | EXTEND — add `strand translate <file.json>` subcommand. Reads JSON, runs verifier to get `nodeTypes`, projects, prints text. | Small (~40 lines added) |
-| `impl/CLAUDE.md` | EXTEND — add entry under "Known gaps and design questions" pointing at this proposal. Update authoring-module description. | Trivial |
+| `impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerATranslator.kt` | NEW — canonical dag-json → `LayerADocument` with density-sugar projection in bottom-up walk. Visit order, sugar dispatch, reference-count map, `nodeTypes` plumbing for Slice 9 WHEN. | Medium-Large (~500 lines) |
+| `impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerARenderer.kt` | NEW — `LayerADocument` → Layer A text. Deterministic line ordering, density-v4 grammar tokens, nested-expression line layout. | Medium (~250 lines) |
+| `impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/ElaborationOmission.kt` | NEW — static SAFE/UNSAFE classification table for the 11 cases plus the probe-and-fallback loop driver. | Small-Medium (~150 lines) |
+| `impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/Authoring.kt` | EXTEND — add public entry `Authoring.projectFromDagJson(canonical: String, nodeTypes: Map<NodeId, TypeExpr>? = null): String` that orchestrates translator + renderer + omission probe. | Small (~50 lines added) |
+| `impl-kotlin/authoring/src/test/kotlin/org/strand/authoring/LayerATranslatorTest.kt` | NEW — unit tests for each density sugar's projection rule (10 sugars × ~3 cases each) plus elaboration-omission unit tests (11 cases × probe/safe/unsafe variants). | Medium (~400 lines) |
+| `impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/LayerAReverseRoundTripTest.kt` | NEW — for every canonical corpus program: project to text, forward-compile, assert canonical hash equality. This is the primary regression net. | Small (~80 lines) |
+| `impl-kotlin/cli/src/main/kotlin/org/strand/cli/Main.kt` | EXTEND — add `strand translate <file.json>` subcommand. Reads JSON, runs verifier to get `nodeTypes`, projects, prints text. | Small (~40 lines added) |
+| `impl-kotlin/CLAUDE.md` | EXTEND — add entry under "Known gaps and design questions" pointing at this proposal. Update authoring-module description. | Trivial |
 | `proposals/README.md` | EXTEND — add this proposal to the Current proposals table. | Trivial |
 | `open-questions.md` | EXTEND — register Q-036, status `Proposed`, resolution summary points at this document. | Trivial |
 | `INDEX.md` | EXTEND — identifier-registry blurb updated to "Q-001 through Q-036". Last-revised line. | Trivial |
@@ -308,11 +308,11 @@ Not applicable — the projection is build-time, not runtime.
 - [`decisions/ADR-001-graph-not-text.md`](../../decisions/ADR-001-graph-not-text.md) — graph remains the source; Layer A is a tool-layer affordance, not a parallel source language
 - [`decisions/ADR-002-no-human-projection.md`](../../decisions/ADR-002-no-human-projection.md) — preserved: Layer A is for LLM emission and consumption, not for human authoring; the proposal does not introduce a human-readable projection layer
 - [`decisions/ADR-003-content-addressing.md`](../../decisions/ADR-003-content-addressing.md) — canonical CBOR encoding and BLAKE3 hashing are unchanged; round-trip correctness is asserted by hash equality
-- [`impl/authoring/`](../../impl/authoring/) — the module the new code lives in
+- [`impl-kotlin/authoring/`](../../impl-kotlin/authoring/) — the module the new code lives in
 - [`open-questions.md`](../../open-questions.md) — Q-021, Q-034, Q-036
-- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — implementation orientation for the next session
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — implementation orientation for the next session
 
 **Incoming references:**
 - [`open-questions.md`](../../open-questions.md) — Q-036 points at this proposal
 - [`proposals/README.md`](../README.md)
-- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — Known gaps section will reference this proposal
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section will reference this proposal

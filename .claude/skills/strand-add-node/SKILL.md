@@ -15,7 +15,7 @@ Three things make a new node category genuinely tricky to add right:
 
 2. **Conventions need to hold across many files at once.** Neutral spec voice in design docs, exhaustive `when` (never `else`), structured-data errors (never strings), positional encoding for any new binder, "Last revised" lines updated. Easy to forget any one of these without an explicit checklist.
 
-3. **Cross-document updates have to stay in sync.** Adding N-NNN means updating `design/node-algebra.md`, `INDEX.md`, possibly `open-questions.md`, possibly `proposals/`, then `impl/CLAUDE.md`. Missing one leaves the corpus inconsistent for future sessions.
+3. **Cross-document updates have to stay in sync.** Adding N-NNN means updating `design/node-algebra.md`, `INDEX.md`, possibly `open-questions.md`, possibly `proposals/`, then `impl-kotlin/CLAUDE.md`. Missing one leaves the corpus inconsistent for future sessions.
 
 ## When to use this skill vs other approaches
 
@@ -32,7 +32,7 @@ Three things make a new node category genuinely tricky to add right:
 5. Implement across the six Kotlin modules (in dependency order, compiling as you go)
 6. Add corpus programs paired with natural-language descriptions
 7. Add unit tests (verifier + interpreter, error paths and happy paths)
-8. Update `impl/CLAUDE.md` to reflect the new layer/feature status
+8. Update `impl-kotlin/CLAUDE.md` to reflect the new layer/feature status
 9. Final clean test run; report the new test count
 
 Each step is detailed below. The reference files in `references/` give per-file change templates and convention checks — load them as you reach the relevant step.
@@ -42,7 +42,7 @@ Each step is detailed below. The reference files in `references/` give per-file 
 Read these in order, even if you've read them before — Strand has strong conventions and they're easy to slip on:
 
 - `CLAUDE.md` (root) — project framing, non-negotiable conventions, how to work with Jeff
-- `impl/CLAUDE.md` — implementation state, layer scope, "Known gaps" section, "Building and testing" section
+- `impl-kotlin/CLAUDE.md` — implementation state, layer scope, "Known gaps" section, "Building and testing" section
 - `INDEX.md` § Identifier registry — find the next free N-NNN
 
 If implementing against a proposal:
@@ -112,29 +112,29 @@ If you skip compile checkpoints, the sealed `Node` hierarchy will produce non-ex
 
 The dependency order:
 
-1. **`impl/core/src/main/kotlin/org/strand/core/Node.kt`** — add the data class (or `object` if the node has no content fields, like `UnitLit` or `RecursiveSelf`) to the sealed `Node` hierarchy. Document with KDoc that explains: what the node represents, what its content fields mean, what its edges point at, and any semantic constraints the verifier will enforce.
+1. **`impl-kotlin/core/src/main/kotlin/org/strand/core/Node.kt`** — add the data class (or `object` if the node has no content fields, like `UnitLit` or `RecursiveSelf`) to the sealed `Node` hierarchy. Document with KDoc that explains: what the node represents, what its content fields mean, what its edges point at, and any semantic constraints the verifier will enforce.
 
-2. **`impl/core/src/main/kotlin/org/strand/core/Json.kt`** — add an ingest case in `buildNode`'s `when (type)` block. Use `obj.requireRef(...)` for required edges, `obj.optionalRef(...)` for optional edges, `obj.requireRefList(...)` for required edge lists, `obj.requireString(...)` for required string content fields. Update the "Unknown node type" rejection message's identifier range. If the new node is user-visible, extend the schema doc comment at the top of the file.
+2. **`impl-kotlin/core/src/main/kotlin/org/strand/core/Json.kt`** — add an ingest case in `buildNode`'s `when (type)` block. Use `obj.requireRef(...)` for required edges, `obj.optionalRef(...)` for optional edges, `obj.requireRefList(...)` for required edge lists, `obj.requireString(...)` for required string content fields. Update the "Unknown node type" rejection message's identifier range. If the new node is user-visible, extend the schema doc comment at the top of the file.
 
-3. **`impl/hashing/src/main/kotlin/org/strand/hashing/CategoryTag.kt`** — add `val NodeName = CategoryTag(NNN)` matching the N-NNN. Group it with related tags.
+3. **`impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/CategoryTag.kt`** — add `val NodeName = CategoryTag(NNN)` matching the N-NNN. Group it with related tags.
 
-4. **`impl/hashing/src/main/kotlin/org/strand/hashing/CanonicalEncoder.kt`** — add a dispatch case in `encodeDispatch` and write an `encodeNodeName(node, stack)` helper. **Critical encoding decisions:**
+4. **`impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/CanonicalEncoder.kt`** — add a dispatch case in `encodeDispatch` and write an `encodeNodeName(node, stack)` helper. **Critical encoding decisions:**
    - If the new node introduces a binder (extends the de Bruijn stack — like Lambda, Let, TypeAbstraction, ForallType, RecursiveType), the body is encoded in the extended stack and the new binders are pushed before encoding.
    - If the new node *references* a binder positionally (like VarRef, RecursiveSelf, bound TypeParameter), it emits `(depth, index)` rather than a hash reference.
    - Set-like edges (effect lists, capability lists) are sorted by hash bytes before encoding so declaration order doesn't affect identity.
    - List-like ordered edges (Application.arguments, Match.cases) are encoded in declaration order — order is structural.
    - For structural identifiers (field names, case names), include the UTF-8 bytes inline.
 
-5. **`impl/hashing/src/main/kotlin/org/strand/hashing/Hasher.kt`** — extend the `walk` function. Most nodes go in the main `when` block, recursing into children with the appropriate stack push. Nodes that are **bound** (have no standalone hash because they're intrinsic to their parent — ParameterDecl, TypeParameter, RecursiveSelf) get added to the early-return list at the top of `walk`.
+5. **`impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/Hasher.kt`** — extend the `walk` function. Most nodes go in the main `when` block, recursing into children with the appropriate stack push. Nodes that are **bound** (have no standalone hash because they're intrinsic to their parent — ParameterDecl, TypeParameter, RecursiveSelf) get added to the early-return list at the top of `walk`.
 
-6. **`impl/verifier/src/main/kotlin/org/strand/verifier/Verifier.kt`** — depends on whether the node is an expression, a type, or structural:
+6. **`impl-kotlin/verifier/src/main/kotlin/org/strand/verifier/Verifier.kt`** — depends on whether the node is an expression, a type, or structural:
    - **Expression nodes** (Match, Fixpoint, SumValue, ProductValue, ProductFieldGet, etc.): add a dispatch case in `infer` and write an `inferNodeName(id, node, scope, typeParams)` helper. The helper returns the node's `TypeExpr`, records the closure via `recordClosure(id, ...)`, and reports any errors.
    - **Type nodes** (PrimitiveType, FunctionType, ProductType, SumType, ForallType, RecursiveType): extend `resolveType` instead.
    - **Structural pieces** (MatchCase, Pattern, ProductFieldValue, EffectDecl in expression position): add to the catch-all "<expression position>" branch that rejects with `CategoryMismatch`. The node is still valid graph-wise; it's just not an expression on its own.
 
-7. **`impl/verifier/src/main/kotlin/org/strand/verifier/VerifyError.kt`** — add new sealed-class data variants for each new error condition. Update the `categoryName` function with the new node category. Errors are typed data, never strings.
+7. **`impl-kotlin/verifier/src/main/kotlin/org/strand/verifier/VerifyError.kt`** — add new sealed-class data variants for each new error condition. Update the `categoryName` function with the new node category. Errors are typed data, never strings.
 
-8. **`impl/interpreter/src/main/kotlin/org/strand/interpreter/Interpreter.kt`** — depends on whether the node is value-producing or structural:
+8. **`impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Interpreter.kt`** — depends on whether the node is value-producing or structural:
    - **Value-producing expressions**: add an `eval` case and any helper functions. If the node is callable (like Lambda, ForeignNode, Fixpoint), add a new `Value.NodeNameFn` to `Value.kt` and a dispatch in `applyCall`.
    - **Structural pieces** (Pattern, MatchCase, ProductFieldValue, type nodes): add to the catch-all that throws `InterpretError.NotCallable`.
    - New runtime errors go in `InterpretError.kt` as sealed-class variants.
@@ -143,9 +143,9 @@ See `references/file-touchpoints.md` for a detailed change template per file, in
 
 ## Step 6: Add corpus programs
 
-Add 2-3 JSON corpus programs in `impl/corpus/src/main/resources/corpus/` demonstrating the new feature. Number them sequentially after the highest current corpus program.
+Add 2-3 JSON corpus programs in `corpus/` demonstrating the new feature. Number them sequentially after the highest current corpus program.
 
-**Each program MUST be paired with a one-paragraph natural-language description in `impl/corpus/src/main/resources/corpus/README.md`**. This is the Phase 1 Stage 1.1 seed-corpus bootstrap — every JSON program is also a candidate seed-corpus entry. The description explains what the program does and what feature it exercises.
+**Each program MUST be paired with a one-paragraph natural-language description in `corpus/README.md`**. This is the Phase 1 Stage 1.1 seed-corpus bootstrap — every JSON program is also a candidate seed-corpus entry. The description explains what the program does and what feature it exercises.
 
 Patterns for choosing programs:
 - A minimum example demonstrating the happy path
@@ -155,18 +155,18 @@ Patterns for choosing programs:
 ## Step 7: Register corpus and write unit tests
 
 1. **Register** the new corpus programs in:
-   - `impl/corpus/src/test/kotlin/org/strand/corpus/CorpusTest.kt` (verify+run cases with expected `Value` results)
-   - `impl/corpus/src/test/kotlin/org/strand/corpus/CorpusHashingTest.kt` (hash-determinism tests)
+   - `impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/CorpusTest.kt` (verify+run cases with expected `Value` results)
+   - `impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/CorpusHashingTest.kt` (hash-determinism tests)
 
-2. **Verifier unit tests** in `impl/verifier/src/test/kotlin/org/strand/verifier/VerifierTest.kt`:
+2. **Verifier unit tests** in `impl-kotlin/verifier/src/test/kotlin/org/strand/verifier/VerifierTest.kt`:
    - One happy-path test for each new node showing it type-checks correctly
    - One test per new `VerifyError` variant exercising the rejection condition
 
-3. **Interpreter unit tests** in `impl/interpreter/src/test/kotlin/org/strand/interpreter/InterpreterTest.kt`:
+3. **Interpreter unit tests** in `impl-kotlin/interpreter/src/test/kotlin/org/strand/interpreter/InterpreterTest.kt`:
    - One test per evaluation semantics
    - One test per new `InterpretError` variant if applicable
 
-## Step 8: Update `impl/CLAUDE.md`
+## Step 8: Update `impl-kotlin/CLAUDE.md`
 
 Touch these sections as appropriate:
 

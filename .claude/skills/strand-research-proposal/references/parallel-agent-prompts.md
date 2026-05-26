@@ -71,7 +71,7 @@ Produce a markdown design proposal (~1500–2500 words) with:
 6. **Runtime semantics** — interpreter changes
 7. **Test scenarios** — 5–10 concrete cases
 8. **Tradeoffs and open questions** — what's deferred, why
-9. **Implementation sketch** — files in `impl/` that change, scope per file. Do NOT write the implementation; just sketch.
+9. **Implementation sketch** — files in `impl-kotlin/` that change, scope per file. Do NOT write the implementation; just sketch.
 
 Do NOT write code. Do NOT modify any files. Produce a self-contained design proposal that the project lead can review and either approve or send back for revision.
 ```

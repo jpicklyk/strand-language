@@ -42,9 +42,9 @@ Three things make builtins easy to half-ship:
 
 Read these to confirm conventions and current state:
 
-- [`impl/CLAUDE.md`](../../../impl/CLAUDE.md) § Code conventions § "When adding a new builtin" — the canonical three-step checklist this skill operationalizes.
-- [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — scroll the existing entries to find the shape of pure / effectful / resource-handle-returning builtins. The recent stdlib expansion round 2 entries (Math.*, Hash.*, Random.*) are good monomorphic templates.
-- [`impl/authoring/src/main/kotlin/org/strand/authoring/LayerAGrammar.kt`](../../../impl/authoring/src/main/kotlin/org/strand/authoring/LayerAGrammar.kt) § `reservedNodes` — find the `Stdlib expansion round 2` block to see the `FunctionType` + `ForeignNode` (+ effect category) shape the prelude expects.
+- [`impl-kotlin/CLAUDE.md`](../../../impl-kotlin/CLAUDE.md) § Code conventions § "When adding a new builtin" — the canonical three-step checklist this skill operationalizes.
+- [`impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — scroll the existing entries to find the shape of pure / effectful / resource-handle-returning builtins. The recent stdlib expansion round 2 entries (Math.*, Hash.*, Random.*) are good monomorphic templates.
+- [`impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerAGrammar.kt`](../../../impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerAGrammar.kt) § `reservedNodes` — find the `Stdlib expansion round 2` block to see the `FunctionType` + `ForeignNode` (+ effect category) shape the prelude expects.
 - [`evaluation/dynamic/prompts/strand-system.md`](../../../evaluation/dynamic/prompts/strand-system.md) § "Implicit prelude" — see where the new entry will be documented for agents.
 
 ## Step 2: Decide — monomorphic, or one of the documented exceptions

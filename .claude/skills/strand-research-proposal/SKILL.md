@@ -1,6 +1,6 @@
 ---
 name: strand-research-proposal
-description: How to research and document an unresolved Strand design question, producing a durable proposal in `proposals/<topic>.md` that a future session can implement against. Use this skill PROACTIVELY whenever the user wants to think through, explore, investigate, research, or draft a proposal for any open Strand design problem — INCLUDING when the question is framed as uncertainty rather than as an explicit research request. Trigger phrasings include: "I'm not sure how X should work", "the spec is ambiguous about Y", "what would it look like if Strand had Z", "how should Strand model W", "help me think through how Strand handles N", "we need a clarifying design pass on X", "draft a proposal for Y", "research the open question about W", "explore tradeoffs for Z", "investigate how Strand should integrate with X", any reference to a Q-NNN in `open-questions.md` that doesn't yet have a proposal, any mention of "Milestone 2.X" research work, or any request to study an open design problem before implementing it. Even soft framings like "I've been wondering about X" or "what's the right approach for Y" should trigger the skill if Y is an open Strand design question rather than a settled one. The skill orchestrates the research-to-document workflow: identifies relevant design docs, optionally decomposes via parallel research agents when the question naturally splits into independent sub-questions, synthesizes into the standard proposal-doc structure (see `references/proposal-structure.md`), registers a Q-NNN identifier in `open-questions.md`, and links from `impl/CLAUDE.md` so future sessions surface the work during orientation. Does NOT trigger for quick factual questions about what the spec already says ("what does ADR-003 conclude about X") — only for open questions that warrant a proposal.
+description: How to research and document an unresolved Strand design question, producing a durable proposal in `proposals/<topic>.md` that a future session can implement against. Use this skill PROACTIVELY whenever the user wants to think through, explore, investigate, research, or draft a proposal for any open Strand design problem — INCLUDING when the question is framed as uncertainty rather than as an explicit research request. Trigger phrasings include: "I'm not sure how X should work", "the spec is ambiguous about Y", "what would it look like if Strand had Z", "how should Strand model W", "help me think through how Strand handles N", "we need a clarifying design pass on X", "draft a proposal for Y", "research the open question about W", "explore tradeoffs for Z", "investigate how Strand should integrate with X", any reference to a Q-NNN in `open-questions.md` that doesn't yet have a proposal, any mention of "Milestone 2.X" research work, or any request to study an open design problem before implementing it. Even soft framings like "I've been wondering about X" or "what's the right approach for Y" should trigger the skill if Y is an open Strand design question rather than a settled one. The skill orchestrates the research-to-document workflow: identifies relevant design docs, optionally decomposes via parallel research agents when the question naturally splits into independent sub-questions, synthesizes into the standard proposal-doc structure (see `references/proposal-structure.md`), registers a Q-NNN identifier in `open-questions.md`, and links from `impl-kotlin/CLAUDE.md` so future sessions surface the work during orientation. Does NOT trigger for quick factual questions about what the spec already says ("what does ADR-003 conclude about X") — only for open questions that warrant a proposal.
 ---
 
 # Researching and documenting a Strand design question
@@ -32,7 +32,7 @@ Three things make design research for Strand non-trivial:
 4. Synthesize into the standard proposal-doc structure
 5. Store in `proposals/<topic>.md` and update `proposals/README.md`
 6. Register a Q-NNN in `open-questions.md` with status `Proposed` and resolution summary
-7. Link the proposal from `impl/CLAUDE.md` "Known gaps" section
+7. Link the proposal from `impl-kotlin/CLAUDE.md` "Known gaps" section
 8. Final review with the user — surface judgment calls explicitly
 
 ## Step 1: Orient
@@ -40,7 +40,7 @@ Three things make design research for Strand non-trivial:
 Read:
 
 - `CLAUDE.md` (root) — project framing, non-negotiable conventions
-- `impl/CLAUDE.md` — implementation state and the "Known gaps" section
+- `impl-kotlin/CLAUDE.md` — implementation state and the "Known gaps" section
 - Existing design docs in `design/` related to the question (the user's prompt usually names them, or your search for relevant Q-NNN in `open-questions.md` will)
 - Existing proposals in `proposals/` if any might overlap or be related
 
@@ -86,7 +86,7 @@ For each sub-question:
 - **Detailed mechanism** — canonical encoding bytes, verifier rules, runtime semantics, as appropriate. Walk through a concrete example.
 - **Test scenarios** — enumerate 5–10 concrete cases the test suite should cover. Include error paths, not just happy paths.
 - **Tradeoffs and deferred concerns** — what's intentionally out of scope, and why. The "what we didn't solve" list is as important as the "what we solved" list.
-- **Implementation sketch** — file-by-file change estimates with scope (small/medium/large). What files in `impl/` change? Any new modules? Any new dependencies?
+- **Implementation sketch** — file-by-file change estimates with scope (small/medium/large). What files in `impl-kotlin/` change? Any new modules? Any new dependencies?
 
 ## Step 4: Synthesize into the standard proposal-doc structure
 
@@ -139,9 +139,9 @@ The exact section numbering varies — see existing proposals for examples. The 
   - Identifier-registry blurb: "Q-001 through Q-NNN are currently assigned"
   - `**Last revised:**` line if appropriate
 
-## Step 7: Link from `impl/CLAUDE.md`
+## Step 7: Link from `impl-kotlin/CLAUDE.md`
 
-The "Known gaps and design questions" section in `impl/CLAUDE.md` is what future sessions read during orientation. Add an entry pointing at the new proposal so the work surfaces naturally:
+The "Known gaps and design questions" section in `impl-kotlin/CLAUDE.md` is what future sessions read during orientation. Add an entry pointing at the new proposal so the work surfaces naturally:
 
 ```markdown
 - **<Topic name>**. See [`proposals/<topic>.md`](../proposals/<topic>.md) (Q-NNN). <One-sentence summary of what the proposal closes and any context needed for the next session.>

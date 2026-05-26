@@ -3,7 +3,7 @@
 This directory hosts the empirical-measurement framework for the open
 research questions Q-021 (evaluation metrics and baselines) and Q-034
 (authoring-layer token-cost validation). It is **deliberately outside
-`impl/`** because it spans multiple languages (Python, Strand canonical
+`impl-kotlin/`** because it spans multiple languages (Python, Strand canonical
 dag-json, Strand Layer A) and is not part of the reference runtime; the
 proposal at [`proposals/implemented/llm-authoring-layer.md`](../proposals/implemented/llm-authoring-layer.md)
 §7 places this work in Phase 1.

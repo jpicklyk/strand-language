@@ -3,7 +3,7 @@
 **Document:** `proposals/implemented/stdlib-expansion-round-2.md`
 **Status:** Implemented 2026-05-26 across slices 1-3 in 12 commits (commit range `393b634..28427d0`). The original slice 1 plan landed verbatim (~28 builtins); slice 2 (higher-order List ops) landed with new ApplyFn / FnH interpreter infrastructure; slice 3 (nested-Json) pivoted from the depth-field-only plan to a depth-field-plus-spliced-variants combination, as the depth field alone proved incomplete for value construction. All gradle tests green; corpus extended to 66 programs.
 **Date:** 2026-05-26 (proposal and implementation)
-**Concerns:** [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt), [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`proposals/implemented/layer-4-step-2-real-io.md`](layer-4-step-2-real-io.md), [`proposals/implemented/nested-recursive-self-depth.md`](nested-recursive-self-depth.md)
+**Concerns:** [`impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt), [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`proposals/implemented/layer-4-step-2-real-io.md`](layer-4-step-2-real-io.md), [`proposals/implemented/nested-recursive-self-depth.md`](nested-recursive-self-depth.md)
 **Scope:** Medium — 25 builtins in slice 1, 6 higher-order builtins + ApplyFn infra in slice 2, RecursiveSelf depth field + JsonValueFull in slice 3
 
 > **Implementation note (2026-05-26).** All three slices landed across
@@ -140,8 +140,8 @@ For replay determinism, `Random.*` reads from `Builtins.random` (a `java.util.Ra
 **Outgoing:**
 - [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md) — E-024 Crypto.RandomBytes is the effect category Random.* declares.
 - [`proposals/implemented/layer-4-step-2-real-io.md`](implemented/layer-4-step-2-real-io.md) — sets the cadence and Clock-injection pattern this slice mirrors for Random.
-- [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — the registry being extended.
-- [`impl/hashing/`](../impl/hashing/) — the Blake3 primitive Hash.Blake3 reuses.
+- [`impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — the registry being extended.
+- [`impl-kotlin/hashing/`](../impl-kotlin/hashing/) — the Blake3 primitive Hash.Blake3 reuses.
 
 **Incoming:**
 - [`proposals/README.md`](README.md) — listed in Active proposals during draft state; moved to Implemented at completion.

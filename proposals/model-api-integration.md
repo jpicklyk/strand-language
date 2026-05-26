@@ -50,7 +50,7 @@ The brief raises ten design questions. The proposal evaluates each before commit
 
 ### 3.1 Language and runtime for the harness
 
-Three plausible choices. **Python** (the ML-eval convention; best Anthropic SDK support; aligns with the Python+type-hints baseline since the harness can import and execute Python reference solutions in-process). **Kotlin** (matches the existing `impl/` layout; the harness can call `Authoring.compileToDagJson` directly without subprocess overhead; build-system integration is trivial). **Bash** (matches the static `evaluation/measure.sh`; the simplest possible addition).
+Three plausible choices. **Python** (the ML-eval convention; best Anthropic SDK support; aligns with the Python+type-hints baseline since the harness can import and execute Python reference solutions in-process). **Kotlin** (matches the existing `impl-kotlin/` layout; the harness can call `Authoring.compileToDagJson` directly without subprocess overhead; build-system integration is trivial). **Bash** (matches the static `evaluation/measure.sh`; the simplest possible addition).
 
 Recommendation: **Python**. The framework needs (a) async HTTP for the Anthropic SDK, (b) a structured retry loop with multi-turn message history, (c) deterministic execution of Python reference baselines, (d) statistical analysis (bootstrap CIs, geometric means) on the results. Each of these is a one-line dependency in Python (`anthropic`, native async, subprocess for non-Python baselines, `scipy.stats`); each is a multi-day project in Kotlin (Ktor + serialization + JVM-bridge for Python baselines) and impractical in Bash. The cost of Python — adding a Python toolchain dependency to the project — is paid once at framework setup, not per-task or per-run. The shell-out approach to the Strand compiler (§3.2) means the harness never imports JVM code; the integration boundary is `subprocess.run([..., "strand", "verify", ...])`. Bash remains the right tool for the static `measure.sh` framework, which the proposal explicitly does not touch.
 
@@ -58,7 +58,7 @@ Recommendation: **Python**. The framework needs (a) async HTTP for the Anthropic
 
 Two axes: where the code lives, and how it talks to the Strand compiler.
 
-For location, **a top-level `evaluation/dynamic/` subdirectory containing a Python package `strand_eval/`** keeps the dynamic framework adjacent to the static one and outside `impl/` (since the framework spans multiple languages). The pattern mirrors `evaluation/tasks/` which is already a sibling of `evaluation/measure.sh`. No Gradle module is added; the framework does not link against `impl/`.
+For location, **a top-level `evaluation/dynamic/` subdirectory containing a Python package `strand_eval/`** keeps the dynamic framework adjacent to the static one and outside `impl-kotlin/` (since the framework spans multiple languages). The pattern mirrors `evaluation/tasks/` which is already a sibling of `evaluation/measure.sh`. No Gradle module is added; the framework does not link against `impl-kotlin/`.
 
 For Strand-compiler integration, two options: **shell out to the `strand` CLI** or **JNI / JPype into the Kotlin classes directly**. Shell-out is slower per call (JVM startup + Gradle wrapper cost is ~1-2 seconds per `strand verify`) but trivially correct: the harness consumes the same CLI surface a real agent would use, and the CLI's stdout/stderr contract is stable (it is the agent-facing interface in practice). JNI is faster per call but requires the framework to manage a long-lived JVM, handle classpath setup, and re-implement error decoding from Kotlin objects to Python data. The shell-out cost is amortized: per-task latency is dominated by the model API call (1-10 seconds), not the verifier (1-2 seconds with cold JVM). For a representative ~10-task suite × ~5 retries × ~6 configurations, the JVM-startup cost is order ~5 minutes per full run, against an API cost of ~30 minutes. The shell-out wins on engineering simplicity by enough margin to ship first.
 
@@ -509,7 +509,7 @@ The framework shells out to `strand` for every Strand operation. The CLI surface
 
 The Python adapter parses CLI output as it currently exists. The CLI does not need any changes for the initial integration; the framework is a downstream consumer of the existing interface. A future "verifier daemon" mode (one long-running JVM serving repeated verify calls over stdin/stdout) is a useful follow-up but is out of scope here.
 
-The framework handles the `strand` binary path via configuration (a `strand_eval` config file pointing at `impl/cli/build/install/cli/bin/cli` or the system-installed binary), defaulting to the build output path when run from the project root. A `strand-eval check-strand-cli` subcommand confirms the binary is callable.
+The framework handles the `strand` binary path via configuration (a `strand_eval` config file pointing at `impl-kotlin/cli/build/install/cli/bin/cli` or the system-installed binary), defaulting to the build output path when run from the project root. A `strand-eval check-strand-cli` subcommand confirms the binary is callable.
 
 ## 6. Cost analysis
 
@@ -579,7 +579,7 @@ This evaluation criterion is itself a research question: what counts as "appropr
 - [`proposals/implemented/llm-authoring-layer.md`](implemented/llm-authoring-layer.md) — Q-034 §7 "Evaluation framework" sketch that this proposal makes concrete
 - [`proposals/implemented/layer-a-density.md`](implemented/layer-a-density.md) — Layer A density v4 results the dynamic framework now needs to validate dynamically
 - [`open-questions.md`](../open-questions.md) — Q-020 (corpus bootstrap), Q-021 (metrics and baselines), Q-034 (authoring layer)
-- [`impl/CLAUDE.md`](../impl/CLAUDE.md) — Strand CLI surface the framework shells out to
+- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Strand CLI surface the framework shells out to
 - [`decisions/ADR-001-graph-not-text.md`](../decisions/ADR-001-graph-not-text.md) — graph-native source; the framework respects this by treating Layer A as the agent-facing surface and dag-json as the verifier's input
 - [`decisions/ADR-002-no-human-projection.md`](../decisions/ADR-002-no-human-projection.md) — the framework writes/reads Layer A as the agent-facing surface, not a human-readable projection
 

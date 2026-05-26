@@ -3,7 +3,7 @@
 **Document:** `proposals/implemented/layer-4-step-2-real-io.md`
 **Status:** Implemented 2026-05-26 across phases 1-4 in 10 commits (commit range `e5443c6..876ec72` plus the corpus-exemplar `64-65-option` slice). All 18 originally-planned builtins shipped; final scope landed at 28 builtins (the bonus String.From* converters and Bytes UTF-8 round-trip were folded in during Phase 3 implementation). All gradle tests green; corpus extended to 65 programs with two new Option-pattern exemplars.
 **Date:** 2026-05-25 (proposal); 2026-05-26 (implementation complete)
-**Concerns:** [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md), [`design/security-model.md`](../../design/security-model.md), [`impl/interpreter/`](../../impl/interpreter/), Q-006 (deferred trust model), Q-007 (effect inference for unannotated foreign code)
+**Concerns:** [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md), [`design/security-model.md`](../../design/security-model.md), [`impl-kotlin/interpreter/`](../../impl-kotlin/interpreter/), Q-006 (deferred trust model), Q-007 (effect inference for unannotated foreign code)
 **Scope:** Medium — ~15-20 new builtins across 4 phases, each shippable independently
 
 > **Implementation note (2026-05-26).** All four phases landed across
@@ -179,9 +179,9 @@ Acceptance: corpus programs verify and run. The new blessed libraries get round-
 - [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md) — defines E-001..E-031, the effect categories these builtins exercise.
 - [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md) — ForeignNode + trust model.
 - [`design/security-model.md`](../../design/security-model.md) — foreign binding trust (Q-006, deferred).
-- [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — the registry being extended.
+- [`impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — the registry being extended.
 - Q-006, Q-007 in [`open-questions.md`](../../open-questions.md) — both stay open.
 
 **Incoming:**
 - [`proposals/README.md`](../README.md) — this proposal listed in Implemented proposals.
-- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — Known gaps section.
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section.

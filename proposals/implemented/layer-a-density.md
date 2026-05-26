@@ -11,7 +11,7 @@ slice (Slice 10 nested expressions) plus seven new Elaborator inference
 cases beyond the original four Layer C cases from Q-034 step 1.
 **Date:** 2026-05-25
 **Concerns:** [`evaluation/results.md`](../../evaluation/results.md),
-[`impl/authoring/`](../../impl/authoring/),
+[`impl-kotlin/authoring/`](../../impl-kotlin/authoring/),
 [Q-021](../../open-questions.md#Q-021), [Q-034](../../open-questions.md#Q-034)
 
 > **Implementation note (2026-05-25).** All 10 slices plus seven
@@ -156,9 +156,9 @@ cases beyond the original four Layer C cases from Q-034 step 1.
 >   only in corpus fixtures.
 >
 > All increments preserved the constraint-list: no changes to
-> `impl/core/`, `impl/verifier/`, `impl/interpreter/`, `impl/hashing/`,
-> `impl/schema/`, `impl/runtime/`, `impl/bytecode/`, `impl/vm/`, or the
-> canonical CBOR encoder. All work lives in `impl/authoring/` + its
+> `impl-kotlin/core/`, `impl-kotlin/verifier/`, `impl-kotlin/interpreter/`, `impl-kotlin/hashing/`,
+> `impl-kotlin/schema/`, `impl-kotlin/runtime/`, `impl-kotlin/bytecode/`, `impl-kotlin/vm/`, or the
+> canonical CBOR encoder. All work lives in `impl-kotlin/authoring/` + its
 > tests + corpus fixtures + evaluation files.
 >
 > **What got added beyond the original plan.** The original plan

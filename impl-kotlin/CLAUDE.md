@@ -1,4 +1,4 @@
-# Strand `impl/` — session brief for Claude
+# Strand `impl-kotlin/` — session brief for Claude
 
 Kotlin/JVM reference implementation of Strand. **Layers 1 through 7 step 1 are complete** (Layer 6 step 2 fully implemented as of 2026-05-24):
 - Layer 1 (pure-computation core, N-001..N-019 + N-034 TypeAbstraction + N-035 ForallType)
@@ -47,7 +47,7 @@ authoring/    Layer A compact text projection → dag-json (Q-034 step 1 + Layer
 bytecode/     Q-017 step 1 bytecode VM (proposals/implemented/bytecode-vm-step-1.md) — Opcode + Chunk + Lowerer covering Layers 1/3/4/5 (literals, lambda, application, let, varref, NodeRef, TypeAbstraction, ForeignNode, Fixpoint, Match with all 4 pattern variants, Product/Sum/ProductFieldGet, CapabilityScope, Handler with intercept dispatch)
 vm/           Q-017 step 1 bytecode VM — dispatch loop, Frame, VmClosure/VmForeign/VmFixpoint callables, capability stack + active handler list, EQ/SUM_CASE_IS/SUM_PAYLOAD/THROW_NO_MATCH helpers, `Vm.applyClosure` + `Vm.evaluate` public APIs for runtime/schema integration. **57 of 58 corpus programs pass `interpreter == VM` equivalence** across VmEquivalenceTest (Layers 1/3/4/5 programs), VmMachineEquivalenceTest (sync state machines), VmSchemaEquivalenceTest (every schema program), and VmAsyncMachineEquivalenceTest (every async program 46-49, 57 via `MachineGroup.dispatcherFactory`). The 1 remaining program is 08/09 (type-decl-only, no value to evaluate).
 cli/          `strand verify|run|machine|group|author|grammar <file>`
-corpus/       Seed corpus + end-to-end tests, packaged as a module
+corpus/       End-to-end tests over the shared top-level `../corpus/` programs (wired via `processResources` so the existing classpath layout is preserved)
 ```
 
 Dependency direction: `verifier → core`; `interpreter → verifier → core`; `hashing → core`; `runtime → interpreter → verifier → core`; `schema → interpreter → verifier → core`; `authoring → core`; `cli → interpreter` + `runtime` + `schema` + `authoring`; `corpus → cli`/`interpreter`/`hashing`/`runtime`/`schema`/`authoring`. The interpreter does not re-run verification — it trusts its input has been verified. The hasher does not re-run verification either — it trusts its input has been verified, and produces hashes for every reachable node. The runtime trusts the same and consumes only verified StateMachine nodes. The SchemaChecker trusts the same: it consumes the verifier's `nodeTypes` map and the canonical store, evaluating invariant bodies via `Interpreter.applyCallable`.
@@ -174,7 +174,7 @@ Both event formats are decode-only in step 2; encode-side support lands alongsid
 ./gradlew test                       # POSIX
 .\gradlew.bat test                   # Windows
 ./gradlew :cli:installDist           # build the CLI
-./cli/build/install/cli/bin/cli run corpus/src/main/resources/corpus/02-identity-applied.json
+./cli/build/install/cli/bin/cli run ../corpus/02-identity-applied.json
 ```
 
 The Gradle wrapper JAR (`gradle/wrapper/gradle-wrapper.jar`) is the one file not committed by the initial scaffolding; if missing, regenerate with `gradle wrapper --gradle-version 8.10.2`.
