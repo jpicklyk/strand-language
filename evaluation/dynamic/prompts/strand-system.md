@@ -155,7 +155,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (67):
+FunctionType signatures (68):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -205,8 +205,9 @@ FunctionType signatures (67):
     logT                            — (String) -> Unit  (Log.Info/Warn/Error)
     hostT platT cwdT                — () -> String  (OS.Hostname/Platform/Cwd)
     exitT                           — (Int) -> Unit  (System.Exit)
+    reReplaceT                      — (String, String, String) -> String  (Regex.Replace pattern, input, replacement)
 
-Foreign-node builtins (75):
+Foreign-node builtins (76):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
@@ -232,6 +233,7 @@ Foreign-node builtins (75):
     logInfo logWarn logError                    — Log.* (effectful; each declares logFx for E-032 Log.Write)
     hostname platform cwd                       — OS.* (effectful; each declares osReadFx for E-033 OS.Read)
     exit                                        — System.Exit(code: Int) -> Unit (effectful; declares exitFx for E-034 System.Exit; terminates the host process in production, captured in tests)
+    reReplace                                   — Regex.Replace (pure; supports `$1`/`$2` backrefs to groups via java.util.regex semantics). The other Regex.* builtins (Match/FindAll/Split) stay explicit at the use site — see "NOT in the prelude" below.
 
 Effect categories (16):
 
@@ -265,9 +267,10 @@ Reverse / Take / Drop / Concat / Nth, all polymorphic in element type),
 `String.Split` / `String.Join` (polymorphic List<String>),
 `Json.Parse` / `Json.Stringify` (typed against a specific JsonValue schema
 — corpus 54 flat or corpus 66 JsonValueFull), `Markdown.Parse` (typed against
-the corpus 61 MarkdownDocument schema). When using these, declare the FN with
-the appropriate target string and an FNT for the concrete type at this call
-site.
+the corpus 61 MarkdownDocument schema), `Regex.Match` (Option<String>) /
+`Regex.FindAll` (List<String>) / `Regex.Split` (List<String>). When using
+these, declare the FN with the appropriate target string and an FNT for the
+concrete type at this call site.
 
 ## Layer 4 step 2 builtins (real IO + stdlib)
 

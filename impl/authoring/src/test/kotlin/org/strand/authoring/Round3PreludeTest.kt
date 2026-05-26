@@ -67,4 +67,24 @@ class Round3PreludeTest {
         val exitFx = nodeOf(text, "exitFx")
         assertEquals("System.Exit", exitFx["categoryName"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun `reReplace wires to Regex_Replace with pure String-String-String to String type`() {
+        // Only Regex.Replace is in the prelude (monomorphic and pure).
+        // Regex.Match / Regex.FindAll / Regex.Split stay explicit at
+        // the use site per the documented Option-returning and
+        // polymorphic-list exceptions.
+        val text = "@v=1 root=a\na APP reReplace [\"\\\\d+\" \"abc 123\" \"N\"]"
+        val node = nodeOf(text, "reReplace")
+        assertEquals("strand-builtin:Regex.Replace", node["target"]!!.jsonPrimitive.content)
+        // Pure: no effects field.
+        val effects: List<String> = node["effects"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList()
+        assertEquals(emptyList<String>(), effects)
+        val fnt = nodeOf(text, "reReplaceT")
+        assertEquals(
+            listOf("stringT", "stringT", "stringT"),
+            fnt["parameters"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals("stringT", fnt["result"]!!.jsonPrimitive.content)
+    }
 }

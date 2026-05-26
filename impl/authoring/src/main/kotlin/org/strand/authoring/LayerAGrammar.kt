@@ -1164,6 +1164,24 @@ object LayerAGrammar {
             refFields = mapOf("foreignType" to "exitT"),
             refListFields = mapOf("effects" to listOf("exitFx")),
         ),
+
+        // Stdlib expansion round 3 phase 2 — Regex.Replace. Only the
+        // monomorphic Regex builtin gets a prelude entry; Regex.Match
+        // (returns Option<String>), Regex.FindAll, and Regex.Split
+        // (both return List<String>) stay explicit at the use site
+        // per the documented Option-returning and polymorphic-list
+        // exceptions. Name `reReplace` to avoid clash with the
+        // existing `replace` (String.Replace).
+        "reReplaceT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "reReplace" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Regex.Replace"),
+            refFields = mapOf("foreignType" to "reReplaceT"),
+        ),
     )
 
     /**

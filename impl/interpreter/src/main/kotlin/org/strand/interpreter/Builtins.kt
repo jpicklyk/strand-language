@@ -1232,6 +1232,91 @@ object Builtins {
             Value.BytesV(out)
         },
 
+        // Stdlib expansion round 3 phase 2 — Regex.*. Uses Kotlin's
+        // kotlin.text.Regex (java.util.regex.Pattern under the hood).
+        // All pure. Pattern-compile failures throw IoFailure with
+        // kind "regex-compile" so agents see a structured error;
+        // syntactically-valid patterns that fail to match return
+        // None (for Match/Find) or the original input (for Replace).
+        //
+        // Backtracking and POSIX character classes are supported; the
+        // exact dialect is Java's standard one. \\, \d, \w, \s, [^...],
+        // (?:...), ^, $, |, *, +, ?, {n,m}, anchors, and groups all
+        // work. Named groups are not exposed in this slice (would need
+        // a richer return type than Option<String>).
+
+        "strand-builtin:Regex.Match" to Fn { args ->
+            // (pattern: String, input: String) -> Option<String>
+            // Returns the first full-match substring, or None if no match.
+            require(args.size == 2) { "Regex.Match expects 2 args (pattern, input), got ${args.size}" }
+            val pattern = (args[0] as Value.StringV).v
+            val input = (args[1] as Value.StringV).v
+            val regex = try { Regex(pattern) }
+                catch (e: java.util.regex.PatternSyntaxException) {
+                    throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
+                }
+            val m = regex.find(input)
+            if (m != null) Value.SumV("Some", Value.StringV(m.value))
+            else Value.SumV("None", null)
+        },
+
+        "strand-builtin:Regex.FindAll" to Fn { args ->
+            // (pattern: String, input: String) -> List<String>
+            // Returns every non-overlapping match as a Cons/Nil chain.
+            require(args.size == 2) { "Regex.FindAll expects 2 args (pattern, input), got ${args.size}" }
+            val pattern = (args[0] as Value.StringV).v
+            val input = (args[1] as Value.StringV).v
+            val regex = try { Regex(pattern) }
+                catch (e: java.util.regex.PatternSyntaxException) {
+                    throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
+                }
+            val matches = regex.findAll(input).map { it.value }.toList()
+            var listValue: Value = Value.SumV("Nil", null)
+            for (m in matches.reversed()) {
+                listValue = Value.SumV("Cons", Value.ProductV(mapOf(
+                    "head" to Value.StringV(m), "tail" to listValue,
+                )))
+            }
+            listValue
+        },
+
+        "strand-builtin:Regex.Replace" to Fn { args ->
+            // (pattern: String, input: String, replacement: String) -> String
+            // Replaces every non-overlapping match. The replacement
+            // string supports $1/$2/etc. backreferences for capture
+            // groups (java.util.regex semantics).
+            require(args.size == 3) { "Regex.Replace expects 3 args (pattern, input, replacement), got ${args.size}" }
+            val pattern = (args[0] as Value.StringV).v
+            val input = (args[1] as Value.StringV).v
+            val replacement = (args[2] as Value.StringV).v
+            val regex = try { Regex(pattern) }
+                catch (e: java.util.regex.PatternSyntaxException) {
+                    throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
+                }
+            Value.StringV(regex.replace(input, replacement))
+        },
+
+        "strand-builtin:Regex.Split" to Fn { args ->
+            // (pattern: String, input: String) -> List<String>
+            // Splits on every non-overlapping match. Adjacent matches
+            // produce empty-string entries (matches Kotlin's split).
+            require(args.size == 2) { "Regex.Split expects 2 args (pattern, input), got ${args.size}" }
+            val pattern = (args[0] as Value.StringV).v
+            val input = (args[1] as Value.StringV).v
+            val regex = try { Regex(pattern) }
+                catch (e: java.util.regex.PatternSyntaxException) {
+                    throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
+                }
+            val parts = regex.split(input)
+            var listValue: Value = Value.SumV("Nil", null)
+            for (part in parts.reversed()) {
+                listValue = Value.SumV("Cons", Value.ProductV(mapOf(
+                    "head" to Value.StringV(part), "tail" to listValue,
+                )))
+            }
+            listValue
+        },
+
         // Stdlib expansion round 3 — Log.* / OS.* / System.Exit
         // diagnostic and host-environment builtins.
         // Effect categories E-032 Log.Write, E-033 OS.Read,
