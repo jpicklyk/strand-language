@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":         { "type": "PrimitiveType", "kind": "Int" },
+    "strT":         { "type": "PrimitiveType", "kind": "String" },
+
+    "someCase":     { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneCase":     { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionIntT":   { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "parseIntT":    { "type": "FunctionType", "parameters": ["strT"], "result": "optionIntT" },
+    "parseInt":     { "type": "ForeignNode", "target": "strand-builtin:String.ParseInt", "foreignType": "parseIntT", "effects": [] },
+
+    "inputLit":     { "type": "StringLit", "value": "not a number" },
+    "parsedOpt":    { "type": "Application", "function": "parseInt", "arguments": ["inputLit"] },
+
+    "varN":         { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+    "patSome":      { "type": "Pattern", "kind": "constructor", "patternType": "optionIntT", "caseName": "Some", "payloadPattern": "varN" },
+    "nRef":         { "type": "VarRef", "binder": "varN" },
+    "caseSome":     { "type": "MatchCase", "pattern": "patSome", "body": "nRef" },
+
+    "patNone":      { "type": "Pattern", "kind": "constructor", "patternType": "optionIntT", "caseName": "None" },
+    "defaultLit":   { "type": "IntLit", "value": -1 },
+    "caseNone":     { "type": "MatchCase", "pattern": "patNone", "body": "defaultLit" },
+
+    "app":          { "type": "Match", "scrutinee": "parsedOpt", "cases": ["caseSome", "caseNone"] }
+  }
+}

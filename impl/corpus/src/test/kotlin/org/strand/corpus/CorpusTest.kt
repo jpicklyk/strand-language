@@ -141,7 +141,17 @@ class CorpusTest {
         Case("/corpus/39-handler-itself-performs-effect.json", Value.IntV(0),
             "Q-030 scenario 4 (under {Filesystem.Write}): the Handler intercepts Time.Now; its `handle` Lambda itself writes to a file via the Filesystem.Write builtin. The closure-subtraction rule plus closure-union means the surrounding context needs Filesystem.Write but NOT Time.Now — exactly what the proposal § 6.3 algebra states."),
         Case("/corpus/40-handler-fires-through-fixpoint.json", Value.IntV(4),
-            "Q-030 scenario 6: a recursive function over Fixpoint that wraps every now() call in a freshly-installed Handler returning 1. Regression test for handler threading across Fixpoint self-references. f(3) returns 1+1+1+1 = 4 (one handler firing at each n=3,2,1,0).")
+            "Q-030 scenario 6: a recursive function over Fixpoint that wraps every now() call in a freshly-installed Handler returning 1. Regression test for handler threading across Fixpoint self-references. f(3) returns 1+1+1+1 = 4 (one handler firing at each n=3,2,1,0)."),
+
+        // Phase 4 #10 — blessed Option<T> convention with real
+        // builtin-produced values. These corpus programs are
+        // canonical exemplars of the Option pattern that all the
+        // Layer 4 step 2 builtins use for their fallible-parse
+        // results (String.ParseInt, Bytes.ParseUtf8, etc.).
+        Case("/corpus/64-option-parseint-unwrap.json", Value.IntV(42L),
+            "Phase 4 #10: ParseInt(\"42\") -> Some(42), unwrapped by Match to 42. Demonstrates the canonical Option<Int> shape (SumV \"Some\" / \"None\") that all the new String.* / Bytes.* / Process.* builtins use for fallible-parse / fallible-lookup results."),
+        Case("/corpus/65-option-parseint-fallback.json", Value.IntV(-1L),
+            "Phase 4 #10: ParseInt(\"not a number\") -> None, unwrapped to fallback -1. Pair with corpus 64 for the canonical Option-with-default pattern.")
     )
 
     /**
