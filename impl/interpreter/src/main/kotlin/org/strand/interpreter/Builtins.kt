@@ -931,6 +931,135 @@ object Builtins {
             Value.BytesV(md.digest((args[0] as Value.BytesV).v))
         },
 
+        // Stdlib expansion round 2 — List.* primitives (no lambdas).
+        // Walk and produce the canonical Cons(head, tail) / Nil SumV
+        // encoding (corpus 31/32, also produced by Fs.List, String.Split,
+        // Process.Spawn arg lists). Polymorphic in the element type —
+        // the runtime never inspects head values, so any Value type
+        // works for the head. Empty-list construction is convenient
+        // because Strand has no literal syntax for it (otherwise an
+        // agent emits a 3-node Sum-construct boilerplate).
+        //
+        // Higher-order operations (Map, Filter, Fold, Find, Any, All)
+        // are deferred to round 3, which needs the interpreter-callback
+        // infrastructure for builtins to invoke Strand lambdas.
+
+        "strand-builtin:List.Empty" to Fn { args ->
+            require(args.isEmpty()) { "List.Empty expects 0 args, got ${args.size}" }
+            Value.SumV("Nil", null)
+        },
+
+        "strand-builtin:List.IsEmpty" to Fn { args ->
+            require(args.size == 1) { "List.IsEmpty expects 1 arg (list), got ${args.size}" }
+            Value.BoolV(args[0] is Value.SumV && (args[0] as Value.SumV).case == "Nil")
+        },
+
+        "strand-builtin:List.Length" to Fn { args ->
+            require(args.size == 1) { "List.Length expects 1 arg (list), got ${args.size}" }
+            var n = 0L
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                n++
+                cur = (sumV.payload as Value.ProductV).fields.getValue("tail")
+            }
+            Value.IntV(n)
+        },
+
+        "strand-builtin:List.Reverse" to Fn { args ->
+            require(args.size == 1) { "List.Reverse expects 1 arg (list), got ${args.size}" }
+            var result: Value = Value.SumV("Nil", null)
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                val head = payload.fields.getValue("head")
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to head, "tail" to result)))
+                cur = payload.fields.getValue("tail")
+            }
+            result
+        },
+
+        "strand-builtin:List.Take" to Fn { args ->
+            // (list, n: Int) -> list. Negative or zero n yields Nil.
+            // n larger than list length yields the whole list.
+            require(args.size == 2) { "List.Take expects 2 args (list, n: Int), got ${args.size}" }
+            val take = (args[1] as Value.IntV).v
+            if (take <= 0) return@Fn Value.SumV("Nil", null)
+            val heads = mutableListOf<Value>()
+            var cur: Value = args[0]
+            var remaining = take
+            while (remaining > 0) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                heads += payload.fields.getValue("head")
+                cur = payload.fields.getValue("tail")
+                remaining--
+            }
+            var result: Value = Value.SumV("Nil", null)
+            for (h in heads.reversed()) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to h, "tail" to result)))
+            }
+            result
+        },
+
+        "strand-builtin:List.Drop" to Fn { args ->
+            // (list, n: Int) -> list. Negative or zero n yields the
+            // original list. n larger than list length yields Nil.
+            require(args.size == 2) { "List.Drop expects 2 args (list, n: Int), got ${args.size}" }
+            var drop = (args[1] as Value.IntV).v
+            var cur: Value = args[0]
+            while (drop > 0) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                cur = (sumV.payload as Value.ProductV).fields.getValue("tail")
+                drop--
+            }
+            cur
+        },
+
+        "strand-builtin:List.Concat" to Fn { args ->
+            // (a, b) -> list. Append b to the end of a.
+            require(args.size == 2) { "List.Concat expects 2 args (a, b), got ${args.size}" }
+            val heads = mutableListOf<Value>()
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                heads += payload.fields.getValue("head")
+                cur = payload.fields.getValue("tail")
+            }
+            var result: Value = args[1]
+            for (h in heads.reversed()) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to h, "tail" to result)))
+            }
+            result
+        },
+
+        "strand-builtin:List.Nth" to Fn { args ->
+            // (list, i: Int) -> Option<T>. Some(elem) for in-range
+            // 0-based index, None otherwise.
+            require(args.size == 2) { "List.Nth expects 2 args (list, i: Int), got ${args.size}" }
+            var i = (args[1] as Value.IntV).v
+            if (i < 0) return@Fn Value.SumV("None", null)
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                if (i == 0L) {
+                    return@Fn Value.SumV("Some", payload.fields.getValue("head"))
+                }
+                cur = payload.fields.getValue("tail")
+                i--
+            }
+            Value.SumV("None", null)
+        },
+
         // Test-only no-op effectful builtin. Returns IntV(0) for any
         // single StringV argument. Used by tests that want to exercise
         // the effect-handler / capability machinery without touching
