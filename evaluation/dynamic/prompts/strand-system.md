@@ -187,6 +187,125 @@ Effect categories (7):
 A state machine with input streams must declare `receiveFx` in its `effects`
 list. A state machine with output streams must also declare `sendFx`.
 
+## Layer 4 step 2 builtins (real IO + stdlib)
+
+These ForeignNode targets are registered in the in-process Builtins
+registry and may be invoked from any Strand program. They are NOT in
+the implicit prelude (no short reserved name); declare a `ForeignNode`
+referencing the target string and an appropriate `FunctionType`.
+
+### Filesystem (`Fs.*`)
+
+Declare effect category `EFC "Filesystem.Write"` for write/append/delete
+and `EFC "Filesystem.Read"` for read/exists/list. The granted
+CapabilitySet covers the call site (refinement-lattice match).
+
+    strand-builtin:Fs.Read(path: String) -> Bytes
+    strand-builtin:Fs.Write(path: String, bytes: Bytes) -> Int  (bytes written)
+    strand-builtin:Fs.Append(path: String, bytes: Bytes) -> Int (bytes written)
+    strand-builtin:Fs.Exists(path: String) -> Bool
+    strand-builtin:Fs.Delete(path: String) -> Bool  (true if deleted, false if absent)
+    strand-builtin:Fs.List(dir: String) -> List<String>  (alphabetically sorted)
+
+Errors (missing file, permission denied, etc.) throw a runtime
+`InterpretError.IoFailure(at, kind, detail)` carrying the call-site
+NodeId — verifier-level errors don't apply here, the agent sees the
+exception at runtime.
+
+### Network sockets (`Net.*`) and HTTP (`Http.*`)
+
+Sync JVM sockets. Async actor-loop integration is a follow-up; for now
+`Net.Receive` blocks the calling thread.
+
+    strand-builtin:Net.Connect(host: String, port: Int) -> SocketHandle  (declared as Int)
+    strand-builtin:Net.Send(handle: Int, bytes: Bytes) -> Int  (bytes written)
+    strand-builtin:Net.Receive(handle: Int, maxBytes: Int) -> Bytes  (empty on EOF)
+    strand-builtin:Net.Close(handle: Int) -> Unit  (idempotent)
+    strand-builtin:Http.Request(method: String, url: String, body: Bytes)
+        -> {status: Int, body: Bytes}
+
+`Http.Request` wraps URL parsing + socket + HTTP/1.1 framing. HTTPS via
+the JVM's default truststore. Effect categories: declare `Network.Connect`,
+`Network.Send`, `Network.Receive` (or a single `Network.*` if your
+policy is broad).
+
+### Process + env (`Process.*`)
+
+    strand-builtin:Process.Spawn(cmd: String, args: List<String>) -> ProcessHandle (Int)
+    strand-builtin:Process.Wait(handle: Int) -> Int  (exit code)
+    strand-builtin:Process.EnvVar(name: String) -> Option<String>
+
+Effect categories: `Process.Spawn`, `Process.Wait` for the first two.
+`EnvVar` is conventionally treated as `Process.*` too; the registry
+doesn't enforce.
+
+### Time (`Time.*`)
+
+    strand-builtin:Time.Now() -> Int            — Unix-millis from the active clock
+    strand-builtin:Time.Sleep(millis: Int) -> Unit
+
+Effect category for both: `EFC "Time.Now"` (or "Time.Sleep" for Sleep
+if you want the distinction). The default clock is real wall-clock
+time; tests install a FixedClock so deterministic-replay scenarios
+work. Don't assume Time.Now returns a specific value.
+
+### String stdlib (pure, no declared effects required)
+
+    strand-builtin:String.Length(s) -> Int
+    strand-builtin:String.Substring(s, start: Int, end: Int) -> String
+    strand-builtin:String.IndexOf(haystack, needle) -> Int  (-1 if not found)
+    strand-builtin:String.Contains(haystack, needle) -> Bool
+    strand-builtin:String.Replace(s, find, replace) -> String  (literal, not regex)
+    strand-builtin:String.Split(s, sep) -> List<String>  (sep must be non-empty)
+    strand-builtin:String.Join(parts: List<String>, sep) -> String
+    strand-builtin:String.ToUpper(s) -> String
+    strand-builtin:String.ToLower(s) -> String
+    strand-builtin:String.Trim(s) -> String
+    strand-builtin:String.ParseInt(s) -> Option<Int>
+    strand-builtin:String.ParseFloat(s) -> Option<Float>
+    strand-builtin:String.FromInt(n: Int) -> String
+    strand-builtin:String.FromFloat(f: Float) -> String
+    strand-builtin:String.FromBool(b: Bool) -> String  ("true" or "false")
+
+### Bytes stdlib (pure)
+
+    strand-builtin:Bytes.Length(b) -> Int
+    strand-builtin:Bytes.Slice(b, start: Int, end: Int) -> Bytes
+    strand-builtin:Bytes.Concat(a, b) -> Bytes
+    strand-builtin:Bytes.ParseUtf8(b) -> Option<String>  (None on invalid UTF-8)
+    strand-builtin:Bytes.FromUtf8(s) -> Bytes
+    strand-builtin:Bytes.FormatBase64(b) -> String
+    strand-builtin:Bytes.ParseBase64(s) -> Option<Bytes>
+
+### Json + Markdown parsers (pure)
+
+    strand-builtin:Json.Parse(s: String) -> Option<JsonValue>
+    strand-builtin:Markdown.Parse(s: String) -> Option<MarkdownDocument>
+
+`Json.Parse` recognizes the four primitive cases (null → JsonNull, true/
+false → JsonBool, integer → JsonNumber, "string" → JsonString). Arrays
+and objects parse as valid JSON but degrade to JsonNull because the
+JsonValue blessed library has no recursive cases for them
+(nested-μ blocker — a future RecursiveSelf protocol extension can lift
+this). Use `Option<JsonValue>` for fallible parse handling.
+
+### Canonical Option<T> pattern
+
+All fallible builtins (`String.ParseInt`, `Bytes.ParseUtf8`,
+`Process.EnvVar`, `Json.Parse`, ...) return `Option<T>` with the
+canonical sum encoding:
+
+    optionT SUM [someCase noneCase]
+    someCase SCS "Some" T
+    noneCase SCS "None" _
+
+Unwrap-with-default via Match:
+
+    val WHEN optResult optT "Some(n) -> n | None -> 0"
+
+Or with explicit MAT for non-WHEN-sugared code, the standard
+Cons-style constructor pattern with a variable-binding payload.
+
 ## Density sugars
 
 These shorthand forms produce byte-identical canonical JSON to their
