@@ -70,4 +70,19 @@ sealed class Value {
 
     /** A constructed sum (variant) value. */
     data class SumV(val case: String, val payload: Value?) : Value()
+
+    /**
+     * An opaque runtime handle to an OS resource (file descriptor,
+     * socket, process, ...). The [id] is a counter-minted long; the
+     * [kind] tags the resource family so per-resource builtins can
+     * validate at dispatch ("socket" vs "process" vs "file"). The
+     * runtime [ResourceTable] holds the actual JVM-side object.
+     *
+     * Resource values never enter the canonical store — they're
+     * ephemeral OS state, not content-addressable. The Strand-level
+     * surface type for a resource is currently `Int` (Layer 4 step
+     * 2 design call: opaque-handle representation, with the runtime
+     * doing the per-kind dispatch on this Resource wrapping).
+     */
+    data class Resource(val id: Long, val kind: String) : Value()
 }

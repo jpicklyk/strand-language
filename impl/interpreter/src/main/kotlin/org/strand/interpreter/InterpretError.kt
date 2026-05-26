@@ -94,6 +94,24 @@ sealed class InterpretError {
         override val at: NodeId,
         val targetHash: Hash
     ) : InterpretError()
+
+    /**
+     * An IO builtin (Layer 4 step 2 — Filesystem, Network, Process,
+     * Time) failed. [kind] is a short tag like "filesystem-read",
+     * "network-connect", "resource-not-found"; [detail] is the
+     * underlying error message (typically a JVM IOException's text).
+     *
+     * Per the Layer 4 step 2 design call, IO failures surface as
+     * exceptions rather than Result-typed values — matches the
+     * existing pattern for Int.Div by zero, NoMatchingCase, etc.
+     * Future work can introduce a blessed Result<T, IoError> sum
+     * type with explicit error handling.
+     */
+    data class IoFailure(
+        override val at: NodeId,
+        val kind: String,
+        val detail: String,
+    ) : InterpretError()
 }
 
 class InterpretException(val error: InterpretError) : RuntimeException(error.toString())

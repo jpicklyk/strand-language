@@ -512,7 +512,13 @@ class Interpreter(
                 ?: throw InterpretException(
                     InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
                 )
-            builtin.invoke(args)
+            try {
+                builtin.invoke(args)
+            } catch (io: IoFailure) {
+                throw InterpretException(
+                    InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
+                )
+            }
         }
         is Value.FixpointFn -> {
             val userArity = callable.bodyLambda.parameters.size - 1
@@ -611,7 +617,16 @@ class Interpreter(
             ?: throw InterpretException(
                 InterpretError.UnknownForeignTarget(at = id, target = fn.node.target)
             )
-        return builtin.invoke(args)
+        return try {
+            builtin.invoke(args)
+        } catch (io: IoFailure) {
+            // Translate runtime IoFailure (thrown by Layer 4 step 2
+            // builtins on actual OS failures) into a structured
+            // InterpretError carrying the call-site NodeId.
+            throw InterpretException(
+                InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
+            )
+        }
     }
 
     /**

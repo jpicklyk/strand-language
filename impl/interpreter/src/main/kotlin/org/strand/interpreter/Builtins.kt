@@ -167,21 +167,139 @@ object Builtins {
             Value.UnitV
         },
 
-        // Q-031 reference targets: Filesystem.Write and Network.Connect.
-        // These nominally exercise refinement-bearing effects
-        // (Filesystem.Write{path: String}, Network.Connect{host: String,
-        // port: Int}). In this reference implementation they do not
-        // perform any real I/O — they return a stable Int so call sites
-        // can be exercised end-to-end under various CapabilitySet
-        // shapes. Production runtimes would replace these with real
-        // implementations under the same target identifiers.
+        // Legacy stub kept for backwards-compat with the seed corpus
+        // (programs 35, 39 and the test fixtures in InterpreterTest /
+        // ElaboratorTest). Returns IntV(0) for any single StringV arg.
+        // Real filesystem writes use the `strand-builtin:Fs.Write`
+        // target (Layer 4 step 2 — see below). A future cleanup pass
+        // may unify the namespaces once the corpus is updated.
         "strand-builtin:Filesystem.Write" to Fn { args ->
             require(args.size == 1) { "Filesystem.Write expects 1 arg (path: String), got ${args.size}" }
             require(args[0] is Value.StringV) {
                 "Filesystem.Write expects a StringV path argument, got ${args[0]::class.simpleName}"
             }
-            Value.IntV(0)  // bytes written; the reference impl is a no-op
+            Value.IntV(0)  // bytes written; legacy stub semantics
         },
+
+        // Layer 4 step 2 — Filesystem builtins under the `Fs.*` target
+        // namespace. Real OS calls via java.nio.file.Files. IO failures
+        // throw IoFailure, which the interpreter translates to
+        // InterpretError.IoFailure carrying the call-site NodeId.
+        //
+        // Effect category: all of these declare E-007 Filesystem.Write
+        // (for Write/Append/Delete) or E-006 Filesystem.Read (for Read/
+        // Exists/List). Programs that use them must declare the
+        // appropriate EffectCategory and grant a CapabilitySet that
+        // covers the call site.
+
+        "strand-builtin:Fs.Write" to Fn { args ->
+            require(args.size == 2) {
+                "Fs.Write expects 2 args (path: String, bytes: Bytes), got ${args.size}"
+            }
+            val path = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("filesystem-write", "expected StringV path, got ${args[0]::class.simpleName}")
+            val bytes = (args[1] as? Value.BytesV)?.v
+                ?: throw IoFailure("filesystem-write", "expected BytesV content, got ${args[1]::class.simpleName}")
+            try {
+                java.nio.file.Files.write(java.nio.file.Paths.get(path), bytes)
+                Value.IntV(bytes.size.toLong())
+            } catch (e: java.io.IOException) {
+                throw IoFailure("filesystem-write", "$path: ${e.message}")
+            } catch (e: SecurityException) {
+                throw IoFailure("filesystem-write", "$path: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Fs.Read" to Fn { args ->
+            require(args.size == 1) {
+                "Fs.Read expects 1 arg (path: String), got ${args.size}"
+            }
+            val path = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("filesystem-read", "expected StringV path, got ${args[0]::class.simpleName}")
+            try {
+                Value.BytesV(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)))
+            } catch (e: java.nio.file.NoSuchFileException) {
+                throw IoFailure("filesystem-read", "$path: file does not exist")
+            } catch (e: java.io.IOException) {
+                throw IoFailure("filesystem-read", "$path: ${e.message}")
+            } catch (e: SecurityException) {
+                throw IoFailure("filesystem-read", "$path: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Fs.Append" to Fn { args ->
+            require(args.size == 2) {
+                "Fs.Append expects 2 args (path: String, bytes: Bytes), got ${args.size}"
+            }
+            val path = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("filesystem-append", "expected StringV path, got ${args[0]::class.simpleName}")
+            val bytes = (args[1] as? Value.BytesV)?.v
+                ?: throw IoFailure("filesystem-append", "expected BytesV content, got ${args[1]::class.simpleName}")
+            try {
+                java.nio.file.Files.write(
+                    java.nio.file.Paths.get(path),
+                    bytes,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND,
+                )
+                Value.IntV(bytes.size.toLong())
+            } catch (e: java.io.IOException) {
+                throw IoFailure("filesystem-append", "$path: ${e.message}")
+            } catch (e: SecurityException) {
+                throw IoFailure("filesystem-append", "$path: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Fs.Exists" to Fn { args ->
+            require(args.size == 1) {
+                "Fs.Exists expects 1 arg (path: String), got ${args.size}"
+            }
+            val path = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("filesystem-exists", "expected StringV path, got ${args[0]::class.simpleName}")
+            Value.BoolV(java.nio.file.Files.exists(java.nio.file.Paths.get(path)))
+        },
+
+        "strand-builtin:Fs.Delete" to Fn { args ->
+            require(args.size == 1) {
+                "Fs.Delete expects 1 arg (path: String), got ${args.size}"
+            }
+            val path = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("filesystem-delete", "expected StringV path, got ${args[0]::class.simpleName}")
+            try {
+                Value.BoolV(java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(path)))
+            } catch (e: java.io.IOException) {
+                throw IoFailure("filesystem-delete", "$path: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Fs.List" to Fn { args ->
+            require(args.size == 1) {
+                "Fs.List expects 1 arg (dir: String), got ${args.size}"
+            }
+            val path = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("filesystem-list", "expected StringV dir path, got ${args[0]::class.simpleName}")
+            try {
+                val entries = java.nio.file.Files.list(java.nio.file.Paths.get(path)).use { stream ->
+                    stream.map { it.fileName.toString() }.sorted().toList()
+                }
+                // Build a SumV-encoded list using the same Cons/Nil
+                // convention as the corpus (μ. Cons({head, tail}) | Nil).
+                // The Strand-side type is the standard recursive String
+                // list; the runtime produces a chain of SumV values
+                // terminated by Nil.
+                var listValue: Value = Value.SumV(case = "Nil", payload = null)
+                for (entry in entries.reversed()) {
+                    val payload = Value.ProductV(
+                        mapOf("head" to Value.StringV(entry), "tail" to listValue)
+                    )
+                    listValue = Value.SumV(case = "Cons", payload = payload)
+                }
+                listValue
+            } catch (e: java.io.IOException) {
+                throw IoFailure("filesystem-list", "$path: ${e.message}")
+            }
+        },
+
         "strand-builtin:Network.Connect" to Fn { args ->
             require(args.size == 2) {
                 "Network.Connect expects 2 args (host: String, port: Int), got ${args.size}"
@@ -190,7 +308,20 @@ object Builtins {
                 "Network.Connect expects StringV host + IntV port, got " +
                     "(${args[0]::class.simpleName}, ${args[1]::class.simpleName})"
             }
-            Value.IntV(1)  // connection id; reference impl returns a stable sentinel
+            Value.IntV(1)  // TODO: real socket — Phase 2 #5
+        },
+
+        // Test-only no-op effectful builtin. Returns IntV(0) for any
+        // single StringV argument. Used by tests that want to exercise
+        // the effect-handler / capability machinery without touching
+        // real IO. Not for production use. Target name reserved under
+        // `strand-builtin:Test.*`.
+        "strand-builtin:Test.EffectfulNoOp" to Fn { args ->
+            require(args.size == 1) { "Test.EffectfulNoOp expects 1 arg, got ${args.size}" }
+            require(args[0] is Value.StringV) {
+                "Test.EffectfulNoOp expects a StringV argument, got ${args[0]::class.simpleName}"
+            }
+            Value.IntV(0)
         },
     )
 

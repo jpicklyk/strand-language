@@ -1,0 +1,176 @@
+package org.strand.interpreter
+
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
+
+/**
+ * Layer 4 step 2 — direct unit tests of the Filesystem / Time / Process
+ * builtins via the [Builtins.lookup] dispatch. The tests bypass the
+ * full interpreter (no JSON ingest, no capability check) because each
+ * builtin's contract is "given evaluated args, return a value" — that's
+ * what gets exercised end-to-end here. The interpreter-level capability
+ * check is covered by the broader InterpreterTest suite.
+ */
+class BuiltinsIoTest {
+
+    @AfterEach
+    fun cleanupResourceTable() {
+        ResourceTable.resetForTest()
+    }
+
+    // ---------- Filesystem ----------
+
+    @Test
+    fun `Filesystem_Write writes bytes and returns count`(@TempDir tmp: Path) {
+        val fn = Builtins.lookup("strand-builtin:Fs.Write")!!
+        val target = tmp.resolve("hello.txt")
+        val payload = "hello, strand\n".toByteArray(Charsets.UTF_8)
+        val result = fn.invoke(listOf(Value.StringV(target.toString()), Value.BytesV(payload)))
+        assertEquals(Value.IntV(payload.size.toLong()), result)
+        assertTrue(Files.exists(target))
+        assertEquals(payload.toList(), Files.readAllBytes(target).toList())
+    }
+
+    @Test
+    fun `Filesystem_Read returns the file's bytes`(@TempDir tmp: Path) {
+        val fn = Builtins.lookup("strand-builtin:Fs.Read")!!
+        val target = tmp.resolve("greet.txt")
+        val payload = "hi".toByteArray(Charsets.UTF_8)
+        Files.write(target, payload)
+        val result = fn.invoke(listOf(Value.StringV(target.toString())))
+        assertEquals(Value.BytesV(payload), result)
+    }
+
+    @Test
+    fun `Filesystem_Read on missing file raises IoFailure with filesystem-read kind`(@TempDir tmp: Path) {
+        val fn = Builtins.lookup("strand-builtin:Fs.Read")!!
+        val missing = tmp.resolve("nope.txt")
+        val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
+            fn.invoke(listOf(Value.StringV(missing.toString())))
+        }
+        assertEquals("filesystem-read", ex.kind)
+        assertTrue(ex.detail.contains("does not exist"), "got detail: ${ex.detail}")
+    }
+
+    @Test
+    fun `Filesystem_Append concatenates to an existing file`(@TempDir tmp: Path) {
+        val target = tmp.resolve("log.txt")
+        val writeFn = Builtins.lookup("strand-builtin:Fs.Write")!!
+        val appendFn = Builtins.lookup("strand-builtin:Fs.Append")!!
+        writeFn.invoke(listOf(Value.StringV(target.toString()), Value.BytesV("a".toByteArray())))
+        appendFn.invoke(listOf(Value.StringV(target.toString()), Value.BytesV("b".toByteArray())))
+        appendFn.invoke(listOf(Value.StringV(target.toString()), Value.BytesV("c\n".toByteArray())))
+        assertEquals("abc\n", Files.readString(target))
+    }
+
+    @Test
+    fun `Filesystem_Append creates the file if it doesn't exist`(@TempDir tmp: Path) {
+        val target = tmp.resolve("new.txt")
+        val appendFn = Builtins.lookup("strand-builtin:Fs.Append")!!
+        appendFn.invoke(listOf(Value.StringV(target.toString()), Value.BytesV("first".toByteArray())))
+        assertEquals("first", Files.readString(target))
+    }
+
+    @Test
+    fun `Filesystem_Exists reports true and false correctly`(@TempDir tmp: Path) {
+        val fn = Builtins.lookup("strand-builtin:Fs.Exists")!!
+        val present = tmp.resolve("here.txt").also { Files.write(it, "x".toByteArray()) }
+        val absent = tmp.resolve("notHere.txt")
+        assertEquals(Value.BoolV(true), fn.invoke(listOf(Value.StringV(present.toString()))))
+        assertEquals(Value.BoolV(false), fn.invoke(listOf(Value.StringV(absent.toString()))))
+    }
+
+    @Test
+    fun `Filesystem_Delete removes the file and returns true, then false when absent`(@TempDir tmp: Path) {
+        val fn = Builtins.lookup("strand-builtin:Fs.Delete")!!
+        val target = tmp.resolve("doomed.txt").also { Files.write(it, "bye".toByteArray()) }
+        assertTrue(Files.exists(target))
+        assertEquals(Value.BoolV(true), fn.invoke(listOf(Value.StringV(target.toString()))))
+        assertFalse(Files.exists(target))
+        // Calling again returns false (file no longer exists; deleteIfExists semantics).
+        assertEquals(Value.BoolV(false), fn.invoke(listOf(Value.StringV(target.toString()))))
+    }
+
+    @Test
+    fun `Filesystem_List returns a SumV Cons chain sorted alphabetically`(@TempDir tmp: Path) {
+        val fn = Builtins.lookup("strand-builtin:Fs.List")!!
+        Files.write(tmp.resolve("c.txt"), "c".toByteArray())
+        Files.write(tmp.resolve("a.txt"), "a".toByteArray())
+        Files.write(tmp.resolve("b.txt"), "b".toByteArray())
+        val result = fn.invoke(listOf(Value.StringV(tmp.toString())))
+        // Walk the Cons/Nil chain and collect the heads in order.
+        val collected = mutableListOf<String>()
+        var cur: Value = result
+        while (cur is Value.SumV && cur.case == "Cons") {
+            val payload = cur.payload as Value.ProductV
+            collected += (payload.fields.getValue("head") as Value.StringV).v
+            cur = payload.fields.getValue("tail")
+        }
+        assertTrue(cur is Value.SumV && (cur as Value.SumV).case == "Nil")
+        assertEquals(listOf("a.txt", "b.txt", "c.txt"), collected)
+    }
+
+    @Test
+    fun `Filesystem_List on missing directory raises IoFailure`(@TempDir tmp: Path) {
+        val fn = Builtins.lookup("strand-builtin:Fs.List")!!
+        val missing = tmp.resolve("not-a-dir")
+        val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
+            fn.invoke(listOf(Value.StringV(missing.toString())))
+        }
+        assertEquals("filesystem-list", ex.kind)
+    }
+
+    // ---------- Time ----------
+
+    @Test
+    fun `Time_Now reads from the active Builtins clock (FixedClock)`() {
+        val saved = Builtins.clock
+        try {
+            Builtins.clock = Builtins.FixedClock(1_234_567_890_000L)
+            val fn = Builtins.lookup("strand-builtin:Time.Now")!!
+            assertEquals(Value.IntV(1_234_567_890_000L), fn.invoke(emptyList()))
+        } finally {
+            Builtins.clock = saved
+        }
+    }
+
+    @Test
+    fun `Time_Now under SystemClock returns a value near System_currentTimeMillis`() {
+        val saved = Builtins.clock
+        try {
+            Builtins.clock = Builtins.SystemClock
+            val before = System.currentTimeMillis()
+            val fn = Builtins.lookup("strand-builtin:Time.Now")!!
+            val result = (fn.invoke(emptyList()) as Value.IntV).v
+            val after = System.currentTimeMillis()
+            // Result is between before and after (inclusive on both ends
+            // because System.currentTimeMillis may return the same value
+            // on fast machines).
+            assertTrue(result in before..after, "Time.Now returned $result; expected $before..$after")
+        } finally {
+            Builtins.clock = saved
+        }
+    }
+
+    @Test
+    fun `Time_Sleep under FixedClock is a no-op`() {
+        val saved = Builtins.clock
+        try {
+            Builtins.clock = Builtins.FixedClock(0L)
+            val fn = Builtins.lookup("strand-builtin:Time.Sleep")!!
+            val t0 = System.nanoTime()
+            assertEquals(Value.UnitV, fn.invoke(listOf(Value.IntV(1000L))))
+            val elapsedMillis = (System.nanoTime() - t0) / 1_000_000
+            // FixedClock.sleep is a no-op; should return in well under 100ms.
+            assertTrue(elapsedMillis < 100, "Time.Sleep took ${elapsedMillis}ms under FixedClock")
+        } finally {
+            Builtins.clock = saved
+        }
+    }
+}
