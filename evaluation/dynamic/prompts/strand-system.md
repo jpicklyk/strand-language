@@ -386,6 +386,35 @@ production; tests inject a seeded Random for reproducibility).
     strand-builtin:Random.Float() -> Float            -- uniform in [0.0, 1.0)
     strand-builtin:Random.Bytes(n: Int) -> Bytes      -- exactly n bytes
 
+### Higher-order List ops (`List.Map/Filter/Fold/Find/Any/All`)
+
+These take a Strand lambda (a `LAM` or, less commonly, a `FXP`)
+as the function argument. The interpreter invokes the lambda once
+per element. Lambdas inherit the calling site's capability
+context — any effects the lambda declares must be covered by the
+context surrounding the higher-order call.
+
+    strand-builtin:List.Map(list, fn: A -> B) -> List<B>
+    strand-builtin:List.Filter(list, predicate: A -> Bool) -> List<A>
+    strand-builtin:List.Fold(list, init: B, fn: (B, A) -> B) -> B
+    strand-builtin:List.Find(list, predicate: A -> Bool) -> Option<A>
+    strand-builtin:List.Any(list, predicate: A -> Bool) -> Bool
+    strand-builtin:List.All(list, predicate: A -> Bool) -> Bool
+
+Find / Any / All short-circuit on the first hit; Fold processes
+left-to-right; Map and Filter preserve order. Empty list inputs
+produce empty results (Nil) or the init value (Fold) or the
+appropriate boolean (Any → false, All → true vacuously).
+
+Typical Layer A density usage:
+
+    val LAM x intT (Application Int.Mul (xRef intT) two)
+    mapResult APP mapFn list double
+
+The lambda's `parameters` and `effects` follow the standard LAM
+shape; the FunctionType for the lambda parameter of the higher-
+order builtin must match its arity.
+
 ## Density sugars
 
 These shorthand forms produce byte-identical canonical JSON to their
