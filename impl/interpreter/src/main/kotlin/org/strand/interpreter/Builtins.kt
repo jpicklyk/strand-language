@@ -63,6 +63,21 @@ object Builtins {
     @Volatile
     var clock: Clock = SystemClock
 
+    /**
+     * Pluggable randomness source for the `Random.*` builtins. Default
+     * is a [java.security.SecureRandom] (cryptographically secure
+     * non-deterministic). Tests that need reproducible random sequences
+     * install a seeded [java.util.Random] in setup and reset in
+     * teardown. Thread safety mirrors [clock]: tests that mutate this
+     * must not run in parallel.
+     *
+     * Both `Random.Int` / `Random.Float` / `Random.Bytes` declare
+     * effect category `E-024 Crypto.RandomBytes` (the existing
+     * registry entry covering cryptographically-secure entropy).
+     */
+    @Volatile
+    var random: java.util.Random = java.security.SecureRandom()
+
     private val registry: Map<String, Fn> = mapOf(
         // Pure arithmetic (no declared effects expected).
         "strand-builtin:Int.Add" to Fn { args ->
@@ -1108,6 +1123,50 @@ object Builtins {
                 out[i] = ((hi shl 4) or lo).toByte()
             }
             Value.SumV("Some", Value.BytesV(out))
+        },
+
+        // Stdlib expansion round 2 — Random.* builtins (Phase 5).
+        // Effectful: declare E-024 Crypto.RandomBytes at the call
+        // site. Reads from the active [random] (default SecureRandom).
+        // Tests install a seeded java.util.Random for reproducibility.
+
+        "strand-builtin:Random.Int" to Fn { args ->
+            // (min: Int, max: Int) -> Int. Inclusive min, exclusive max.
+            // Returns a uniformly-distributed Long in [min, max).
+            require(args.size == 2) {
+                "Random.Int expects 2 args (min: Int, max: Int), got ${args.size}"
+            }
+            val min = (args[0] as Value.IntV).v
+            val max = (args[1] as Value.IntV).v
+            require(max > min) { "Random.Int requires max > min, got min=$min max=$max" }
+            val range = max - min
+            val sample = if (range <= Int.MAX_VALUE.toLong()) {
+                random.nextInt(range.toInt()).toLong()
+            } else {
+                // 64-bit range: use nextLong and modulo. Slight bias
+                // for non-power-of-2 ranges but acceptable for any
+                // realistic application range.
+                val raw = random.nextLong()
+                val unbiased = if (raw == Long.MIN_VALUE) 0L else kotlin.math.abs(raw)
+                unbiased % range
+            }
+            Value.IntV(min + sample)
+        },
+
+        "strand-builtin:Random.Float" to Fn { args ->
+            // () -> Float. Uniformly distributed in [0.0, 1.0).
+            require(args.isEmpty()) { "Random.Float expects 0 args, got ${args.size}" }
+            Value.FloatV(random.nextDouble())
+        },
+
+        "strand-builtin:Random.Bytes" to Fn { args ->
+            // (n: Int) -> Bytes. Exactly n random bytes.
+            require(args.size == 1) { "Random.Bytes expects 1 arg (n: Int), got ${args.size}" }
+            val n = (args[0] as Value.IntV).v.toInt()
+            require(n >= 0) { "Random.Bytes n must be non-negative, got $n" }
+            val out = ByteArray(n)
+            random.nextBytes(out)
+            Value.BytesV(out)
         },
 
         // Test-only no-op effectful builtin. Returns IntV(0) for any
