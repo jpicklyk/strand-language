@@ -10,9 +10,12 @@ strand_eval.languages.__init__:
     format_feedback(verify_result, fmt) -> str
 
 The verification step shells out to ``mypy --strict`` against a temp
-file. If mypy is not on PATH the verify step returns a clear error
-explaining the missing dependency (the orchestrator's tests skip
-mypy-requiring cases via ``pytest.mark.skipif``).
+file when mypy is available, and falls back to ``python -m py_compile``
+(syntax-only) when mypy is missing. The fallback produces a weaker
+verification signal but lets the loop run on stock Python installs.
+Set ``STRAND_EVAL_REQUIRE_MYPY=1`` to make a missing mypy a hard
+failure (preserves the old behavior for CI where the mypy signal is
+required).
 
 The run step dispatches on the task's ``check`` field:
 
@@ -93,32 +96,68 @@ class PythonLanguage(Language):
     # ------------------------------------------------------------------
 
     def verify(self, program_source: str) -> VerifyResult:
-        """Run ``mypy --strict`` over the program and report errors.
+        """Statically verify the program. Uses mypy --strict when available,
+        falls back to ``python -m py_compile`` (syntax-only) otherwise.
 
-        Returns ok=True iff mypy exits cleanly. On non-zero exit, the
-        mypy stdout is parsed into structured ``error_json`` entries
-        and a prose summary. If mypy is not on PATH, returns ok=False
-        with a clear note so the orchestrator (and tests) can skip.
+        Returns ok=True iff verification passes. On a mypy failure the
+        stdout is parsed into structured ``error_json`` entries and a
+        prose summary. On a syntax failure (py_compile path) the
+        SyntaxError is surfaced. When mypy is not on PATH, verification
+        falls back to py_compile rather than refusing — many development
+        environments (including stock Python installs) do not ship mypy
+        by default, and a hard mypy dependency makes the framework
+        unusable on those machines. The verifier-feedback signal is
+        weaker without mypy (only catches parse-level errors, not type
+        errors) but the orchestrator can still run the dynamic-cost loop
+        end-to-end.
+
+        Set the env var ``STRAND_EVAL_REQUIRE_MYPY=1`` to make a missing
+        mypy a hard failure (preserves the old behavior for CI runs
+        where the mypy verification signal is required).
         """
-        mypy_path = shutil.which("mypy")
-        if mypy_path is None:
-            return VerifyResult(
-                ok=False,
-                error_prose=(
-                    "mypy is not on PATH. The Python language adapter requires "
-                    "mypy for static verification. Install it with "
-                    "`pip install mypy` and ensure it is callable from PATH."
-                ),
-                error_json={
-                    "kind": "missing-dependency",
-                    "missing": "mypy",
-                },
-            )
-
         with tempfile.TemporaryDirectory(prefix="strand_eval_py_") as tmpdir:
             program_path = os.path.join(tmpdir, "program.py")
             with open(program_path, "w", encoding="utf-8") as fh:
                 fh.write(program_source)
+
+            mypy_path = shutil.which("mypy")
+            if mypy_path is None:
+                if os.environ.get("STRAND_EVAL_REQUIRE_MYPY") == "1":
+                    return VerifyResult(
+                        ok=False,
+                        error_prose=(
+                            "mypy is not on PATH and STRAND_EVAL_REQUIRE_MYPY=1. "
+                            "Install mypy with `pip install mypy` or unset the env var."
+                        ),
+                        error_json={
+                            "kind": "missing-dependency",
+                            "missing": "mypy",
+                        },
+                    )
+                # Fallback: syntax-only check via py_compile. This is a weaker
+                # verification signal than mypy --strict (only catches parse
+                # errors, not type errors) but lets the loop run end-to-end
+                # without requiring mypy.
+                proc = subprocess.run(
+                    [sys.executable, "-m", "py_compile", program_path],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    return VerifyResult(ok=True)
+                return VerifyResult(
+                    ok=False,
+                    error_prose=(
+                        f"Python syntax error (py_compile fallback — mypy not installed):\n"
+                        f"{proc.stderr.strip() or proc.stdout.strip()}"
+                    ),
+                    error_json={
+                        "kind": "py_compile",
+                        "exit_code": proc.returncode,
+                        "stderr": proc.stderr,
+                    },
+                )
 
             cmd = [
                 mypy_path,

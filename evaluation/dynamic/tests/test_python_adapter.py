@@ -5,6 +5,12 @@ so the suite passes in environments without it (CI is one such
 environment; contributors without a Python toolchain installed are
 another). The skipped tests are still useful regression coverage when
 the toolchain IS present.
+
+The default verify path falls back to ``python -m py_compile`` when
+mypy is absent (syntax-only check). Tests for that fallback do not need
+to skip when mypy IS present, but they do need to clear
+``STRAND_EVAL_REQUIRE_MYPY`` and synthesize a mypy-missing situation by
+temporarily stripping the executable from PATH via monkeypatch.
 """
 
 from __future__ import annotations
@@ -99,17 +105,53 @@ def test_python_adapter_registered() -> None:
 # ----------------------------------------------------------------------
 
 
-def test_verify_reports_missing_mypy_clearly() -> None:
-    """If mypy is missing, verify returns a clear ok=False with guidance.
+def test_verify_falls_back_to_py_compile_when_mypy_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With mypy absent and no env override, verify falls back to py_compile.
 
-    This is the path operators see in CI without mypy installed. The
-    error_prose mentions mypy and points at installation; the
-    error_json carries a stable ``kind`` so the orchestrator can branch
-    on it if needed.
+    A syntactically valid program should pass the fallback. The
+    verifier-feedback signal is weaker (only catches parse errors, not
+    type errors) but the loop still runs end-to-end on stock Python
+    installs without mypy.
     """
     adapter = PythonLanguage()
-    if _HAS_MYPY:
-        pytest.skip("mypy IS on PATH; this test only meaningful when it is not")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.delenv("STRAND_EVAL_REQUIRE_MYPY", raising=False)
+    result = adapter.verify("def main() -> None:\n    pass\n")
+    assert result.ok is True, result.error_prose
+
+
+def test_verify_py_compile_fallback_catches_syntax_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The py_compile fallback still surfaces SyntaxError as ok=False.
+
+    error_json carries kind="py_compile" so the orchestrator can tell
+    the fallback path apart from the mypy path.
+    """
+    adapter = PythonLanguage()
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.delenv("STRAND_EVAL_REQUIRE_MYPY", raising=False)
+    # Unterminated string literal — a syntax error py_compile must catch.
+    result = adapter.verify("def main() -> None:\n    x = 'unterminated\n")
+    assert result.ok is False
+    assert result.error_json is not None
+    assert result.error_json.get("kind") == "py_compile"
+
+
+def test_verify_require_mypy_env_var_hard_fails_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """STRAND_EVAL_REQUIRE_MYPY=1 preserves the old hard-fail behavior.
+
+    This is the CI path: when the operator explicitly opts in by setting
+    the env var, a missing mypy is a hard failure with a clear note
+    rather than a silent fallback to weaker py_compile checking.
+    """
+    adapter = PythonLanguage()
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setenv("STRAND_EVAL_REQUIRE_MYPY", "1")
     result = adapter.verify("def main() -> None:\n    pass\n")
     assert result.ok is False
     assert result.error_prose is not None
