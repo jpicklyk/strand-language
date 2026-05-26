@@ -1,5 +1,7 @@
 package org.strand.interpreter
 
+import kotlin.math.pow
+
 /**
  * Registry of trusted in-process builtins that [ForeignNode][org.strand.core.Node.ForeignNode]
  * declarations may target. Layer 4 step 1 ships a small fixed set; later
@@ -779,6 +781,124 @@ object Builtins {
                 "tail" to Value.SumV("Nil", null),
             )))
             Value.SumV("Some", singleton)
+        },
+
+        // Stdlib expansion round 2 — Math.* builtins. Pure.
+        // Int-typed (Abs/Sign/Min/Max/Mod) compose with the existing
+        // Int arithmetic surface; Float-typed (Sqrt/Pow/Log/Exp/Sin/
+        // Cos/Tan) are irreducibly real-valued; Floor/Ceil/Round take
+        // a Float and return an Int. Math.Mod is the *always-positive*
+        // mathematical modulo, distinct from Int.Mod (which follows
+        // JVM `%` sign-of-dividend semantics).
+
+        "strand-builtin:Math.Abs" to Fn { args ->
+            require(args.size == 1) { "Math.Abs expects 1 arg (n: Int), got ${args.size}" }
+            Value.IntV(kotlin.math.abs((args[0] as Value.IntV).v))
+        },
+
+        "strand-builtin:Math.Sign" to Fn { args ->
+            // -1, 0, or 1 depending on the sign of the input.
+            require(args.size == 1) { "Math.Sign expects 1 arg (n: Int), got ${args.size}" }
+            val n = (args[0] as Value.IntV).v
+            Value.IntV(when {
+                n > 0 -> 1L
+                n < 0 -> -1L
+                else -> 0L
+            })
+        },
+
+        "strand-builtin:Math.Min" to Fn { args ->
+            require(args.size == 2) { "Math.Min expects 2 args (a, b: Int), got ${args.size}" }
+            Value.IntV(kotlin.math.min((args[0] as Value.IntV).v, (args[1] as Value.IntV).v))
+        },
+
+        "strand-builtin:Math.Max" to Fn { args ->
+            require(args.size == 2) { "Math.Max expects 2 args (a, b: Int), got ${args.size}" }
+            Value.IntV(kotlin.math.max((args[0] as Value.IntV).v, (args[1] as Value.IntV).v))
+        },
+
+        "strand-builtin:Math.Mod" to Fn { args ->
+            // True mathematical modulo: result has the sign of the
+            // divisor (always non-negative for positive divisors).
+            // Distinct from Int.Mod, which follows JVM `%` semantics.
+            require(args.size == 2) { "Math.Mod expects 2 args (a, b: Int), got ${args.size}" }
+            val a = (args[0] as Value.IntV).v
+            val b = (args[1] as Value.IntV).v
+            require(b != 0L) { "Math.Mod division by zero" }
+            Value.IntV(((a % b) + b) % b)
+        },
+
+        "strand-builtin:Math.Floor" to Fn { args ->
+            // (f: Float) -> Int. Largest Int <= f.
+            require(args.size == 1) { "Math.Floor expects 1 arg (f: Float), got ${args.size}" }
+            Value.IntV(kotlin.math.floor((args[0] as Value.FloatV).v).toLong())
+        },
+
+        "strand-builtin:Math.Ceil" to Fn { args ->
+            // (f: Float) -> Int. Smallest Int >= f.
+            require(args.size == 1) { "Math.Ceil expects 1 arg (f: Float), got ${args.size}" }
+            Value.IntV(kotlin.math.ceil((args[0] as Value.FloatV).v).toLong())
+        },
+
+        "strand-builtin:Math.Round" to Fn { args ->
+            // (f: Float) -> Int. Banker's rounding (round-half-to-even)
+            // to avoid the asymmetric bias of round-half-up.
+            require(args.size == 1) { "Math.Round expects 1 arg (f: Float), got ${args.size}" }
+            Value.IntV(kotlin.math.round((args[0] as Value.FloatV).v).toLong())
+        },
+
+        "strand-builtin:Math.Sqrt" to Fn { args ->
+            // (f: Float) -> Float. NaN for negative inputs (matches IEEE 754).
+            require(args.size == 1) { "Math.Sqrt expects 1 arg (f: Float), got ${args.size}" }
+            Value.FloatV(kotlin.math.sqrt((args[0] as Value.FloatV).v))
+        },
+
+        "strand-builtin:Math.Pow" to Fn { args ->
+            // (base: Float, exp: Float) -> Float.
+            require(args.size == 2) { "Math.Pow expects 2 args (base, exp: Float), got ${args.size}" }
+            Value.FloatV((args[0] as Value.FloatV).v.pow((args[1] as Value.FloatV).v))
+        },
+
+        "strand-builtin:Math.Log" to Fn { args ->
+            // (f: Float) -> Float. Natural log. NaN for non-positive inputs.
+            require(args.size == 1) { "Math.Log expects 1 arg (f: Float), got ${args.size}" }
+            Value.FloatV(kotlin.math.ln((args[0] as Value.FloatV).v))
+        },
+
+        "strand-builtin:Math.Exp" to Fn { args ->
+            // (f: Float) -> Float. e^f.
+            require(args.size == 1) { "Math.Exp expects 1 arg (f: Float), got ${args.size}" }
+            Value.FloatV(kotlin.math.exp((args[0] as Value.FloatV).v))
+        },
+
+        "strand-builtin:Math.Sin" to Fn { args ->
+            require(args.size == 1) { "Math.Sin expects 1 arg (f: Float), got ${args.size}" }
+            Value.FloatV(kotlin.math.sin((args[0] as Value.FloatV).v))
+        },
+
+        "strand-builtin:Math.Cos" to Fn { args ->
+            require(args.size == 1) { "Math.Cos expects 1 arg (f: Float), got ${args.size}" }
+            Value.FloatV(kotlin.math.cos((args[0] as Value.FloatV).v))
+        },
+
+        "strand-builtin:Math.Tan" to Fn { args ->
+            require(args.size == 1) { "Math.Tan expects 1 arg (f: Float), got ${args.size}" }
+            Value.FloatV(kotlin.math.tan((args[0] as Value.FloatV).v))
+        },
+
+        // Int <-> Float coercion helpers. Strand has no implicit
+        // numeric coercion; these make Math.Sqrt(Float.FromInt(n))
+        // ergonomic without round-tripping through String.
+        "strand-builtin:Float.FromInt" to Fn { args ->
+            require(args.size == 1) { "Float.FromInt expects 1 arg (n: Int), got ${args.size}" }
+            Value.FloatV((args[0] as Value.IntV).v.toDouble())
+        },
+
+        "strand-builtin:Int.FromFloatTrunc" to Fn { args ->
+            // Truncation toward zero (drops the fractional part).
+            // Distinct from Math.Floor (which rounds toward -infinity).
+            require(args.size == 1) { "Int.FromFloatTrunc expects 1 arg (f: Float), got ${args.size}" }
+            Value.IntV((args[0] as Value.FloatV).v.toLong())
         },
 
         // Test-only no-op effectful builtin. Returns IntV(0) for any
