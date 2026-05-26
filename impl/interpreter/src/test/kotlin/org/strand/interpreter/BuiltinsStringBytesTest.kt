@@ -171,4 +171,69 @@ class BuiltinsStringBytesTest {
         val fn = lookup("strand-builtin:Bytes.ParseBase64")
         assertEquals(Value.SumV("None", null), fn.invoke(listOf(Value.StringV("!!! not base64 !!!"))))
     }
+
+    // ---------- Json.Parse ----------
+
+    @Test
+    fun `Json_Parse null returns Some JsonNull`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        assertEquals(Value.SumV("Some", Value.SumV("JsonNull", null)), fn.invoke(listOf(Value.StringV("null"))))
+    }
+
+    @Test
+    fun `Json_Parse true and false return Some JsonBool`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        assertEquals(Value.SumV("Some", Value.SumV("JsonBool", Value.BoolV(true))), fn.invoke(listOf(Value.StringV("true"))))
+        assertEquals(Value.SumV("Some", Value.SumV("JsonBool", Value.BoolV(false))), fn.invoke(listOf(Value.StringV("false"))))
+    }
+
+    @Test
+    fun `Json_Parse integer returns Some JsonNumber`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        assertEquals(Value.SumV("Some", Value.SumV("JsonNumber", Value.IntV(42L))), fn.invoke(listOf(Value.StringV("42"))))
+        assertEquals(Value.SumV("Some", Value.SumV("JsonNumber", Value.IntV(-7L))), fn.invoke(listOf(Value.StringV("-7"))))
+    }
+
+    @Test
+    fun `Json_Parse string returns Some JsonString`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        assertEquals(Value.SumV("Some", Value.SumV("JsonString", Value.StringV("hello"))), fn.invoke(listOf(Value.StringV("\"hello\""))))
+    }
+
+    @Test
+    fun `Json_Parse malformed input returns None`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        assertEquals(Value.SumV("None", null), fn.invoke(listOf(Value.StringV("{invalid"))))
+        assertEquals(Value.SumV("None", null), fn.invoke(listOf(Value.StringV(""))))
+    }
+
+    @Test
+    fun `Json_Parse array degrades to JsonNull`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        // Arrays + objects aren't representable in the current blessed
+        // JsonValue (nested-μ blocker); they degrade to JsonNull rather
+        // than None so the caller knows the input parsed but the
+        // structure wasn't capturable. A nested-μ JsonArray/JsonObject
+        // expansion would replace this.
+        assertEquals(Value.SumV("Some", Value.SumV("JsonNull", null)), fn.invoke(listOf(Value.StringV("[1,2,3]"))))
+        assertEquals(Value.SumV("Some", Value.SumV("JsonNull", null)), fn.invoke(listOf(Value.StringV("{}"))))
+    }
+
+    // ---------- Markdown.Parse ----------
+
+    @Test
+    fun `Markdown_Parse wraps input as a single Paragraph`() {
+        val fn = lookup("strand-builtin:Markdown.Parse")
+        val result = fn.invoke(listOf(Value.StringV("hello world"))) as Value.SumV
+        assertEquals("Some", result.case)
+        val list = result.payload as Value.SumV
+        assertEquals("Cons", list.case)
+        val firstEntry = (list.payload as Value.ProductV).fields
+        val firstBlock = firstEntry.getValue("head") as Value.SumV
+        assertEquals("Paragraph", firstBlock.case)
+        assertEquals(Value.StringV("hello world"), firstBlock.payload)
+        // Tail is Nil.
+        val tail = firstEntry.getValue("tail") as Value.SumV
+        assertEquals("Nil", tail.case)
+    }
 }

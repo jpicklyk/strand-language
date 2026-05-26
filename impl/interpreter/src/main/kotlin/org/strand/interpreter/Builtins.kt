@@ -705,6 +705,82 @@ object Builtins {
             }
         },
 
+        // Layer 4 step 2 — Json.Parse (Phase 4 #9). Parses a JSON
+        // primitive (null, true, false, number, string) into the
+        // standard JsonValue sum encoding from the blessed library
+        // (corpus 54: JsonNull | JsonBool(Bool) | JsonNumber(Int) |
+        // JsonString(String)). Arrays and objects are not currently
+        // supported by the JsonValue blessed library because of
+        // nested-μ binder limitations — they return Some(JsonNull) as
+        // a degraded fallback so the parser never throws on syntactically
+        // valid JSON; tests that need arrays/objects should wait for
+        // the nested-μ work.
+        //
+        // Returns Option<JsonValue>: Some on a valid JSON primitive,
+        // None on malformed input.
+
+        "strand-builtin:Json.Parse" to Fn { args ->
+            require(args.size == 1) { "Json.Parse expects 1 arg (s: String), got ${args.size}" }
+            val s = (args[0] as Value.StringV).v.trim()
+            try {
+                val element = kotlinx.serialization.json.Json.parseToJsonElement(s)
+                val jsonValue: Value = when (element) {
+                    is kotlinx.serialization.json.JsonNull ->
+                        Value.SumV("JsonNull", null)
+                    is kotlinx.serialization.json.JsonPrimitive -> {
+                        if (element.isString) {
+                            Value.SumV("JsonString", Value.StringV(element.content))
+                        } else {
+                            val b = element.content.lowercase()
+                            when {
+                                b == "true" -> Value.SumV("JsonBool", Value.BoolV(true))
+                                b == "false" -> Value.SumV("JsonBool", Value.BoolV(false))
+                                else -> {
+                                    val asLong = element.content.toLongOrNull()
+                                    if (asLong != null) Value.SumV("JsonNumber", Value.IntV(asLong))
+                                    else return@Fn Value.SumV("None", null)
+                                }
+                            }
+                        }
+                    }
+                    // Arrays + objects: degrade to JsonNull. The JsonValue
+                    // blessed library has no recursive cases for them, so
+                    // there's no faithful encoding to produce. Returning
+                    // JsonNull rather than None signals "parsed valid JSON,
+                    // but structure not representable" — a future
+                    // nested-μ JsonArray/JsonObject expansion will replace
+                    // this with the proper recursive encoding.
+                    else -> Value.SumV("JsonNull", null)
+                }
+                Value.SumV("Some", jsonValue)
+            } catch (_: kotlinx.serialization.SerializationException) {
+                Value.SumV("None", null)
+            } catch (_: IllegalArgumentException) {
+                Value.SumV("None", null)
+            }
+        },
+
+        // Layer 4 step 2 — Markdown.Parse (Phase 4 #9). Stub for
+        // symmetry: parses a Markdown source into the MarkdownDocument
+        // sum encoding (corpus 61). The corpus encoding is a list of
+        // MarkdownBlock variants (Heading, Paragraph, CodeBlock,
+        // Quote); full block-level parsing is non-trivial and the
+        // blessed library can already represent the result. For now,
+        // wrap the entire input as a single Paragraph block. Programs
+        // that need real parsing should use a proper markdown lib via
+        // a future blessed-library binding.
+        "strand-builtin:Markdown.Parse" to Fn { args ->
+            require(args.size == 1) { "Markdown.Parse expects 1 arg (s: String), got ${args.size}" }
+            val s = (args[0] as Value.StringV).v
+            // Build: Cons(Paragraph(s), Nil) as the document list.
+            val paragraphBlock = Value.SumV("Paragraph", Value.StringV(s))
+            val singleton = Value.SumV("Cons", Value.ProductV(mapOf(
+                "head" to paragraphBlock,
+                "tail" to Value.SumV("Nil", null),
+            )))
+            Value.SumV("Some", singleton)
+        },
+
         // Test-only no-op effectful builtin. Returns IntV(0) for any
         // single StringV argument. Used by tests that want to exercise
         // the effect-handler / capability machinery without touching
