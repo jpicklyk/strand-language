@@ -145,12 +145,284 @@ object Elaborator {
             val afterCompactParams = inferCompactLambdaParamTypes(afterRecSlot)
             val afterFntSynthesis = synthesizeFunctionTypes(afterCompactParams)
             val afterScsInference = inferSumCaseTypes(afterFntSynthesis)
+            // v4 outer-product synthesis: rewrites inner-PRD references
+            // at value-construction / function-param sites to a synthesized
+            // outer-equivalent that the verifier can resolve at depth=0.
+            val afterOuterSynth = synthesizeOuterRecursiveProducts(afterScsInference)
             // v1-v3 passes (extended to use the richer typeOfArg)
-            val afterAllNodeRewrites = applyNodeRewrites(afterScsInference)
+            val afterAllNodeRewrites = applyNodeRewrites(afterOuterSynth)
             if (afterAllNodeRewrites == current) return current
             current = afterAllNodeRewrites
         }
         return current
+    }
+
+    // ========================================================================
+    // v4 — Outer ProductType synthesis (task #22).
+    // ========================================================================
+
+    /**
+     * Auto-synthesize "outer" ProductType nodes for the canonical inner/
+     * outer split that recursive types require (see corpus 31 for the
+     * pattern). The agent's natural emission uses one ProductType per
+     * recursive case payload, with the recursive field referencing
+     * `RecursiveSelf`; that works as the `SumTypeCase.caseType` (the
+     * verifier walks the SCS inside the enclosing `RecursiveType`, where
+     * the RS reference is well-bound) but fails at top-level
+     * value-construction sites (`ProductValue.ofType`, `ParameterDecl.
+     * paramType`), where the verifier resolves at depth=0 and trips
+     * `UnboundRecursiveSelf`.
+     *
+     * This pass detects PRDs whose field-tree transitively reaches an RS
+     * reference without crossing an RT boundary (the "inner" PRDs) and
+     * for each value-construction-site use, synthesizes an outer
+     * equivalent in which every RS reference is replaced by the
+     * enclosing RT id. The original inner PRD stays put — the SCS still
+     * references it inside the RT, and the canonical encoder treats inner
+     * and outer as equirecursively-equal, so the hash is unaffected.
+     *
+     * Rewrites applied at value-construction sites:
+     *  - `ProductValue.ofType` — every PV whose ofType is an inner PRD.
+     *  - `ParameterDecl.paramType` — every standalone PRC declaration.
+     *
+     * Not rewritten (handled elsewhere or rare in practice):
+     *  - `SumTypeCase.caseType` — inner is correct here (inside RT walk).
+     *  - `Pattern.patternType` for raw PCN/PVR — WHEN sugar already
+     *    synthesizes an outer in [DagJsonEmitter.expandWhenSugar]; raw
+     *    use is rare and the agent can rewrite manually.
+     *  - Compact-LAM `name:type` entries — the type part is a substring
+     *    inside an `Arg.Bare`; rewriting requires string-level munging
+     *    and is deferred. Standalone PRC rewrites cover the typical case.
+     */
+    private fun synthesizeOuterRecursiveProducts(doc: LayerADocument): LayerADocument {
+        val byId = doc.nodes.associateBy { it.id }
+
+        // Step 1: classify each PRD as "inner" (transitively reaches RS
+        // without crossing RT) or not. Memoize.
+        val reachesRsMemo = mutableMapOf<String, Boolean>()
+        fun reachesRs(typeId: String, visiting: Set<String>): Boolean {
+            reachesRsMemo[typeId]?.let { return it }
+            if (typeId in visiting) return false
+            val node = byId[typeId] ?: return false
+            val result = when (node.code) {
+                "RS" -> true
+                "RT" -> false  // crosses RT boundary; the binder rebinds RS
+                "PRD" -> {
+                    val fields = (node.args.firstOrNull() as? Arg.Listing)?.items.orEmpty()
+                    fields.any { entry ->
+                        val prfId = (entry as? Arg.Bare)?.text ?: return@any false
+                        val prfNode = byId[prfId] ?: return@any false
+                        if (prfNode.code != "PRF") return@any false
+                        val fieldTypeId = (prfNode.args.getOrNull(1) as? Arg.Bare)?.text
+                            ?: return@any false
+                        reachesRs(fieldTypeId, visiting + typeId)
+                    }
+                }
+                "SUM" -> {
+                    val cases = (node.args.firstOrNull() as? Arg.Listing)?.items.orEmpty()
+                    cases.any { entry ->
+                        val scsId = (entry as? Arg.Bare)?.text ?: return@any false
+                        val scsNode = byId[scsId] ?: return@any false
+                        if (scsNode.code != "SCS") return@any false
+                        val caseTypeId = (scsNode.args.getOrNull(1) as? Arg.Bare)?.text
+                            ?: return@any false
+                        reachesRs(caseTypeId, visiting + typeId)
+                    }
+                }
+                "FNT" -> {
+                    val params = (node.args.firstOrNull() as? Arg.Listing)?.items.orEmpty()
+                    val resultRef = (node.args.getOrNull(1) as? Arg.Bare)?.text
+                    val anyParam = params.any { entry ->
+                        val pId = (entry as? Arg.Bare)?.text ?: return@any false
+                        reachesRs(pId, visiting + typeId)
+                    }
+                    anyParam || (resultRef != null && reachesRs(resultRef, visiting + typeId))
+                }
+                else -> false
+            }
+            reachesRsMemo[typeId] = result
+            return result
+        }
+        for (node in doc.nodes) {
+            if (node.code == "PRD") reachesRs(node.id, emptySet())
+        }
+
+        val innerPrdIds = reachesRsMemo.entries
+            .asSequence()
+            .filter { it.value && byId[it.key]?.code == "PRD" }
+            .map { it.key }
+            .toSet()
+        if (innerPrdIds.isEmpty()) return doc
+
+        // Step 2: find the enclosing RT for each inner PRD. Walk every
+        // RT's body subtree without crossing other RTs; record which
+        // inner PRDs are reachable. First-RT-found wins (outermost is
+        // typically the only one for the canonical pattern).
+        val rtForInnerPrd = mutableMapOf<String, String>()
+        for (rt in doc.nodes.filter { it.code == "RT" }) {
+            val bodyId = (rt.args.firstOrNull() as? Arg.Bare)?.text ?: continue
+            val visiting = mutableSetOf<String>()
+            fun walk(id: String) {
+                if (id in visiting) return
+                visiting += id
+                val n = byId[id] ?: return
+                // Don't cross into another RT (its body has its own
+                // binder; inner PRDs inside it bind to *that* RT).
+                if (n.code == "RT" && id != rt.id) return
+                if (n.code == "PRD" && id in innerPrdIds) {
+                    rtForInnerPrd.putIfAbsent(id, rt.id)
+                }
+                // Walk all bare-ref children.
+                for (arg in n.args) {
+                    walkArg(arg, ::walk)
+                }
+            }
+            walk(bodyId)
+        }
+        if (rtForInnerPrd.isEmpty()) return doc
+
+        // Step 3: synthesize outer equivalents on demand. Each call mints
+        // (at most once per inner PRD) an outer PRD whose RS-referencing
+        // PRFs are replaced by synthesized outer PRFs pointing at the RT
+        // id, and whose nested-inner PRF fieldTypes (if any) are
+        // replaced by the recursively-synthesized outer PRD.
+        val outerForInner = mutableMapOf<String, String>()
+        val synthesized = mutableListOf<NodeDecl>()
+        val counter = intArrayOf(0)
+        fun freshOuterId(suffix: String) = "__outerprd${counter[0]++}_$suffix"
+        fun freshOuterPrfId(suffix: String) = "__outerprf${counter[0]++}_$suffix"
+
+        fun synthOuter(innerPrdId: String): String {
+            outerForInner[innerPrdId]?.let { return it }
+            val innerPrd = byId[innerPrdId] ?: return innerPrdId
+            val rtId = rtForInnerPrd[innerPrdId] ?: return innerPrdId
+            val outerId = freshOuterId(innerPrdId)
+            // Memoize early to break recursion cycles via nested-inner refs.
+            outerForInner[innerPrdId] = outerId
+
+            val origFields = (innerPrd.args.firstOrNull() as? Arg.Listing)?.items.orEmpty()
+            val newFieldEntries = origFields.map { entry ->
+                val innerPrfId = (entry as? Arg.Bare)?.text ?: return@map entry
+                val innerPrf = byId[innerPrfId] ?: return@map entry
+                if (innerPrf.code != "PRF") return@map entry
+                val nameArg = innerPrf.args.getOrNull(0) ?: return@map entry
+                val fieldTypeRef = innerPrf.args.getOrNull(1) as? Arg.Bare ?: return@map entry
+                val fieldTypeId = fieldTypeRef.text
+                val newFieldTypeId = when {
+                    // RS reference → replace with the enclosing RT.
+                    byId[fieldTypeId]?.code == "RS" -> rtId
+                    // Nested inner PRD → recurse, synthesize its outer.
+                    fieldTypeId in innerPrdIds -> synthOuter(fieldTypeId)
+                    // Anything else: pass through.
+                    else -> fieldTypeId
+                }
+                if (newFieldTypeId == fieldTypeId) {
+                    // No change needed for this PRF; reuse it.
+                    Arg.Bare(innerPrfId)
+                } else {
+                    val newPrfId = freshOuterPrfId(innerPrfId)
+                    synthesized += NodeDecl(
+                        id = newPrfId,
+                        code = "PRF",
+                        args = listOf(nameArg, Arg.Bare(newFieldTypeId)),
+                        line = innerPrf.line,
+                    )
+                    Arg.Bare(newPrfId)
+                }
+            }
+            synthesized += NodeDecl(
+                id = outerId,
+                code = "PRD",
+                args = listOf(Arg.Listing(newFieldEntries)),
+                line = innerPrd.line,
+            )
+            return outerId
+        }
+
+        // Step 4: rewrite both top-level node args (PV.ofType,
+        // PRC.paramType) AND nested `(PV ...)` / `(PRC ...)` expressions
+        // inside other nodes' arg trees. The nested form is what
+        // `DagJsonEmitter.synthesizeNestedIfNested` expands at emit
+        // time, so without the nested-arg walk a program like
+        // `c1 SV listT "Cons" (PV consPayload [head=1 tail=nilV])`
+        // would miss the rewrite and still trip `UnboundRecursiveSelf`
+        // after synthesis. Compact-LAM `name:type` entries are not
+        // rewritten — string-level munging deferred.
+        fun shouldRewriteOfType(typeId: String?): Boolean =
+            typeId != null && typeId in innerPrdIds && typeId in rtForInnerPrd
+
+        fun rewriteArgTree(arg: Arg): Arg {
+            return when (arg) {
+                is Arg.Listing -> Arg.Listing(arg.items.map { rewriteArgTree(it) })
+                is Arg.Nested -> {
+                    val rewrittenChildren = arg.args.map { rewriteArgTree(it) }
+                    // For nested PV / PRC, also rewrite the type-position ref.
+                    val finalChildren = when (arg.code) {
+                        "PV" -> {
+                            val ofType = (rewrittenChildren.getOrNull(0) as? Arg.Bare)?.text
+                            if (shouldRewriteOfType(ofType)) {
+                                val mut = rewrittenChildren.toMutableList()
+                                mut[0] = Arg.Bare(synthOuter(ofType!!))
+                                mut
+                            } else rewrittenChildren
+                        }
+                        "PRC" -> {
+                            val paramTypeId = (rewrittenChildren.getOrNull(1) as? Arg.Bare)?.text
+                            if (shouldRewriteOfType(paramTypeId)) {
+                                val mut = rewrittenChildren.toMutableList()
+                                mut[1] = Arg.Bare(synthOuter(paramTypeId!!))
+                                mut
+                            } else rewrittenChildren
+                        }
+                        else -> rewrittenChildren
+                    }
+                    Arg.Nested(arg.code, finalChildren)
+                }
+                else -> arg
+            }
+        }
+
+        val rewrittenNodes = doc.nodes.map { node ->
+            val withTypeRewritten = when (node.code) {
+                "PV" -> {
+                    val ofType = (node.args.firstOrNull() as? Arg.Bare)?.text
+                    if (shouldRewriteOfType(ofType)) {
+                        val mut = node.args.toMutableList()
+                        mut[0] = Arg.Bare(synthOuter(ofType!!))
+                        node.copy(args = mut)
+                    } else node
+                }
+                "PRC" -> {
+                    val paramTypeId = (node.args.getOrNull(1) as? Arg.Bare)?.text
+                    if (shouldRewriteOfType(paramTypeId)) {
+                        val mut = node.args.toMutableList()
+                        mut[1] = Arg.Bare(synthOuter(paramTypeId!!))
+                        node.copy(args = mut)
+                    } else node
+                }
+                else -> node
+            }
+            // Also walk into nested expressions inside this node's args.
+            val rewrittenArgs = withTypeRewritten.args.map { rewriteArgTree(it) }
+            if (rewrittenArgs == withTypeRewritten.args) withTypeRewritten
+            else withTypeRewritten.copy(args = rewrittenArgs)
+        }
+
+        return if (synthesized.isEmpty() && rewrittenNodes == doc.nodes) doc
+        else LayerADocument(
+            version = doc.version,
+            rootId = doc.rootId,
+            nodes = rewrittenNodes + synthesized,
+        )
+    }
+
+    private fun walkArg(arg: Arg, visit: (String) -> Unit) {
+        when (arg) {
+            is Arg.Bare -> visit(arg.text)
+            is Arg.Listing -> for (item in arg.items) walkArg(item, visit)
+            is Arg.Nested -> for (child in arg.args) walkArg(child, visit)
+            else -> {}
+        }
     }
 
     // ========================================================================
