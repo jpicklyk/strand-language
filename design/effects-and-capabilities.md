@@ -2,7 +2,7 @@
 
 **Document:** `design/effects-and-capabilities.md`
 **Status:** Wave 3 draft
-**Last revised:** 2026-05-23 (§ Effect handlers expanded with N-043 Handler node shape, closure algebra, runtime dispatch — per Q-030 resolution in `proposals/implemented/effect-handlers.md`)
+**Last revised:** 2026-05-26 (§ Diagnostic and host-environment effects added — E-032 Log.Write, E-033 OS.Read, E-034 System.Exit — to support the Log.* / OS.* / System.Exit builtin slice added in `stdlib expansion round 3`. No parameters; all three are simple guard categories.) 2026-05-23 (§ Effect handlers expanded with N-043 Handler node shape, closure algebra, runtime dispatch — per Q-030 resolution in `proposals/implemented/effect-handlers.md`)
 
 ## Summary
 
@@ -91,6 +91,14 @@ The initial effect taxonomy is a small set of category groups. Categories within
 | E-029 | StateMachine.Receive | streamId: NodeRef | Receive an event from a stream |
 | E-030 | StateMachine.Spawn | machineId: NodeRef | Instantiate a state machine |
 | E-031 | StateMachine.Terminate | machineId: NodeRef | Terminate a running state machine |
+
+### Diagnostic and host-environment effects (E-032 through E-034)
+
+| ID | Category | Parameters | Description |
+|----|----------|-----------|-------------|
+| E-032 | Log.Write | (none) | Emit a diagnostic line to the host's log sink (stderr or equivalent) |
+| E-033 | OS.Read | (none) | Observe stable host-environment state (hostname, platform, working directory) |
+| E-034 | System.Exit | (none) | Terminate the current evaluation with a host-level exit code |
 
 This inventory is intentionally bounded but extensible. New categories may be added as new platform integrations are required; the category-tag space accommodates growth in the same way as node categories ([node-algebra.md](node-algebra.md), versioning section).
 

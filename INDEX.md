@@ -264,6 +264,9 @@ Inventory specified in [`design/effects-and-capabilities.md`](design/effects-and
 | E-029 | StateMachine.Receive | State machines |
 | E-030 | StateMachine.Spawn | State machines |
 | E-031 | StateMachine.Terminate | State machines |
+| E-032 | Log.Write | Diagnostic |
+| E-033 | OS.Read | Host environment |
+| E-034 | System.Exit | Host environment |
 
 New effect categories receive higher numbers; existing numbers are not reused.
 

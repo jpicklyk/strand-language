@@ -155,7 +155,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (62):
+FunctionType signatures (67):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -202,8 +202,11 @@ FunctionType signatures (62):
     bytesCatT                       — (Bytes, Bytes) -> Bytes
     fromUtf8T                       — (String) -> Bytes
     b64OfT                          — (Bytes) -> String
+    logT                            — (String) -> Unit  (Log.Info/Warn/Error)
+    hostT platT cwdT                — () -> String  (OS.Hostname/Platform/Cwd)
+    exitT                           — (Int) -> Unit  (System.Exit)
 
-Foreign-node builtins (68):
+Foreign-node builtins (75):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
@@ -226,8 +229,11 @@ Foreign-node builtins (68):
     upper lower trim                            — String.* casing/trim (pure)
     intToStr floatToStr boolToStr               — String.FromInt / FromFloat / FromBool coercions
     bytesLen bytesSlice bytesCat fromUtf8 b64Of — Bytes.* core (pure; b64Of is FormatBase64)
+    logInfo logWarn logError                    — Log.* (effectful; each declares logFx for E-032 Log.Write)
+    hostname platform cwd                       — OS.* (effectful; each declares osReadFx for E-033 OS.Read)
+    exit                                        — System.Exit(code: Int) -> Unit (effectful; declares exitFx for E-034 System.Exit; terminates the host process in production, captured in tests)
 
-Effect categories (13):
+Effect categories (16):
 
     receiveFx     — StateMachine.Receive (every state machine needs this)
     sendFx        — StateMachine.Send (state machines with outputs need this)
@@ -242,6 +248,9 @@ Effect categories (13):
     netRecvFx     — Network.Receive (declared by Net.Receive and Http.Request); distinct from receiveFx
     procWaitFx    — Process.Wait (declared by procWait)
     sleepFx       — Time.Sleep (declared by sleep)
+    logFx         — Log.Write (declared by every Log.* call)
+    osReadFx      — OS.Read (declared by every OS.* call)
+    exitFx        — System.Exit (declared by exit)
 
 A state machine with input streams must declare `receiveFx` in its `effects`
 list. A state machine with output streams must also declare `sendFx`.

@@ -107,6 +107,76 @@ object Builtins {
     @Volatile
     var random: java.util.Random = java.security.SecureRandom()
 
+    /**
+     * Pluggable log sink for the `Log.*` builtins (round 3). Default
+     * routes log lines to `System.err` so they don't tangle with
+     * stdout-bound program output. Tests install a captured sink to
+     * assert on the emitted lines. Effect category: E-032 Log.Write.
+     */
+    interface LogSink {
+        fun println(line: String)
+    }
+    object StderrLogSink : LogSink {
+        override fun println(line: String) = System.err.println(line)
+    }
+    @Volatile
+    var logSink: LogSink = StderrLogSink
+
+    /**
+     * Pluggable host-environment source for the `OS.*` builtins
+     * (round 3). Default reads from the live JVM / OS state. Tests
+     * install a fixed-value source for replay determinism. Effect
+     * category: E-033 OS.Read.
+     */
+    interface OsEnv {
+        fun hostname(): String
+        fun platform(): String
+        fun cwd(): String
+    }
+    object SystemOsEnv : OsEnv {
+        override fun hostname(): String =
+            try { java.net.InetAddress.getLocalHost().hostName }
+            catch (_: java.net.UnknownHostException) { "unknown" }
+        override fun platform(): String =
+            System.getProperty("os.name", "unknown").lowercase().let { name ->
+                when {
+                    "windows" in name -> "windows"
+                    "linux" in name -> "linux"
+                    "mac" in name || "darwin" in name -> "macos"
+                    "bsd" in name -> "bsd"
+                    else -> name
+                }
+            }
+        override fun cwd(): String = System.getProperty("user.dir", ".")
+    }
+    @Volatile
+    var osEnv: OsEnv = SystemOsEnv
+
+    /**
+     * Pluggable exit handler for `System.Exit` (round 3, E-034).
+     * Default calls `kotlin.system.exitProcess(code)` which
+     * terminates the JVM. Tests install [TestExitHandler] which
+     * captures the code and throws [SystemExitInvoked] so the test
+     * framework observes the call without the JVM actually
+     * terminating.
+     */
+    interface ExitHandler {
+        fun exit(code: Int)
+    }
+    object RealExitHandler : ExitHandler {
+        override fun exit(code: Int): Unit = kotlin.system.exitProcess(code)
+    }
+    class SystemExitInvoked(val code: Int) : RuntimeException("System.Exit($code)")
+    class TestExitHandler : ExitHandler {
+        var lastCode: Int? = null
+        override fun exit(code: Int) {
+            lastCode = code
+            throw SystemExitInvoked(code)
+        }
+    }
+    @Volatile
+    var exitHandler: ExitHandler = RealExitHandler
+
     private val registry: Map<String, Fn> = mapOf(
         // Pure arithmetic (no declared effects expected).
         "strand-builtin:Int.Add" to Fn { args ->
@@ -1160,6 +1230,62 @@ object Builtins {
             val out = ByteArray(n)
             random.nextBytes(out)
             Value.BytesV(out)
+        },
+
+        // Stdlib expansion round 3 — Log.* / OS.* / System.Exit
+        // diagnostic and host-environment builtins.
+        // Effect categories E-032 Log.Write, E-033 OS.Read,
+        // E-034 System.Exit per design/effects-and-capabilities.md.
+
+        // Log.* writes to the host's log sink. Default sink is
+        // System.err so log lines don't tangle with stdout-bound
+        // program output; tests install a captured StringBuilder
+        // via the injectable [logSink] for assertion.
+        "strand-builtin:Log.Info" to Fn { args ->
+            require(args.size == 1) { "Log.Info expects 1 arg (msg: String), got ${args.size}" }
+            logSink.println("[INFO] " + (args[0] as Value.StringV).v)
+            Value.UnitV
+        },
+        "strand-builtin:Log.Warn" to Fn { args ->
+            require(args.size == 1) { "Log.Warn expects 1 arg (msg: String), got ${args.size}" }
+            logSink.println("[WARN] " + (args[0] as Value.StringV).v)
+            Value.UnitV
+        },
+        "strand-builtin:Log.Error" to Fn { args ->
+            require(args.size == 1) { "Log.Error expects 1 arg (msg: String), got ${args.size}" }
+            logSink.println("[ERROR] " + (args[0] as Value.StringV).v)
+            Value.UnitV
+        },
+
+        // OS.* observes stable host-environment state. All return
+        // String; injectable [osEnv] lets tests pin values.
+        "strand-builtin:OS.Hostname" to Fn { args ->
+            require(args.isEmpty()) { "OS.Hostname expects 0 args, got ${args.size}" }
+            Value.StringV(osEnv.hostname())
+        },
+        "strand-builtin:OS.Platform" to Fn { args ->
+            require(args.isEmpty()) { "OS.Platform expects 0 args, got ${args.size}" }
+            Value.StringV(osEnv.platform())
+        },
+        "strand-builtin:OS.Cwd" to Fn { args ->
+            require(args.isEmpty()) { "OS.Cwd expects 0 args, got ${args.size}" }
+            Value.StringV(osEnv.cwd())
+        },
+
+        // System.Exit terminates the host process via
+        // [exitHandler]. Default invokes kotlin.system.exitProcess;
+        // tests install a captured handler that records the code
+        // and throws SystemExitInvoked so the test framework sees it
+        // without actually terminating the JVM.
+        "strand-builtin:System.Exit" to Fn { args ->
+            require(args.size == 1) { "System.Exit expects 1 arg (code: Int), got ${args.size}" }
+            val code = (args[0] as Value.IntV).v.toInt()
+            exitHandler.exit(code)
+            // Production handler never returns; the test handler throws.
+            // If a custom handler returns normally we still produce UnitV
+            // so the evaluator can continue (mirrors a no-op in tests
+            // that don't want termination semantics).
+            Value.UnitV
         },
 
         // Test-only no-op effectful builtin. Returns IntV(0) for any

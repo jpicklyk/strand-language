@@ -445,6 +445,21 @@ object LayerAGrammar {
             jsonType = "EffectCategory",
             stringFields = mapOf("categoryName" to "Time.Sleep"),
         ),
+        // Stdlib expansion round 3 — diagnostic and host-environment
+        // effect categories. E-032 / E-033 / E-034 in
+        // design/effects-and-capabilities.md.
+        "logFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "Log.Write"),
+        ),
+        "osReadFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "OS.Read"),
+        ),
+        "exitFx" to ReservedNodeSpec(
+            jsonType = "EffectCategory",
+            stringFields = mapOf("categoryName" to "System.Exit"),
+        ),
 
         // Stdlib expansion round 2 — Math.* function types.
         // Sharing FNT shape across multiple names (e.g., absT and
@@ -1064,6 +1079,90 @@ object LayerAGrammar {
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Bytes.FormatBase64"),
             refFields = mapOf("foreignType" to "b64OfT"),
+        ),
+
+        // ===== Stdlib expansion round 3 (2026-05-26) =====
+        // Log.* / OS.* / System.Exit. All monomorphic; each declares
+        // a new effect category (logFx / osReadFx / exitFx) registered
+        // above. Function-type names follow the existing per-builtin
+        // convention (logT/exitT all share `(String) -> Unit` shape,
+        // hostT/platT/cwdT all share `() -> String`, but kept distinct
+        // for readability per the addT/subT/mulT precedent).
+
+        "logT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+        "hostT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to emptyList()),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "platT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to emptyList()),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "cwdT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to emptyList()),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "exitT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
+
+        // ForeignNode entries — Log.*. All three target a distinct
+        // strand-builtin entry but declare the same logFx effect
+        // category.
+        "logInfo" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Log.Info"),
+            refFields = mapOf("foreignType" to "logT"),
+            refListFields = mapOf("effects" to listOf("logFx")),
+        ),
+        "logWarn" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Log.Warn"),
+            refFields = mapOf("foreignType" to "logT"),
+            refListFields = mapOf("effects" to listOf("logFx")),
+        ),
+        "logError" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Log.Error"),
+            refFields = mapOf("foreignType" to "logT"),
+            refListFields = mapOf("effects" to listOf("logFx")),
+        ),
+
+        // ForeignNode entries — OS.*. All three declare osReadFx.
+        "hostname" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:OS.Hostname"),
+            refFields = mapOf("foreignType" to "hostT"),
+            refListFields = mapOf("effects" to listOf("osReadFx")),
+        ),
+        "platform" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:OS.Platform"),
+            refFields = mapOf("foreignType" to "platT"),
+            refListFields = mapOf("effects" to listOf("osReadFx")),
+        ),
+        "cwd" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:OS.Cwd"),
+            refFields = mapOf("foreignType" to "cwdT"),
+            refListFields = mapOf("effects" to listOf("osReadFx")),
+        ),
+
+        // ForeignNode entry — System.Exit. Declares exitFx (E-034).
+        "exit" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:System.Exit"),
+            refFields = mapOf("foreignType" to "exitT"),
+            refListFields = mapOf("effects" to listOf("exitFx")),
         ),
     )
 
