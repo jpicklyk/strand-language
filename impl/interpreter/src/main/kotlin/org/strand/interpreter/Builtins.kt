@@ -177,6 +177,28 @@ object Builtins {
     @Volatile
     var exitHandler: ExitHandler = RealExitHandler
 
+    /**
+     * Per-server state for the `Http.Listen` / `Http.Accept` builtins.
+     * The handler thread enqueues a [HttpPending] for each request and
+     * blocks on its latch until Strand calls Http.Respond. The queue
+     * is unbounded — backpressure is the agent's responsibility.
+     */
+    internal data class HttpServerHolder(
+        val server: com.sun.net.httpserver.HttpServer,
+        val queue: java.util.concurrent.BlockingQueue<HttpPending>,
+    )
+
+    /**
+     * One pending HTTP request waiting for the Strand program to
+     * call Http.Respond. The [latch] releases the handler thread
+     * after the response is written; the [exchange] is the underlying
+     * JDK HttpExchange the Strand-side responder writes through.
+     */
+    internal data class HttpPending(
+        val exchange: com.sun.net.httpserver.HttpExchange,
+        val latch: java.util.concurrent.CountDownLatch,
+    )
+
     private val registry: Map<String, Fn> = mapOf(
         // Pure arithmetic (no declared effects expected).
         "strand-builtin:Int.Add" to Fn { args ->
@@ -1230,6 +1252,124 @@ object Builtins {
             val out = ByteArray(n)
             random.nextBytes(out)
             Value.BytesV(out)
+        },
+
+        // Stdlib expansion round 3 phase 4 — HTTP server. Synchronous
+        // accept/respond pattern (mirrors the Net.Connect / Send /
+        // Receive / Close sync sockets above). Backed by the JDK's
+        // com.sun.net.httpserver.HttpServer.
+        //
+        // Lifecycle: Http.Listen starts a server bound to a port and
+        // returns a server handle (Int via ResourceTable, kind
+        // "http-server"). Http.Accept blocks until the next request
+        // arrives, returns a ProductV {method, path, body, responder}
+        // where `responder` is a separate Int handle to the pending
+        // exchange (kind "http-pending"). Http.Respond writes the
+        // status + body and releases the handler thread.
+        // Http.ServerClose tears down the server and frees the port.
+        //
+        // Effect categories: Listen -> E-002 Network.Listen;
+        // Accept -> E-004 Network.Receive; Respond -> E-003 Network.Send.
+        //
+        // Implementation note: the JDK HttpServer dispatches each
+        // request on its own thread. We coordinate via a per-server
+        // LinkedBlockingQueue of pending exchanges + a per-exchange
+        // CountDownLatch the handler thread waits on until Respond
+        // counts it down. The Strand-side loop sees a simple
+        // sequential accept/respond protocol; concurrency is the
+        // host's problem.
+
+        "strand-builtin:Http.Listen" to Fn { args ->
+            // (port: Int) -> serverHandle (Int)
+            require(args.size == 1) { "Http.Listen expects 1 arg (port: Int), got ${args.size}" }
+            val port = (args[0] as Value.IntV).v.toInt()
+            try {
+                val server = com.sun.net.httpserver.HttpServer.create(
+                    java.net.InetSocketAddress(port), 0,
+                )
+                val queue = java.util.concurrent.LinkedBlockingQueue<HttpPending>()
+                server.createContext("/") { exchange ->
+                    val latch = java.util.concurrent.CountDownLatch(1)
+                    queue.put(HttpPending(exchange, latch))
+                    // Block the handler thread until Respond releases.
+                    // 30s safety timeout so an unresponsive Strand
+                    // program doesn't hang the server thread forever;
+                    // Respond is the normal release path.
+                    latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+                }
+                server.executor = java.util.concurrent.Executors.newCachedThreadPool()
+                server.start()
+                ResourceTable.register("http-server", HttpServerHolder(server, queue))
+            } catch (e: java.io.IOException) {
+                throw IoFailure("http-listen", "port $port: ${e.message}")
+            } catch (e: SecurityException) {
+                throw IoFailure("http-listen", "port $port: ${e.message}")
+            }
+        },
+
+        "strand-builtin:Http.Accept" to Fn { args ->
+            // (server: serverHandle) -> {method, path, body, responder}
+            // Blocks until a request arrives.
+            require(args.size == 1) { "Http.Accept expects 1 arg (server: serverHandle), got ${args.size}" }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("http-accept", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val holder = ResourceTable.get(handle, "http-server") as HttpServerHolder
+            try {
+                val pending = holder.queue.take()  // blocks
+                val exchange = pending.exchange
+                val method = exchange.requestMethod
+                val path = exchange.requestURI.toString()
+                val body = exchange.requestBody.readAllBytes()
+                val responderHandle = ResourceTable.register("http-pending", pending)
+                Value.ProductV(mapOf(
+                    "method" to Value.StringV(method),
+                    "path" to Value.StringV(path),
+                    "body" to Value.BytesV(body),
+                    "responder" to responderHandle,
+                ))
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IoFailure("http-accept", "interrupted waiting for request")
+            } catch (e: java.io.IOException) {
+                throw IoFailure("http-accept", e.message ?: "i/o error")
+            }
+        },
+
+        "strand-builtin:Http.Respond" to Fn { args ->
+            // (responder: responderHandle, status: Int, body: Bytes) -> Unit
+            // Writes the response and releases the handler thread.
+            require(args.size == 3) {
+                "Http.Respond expects 3 args (responder: responderHandle, status: Int, body: Bytes), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("http-respond", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val status = (args[1] as Value.IntV).v.toInt()
+            val body = (args[2] as Value.BytesV).v
+            val pending = ResourceTable.get(handle, "http-pending") as HttpPending
+            try {
+                val exchange = pending.exchange
+                exchange.sendResponseHeaders(status, body.size.toLong())
+                exchange.responseBody.use { it.write(body) }
+                pending.latch.countDown()
+                ResourceTable.remove(handle)  // one-shot: free the responder
+                Value.UnitV
+            } catch (e: java.io.IOException) {
+                pending.latch.countDown()  // release the handler thread even on error
+                ResourceTable.remove(handle)
+                throw IoFailure("http-respond", e.message ?: "i/o error")
+            }
+        },
+
+        "strand-builtin:Http.ServerClose" to Fn { args ->
+            // (server: serverHandle) -> Unit. Idempotent.
+            require(args.size == 1) { "Http.ServerClose expects 1 arg (server: serverHandle), got ${args.size}" }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("http-server-close", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val obj = ResourceTable.remove(handle)
+            if (obj is HttpServerHolder) {
+                try { obj.server.stop(0) } catch (_: Exception) { /* idempotent */ }
+            }
+            Value.UnitV
         },
 
         // Stdlib expansion round 3 phase 3 — Map.* (opaque-handle

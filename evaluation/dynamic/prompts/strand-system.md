@@ -275,6 +275,42 @@ the corpus 61 MarkdownDocument schema), `Regex.Match` (Option<String>) /
 these, declare the FN with the appropriate target string and an FNT for the
 concrete type at this call site.
 
+### HTTP server (`Http.Listen` / `Http.Accept` / `Http.Respond` / `Http.ServerClose`)
+
+Synchronous accept/respond model (mirrors `Net.*` sync sockets).
+Backed by the JDK's `com.sun.net.httpserver.HttpServer`; the
+handler thread enqueues each request and blocks on a latch until
+the Strand-side calls `Http.Respond`.
+
+    strand-builtin:Http.Listen(port: Int) -> serverHandle (Int)
+        -- declares E-002 Network.Listen
+    strand-builtin:Http.Accept(server: serverHandle)
+        -> {method: String, path: String, body: Bytes, responder: Int}
+        -- declares E-004 Network.Receive; blocks until a request arrives
+    strand-builtin:Http.Respond(responder: Int, status: Int, body: Bytes) -> Unit
+        -- declares E-003 Network.Send; releases the handler thread.
+        -- One-shot per responder; the responder handle is freed after.
+    strand-builtin:Http.ServerClose(server: serverHandle) -> Unit
+        -- idempotent; tears down the server and frees the port.
+
+Headers and query-string parsing aren't exposed in this initial
+slice — the request `path` includes the query string verbatim, and
+the agent does its own parsing (e.g., `Regex.FindAll` for
+`name=value` pairs). A follow-up slice can add header lists once a
+prelude shape for `List<{name, value}>` is decided.
+
+Typical server loop in Layer A:
+
+    listenT FNT [intT] intT
+    httpListen FN "strand-builtin:Http.Listen" listenT [listenFx]
+    server APP httpListen [8080]
+    -- ... FIX loop calling Accept / Respond / recurse ...
+
+NOT in the prelude: HTTP server builtins return product types that
+overlap with the existing prelude `httpRespT`. A follow-up slice
+could prelude-encode `httpRequestT` for the Accept result; until
+then declare it explicitly at the use site.
+
 ### Map.* (opaque persistent map)
 
 `Map<K, V>` is an opaque persistent value backed by an immutable
