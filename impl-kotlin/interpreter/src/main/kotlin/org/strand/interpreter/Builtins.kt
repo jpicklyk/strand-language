@@ -234,6 +234,15 @@ object Builtins {
         val latch: java.util.concurrent.CountDownLatch,
     )
 
+    /**
+     * Pluggable HTTP transport for vector-store providers
+     * (Q-038). Default is [JdkHttpTransport]. Tests install
+     * [InMemoryHttpTransport] with canned matchers so the
+     * provider code never opens a real socket.
+     */
+    @Volatile
+    var vectorHttpTransport: VectorHttpTransport = JdkHttpTransport
+
     private val registry: Map<String, Fn> = mapOf(
         // Pure arithmetic (no declared effects expected).
         "strand-builtin:Int.Add" to Fn { args ->
@@ -1659,6 +1668,178 @@ object Builtins {
                 "Test.EffectfulNoOp expects a StringV argument, got ${args[0]::class.simpleName}"
             }
             Value.IntV(0)
+        },
+
+        // Q-038 Phase 1 — Pinecone vector-store builtins. Each
+        // ForeignNode entry declares effect category Vector.Read
+        // (E-037) or Vector.Write (E-038) with provider pinned to
+        // "pinecone" and store bound to the index name from the
+        // open config. Operations target [PineconeProvider] which
+        // talks to Pinecone's REST API via
+        // [Builtins.vectorHttpTransport] (default JDK-backed;
+        // tests inject [InMemoryHttpTransport] with canned
+        // matchers).
+        //
+        // Open returns a Resource handle of kind "pinecone_index";
+        // subsequent operations look up by handle. Close is
+        // idempotent.
+
+        "strand-builtin:Pinecone.Index.Open" to Fn { args ->
+            // (config: PineconeIndexConfig) -> pineconeHandle
+            // Declares BOTH Vector.Read and Vector.Write (the
+            // returned handle supports both directions).
+            require(args.size == 1) {
+                "Pinecone.Index.Open expects 1 arg (config: PineconeIndexConfig), got ${args.size}"
+            }
+            val config = VectorValueMarshal.toPineconeConfig(args[0])
+            PineconeProvider.open(config)
+        },
+
+        "strand-builtin:Pinecone.Index.Close" to Fn { args ->
+            // (handle: pineconeHandle) -> Unit. Idempotent.
+            require(args.size == 1) {
+                "Pinecone.Index.Close expects 1 arg (handle: pineconeHandle), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("pinecone-close",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            PineconeProvider.close(handle)
+        },
+
+        "strand-builtin:Pinecone.Index.Upsert" to Fn { args ->
+            // (handle: pineconeHandle, items: List<UpsertItem>) -> Unit
+            // Declares Vector.Write{provider: "pinecone", store: <index>}.
+            require(args.size == 2) {
+                "Pinecone.Index.Upsert expects 2 args (handle, items), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("pinecone-upsert",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val items = VectorValueMarshal.toUpsertItems(args[1])
+            PineconeProvider.upsert(handle, items)
+            Value.UnitV
+        },
+
+        "strand-builtin:Pinecone.Index.Query" to Fn { args ->
+            // (handle: pineconeHandle, request: QueryRequest) -> List<QueryHit>
+            // Declares Vector.Read{provider: "pinecone", store: <index>}.
+            require(args.size == 2) {
+                "Pinecone.Index.Query expects 2 args (handle, request), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("pinecone-query",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val request = VectorValueMarshal.toQueryRequest(args[1])
+            VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request))
+        },
+
+        "strand-builtin:Pinecone.Index.Delete" to Fn { args ->
+            // (handle: pineconeHandle, ids: List<String>) -> Unit
+            // Declares Vector.Write{provider: "pinecone", store: <index>}.
+            require(args.size == 2) {
+                "Pinecone.Index.Delete expects 2 args (handle, ids), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("pinecone-delete",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val ids = VectorValueMarshal.toStringList(args[1])
+            PineconeProvider.delete(handle, ids)
+            Value.UnitV
+        },
+
+        "strand-builtin:Pinecone.Index.Fetch" to Fn { args ->
+            // (handle: pineconeHandle, ids: List<String>) -> List<QueryHit>
+            // Declares Vector.Read{provider: "pinecone", store: <index>}.
+            require(args.size == 2) {
+                "Pinecone.Index.Fetch expects 2 args (handle, ids), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("pinecone-fetch",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val ids = VectorValueMarshal.toStringList(args[1])
+            VectorValueMarshal.fromQueryHits(PineconeProvider.fetch(handle, ids))
+        },
+
+        // Q-038 Phase 1 — Chroma vector-store builtins. Same shape
+        // as Pinecone's, mapped to Chroma's REST API
+        // (`/api/v1/collections/<id>/{upsert,query,get,delete}`).
+        // Effect declarations use provider="chroma".
+
+        "strand-builtin:Chroma.Collection.Open" to Fn { args ->
+            // (config: ChromaCollectionConfig) -> chromaHandle
+            // Resolves the collection id via GET /api/v1/collections/<name>
+            // at open time and caches it for subsequent operations.
+            require(args.size == 1) {
+                "Chroma.Collection.Open expects 1 arg (config: ChromaCollectionConfig), got ${args.size}"
+            }
+            val config = VectorValueMarshal.toChromaConfig(args[0])
+            ChromaProvider.open(config)
+        },
+
+        "strand-builtin:Chroma.Collection.Close" to Fn { args ->
+            // (handle: chromaHandle) -> Unit. Idempotent.
+            require(args.size == 1) {
+                "Chroma.Collection.Close expects 1 arg (handle: chromaHandle), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("chroma-close",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            ChromaProvider.close(handle)
+        },
+
+        "strand-builtin:Chroma.Collection.Add" to Fn { args ->
+            // (handle: chromaHandle, items: List<UpsertItem>) -> Unit
+            // Bulk upsert. Declares Vector.Write{provider: "chroma", store: <collection>}.
+            require(args.size == 2) {
+                "Chroma.Collection.Add expects 2 args (handle, items), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("chroma-upsert",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val items = VectorValueMarshal.toUpsertItems(args[1])
+            ChromaProvider.add(handle, items)
+            Value.UnitV
+        },
+
+        "strand-builtin:Chroma.Collection.Query" to Fn { args ->
+            // (handle: chromaHandle, request: QueryRequest) -> List<QueryHit>
+            // Declares Vector.Read{provider: "chroma", store: <collection>}.
+            require(args.size == 2) {
+                "Chroma.Collection.Query expects 2 args (handle, request), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("chroma-query",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val request = VectorValueMarshal.toQueryRequest(args[1])
+            VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request))
+        },
+
+        "strand-builtin:Chroma.Collection.Delete" to Fn { args ->
+            // (handle: chromaHandle, ids: List<String>) -> Unit
+            // Declares Vector.Write{provider: "chroma", store: <collection>}.
+            require(args.size == 2) {
+                "Chroma.Collection.Delete expects 2 args (handle, ids), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("chroma-delete",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val ids = VectorValueMarshal.toStringList(args[1])
+            ChromaProvider.delete(handle, ids)
+            Value.UnitV
+        },
+
+        "strand-builtin:Chroma.Collection.Get" to Fn { args ->
+            // (handle: chromaHandle, ids: List<String>) -> List<QueryHit>
+            // Id-based fetch (no similarity search).
+            // Declares Vector.Read{provider: "chroma", store: <collection>}.
+            require(args.size == 2) {
+                "Chroma.Collection.Get expects 2 args (handle, ids), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("chroma-get",
+                    "expected Resource handle, got ${args[0]::class.simpleName}")
+            val ids = VectorValueMarshal.toStringList(args[1])
+            VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids))
         },
     )
 

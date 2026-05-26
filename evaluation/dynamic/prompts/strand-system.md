@@ -155,7 +155,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (70):
+FunctionType signatures (82):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -208,8 +208,14 @@ FunctionType signatures (70):
     reReplaceT                      — (String, String, String) -> String  (Regex.Replace pattern, input, replacement)
     llmGenerateT                    — (Bytes) -> Bytes  (opaque GenerateRequest placeholder — see "Per-provider LLM" below)
     llmEmbedT                       — (Bytes) -> Bytes  (opaque EmbedRequest placeholder)
+    pineconeOpenT chromaOpenT       — (Bytes) -> Int  (config ProductV -> opaque handle Int; see Vector stores section for the ProductV shapes)
+    pineconeCloseT chromaCloseT     — (Int) -> Unit
+    pineconeUpsertT chromaAddT      — (Int, Bytes) -> Unit  (handle, items ProductV-list)
+    pineconeDeleteT chromaDeleteT   — (Int, Bytes) -> Unit  (handle, ids ProductV-list)
+    pineconeQueryT chromaQueryT     — (Int, Bytes) -> Bytes (handle, QueryRequest -> List<QueryHit>; both products carried in Bytes-placeholder slot)
+    pineconeFetchT chromaGetT       — (Int, Bytes) -> Bytes (handle, ids list -> List<QueryHit>)
 
-Foreign-node builtins (82):
+Foreign-node builtins (94):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
@@ -239,8 +245,14 @@ Foreign-node builtins (82):
     anthropicGenerate anthropicEmbed            — Anthropic.Messages.Create / Anthropic.Embeddings.Create (effectful; each declares llmGenerateFx / llmEmbedFx with provider="anthropic" — see "Per-provider LLM" below). anthropicEmbed surfaces an IoFailure ("anthropic-embed-not-supported") — Anthropic recommends Voyage AI for embeddings.
     openaiGenerate openaiEmbed                  — OpenAI.Chat.Completions / OpenAI.Embeddings.Create (effectful; declare llmGenerateFx / llmEmbedFx with provider="openai")
     geminiGenerate geminiEmbed                  — Gemini.GenerateContent / Gemini.EmbedContent (effectful; declare llmGenerateFx / llmEmbedFx with provider="gemini")
+    pineconeOpen pineconeClose                  — Q-038 Pinecone lifecycle. Open declares both vectorReadFx and vectorWriteFx; Close has no effect.
+    pineconeUpsert pineconeDelete               — Pinecone writes (each declares vectorWriteFx).
+    pineconeQuery pineconeFetch                 — Pinecone reads (each declares vectorReadFx).
+    chromaOpen chromaClose                      — Q-038 Chroma lifecycle (Open declares both vectorReadFx and vectorWriteFx).
+    chromaAdd chromaDelete                      — Chroma writes (each declares vectorWriteFx).
+    chromaQuery chromaGet                       — Chroma reads (each declares vectorReadFx).
 
-Effect categories (18):
+Effect categories (20):
 
     receiveFx     — StateMachine.Receive (every state machine needs this)
     sendFx        — StateMachine.Send (state machines with outputs need this)
@@ -260,6 +272,8 @@ Effect categories (18):
     exitFx        — System.Exit (declared by exit)
     llmGenerateFx — LLM.Generate(provider: String, model: String) — declared by Anthropic/OpenAI/Gemini Generate ForeignNodes
     llmEmbedFx    — LLM.Embed(provider: String, model: String) — declared by Anthropic/OpenAI/Gemini Embed ForeignNodes
+    vectorReadFx  — Vector.Read{provider, store} (E-037; declared by all Pinecone/Chroma read ops — see Vector stores section)
+    vectorWriteFx — Vector.Write{provider, store} (E-038; declared by all Pinecone/Chroma write ops)
 
 A state machine with input streams must declare `receiveFx` in its `effects`
 list. A state machine with output streams must also declare `sendFx`.
@@ -748,6 +762,91 @@ Typical Layer A density usage:
 The lambda's `parameters` and `effects` follow the standard LAM
 shape; the FunctionType for the lambda parameter of the higher-
 order builtin must match its arity.
+
+## Vector stores (`Pinecone.*`, `Chroma.*`)
+
+Q-038 Phase 1: per-provider ForeignNodes under two operation-shaped
+effect categories, `Vector.Read` (E-037) and `Vector.Write` (E-038),
+both parameterized by `provider: String` and `store: String`. The
+provider parameter is pinned by which ForeignNode is called
+(`Pinecone.*` → `"pinecone"`, `Chroma.*` → `"chroma"`); the store
+parameter is the index / collection name from the open config.
+
+Prelude entries are pre-bound:
+
+    Effect categories: vectorReadFx, vectorWriteFx
+
+    Pinecone (six builtins): pineconeOpen, pineconeClose,
+        pineconeUpsert, pineconeQuery, pineconeDelete, pineconeFetch
+
+    Chroma (six builtins): chromaOpen, chromaClose, chromaAdd,
+        chromaQuery, chromaDelete, chromaGet
+
+Open returns an opaque handle (Resource of kind `pinecone_index` or
+`chroma_collection`) typed at the Strand surface as `intT`. The
+handle declares BOTH `vectorReadFx` and `vectorWriteFx`: the
+returned handle supports both directions. Per-operation builtins
+declare only the direction they exercise.
+
+### Open config shape (ProductV)
+
+Pinecone:
+    {indexName: String, environment: String, metric: Metric,
+     dimensions: Int, host: Option<String>}
+
+Chroma:
+    {collectionName: String, serverUrl: String, metric: Metric}
+
+Where `Metric` is a sum: `Cosine | DotProduct | Euclidean | Manhattan`
+(SumV cases with no payload). Metric is per-collection (set at open
+time); a non-`None` `metric` field on a per-query request is rejected
+with a runtime `IoFailure` of kind `"vector-metric-fixed"`. pgvector's
+per-query metric lands in Phase 2.
+
+### UpsertItem and QueryHit shape
+
+UpsertItem (ProductV):
+    {id: String, vector: Bytes, metadata: JsonValueFull}
+
+QueryRequest (ProductV):
+    {vector: Bytes, k: Int, filter: Option<JsonValueFull>,
+     includeVector: Bool, includeMetadata: Bool,
+     metric: Option<Metric>}
+
+QueryHit (ProductV):
+    {id: String, score: Float, metadata: JsonValueFull,
+     vector: Option<Bytes>}
+
+Vectors are float32 little-endian Bytes (length = 4 * dimensions),
+matching the encoding produced by Q-037's `LLM.Embed` builtins.
+
+### Emission example — Pinecone upsert + query
+
+    cfg PV (PRD [...]) [indexName="main" environment="us-east-1-aws"
+                        metric=cosineMetric dimensions=384
+                        host=hostNone]
+    handle APP pineconeOpen [cfg]
+    -- ... build items list of {id, vector, metadata} ProductVs ...
+    _ APP pineconeUpsert [handle items]
+    hits APP pineconeQuery [handle queryRequest]
+    _ APP pineconeClose [handle]
+
+### Emission example — Chroma read-only capability
+
+    -- Capability scope grants only Vector.Read{provider: "chroma",
+    -- store: "docs"}; a subsequent chromaAdd call would refinement-fail.
+    scope CAP [readCap] body
+
+Idempotency: upsert across both providers is replace-on-conflict
+(matches Pinecone's upsert semantics and Chroma's `upsert` endpoint).
+Filters are loose `JsonValueFull` values whose shape is provider-
+specific — Pinecone expects a structured boolean over metadata,
+Chroma expects a where-filter dict.
+
+Errors surface as `InterpretError.IoFailure` with kind prefixes
+`pinecone-*` / `chroma-*` / `vector-metric-fixed`. HTTP transport is
+injectable for tests; the production default uses
+`java.net.HttpURLConnection` consistent with `Http.Request`.
 
 ## Density sugars
 

@@ -191,6 +191,15 @@ class CorpusTest {
         // chosen and out of scope for a single corpus demo).
         Case("/corpus/67-llm-state-machine-with-tool.json", null,
             "verify-only; state machine calling Anthropic.Messages.Create with an EffectDecl pinning provider='anthropic'"),
+        // Q-038 Phase 1 — Pinecone vector-store builtin graph shape.
+        // Verify-only: the program demonstrates the structural pattern
+        // an agent emits for a Pinecone upsert + query workflow under
+        // Vector.Read{provider: "pinecone", store: "main"} + Vector.Write
+        // capabilities. Runtime execution requires mocked HTTP transport
+        // and a registered Resource handle; that path is exercised
+        // end-to-end by BuiltinsPineconeTest in the interpreter module.
+        Case("/corpus/68-vector-pinecone-upsert-query.json", null,
+            "Q-038 Phase 1: verify-only structural exemplar for Pinecone upsert + query. Open declares both Vector.Read and Vector.Write; Upsert declares only Vector.Write; Query declares only Vector.Read. provider parameter pinned to literal \"pinecone\", store parameter to literal \"main\". The runtime end-to-end roundtrip lives in BuiltinsPineconeTest with mocked HTTP transport."),
     )
 
     /**

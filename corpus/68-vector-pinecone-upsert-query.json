@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "root": "queryCall",
+  "nodes": {
+    "intT":         { "type": "PrimitiveType", "kind": "Int" },
+    "strT":         { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":       { "type": "PrimitiveType", "kind": "Bytes" },
+    "unitT":        { "type": "PrimitiveType", "kind": "Unit" },
+
+    "vectorReadFx":  { "type": "EffectCategory", "categoryName": "Vector.Read",  "parameters": ["strT", "strT"] },
+    "vectorWriteFx": { "type": "EffectCategory", "categoryName": "Vector.Write", "parameters": ["strT", "strT"] },
+
+    "openT":        { "type": "FunctionType", "parameters": ["bytesT"], "result": "intT",
+                       "effects": ["vectorReadFx", "vectorWriteFx"] },
+    "open":         { "type": "ForeignNode", "target": "strand-builtin:Pinecone.Index.Open",
+                       "foreignType": "openT", "effects": ["vectorReadFx", "vectorWriteFx"] },
+
+    "upsertT":      { "type": "FunctionType", "parameters": ["intT", "bytesT"], "result": "unitT",
+                       "effects": ["vectorWriteFx"] },
+    "upsert":       { "type": "ForeignNode", "target": "strand-builtin:Pinecone.Index.Upsert",
+                       "foreignType": "upsertT", "effects": ["vectorWriteFx"] },
+
+    "queryT":       { "type": "FunctionType", "parameters": ["intT", "bytesT"], "result": "bytesT",
+                       "effects": ["vectorReadFx"] },
+    "query":        { "type": "ForeignNode", "target": "strand-builtin:Pinecone.Index.Query",
+                       "foreignType": "queryT", "effects": ["vectorReadFx"] },
+
+    "providerLit":  { "type": "StringLit", "value": "pinecone" },
+    "storeLit":     { "type": "StringLit", "value": "main" },
+
+    "readDecl":     { "type": "EffectDecl", "effectType": "vectorReadFx",
+                       "parameters": ["providerLit", "storeLit"] },
+    "writeDecl":    { "type": "EffectDecl", "effectType": "vectorWriteFx",
+                       "parameters": ["providerLit", "storeLit"] },
+
+    "configLit":    { "type": "BytesLit", "value": "" },
+    "openCall":     { "type": "Application", "function": "open", "arguments": ["configLit"],
+                       "effectInstances": ["readDecl", "writeDecl"] },
+
+    "itemsLit":     { "type": "BytesLit", "value": "" },
+    "upsertCall":   { "type": "Application", "function": "upsert", "arguments": ["openCall", "itemsLit"],
+                       "effectInstances": ["writeDecl"] },
+
+    "queryReqLit":  { "type": "BytesLit", "value": "" },
+    "queryCall":    { "type": "Application", "function": "query", "arguments": ["openCall", "queryReqLit"],
+                       "effectInstances": ["readDecl"] }
+  }
+}

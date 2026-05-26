@@ -109,6 +109,17 @@ The initial effect taxonomy is a small set of category groups. Categories within
 
 Both categories are operation-shaped: `LLM.Generate` is one effect category whether Anthropic, OpenAI, Gemini, or a future provider executes it. The `provider` and `model` parameters discriminate at the refinement-lattice level — `LLM.Generate{provider: "anthropic", model: *}` is a finer capability than `LLM.Generate{provider: *, model: *}`. This mirrors `Network.Connect{host}` (E-001) and `Filesystem.Read{path}` (E-006): the category names the kind of side effect; refinement parameters name the specific resource. Per-provider ForeignNodes (`Anthropic.Messages.Create`, `OpenAI.Chat.Completions`, etc.) sit at the binding layer; each pins the `provider` parameter to a string literal so the verifier sees provider identity in the effect closure without it needing its own category. The design rationale, prior-art survey, and tool-dispatch semantics are documented in [`proposals/agent-native-capabilities.md`](../proposals/agent-native-capabilities.md).
 
+### Vector store effects (E-037 through E-038)
+
+| ID | Category | Parameters | Description |
+|----|----------|-----------|-------------|
+| E-037 | Vector.Read | provider: String, store: String | Query or fetch from a vector store |
+| E-038 | Vector.Write | provider: String, store: String | Insert, upsert, or delete in a vector store |
+
+Operation-shaped (one category per direction across every provider), with `provider` and `store` parameters carrying the per-binding discrimination. The Read / Write split mirrors `Filesystem.Read` / `Filesystem.Write` (E-006 / E-007): most retrieval workloads read more than they write, so capability minimization naturally exploits the split. Capability scoping flows through the refinement-lattice — `Vector.Read{provider: "pinecone", store: "main"}` authorizes exactly one Pinecone index, `Vector.Read{provider: "pinecone", store: *}` authorizes any Pinecone read, `Vector.Read{provider: *, store: *}` authorizes any read.
+
+Per-provider ForeignNodes under the `strand-builtin:` namespace carry the binding-layer discrimination: each binding's effect declaration pins `provider` to its provider's string literal (`"pinecone"`, `"chroma"`, ...) and binds `store` to the call site's argument. Switching providers means swapping ForeignNodes, which changes the graph's content-address hash per ADR-005. This pattern is consistent with WIT / WASI's one-interface-with-per-implementation-bindings convention and with the operation-shaped effect categorization established by E-001..E-034. The Q-038 proposal [`proposals/agent-native-vector-stores.md`](../proposals/agent-native-vector-stores.md) records the prior-art analysis and the seven API design questions (metric grain, index opacity, filter expression language, typed metadata, batching, pagination, idempotency) the surface answers.
+
 This inventory is intentionally bounded but extensible. New categories may be added as new platform integrations are required; the category-tag space accommodates growth in the same way as node categories ([node-algebra.md](node-algebra.md), versioning section).
 
 ## Effect closure semantics {#effect-closure}
