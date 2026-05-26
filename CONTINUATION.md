@@ -228,6 +228,57 @@ CBOR encoder, and runtime are untouched. See
 [`proposals/implemented/layer-a-density.md`](proposals/implemented/layer-a-density.md)
 for the implementation record.
 
+## Layer 4 step 2 real-IO builtins landed 2026-05-26
+
+The interpreter's `Builtins` registry expanded from 18 to 46 entries
+across one overnight execution window. Real OS-level I/O now works
+from Strand programs through the new `Fs.*` (filesystem), `Net.*`
+(sockets), `Http.*` (HTTP convenience), `Process.*` (subprocess + env),
+and `Time.Sleep` targets. A `String.*` + `Bytes.*` stdlib covers the
+common text and binary manipulation surface (Length, Substring,
+IndexOf, Replace, Split/Join, Trim, ParseInt → Option<Int>, ParseUtf8,
+FormatBase64, etc.). `Json.Parse` and `Markdown.Parse` complete the
+existing JSON and Markdown blessed libraries from "type-and-invariant"
+to "actually usable from a Strand program".
+
+Three runtime infrastructure additions support the new builtins:
+- `Value.Resource(id: Long, kind: String)` opaque-handle variant for
+  OS resources (sockets, processes, file handles) that don't fit
+  the canonical-store model.
+- `ResourceTable` (ConcurrentHashMap-backed, thread-safe) holding the
+  JVM-side objects keyed by handle id. Per-resource builtins validate
+  kind at dispatch.
+- `IoFailure` runtime exception caught at the two `applyForeign` sites
+  and translated to `InterpretError.IoFailure(at, kind, detail)` so
+  agent feedback carries the call-site NodeId plus the OS error text.
+
+Plus the Elaborator gained an auto-Outer-PRD synthesis pass (the
+"task #22" follow-up to Q-036): inner ProductType nodes whose
+recursive field references `RecursiveSelf` are detected, and at
+value-construction sites (ProductValue.ofType, ParameterDecl.paramType,
+nested-in-Arg.Nested PV/PRC) an outer-equivalent PRD with the RS
+replaced by the enclosing RT id is synthesized + the references
+rewritten. The agent's natural recursive-sum emission pattern (one
+PRD with RS) now compiles without the manual inner/outer split.
+
+Implementation deviations recorded in [`proposals/implemented/layer-4-step-2-real-io.md`](proposals/implemented/layer-4-step-2-real-io.md):
+- New `Fs.*` / `Net.*` namespaces rather than overloading legacy
+  `Filesystem.*` / `Network.*` stubs (preserves seed-corpus hashes
+  + 6+ existing test fixtures).
+- `Time.Now` reads from injectable `Builtins.clock` (default
+  `SystemClock`); tests install `FixedClock` via @BeforeAll.
+- `Test.EffectfulNoOp` test helper added so two InterpreterTest
+  cases stop abusing `Filesystem.Write` as a generic effectful stub.
+
+WASM sandboxing (Q-006, Milestone 2.4) remains deferred. The prototype
+path is honest in-process trusted code; the `strand-builtin:` namespace
+is the trust boundary, and `wasm:` / `process:` get separate dispatchers
+when sandboxing lands.
+
+Corpus extended to 65 programs: `64-option-parseint-unwrap.json` and
+`65-option-parseint-fallback.json` are canonical exemplars of the
+Option<T> convention all the new fallible-parse builtins use.
+
 ## Q-036 reverse projection landed 2026-05-25
 
 The reverse direction of the Layer A authoring stack — canonical

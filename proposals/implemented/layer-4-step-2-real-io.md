@@ -1,10 +1,74 @@
 # Layer 4 step 2 — real IO builtins
 
-**Document:** `proposals/layer-4-step-2-real-io.md`
-**Status:** Draft (executing autonomously over a 4-8 hour window)
-**Date:** 2026-05-25
-**Concerns:** [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md), [`decisions/ADR-005-foreign-nodes.md`](../decisions/ADR-005-foreign-nodes.md), [`design/security-model.md`](../design/security-model.md), [`impl/interpreter/`](../impl/interpreter/), Q-006 (deferred trust model), Q-007 (effect inference for unannotated foreign code)
+**Document:** `proposals/implemented/layer-4-step-2-real-io.md`
+**Status:** Implemented 2026-05-26 across phases 1-4 in 10 commits (commit range `e5443c6..876ec72` plus the corpus-exemplar `64-65-option` slice). All 18 originally-planned builtins shipped; final scope landed at 28 builtins (the bonus String.From* converters and Bytes UTF-8 round-trip were folded in during Phase 3 implementation). All gradle tests green; corpus extended to 65 programs with two new Option-pattern exemplars.
+**Date:** 2026-05-25 (proposal); 2026-05-26 (implementation complete)
+**Concerns:** [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md), [`design/security-model.md`](../../design/security-model.md), [`impl/interpreter/`](../../impl/interpreter/), Q-006 (deferred trust model), Q-007 (effect inference for unannotated foreign code)
 **Scope:** Medium — ~15-20 new builtins across 4 phases, each shippable independently
+
+> **Implementation note (2026-05-26).** All four phases landed across
+> one overnight execution window (12 commits + this rename). Three
+> deviations from the literal proposal worth recording:
+>
+> *(1) Separate `Fs.*` and `Net.*` namespaces rather than overloading
+> `Filesystem.*` and `Network.*`.* The pre-existing legacy stubs
+> (`strand-builtin:Filesystem.Write`, `strand-builtin:Network.Connect`)
+> were referenced from corpus 33/34/35/39 and 6+ test fixtures, all
+> assuming the 1-arg-returns-IntV(0) shape. Replacing them in place
+> would have changed those hashes and cascaded into breakage. The new
+> real implementations ship under `strand-builtin:Fs.*` and
+> `strand-builtin:Net.*`; a future cleanup pass could unify the
+> namespaces once the corpus has migrated.
+>
+> *(2) `Time.Now` now reads from an injectable `Builtins.clock` field
+> (default `SystemClock`). Tests install `FixedClock(FIXED_REPLAY_TIMESTAMP)`
+> in @BeforeAll and restore in @AfterAll — the two corpus tests
+> (16/17) and the two InterpreterTest cases that previously asserted
+> the fixed timestamp keep passing without changes to their expected
+> values. The Clock is global mutable state (volatile) — per-interpreter
+> Clock injection is a future refactor if test parallelism becomes a
+> concern.
+>
+> *(3) `Test.EffectfulNoOp` test-only builtin added.* Two
+> InterpreterTest cases were using `strand-builtin:Filesystem.Write` as
+> a generic no-op effectful stub for testing capability/handler
+> mechanics. With the new 2-arg semantics they'd break; introducing
+> `strand-builtin:Test.EffectfulNoOp(s: String) -> IntV(0)` as a
+> deliberate test helper preserves the testing pattern without abusing
+> Filesystem.Write semantically. Reserved under the `strand-builtin:Test.*`
+> namespace for clarity.
+>
+> **Final builtin tally.** 28 new builtins beyond the registry's
+> Layer 4 step 1 baseline of 18:
+> - Time: NowReplacement (Clock-injected), Sleep
+> - Fs (filesystem): Write, Read, Append, Exists, Delete, List
+> - Process: Spawn, Wait, EnvVar
+> - Net: Connect, Send, Receive, Close
+> - Http: Request
+> - String: Length, Substring, IndexOf, Contains, Replace, Split,
+>   Join, ToUpper, ToLower, Trim, ParseInt, ParseFloat, FromInt,
+>   FromFloat, FromBool
+> - Bytes: Length, Slice, Concat, ParseUtf8, FromUtf8, FormatBase64,
+>   ParseBase64
+> - Json: Parse
+> - Markdown: Parse (stub — single-Paragraph wrap)
+> - Test: EffectfulNoOp
+>
+> Plus runtime infrastructure: new `Value.Resource(id, kind)` for
+> opaque OS handles, new `ResourceTable` (ConcurrentHashMap-backed),
+> new `IoFailure` runtime exception → `InterpretError.IoFailure(at,
+> kind, detail)` translation in the interpreter's two `applyForeign`
+> sites.
+>
+> Plus the **Elaborator's auto-Outer-PRD synthesis** (task #22 from
+> the parent slice) lands here as a prerequisite for any recursive-
+> type program — the agent's natural recursive-sum emission pattern
+> (one PRD with RS) now works automatically without the inner/outer
+> manual split.
+>
+> **Corpus extension.** 64-option-parseint-unwrap.json and
+> 65-option-parseint-fallback.json added as canonical exemplars of
+> the Option<T> convention all the new fallible-parse builtins use.
 
 Layer 4 step 1 shipped the foreign function interface (N-020 ForeignNode) and an in-process Builtins registry with arithmetic + comparison + the three effectful *stubs* `Time.Now`, `Filesystem.Write`, `Network.Connect`. The stubs validate argument shapes and return placeholder values — no actual IO. This proposal documents the design calls for replacing them with real implementations, plus expanding the effect surface to cover what a real application would need.
 
@@ -112,12 +176,12 @@ Acceptance: corpus programs verify and run. The new blessed libraries get round-
 ## 5. References
 
 **Outgoing:**
-- [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md) — defines E-001..E-031, the effect categories these builtins exercise.
-- [`decisions/ADR-005-foreign-nodes.md`](../decisions/ADR-005-foreign-nodes.md) — ForeignNode + trust model.
-- [`design/security-model.md`](../design/security-model.md) — foreign binding trust (Q-006, deferred).
-- [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — the registry being extended.
-- Q-006, Q-007 in [`open-questions.md`](../open-questions.md) — both stay open.
+- [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md) — defines E-001..E-031, the effect categories these builtins exercise.
+- [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md) — ForeignNode + trust model.
+- [`design/security-model.md`](../../design/security-model.md) — foreign binding trust (Q-006, deferred).
+- [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) — the registry being extended.
+- Q-006, Q-007 in [`open-questions.md`](../../open-questions.md) — both stay open.
 
 **Incoming:**
-- [`proposals/README.md`](README.md) — this proposal listed in Current proposals.
-- [`impl/CLAUDE.md`](../impl/CLAUDE.md) — Known gaps section.
+- [`proposals/README.md`](../README.md) — this proposal listed in Implemented proposals.
+- [`impl/CLAUDE.md`](../../impl/CLAUDE.md) — Known gaps section.
