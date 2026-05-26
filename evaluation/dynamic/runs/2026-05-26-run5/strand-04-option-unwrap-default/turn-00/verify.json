@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "error_prose": null,
+  "error_json": null,
+  "canonical_dag_json": "{\"version\":1,\"root\":\"app\",\"nodes\":{\"someCase\":{\"type\":\"SumTypeCase\",\"name\":\"Some\",\"caseType\":\"intT\"},\"noneCase\":{\"type\":\"SumTypeCase\",\"name\":\"None\",\"caseType\":null},\"optT\":{\"type\":\"SumType\",\"cases\":[\"someCase\",\"noneCase\"]},\"val\":{\"type\":\"SumValue\",\"ofType\":\"optT\",\"caseName\":\"Some\",\"payload\":\"__lit0\"},\"app\":{\"type\":\"Match\",\"scrutinee\":\"val\",\"cases\":[\"__when0_case_Some\",\"__when0_case_None\"]},\"__lit0\":{\"type\":\"IntLit\",\"value\":42},\"__when0_bind_n\":{\"type\":\"Pattern\",\"kind\":\"variable\",\"patternType\":\"intT\",\"name\":\"n\"},\"__when0_pat_Some\":{\"type\":\"Pattern\",\"kind\":\"constructor\",\"patternType\":\"optT\",\"caseName\":\"Some\",\"payloadPattern\":\"__when0_bind_n\"},\"__var0\":{\"type\":\"VarRef\",\"binder\":\"__when0_bind_n\"},\"__when0_case_Some\":{\"type\":\"MatchCase\",\"pattern\":\"__when0_pat_Some\",\"body\":\"__var0\"},\"__when0_pat_None\":{\"type\":\"Pattern\",\"kind\":\"constructor\",\"patternType\":\"optT\",\"caseName\":\"None\"},\"__lit1\":{\"type\":\"IntLit\",\"value\":0},\"__when0_case_None\":{\"type\":\"MatchCase\",\"pattern\":\"__when0_pat_None\",\"body\":\"__lit1\"},\"intT\":{\"type\":\"PrimitiveType\",\"kind\":\"Int\"}}}"
+}

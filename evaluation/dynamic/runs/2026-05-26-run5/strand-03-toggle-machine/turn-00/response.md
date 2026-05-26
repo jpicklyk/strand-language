@@ -1,0 +1,12 @@
+```layer-a
+@v=1 root=toggleMachine
+emptyOutputsT PRD []
+stateFieldT PRF "state" boolT
+outputsFieldT PRF "outputs" emptyOutputsT
+resultT PRD [stateFieldT outputsFieldT]
+transitionFnT FNT [boolT unitT] resultT
+transitionResult PV resultT [state=(APP not [s]) outputs=(PV emptyOutputsT [])]
+transitionLambda LAM [s e] transitionResult
+inputStream ESE unitT
+toggleMachine SM transitionLambda false [inputStream] [] [receiveFx]
+```

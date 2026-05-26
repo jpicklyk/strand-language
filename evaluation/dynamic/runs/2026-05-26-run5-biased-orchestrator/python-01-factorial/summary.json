@@ -1,0 +1,14 @@
+{
+  "task_id": "01-factorial",
+  "config": "python-type-hints",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": true,
+  "status": "converged",
+  "converged_at_attempt": 0,
+  "total_attempts": 1,
+  "total_input_tokens": 1497,
+  "total_output_tokens": 49,
+  "total_cost_usd": 0.005226,
+  "timestamp": 1779794329
+}

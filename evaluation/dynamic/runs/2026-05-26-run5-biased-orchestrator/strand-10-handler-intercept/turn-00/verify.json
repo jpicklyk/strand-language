@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "error_prose": null,
+  "error_json": null,
+  "canonical_dag_json": "{\"version\":1,\"root\":\"outerHandler\",\"nodes\":{\"zeroArgFnT\":{\"type\":\"FunctionType\",\"parameters\":[],\"result\":\"intT\"},\"innerHandle\":{\"type\":\"Lambda\",\"parameters\":[],\"body\":\"__lit0\"},\"outerHandle\":{\"type\":\"Lambda\",\"parameters\":[],\"body\":\"__lit1\"},\"body\":{\"type\":\"Application\",\"function\":\"now\",\"arguments\":[]},\"innerHandler\":{\"type\":\"Handler\",\"intercept\":\"nowFx\",\"handle\":\"innerHandle\",\"body\":\"body\"},\"outerHandler\":{\"type\":\"Handler\",\"intercept\":\"nowFx\",\"handle\":\"outerHandle\",\"body\":\"innerHandler\"},\"__lit0\":{\"type\":\"IntLit\",\"value\":2},\"__lit1\":{\"type\":\"IntLit\",\"value\":1},\"intT\":{\"type\":\"PrimitiveType\",\"kind\":\"Int\"},\"nowT\":{\"type\":\"FunctionType\",\"result\":\"intT\",\"parameters\":[]},\"now\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Time.Now\",\"foreignType\":\"nowT\",\"effects\":[\"nowFx\"]},\"nowFx\":{\"type\":\"EffectCategory\",\"categoryName\":\"Time.Now\"}}}"
+}

@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "line 18: code 'LAM' at position 0 expected unique compact-LAM param name across Lambdas but got compact param `xs:nonEmptyListSchema` collides with a prior compact `xs:listT` \u2014 the synthesized PRC would silently alias to the most recent declaration. Rename one of the params (e.g., `xs_v2`) so each LAM has its own PRC.",
+  "error_json": {
+    "phase": "compile",
+    "errors": [
+      {
+        "phase": "compile",
+        "line": 18,
+        "error_class": "LayerACompileError",
+        "detail": "code 'LAM' at position 0 expected unique compact-LAM param name across Lambdas but got compact param `xs:nonEmptyListSchema` collides with a prior compact `xs:listT` \u2014 the synthesized PRC would silently alias to the most recent declaration. Rename one of the params (e.g., `xs_v2`) so each LAM has its own PRC."
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

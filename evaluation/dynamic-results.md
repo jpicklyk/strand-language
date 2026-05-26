@@ -4,6 +4,142 @@ Auto-generated companion to `evaluation/results.md` (static cost). Where
 the static framework measures bytes-per-emission, this framework measures
 **tokens-per-successful-task** across the verifier-feedback retry loop.
 
+## Run 5 — 2026-05-26, fresh-context subagents over the post-prelude-expansion prompt
+
+Re-measures Run 2 with the same fresh-subagent methodology (one fresh
+`claude`-subtype agent per cell, constrained to one Read + one Write,
+no shared conversational history with the orchestrator), against the
+substantially-expanded system prompt and Elaborator that landed in
+the 2026-05-25/2026-05-26 work. Run artifacts under
+`evaluation/dynamic/runs/2026-05-26-run5/`. A prior orchestrator-
+responder attempt (with task context in working memory across cells,
+methodologically closer to Runs 1/3) is preserved under
+`evaluation/dynamic/runs/2026-05-26-run5-biased-orchestrator/` for
+reference but not used for the headline numbers.
+
+### What's new in the system prompt + Elaborator since Run 2
+
+- **Stdlib expansion round 2** — Math.* / Hash.* / Random.* / Bytes.FormatHex / Float↔Int coercions (~28 builtins documented).
+- **Higher-order List ops** — `List.Map`/`Filter`/`Fold`/`Find`/`Any`/`All` with the new `ApplyFn`/`FnH` interpreter callback infrastructure.
+- **JsonValueFull** (corpus 66) with spliced `JsonArrayCons/Nil` + `JsonObjectCons/Nil`. `Json.Parse` and `Json.Stringify` round-trip arrays + objects.
+- **RecursiveSelf depth field** (foundational; doesn't compose with value construction across nested RTs — caveat documented).
+- **Implicit-prelude backfill for round-1 IO and stdlib** — `fsRead`/`fsWrite`/`fsAppend`/`fsExists`/`fsDelete` / `netConnect`/`netSend`/`netRecv`/`netClose` / `httpReq` / `procWait` / `sleep` / `strLen`/`subStr`/`indexOf`/`contains`/`replace`/`upper`/`lower`/`trim`/`intToStr`/`floatToStr`/`boolToStr` / `bytesLen`/`bytesSlice`/`bytesCat`/`fromUtf8`/`b64Of` (28 entries) plus round-2 entries `sqrt`/`pow`/`ln`/`exp`/`sin`/`cos`/`tan`/`abs`/`sign`/`min`/`max`/`mmod`/`floor`/`ceil`/`round`/`toFloat`/`toIntTrunc`/`blake3`/`sha256`/`md5`/`randInt`/`randFloat`/`randBytes`/`hexOf` (23 entries).
+- **5 new effect categories**: `readFx`/`netSendFx`/`netRecvFx`/`procWaitFx`/`sleepFx`.
+- **Verifier/Elaborator fixes since Run 2**: WHEN scrutinee auto-VarRef; Cons(c) payload binder patternType; WHEN case body nested expressions; (RS) usable in PRF type position; **auto-Outer-PRD synthesis** in Elaborator (so the inner/outer split is no longer needed for value construction); improved `UnboundRecursiveSelf` error message; new "When adding a new builtin" checklist enforced by the `strand-add-builtin` skill.
+
+The system prompt grew from ~4,500 input tokens (Run 2) to ~10,100 (Run 5) per cell. All Strand cells pay this larger fixed cost up front.
+
+Run metadata:
+- Date: 2026-05-26
+- Model: claude-sonnet-4-7 (via Agent tool sub-agents, `claude` subtype)
+- Backend: step-mode (file-IPC) with per-cell fresh sub-agent dispatch
+- Samples per task: 1
+- Tasks: 10
+- Baselines: Strand Layer A density v4, Python+type-hints
+- Max retries per cell: 5
+- Convergence: **20/20 cells (100%)** — every cell converged within budget
+
+### Per-task results
+
+Per-cell totals (sum across all retry attempts):
+
+| Task | Strand attempts | Strand status | Strand in | Strand out | Python attempts | Python status | Python in | Python out |
+|------|------:|------|------:|------:|------:|------|------:|------:|
+| 01-factorial | 1 | converged | 10068 | 46 | 1 | converged | 1497 | 56 |
+| 02-json-value | 1 | converged | 10083 | 104 | 1 | converged | 1512 | 115 |
+| 03-toggle-machine | 1 | converged | 10124 | 107 | 1 | converged | 1552 | 115 |
+| 04-option-unwrap-default | 1 | converged | 10127 | 43 | 1 | converged | 1556 | 122 |
+| 05-sum-list | 1 | converged | 10123 | 188 | 1 | converged | 1552 | 123 |
+| 06-counter-machine | 1 | converged | 10176 | 159 | 1 | converged | 1604 | 239 |
+| 07-bounded-counter-schema | 1 | converged | 10187 | 51 | 1 | converged | 1616 | 113 |
+| 08-nonempty-list-schema | 2 | converged | 20661 | 352 | 1 | converged | 1627 | 212 |
+| 09-file-write-capability | 1 | converged | 10196 | 61 | 1 | converged | 1625 | 65 |
+| 10-handler-intercept | 1 | converged | 10270 | 69 | 1 | converged | 1699 | 252 |
+| **TOTAL** | — | 10 conv | **112015** | **1180** | — | 10 conv | **15840** | **1412** |
+
+Estimated cost (Sonnet 4.7 at $3/M input + $15/M output, no caching):
+- Strand: **$0.3537**
+- Python: **$0.0687**
+
+### Headline numbers
+
+| Metric | Strand Layer A density v4 | Python+type-hints |
+|---|---:|---:|
+| First-pass verification rate | **9/10 (90%)** | **10/10 (100%)** |
+| Convergence rate (within 5 attempts) | **10/10 (100%)** | **10/10 (100%)** |
+| Total tokens (in+out) | 113,195 | 17,252 |
+| Tokens-per-successful-task | 11,320 | 1,725 |
+| Cost-per-successful-task | $0.0354 | $0.0069 |
+| **Ratio (Strand / Python)** | — | — |
+| Tokens-per-successful-task ratio | **6.56×** | 1.00× |
+| Cost-per-successful-task ratio | **5.15×** | 1.00× |
+
+### Deltas vs Run 2
+
+| Metric | Run 2 | Run 5 | Delta |
+|---|---:|---:|---:|
+| Strand first-pass | 6/10 | 9/10 | **+3** |
+| Strand converged | 8/10 | 10/10 | **+2** |
+| Python first-pass | 9/10 | 10/10 | +1 |
+| Strand input tokens | 98,133 | 112,015 | +13,882 (bigger system prompt) |
+| Strand output tokens | 2,498 | 1,180 | **-1,318 (-53%)** |
+| Strand total | 100,631 | 113,195 | +12,564 |
+| Python total | 18,852 | 17,252 | -1,600 |
+| Total-token ratio | 6.67× | 6.56× | -0.11× |
+| Strand cost-per-success | $0.0415 | $0.0354 | **-$0.0061 (-15%)** |
+| Cost ratio | 5.53× | 5.15× | -0.38× |
+
+### Cells that flipped exhausted → converged (clean attribution)
+
+- **strand-05-sum-list** (Run 2 exhausted after 5 attempts → Run 5 **converged at attempt 1**, 10,123 in / 188 out). Run 2 hit `UnboundRecursiveSelf` at the case-pattern PRD because the WHEN expander's synthesized PVR types resolved the inner PRD through a depth-0 path. The Elaborator's **auto-Outer-PRD synthesis** (the task #22 work that shipped alongside Layer 4 step 2) closes this — the agent's natural one-PRD-with-RS emission now compiles without the manual inner/outer split.
+
+- **strand-08-nonempty-list-schema** (Run 2 exhausted after 5 attempts → Run 5 **converged at attempt 2**, 20,661 in / 352 out). Same underlying root cause as 05, also fixed by auto-Outer-PRD synthesis. The single remaining retry was a compact-LAM parameter name collision (`xs` reused across two `LAM` nodes with different `paramType`s) — the auto-synthesized PRC silently aliases to the most recent declaration. The retry renamed one occurrence and converged. Worth flagging as a real (if narrow) authoring footgun.
+
+### Cells that improved retries → first-pass
+
+- **strand-06-counter-machine** (Run 2: 2 attempts → Run 5: 1 attempt). The WHEN-case-body-with-nested-expression fix (Slice 4 fix #3) is well-established in the system prompt and the agent uses it first attempt.
+- **strand-07-bounded-counter-schema** (Run 2: 2 attempts → Run 5: 1 attempt). The compact-LAM `LAM [x:intT] (APP gt [x 0])` form is documented and used directly.
+- **python-01-factorial** (Run 2: 2 attempts → Run 5: 1 attempt). The Run 3 task-description fix ("apply to 5 so the program produces 120") still in effect.
+
+### Output-token reduction is the real Strand win
+
+Strand output tokens **dropped 53%** (2,498 → 1,180) across the suite while convergence improved. Per-converged-cell output averages 118 (Run 5) vs 312 (Run 2 across the 8 converged cells). The driver:
+- Prelude reserved names skip 2-3 nodes per stdlib reference.
+- Auto-Outer-PRD synthesis means agents emit one PRD instead of two.
+- No retry-wasted output tokens (Run 2 had 1,606 output tokens across 10 wasted retries on 05/08).
+
+Input tokens grew because the system prompt is 2.2× bigger, but the per-cell input cost is now amortizable via prompt caching (Run 4 framework, pending API key). At a 90% cache-hit rate the Strand-per-cell input cost drops from ~$0.030 to ~$0.005, closing most of the gap to Python.
+
+### Prelude additions actually exercised
+
+The new reserved names show up in agent emissions selectively:
+- **strand-10** used `now`/`nowFx` from the prelude.
+- **strand-01/05/06/etc.** used `add`/`sub`/`mul`/`eqInt`/`gt` — same as Run 2; these were already prelude-bound.
+- **strand-09** declared an explicit `fsWriteStub FN "strand-builtin:Filesystem.Write"` rather than using the new `fsWrite`/`writeFx` prelude entries — the task asks for a specific refinement-bearing effect declaration the prelude shortcut doesn't fit cleanly.
+- **None of the cells exercised** the round-2 Math.*/Hash.*/Random.*/JsonValueFull/higher-order-List entries. These tasks don't have natural call sites for them. The new entries are dead weight for this 10-task suite and would only show ROI on tasks that need numeric / hashing / list-walking / nested-JSON work.
+
+### Implications
+
+The dynamic-cost picture from Run 2 was 6.67× Strand/Python with 60% Strand first-pass. Run 5 puts that at **6.56× Strand/Python with 90% Strand first-pass and 100% convergence**. The gap closed on the dimension that mattered most — the two previously-exhausted cells are now in-budget, attributable to one specific Elaborator pass.
+
+Token-ratio improvement is modest (-0.11×) because the bigger system prompt offset the per-emission output reduction. **The right next move is prompt caching** (Run 4 framework, pending key), not further system-prompt shrinking — at 10k tokens caching delivers ~6× cost reduction per cell on the second+ sample, whereas trimming the prompt further risks dropping reserved-name documentation the agent depends on for the output-token wins.
+
+### Open follow-ups
+
+- **Run 4 (Anthropic backend with caching + N=5)** — still pending operator `ANTHROPIC_API_KEY`. The Run 5 numbers are the strongest motivation yet: per-cell input is now 10k tokens, and N=5 with caching would put Strand cost-per-success below Python.
+- **Task expansion** — the existing 10 tasks under-exercise Math/Hash/Random/higher-order-List/JsonValueFull/IO-surface. Adding 5-10 tasks that need these (e.g., JSON round-trip with arrays, SHA-256 hash, Fold-based sum, file-read + parse round-trip) would let the new prelude entries show measurable ROI.
+- **Compact-LAM param-name collision** (strand-08 first-attempt failure) — when two `LAM` nodes both use `xs:T` compact param notation, the auto-synthesized PRCs silently alias to the most-recent declaration. Either reject the collision at compile time with a clear error, or auto-suffix the second occurrence. Currently surfaces as a `code 'LAM' at position 0` compile error with a hint to rename — fine as a warning but better as a verifier-level check.
+- **strand-09 didn't use the new prelude** — task description forces a refinement-bearing effect category that doesn't match the prelude `fsWrite`/`writeFx` shape. If the prelude `writeFx` accepted a path-parameter refinement, this would also collapse to a prelude shortcut. Out of scope as a quick prelude tweak; might warrant a separate parameterized-effect-category prelude entry.
+
+### How this run was produced
+
+1. The package was already installed from prior runs (`pip install -e evaluation/dynamic`).
+2. `mkdir runs/2026-05-26-run5/` and init 20 sessions via `python -m strand_eval.cli step --session <dir> --init --task <task> --config <config> --max-retries 5 --feedback-format both`.
+3. Dispatched 20 sub-agents in parallel via the Claude Code Agent tool (`claude` subtype) from this conversation's main context. Each subagent's prompt explicitly constrained tool use to one `Read` of the prompt and one `Write` of `response.md` — structurally equivalent to a one-shot completion. The orchestrator (this session) did NOT see the per-cell emissions; subagent results were file-system-mediated.
+4. Ran `python -m strand_eval.cli step --session <dir>` per cell to verify and advance.
+5. strand-08 needed one retry: dispatched a fresh sub-agent against the turn-01 prompt (which included verifier feedback), wrote response.md, advanced.
+6. Aggregated all 20 `summary.json` files for the headline numbers in this section.
+
 ## Run 4 — pending, real Anthropic API with prompt caching + N=5 multi-sample
 
 Framework slice that closes the credibility gap with Runs 1-3. Code
