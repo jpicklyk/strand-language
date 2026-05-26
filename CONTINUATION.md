@@ -228,6 +228,86 @@ CBOR encoder, and runtime are untouched. See
 [`proposals/implemented/layer-a-density.md`](proposals/implemented/layer-a-density.md)
 for the implementation record.
 
+## Stdlib expansion round 2 + nested-Json + higher-order List ops landed 2026-05-26
+
+Pure-utility builtins, higher-order callback infra, and a partial
+lift of the nested-Json blocker — 13 commits in one window.
+
+**Slice 1 (pure utilities, ~28 builtins).** Math.* (Abs / Sign / Min /
+Max / Mod / Floor / Ceil / Round / Sqrt / Pow / Log / Exp / Sin / Cos
+/ Tan, plus Float.FromInt / Int.FromFloatTrunc coercions),
+Hash.Blake3 / Sha256 / Md5 (reusing the project's existing Blake3
+library, official test-vector coverage), List.* primitives that
+don't need lambdas (Empty / IsEmpty / Length / Reverse / Take /
+Drop / Concat / Nth), Json.Stringify, Bytes.FormatHex /
+Bytes.ParseHex, Random.Int / Random.Float / Random.Bytes via an
+injectable `Builtins.random` (default SecureRandom) mirroring the
+Clock pattern. New unit test files BuiltinsMathTest,
+BuiltinsHashTest, BuiltinsListTest, BuiltinsJsonHexTest,
+BuiltinsRandomTest.
+
+**Slice 2 (higher-order List ops + interpreter callback infra, 6
+builtins + infra).** Builtins.ApplyFn (continuation handed to
+higher-order builtins so they can invoke user-supplied callables)
++ Builtins.FnH (higher-order builtin interface, separate from Fn)
++ Builtins.higherOrderRegistry / lookupHigherOrder (disjoint from
+the standard registry; dispatcher checks higher-order first). New
+Interpreter.applyValueToArgs(callable, args, ctx, handlers) reuses
+the closure-binding pattern from applyClosure / applyFixpoint but
+takes pre-evaluated args (no Application node). Six higher-order
+builtins: List.Map / Filter / Find / Any / All take 1-arg fns;
+Fold takes 2-arg (acc, elem). Find / Any / All short-circuit;
+Fold is left-to-right; Map / Filter preserve order. ForeignFn
+callbacks work — the dispatcher cycles them back through
+Builtins.lookup, so passing e.g. Bool.Not as List.Map fn is legal.
+Unit tests in BuiltinsListHoTest (Kotlin-constructed ApplyFn);
+one end-to-end integration test in InterpreterTest exercises the
+full Application -> applyForeign -> ApplyFn -> applyValueToArgs ->
+Closure body eval path.
+
+**Slice 3 (RecursiveSelf depth field + JsonValue extension via
+spliced variants).** N-042 RecursiveSelf gains an optional `depth:
+Int = 0` field — a de Bruijn index against the recursive-binder
+stack. Default 0 preserves every existing program hash; depth > 0
+resolves to the N-th outer enclosing RecursiveType. Verifier
+checks `depth < recursiveDepth`; canonical encoder emits the depth
+directly. Two new VerifierTest cases (depth-1 with only 1 enclosing
+RT → UnboundRecursiveSelf; depth-1 with 2 enclosing RTs → OK).
+
+The original plan was to use the depth field to express
+JsonValue's array case as `JsonArray(List<JsonValue>)` with a
+nested μ-list referring back to the outer μ via depth=1.
+Investigation discovered a value-construction limitation: an inner
+μ-type with depth>0 RecursiveSelf references is correct only when
+traversed *as part of* its enclosing outer μ. A direct
+construction site like `SumValue.ofType = innerListT` resolves the
+inner standalone, finds the depth-1 reference unbound (only 1 RT
+in the resolution walk), and aborts with UnboundRecursiveSelf.
+Strand's content-addressed type semantics require every type to
+have one canonical interpretation; depth-N RecursiveSelf
+references depend on traversal context, so they only work for
+type-equality reasoning, not for value-construction sites.
+
+The pragmatic fix: collapse the array/object structure into
+JsonValue's variant set directly via spliced variants — corpus 66
+ships `JsonValueFull` with eight cases: the four primitives plus
+JsonArrayCons(head: jv, tail: jv) | JsonArrayNil |
+JsonObjectCons(key: String, value: jv, tail: jv) | JsonObjectNil.
+All RecursiveSelf references stay depth=0 (single enclosing μ);
+value construction works uniformly. `[1,2]` becomes
+`JsonArrayCons(JsonNumber(1), JsonArrayCons(JsonNumber(2),
+JsonArrayNil))`. Json.Parse rebuilt to produce this encoding;
+Json.Stringify walks it back to canonical JSON text. Round-trip
+covered for arbitrary nesting. The depth field stays in the
+codebase as a sound foundational primitive — useful when Strand
+adds polymorphic recursive types or any construct that doesn't
+have the value-construction issue.
+
+Corpus extended to 66 programs. Two new proposals retired to
+implemented/: stdlib-expansion-round-2.md (umbrella) and
+nested-recursive-self-depth.md (the depth field's design + the
+implementation pivot to spliced variants).
+
 ## Layer 4 step 2 real-IO builtins landed 2026-05-26
 
 The interpreter's `Builtins` registry expanded from 18 to 46 entries

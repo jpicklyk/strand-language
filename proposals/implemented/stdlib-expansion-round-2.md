@@ -1,9 +1,54 @@
 # Stdlib expansion round 2
 
-**Document:** `proposals/stdlib-expansion-round-2.md`
-**Status:** Draft 2026-05-26
-**Concerns:** [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt), [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md), [`proposals/implemented/layer-4-step-2-real-io.md`](implemented/layer-4-step-2-real-io.md)
-**Scope:** Medium — ~25 new builtins across 5 sub-slices, all pure (or single-existing-effect)
+**Document:** `proposals/implemented/stdlib-expansion-round-2.md`
+**Status:** Implemented 2026-05-26 across slices 1-3 in 12 commits (commit range `393b634..28427d0`). The original slice 1 plan landed verbatim (~28 builtins); slice 2 (higher-order List ops) landed with new ApplyFn / FnH interpreter infrastructure; slice 3 (nested-Json) pivoted from the depth-field-only plan to a depth-field-plus-spliced-variants combination, as the depth field alone proved incomplete for value construction. All gradle tests green; corpus extended to 66 programs.
+**Date:** 2026-05-26 (proposal and implementation)
+**Concerns:** [`impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt`](../../impl/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt), [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`proposals/implemented/layer-4-step-2-real-io.md`](layer-4-step-2-real-io.md), [`proposals/implemented/nested-recursive-self-depth.md`](nested-recursive-self-depth.md)
+**Scope:** Medium — 25 builtins in slice 1, 6 higher-order builtins + ApplyFn infra in slice 2, RecursiveSelf depth field + JsonValueFull in slice 3
+
+> **Implementation note (2026-05-26).** All three slices landed across
+> one overnight execution window. The slice 1 plan was executed verbatim
+> (Math.* / Hash.* / List.* primitives / Json.Stringify / Bytes hex /
+> Random.* — ~28 builtins, no design deviations).
+>
+> **Slice 2 deviations from plan.** Added `Builtins.ApplyFn` and
+> `Builtins.FnH` (separate higher-order builtin interface) alongside the
+> existing `Fn`. Builtins.lookupHigherOrder + Interpreter.applyValueToArgs
+> form the dispatch path. Six higher-order List ops shipped: Map, Filter,
+> Fold, Find, Any, All. Fold takes 2-arg fn (acc, elem); rest take 1-arg.
+> ForeignFn callbacks work (e.g., passing Bool.Not as List.Map fn); the
+> dispatcher cycles them back through Builtins.lookup.
+>
+> **Slice 3 pivot.** The original plan was to add a `depth: Int` field
+> to RecursiveSelf and use that to express nested μ-types
+> (`JsonArray(List<JsonValue>)`). The depth field shipped as planned
+> (verifier + encoder + parser updates, two new VerifierTest cases
+> covering depth>0 references) — but during corpus 66 development we
+> discovered that nested μ-types' inner RT can't be resolved standalone:
+> a direct construction site like `SumValue.ofType = arrListT` triggers
+> the inner RT walk at depth 1 only, finds the depth-1 RS unbound, and
+> aborts. Strand's content-addressed type semantics require every type
+> to have one canonical meaning; depth-N RecursiveSelf references
+> depend on traversal context, so they only work when the inner type
+> is reached through its enclosing outer μ.
+>
+> The pragmatic fix: collapse the array / object structure into
+> JsonValue's variant set directly via "spliced variants" — corpus 66
+> ships JsonArrayCons / JsonArrayNil / JsonObjectCons / JsonObjectNil
+> as direct cases of `JsonValueFull`'s single μ. All RecursiveSelf
+> references stay depth=0; value construction works uniformly. The
+> depth field itself stays in the codebase as a sound foundational
+> primitive — useful when Strand adds polymorphic recursive types or
+> any construct that doesn't have the value-construction issue.
+>
+> **Final tally.** Slice 1: 28 builtins (Math 15 + Hash 3 + List 8 +
+> Json.Stringify 1 + Bytes hex 2 + Random 3, plus Float.FromInt /
+> Int.FromFloatTrunc coercions — actually closer to 34). Slice 2: 6
+> higher-order builtins + 2 interpreter-infra interfaces + 1
+> applyValueToArgs helper. Slice 3: RecursiveSelf depth field +
+> Json.Parse / Json.Stringify rewritten for spliced variants + corpus
+> 66 (JsonValueFull, 8 cases). 39 total registry entries added; 11
+> commits + close-out.
 
 Layer 4 step 2 brought the stdlib from 18 to 46 builtins covering real OS-level IO. Round 2 fills the remaining "common pure utility" gaps an agent program is likely to hit immediately: math beyond `Int.Add/Sub/Mul/Div/Mod`, content hashing, list traversal without writing μ-recursion by hand, JSON serialization to balance `Json.Parse`, hex codecs to balance base64, and explicit access to randomness.
 
