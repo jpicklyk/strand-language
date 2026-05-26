@@ -743,7 +743,7 @@ internal fun categoryName(node: Node?): String = when (node) {
     is Node.ProductFieldGet -> "ProductFieldGet"
     is Node.SumValue -> "SumValue"
     is Node.RecursiveType -> "RecursiveType"
-    Node.RecursiveSelf -> "RecursiveSelf"
+    is Node.RecursiveSelf -> "RecursiveSelf"
     is Node.Handler -> "Handler"
     is Node.StateMachine -> "StateMachine"
     is Node.EventStream -> "EventStream"

@@ -267,7 +267,7 @@ class Interpreter(
             is Node.Pattern,
             is Node.ProductFieldValue,
             is Node.RecursiveType,
-            Node.RecursiveSelf,
+            is Node.RecursiveSelf,
             is Node.StateMachine,
             is Node.EventStream,
             is Node.Transition,

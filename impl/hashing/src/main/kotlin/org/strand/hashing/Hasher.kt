@@ -276,7 +276,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                     encoder.popRecursiveBinder()
                 }
             }
-            Node.RecursiveSelf -> Unit  // intrinsic — no standalone hash entry
+            is Node.RecursiveSelf -> Unit  // intrinsic — no standalone hash entry
 
             is Node.Handler -> {
                 walk(node.intercept, stack, out)

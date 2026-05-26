@@ -806,7 +806,7 @@ class VerifierTest {
         // μ. RecursiveSelf — the body IS the self-reference, no constructor
         // guards. Verifier reports NonContractiveRecursiveType.
         val store = org.strand.core.NodeStore()
-        val recSelf = store.add(org.strand.core.Node.RecursiveSelf)
+        val recSelf = store.add(org.strand.core.Node.RecursiveSelf())
         val recType = store.add(org.strand.core.Node.RecursiveType(body = recSelf))
         // Force resolution via a Lambda whose parameter type is the recursive type.
         val param = store.add(org.strand.core.Node.ParameterDecl("x", recType))
@@ -823,7 +823,7 @@ class VerifierTest {
     fun `unbound RecursiveSelf is rejected`() {
         // RecursiveSelf used as a type without any enclosing RecursiveType binder.
         val store = org.strand.core.NodeStore()
-        val recSelf = store.add(org.strand.core.Node.RecursiveSelf)
+        val recSelf = store.add(org.strand.core.Node.RecursiveSelf())
         val param = store.add(org.strand.core.Node.ParameterDecl("x", recSelf))
         val pRef = store.add(org.strand.core.Node.VarRef(param))
         val lambda = store.add(org.strand.core.Node.Lambda(parameters = listOf(param), body = pRef))
@@ -831,6 +831,70 @@ class VerifierTest {
         val failed = r as VerifyResult.Failed
         assertTrue(failed.errors.any { it is VerifyError.UnboundRecursiveSelf }) {
             "expected UnboundRecursiveSelf, got: ${failed.errors}"
+        }
+    }
+
+    @Test
+    fun `RecursiveSelf depth exceeding enclosing binders is rejected`() {
+        // μ. depth=1 — single enclosing RT, but RS asks for the next-outer
+        // binder which does not exist. UnboundRecursiveSelf fires regardless
+        // of contractivity (the contractivity guard requires structure
+        // between binder and self; here intT in Cons's payload satisfies it).
+        val r = verify("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            "intT":     { "type": "PrimitiveType", "kind": "Int" },
+            "rsOuter":  { "type": "RecursiveSelf", "depth": 1 },
+            "consField":{ "type": "ProductTypeField", "name": "head", "fieldType": "rsOuter" },
+            "consProd": { "type": "ProductType", "fields": ["consField"] },
+            "consCase": { "type": "SumTypeCase", "name": "Cons", "caseType": "consProd" },
+            "nilCase":  { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+            "body":     { "type": "SumType", "cases": ["consCase", "nilCase"] },
+            "recT":     { "type": "RecursiveType", "body": "body" },
+            "x":        { "type": "ParameterDecl", "name": "x", "paramType": "recT" },
+            "xr":       { "type": "VarRef", "binder": "x" },
+            "v":        { "type": "Lambda", "parameters": ["x"], "body": "xr" }
+          }
+        }""")
+        val failed = r as VerifyResult.Failed
+        assertTrue(failed.errors.any { it is VerifyError.UnboundRecursiveSelf }) {
+            "expected UnboundRecursiveSelf for depth=1 with only 1 enclosing RT, got: ${failed.errors}"
+        }
+    }
+
+    @Test
+    fun `nested RecursiveTypes accept depth-0 inner and depth-1 outer references`() {
+        // outer = μ jv. JsonLeaf(Int) | JsonArr(μ list. Cons(head=RSouter(depth=1), tail=RSinner(depth=0)) | Nil)
+        // The shape that justifies adding the depth field — JsonValue with a
+        // recursive array case whose List<JsonValue> is itself a nested μ.
+        val r = verify("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            "intT":          { "type": "PrimitiveType", "kind": "Int" },
+
+            "rsInner":       { "type": "RecursiveSelf", "depth": 0 },
+            "rsOuter":       { "type": "RecursiveSelf", "depth": 1 },
+
+            "innerHead":     { "type": "ProductTypeField", "name": "head", "fieldType": "rsOuter" },
+            "innerTail":     { "type": "ProductTypeField", "name": "tail", "fieldType": "rsInner" },
+            "innerProd":     { "type": "ProductType", "fields": ["innerHead", "innerTail"] },
+            "innerCons":     { "type": "SumTypeCase", "name": "Cons", "caseType": "innerProd" },
+            "innerNil":      { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+            "innerBody":     { "type": "SumType", "cases": ["innerCons", "innerNil"] },
+            "listT":         { "type": "RecursiveType", "body": "innerBody" },
+
+            "leafCase":      { "type": "SumTypeCase", "name": "JsonLeaf", "caseType": "intT" },
+            "arrCase":       { "type": "SumTypeCase", "name": "JsonArr", "caseType": "listT" },
+            "outerBody":     { "type": "SumType", "cases": ["leafCase", "arrCase"] },
+            "jsonT":         { "type": "RecursiveType", "body": "outerBody" },
+
+            "x":             { "type": "ParameterDecl", "name": "x", "paramType": "jsonT" },
+            "xr":            { "type": "VarRef", "binder": "x" },
+            "v":             { "type": "Lambda", "parameters": ["x"], "body": "xr" }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Ok) {
+            "expected nested-μ JsonValue-shape to verify cleanly, got: $r"
         }
     }
 

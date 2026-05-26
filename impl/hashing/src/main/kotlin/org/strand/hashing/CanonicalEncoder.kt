@@ -229,7 +229,7 @@ internal class CanonicalEncoder(
         is Node.SumValue -> encodeSumValue(node, stack)
 
         is Node.RecursiveType -> encodeRecursiveType(node, stack)
-        Node.RecursiveSelf -> encodeRecursiveSelf()
+        is Node.RecursiveSelf -> encodeRecursiveSelf(node)
 
         is Node.Handler -> encodeHandler(node, stack)
 
@@ -327,13 +327,18 @@ internal class CanonicalEncoder(
         }
     }
 
-    private fun encodeRecursiveSelf(): ByteArray {
-        // If RecursiveSelf is outside any RecursiveType binder, the verifier
-        // will report `UnboundRecursiveSelf`. Emit an out-of-range sentinel
-        // depth so finalize can still produce a hash for the surrounding
-        // subgraph and the verifier gets a chance to run. Per the proposal,
-        // valid in-binder cases always emit depth 0.
-        val depth = if (currentRecDepth > 0) 0L else Long.MAX_VALUE
+    private fun encodeRecursiveSelf(node: Node.RecursiveSelf): ByteArray {
+        // Emit the node's depth field directly. If RecursiveSelf is
+        // outside any RecursiveType binder, OR its depth exceeds the
+        // count of enclosing binders, the verifier will report
+        // UnboundRecursiveSelf. We still emit a sentinel for the
+        // out-of-range cases so finalize can produce a hash for the
+        // surrounding subgraph and the verifier gets a chance to run.
+        val depth: Long = if (node.depth in 0 until currentRecDepth) {
+            node.depth.toLong()
+        } else {
+            Long.MAX_VALUE  // sentinel: encoder-detectable out-of-range
+        }
         return encodeWithTag(CategoryTag.RecursiveSelf, listOf(
             CanonicalCbor.encodeUint(depth)
         ))

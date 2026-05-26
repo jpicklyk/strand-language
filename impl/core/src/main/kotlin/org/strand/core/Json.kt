@@ -243,7 +243,9 @@ object JsonIngest {
             "RecursiveType" -> Node.RecursiveType(
                 body = obj.requireRef("body", ctx, resolve)
             )
-            "RecursiveSelf" -> Node.RecursiveSelf
+            "RecursiveSelf" -> Node.RecursiveSelf(
+                depth = obj.optionalInt("depth", ctx) ?: 0,
+            )
 
             "Lambda" -> Node.Lambda(
                 parameters = obj.requireRefList("parameters", ctx, resolve),

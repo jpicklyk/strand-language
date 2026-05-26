@@ -279,7 +279,7 @@ class Verifier(
                 is Node.Pattern,
                 is Node.ProductFieldValue,
                 is Node.RecursiveType,
-                Node.RecursiveSelf,
+                is Node.RecursiveSelf,
                 is Node.Schema,
                 is Node.Invariant ->
                     reportFatal(VerifyError.CategoryMismatch(
@@ -1354,7 +1354,7 @@ class Verifier(
                     is Node.SumType, is Node.SumTypeCase, is Node.FunctionType,
                     is Node.TypeParameter, is Node.ForallType, is Node.ParameterDecl,
                     is Node.EffectCategory, is Node.EffectDecl, is Node.Pattern,
-                    is Node.RecursiveType, Node.RecursiveSelf,
+                    is Node.RecursiveType, is Node.RecursiveSelf,
                     is Node.StateMachine, is Node.EventStream, is Node.Transition,
                     is Node.Schema, is Node.Invariant -> Unit
                 }
@@ -1925,16 +1925,18 @@ class Verifier(
                     }
                     TypeExpr.Recursive(body)
                 }
-                Node.RecursiveSelf -> {
-                    if (recursiveDepth == 0) {
+                is Node.RecursiveSelf -> {
+                    if (node.depth < 0 || node.depth >= recursiveDepth) {
                         report(VerifyError.UnboundRecursiveSelf(at = typeId))
                         throw VerifyAbort()
                     }
-                    // The proposal commits to "always innermost": a single
-                    // RecursiveSelf node refers only to the closest
-                    // enclosing RecursiveType binder. Depth 0 is the
-                    // canonical representation.
-                    TypeExpr.RecursiveSelf(depth = 0)
+                    // Depth is a de Bruijn index against the
+                    // recursive-binder stack. 0 = innermost; depth N > 0
+                    // resolves to the N-th outer enclosing RecursiveType.
+                    // The post-stdlib-round-2 JsonValue uses depth = 1 to
+                    // reach the outer `jv` binder from inside the inner
+                    // List<JsonValue> binder.
+                    TypeExpr.RecursiveSelf(depth = node.depth)
                 }
                 is Node.Schema -> resolveSchema(typeId, node, typeParams)
                 else -> {

@@ -751,18 +751,21 @@ object Builtins {
             }
         },
 
-        // Layer 4 step 2 — Json.Parse (Phase 4 #9). Parses a JSON
-        // primitive (null, true, false, number, string) into the
-        // standard JsonValue sum encoding from the blessed library
-        // (corpus 54: JsonNull | JsonBool(Bool) | JsonNumber(Int) |
-        // JsonString(String)). Arrays and objects are not currently
-        // supported by the JsonValue blessed library because of
-        // nested-μ binder limitations — they return Some(JsonNull) as
-        // a degraded fallback so the parser never throws on syntactically
-        // valid JSON; tests that need arrays/objects should wait for
-        // the nested-μ work.
+        // Layer 4 step 2 (round 2 update) — Json.Parse. Parses any
+        // valid JSON value (null, true, false, number, string, array,
+        // object) into the full JsonValue sum encoding now that the
+        // nested-μ blocker is lifted (Slice 3 of stdlib expansion
+        // round 2, via the RecursiveSelf depth field).
         //
-        // Returns Option<JsonValue>: Some on a valid JSON primitive,
+        // The blessed JsonValue type lives in corpus 66; the four
+        // primitive cases match corpus 54's flat predecessor for
+        // primitives — programs that only handle primitives continue
+        // to work unchanged. Arrays and objects now produce real
+        // recursive structure: JsonArray(List<JsonValue>) and
+        // JsonObject(List<{key, value}>) using the canonical Cons/Nil
+        // sum encoding.
+        //
+        // Returns Option<JsonValue>: Some on any valid JSON,
         // None on malformed input.
 
         "strand-builtin:Json.Parse" to Fn { args ->
@@ -770,35 +773,9 @@ object Builtins {
             val s = (args[0] as Value.StringV).v.trim()
             try {
                 val element = kotlinx.serialization.json.Json.parseToJsonElement(s)
-                val jsonValue: Value = when (element) {
-                    is kotlinx.serialization.json.JsonNull ->
-                        Value.SumV("JsonNull", null)
-                    is kotlinx.serialization.json.JsonPrimitive -> {
-                        if (element.isString) {
-                            Value.SumV("JsonString", Value.StringV(element.content))
-                        } else {
-                            val b = element.content.lowercase()
-                            when {
-                                b == "true" -> Value.SumV("JsonBool", Value.BoolV(true))
-                                b == "false" -> Value.SumV("JsonBool", Value.BoolV(false))
-                                else -> {
-                                    val asLong = element.content.toLongOrNull()
-                                    if (asLong != null) Value.SumV("JsonNumber", Value.IntV(asLong))
-                                    else return@Fn Value.SumV("None", null)
-                                }
-                            }
-                        }
-                    }
-                    // Arrays + objects: degrade to JsonNull. The JsonValue
-                    // blessed library has no recursive cases for them, so
-                    // there's no faithful encoding to produce. Returning
-                    // JsonNull rather than None signals "parsed valid JSON,
-                    // but structure not representable" — a future
-                    // nested-μ JsonArray/JsonObject expansion will replace
-                    // this with the proper recursive encoding.
-                    else -> Value.SumV("JsonNull", null)
-                }
-                Value.SumV("Some", jsonValue)
+                val converted = jsonElementToValue(element)
+                if (converted == null) Value.SumV("None", null)
+                else Value.SumV("Some", converted)
             } catch (_: kotlinx.serialization.SerializationException) {
                 Value.SumV("None", null)
             } catch (_: IllegalArgumentException) {
@@ -1104,28 +1081,15 @@ object Builtins {
             Value.SumV("None", null)
         },
 
-        // Stdlib expansion round 2 — Json.Stringify (Phase 4 #1).
-        // Inverse of Json.Parse. Takes a JsonValue SumV and produces
-        // the canonical JSON text. The four primitive cases
-        // (JsonNull, JsonBool, JsonNumber, JsonString) are handled
-        // exhaustively; any other case (defensive against future
-        // additions before round 3 lifts the nested-μ blocker for
-        // arrays/objects) falls back to the JSON null literal.
+        // Stdlib expansion round 2 — Json.Stringify. Inverse of
+        // Json.Parse, handling all six JsonValue cases (the four
+        // primitives plus JsonArray and JsonObject from the Slice-3
+        // nested-μ JsonValue). Recurses through Cons/Nil chains
+        // inside array/object payloads.
 
         "strand-builtin:Json.Stringify" to Fn { args ->
             require(args.size == 1) { "Json.Stringify expects 1 arg (json: JsonValue), got ${args.size}" }
-            val v = args[0] as Value.SumV
-            val text = when (v.case) {
-                "JsonNull" -> "null"
-                "JsonBool" -> if ((v.payload as Value.BoolV).v) "true" else "false"
-                "JsonNumber" -> (v.payload as Value.IntV).v.toString()
-                "JsonString" -> {
-                    val s = (v.payload as Value.StringV).v
-                    kotlinx.serialization.json.JsonPrimitive(s).toString()  // proper escaping
-                }
-                else -> "null"  // unreachable until round 3 adds array/object cases
-            }
-            Value.StringV(text)
+            Value.StringV(jsonValueToText(args[0] as Value.SumV))
         },
 
         // Stdlib expansion round 2 — Bytes hex codecs (Phase 4 #2).
@@ -1342,6 +1306,119 @@ object Builtins {
             Value.BoolV(true)
         },
     )
+
+    /**
+     * Convert a kotlinx-serialization [kotlinx.serialization.json.JsonElement]
+     * into the corresponding Strand `JsonValue` SumV encoding. Returns null
+     * if a number primitive cannot be represented as a Long (the current
+     * JsonNumber payload type) — the caller wraps the result as
+     * `Some(...)` on success or `None` otherwise.
+     *
+     * The output shape matches the post-Slice-3 nested-μ JsonValue
+     * (corpus 66). The encoding uses **spliced variants** rather than
+     * separate inner-μ types: arrays produce a chain of
+     * `JsonArrayCons(head, tail)` cells terminated by `JsonArrayNil`,
+     * with `head` and `tail` both directly typed as `JsonValue`
+     * (depth-0 RecursiveSelf to the single enclosing μ). Objects use
+     * `JsonObjectCons(key, value, tail)` and `JsonObjectNil`
+     * analogously. This sidesteps the value-construction constraint
+     * that nested μ-types fail (the inner RT can't be resolved
+     * standalone) while still producing readable JSON-shaped values.
+     */
+    private fun jsonElementToValue(element: kotlinx.serialization.json.JsonElement): Value? {
+        return when (element) {
+            is kotlinx.serialization.json.JsonNull ->
+                Value.SumV("JsonNull", null)
+            is kotlinx.serialization.json.JsonPrimitive -> {
+                if (element.isString) {
+                    Value.SumV("JsonString", Value.StringV(element.content))
+                } else {
+                    val b = element.content.lowercase()
+                    when {
+                        b == "true" -> Value.SumV("JsonBool", Value.BoolV(true))
+                        b == "false" -> Value.SumV("JsonBool", Value.BoolV(false))
+                        else -> {
+                            val asLong = element.content.toLongOrNull() ?: return null
+                            Value.SumV("JsonNumber", Value.IntV(asLong))
+                        }
+                    }
+                }
+            }
+            is kotlinx.serialization.json.JsonArray -> {
+                var chain: Value = Value.SumV("JsonArrayNil", null)
+                for (entry in element.reversed()) {
+                    val converted = jsonElementToValue(entry) ?: return null
+                    chain = Value.SumV("JsonArrayCons", Value.ProductV(mapOf(
+                        "head" to converted, "tail" to chain,
+                    )))
+                }
+                chain
+            }
+            is kotlinx.serialization.json.JsonObject -> {
+                var chain: Value = Value.SumV("JsonObjectNil", null)
+                for ((key, value) in element.entries.reversed()) {
+                    val convertedValue = jsonElementToValue(value) ?: return null
+                    chain = Value.SumV("JsonObjectCons", Value.ProductV(mapOf(
+                        "key" to Value.StringV(key),
+                        "value" to convertedValue,
+                        "tail" to chain,
+                    )))
+                }
+                chain
+            }
+        }
+    }
+
+    /**
+     * Render a Strand `JsonValue` SumV back to canonical JSON text.
+     * Inverse of [jsonElementToValue]. Recurses through Cons/Nil
+     * chains inside JsonArray / JsonObject payloads.
+     */
+    private fun jsonValueToText(v: Value.SumV): String = when (v.case) {
+        "JsonNull" -> "null"
+        "JsonBool" -> if ((v.payload as Value.BoolV).v) "true" else "false"
+        "JsonNumber" -> (v.payload as Value.IntV).v.toString()
+        "JsonString" -> {
+            val s = (v.payload as Value.StringV).v
+            kotlinx.serialization.json.JsonPrimitive(s).toString()
+        }
+        "JsonArrayCons", "JsonArrayNil" -> {
+            val out = StringBuilder("[")
+            var first = true
+            var cur: Value = v
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "JsonArrayCons") break
+                val payload = sumV.payload as Value.ProductV
+                if (!first) out.append(",")
+                first = false
+                out.append(jsonValueToText(payload.fields.getValue("head") as Value.SumV))
+                cur = payload.fields.getValue("tail")
+            }
+            out.append("]")
+            out.toString()
+        }
+        "JsonObjectCons", "JsonObjectNil" -> {
+            val out = StringBuilder("{")
+            var first = true
+            var cur: Value = v
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "JsonObjectCons") break
+                val payload = sumV.payload as Value.ProductV
+                if (!first) out.append(",")
+                first = false
+                val key = (payload.fields.getValue("key") as Value.StringV).v
+                out.append(kotlinx.serialization.json.JsonPrimitive(key).toString())
+                out.append(":")
+                out.append(jsonValueToText(payload.fields.getValue("value") as Value.SumV))
+                cur = payload.fields.getValue("tail")
+            }
+            out.append("}")
+            out.toString()
+        }
+        else -> "null"
+    }
 
     /** Look up a builtin by its target identifier; null if unknown. */
     fun lookup(target: String): Fn? = registry[target]

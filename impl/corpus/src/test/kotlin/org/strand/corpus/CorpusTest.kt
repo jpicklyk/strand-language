@@ -151,7 +151,35 @@ class CorpusTest {
         Case("/corpus/64-option-parseint-unwrap.json", Value.IntV(42L),
             "Phase 4 #10: ParseInt(\"42\") -> Some(42), unwrapped by Match to 42. Demonstrates the canonical Option<Int> shape (SumV \"Some\" / \"None\") that all the new String.* / Bytes.* / Process.* builtins use for fallible-parse / fallible-lookup results."),
         Case("/corpus/65-option-parseint-fallback.json", Value.IntV(-1L),
-            "Phase 4 #10: ParseInt(\"not a number\") -> None, unwrapped to fallback -1. Pair with corpus 64 for the canonical Option-with-default pattern.")
+            "Phase 4 #10: ParseInt(\"not a number\") -> None, unwrapped to fallback -1. Pair with corpus 64 for the canonical Option-with-default pattern."),
+
+        // Slice 3 of stdlib expansion round 2 — nested-μ JsonValue
+        // exercising the new RecursiveSelf depth field. corpus 66
+        // builds a [1, 2] array literal using the full six-case
+        // JsonValueFull schema (corpus 54 stays flat for backward
+        // compat). The identity Lambda returns the array value
+        // unchanged; the schemaClaim evaluates to the JsonArray
+        // SumV with a Cons-Nil chain of JsonNumber payloads.
+        Case(
+            "/corpus/66-json-value-nested.json",
+            // [1, 2] encoded as JsonArrayCons(JsonNumber(1),
+            //                     JsonArrayCons(JsonNumber(2),
+            //                       JsonArrayNil))
+            Value.SumV(
+                "JsonArrayCons",
+                Value.ProductV(mapOf(
+                    "head" to Value.SumV("JsonNumber", Value.IntV(1L)),
+                    "tail" to Value.SumV(
+                        "JsonArrayCons",
+                        Value.ProductV(mapOf(
+                            "head" to Value.SumV("JsonNumber", Value.IntV(2L)),
+                            "tail" to Value.SumV("JsonArrayNil", null),
+                        )),
+                    ),
+                )),
+            ),
+            "Slice 3: post-blocker JsonValue with spliced JsonArrayCons/JsonArrayNil and JsonObjectCons/JsonObjectNil variants inside a single RecursiveType. The depth-field extension is sound but doesn't compose with value construction across nested μ; the spliced-variants approach keeps the type self-contained while still expressing arrays and objects. arrayValue [JsonNumber(1), JsonNumber(2)] round-trips through the identity Lambda unchanged.",
+        ),
     )
 
     /**

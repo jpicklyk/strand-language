@@ -134,15 +134,22 @@ sealed class Node {
     data class RecursiveType(val body: NodeId) : Node()
 
     /**
-     * N-042. A reference to the innermost enclosing [RecursiveType] binder.
-     * Has no content fields; its canonical encoding emits its de Bruijn
-     * depth, computed by the encoder from the recursive-binder stack at the
-     * reference's position. A RecursiveSelf outside any enclosing
-     * RecursiveType is ill-formed (`UnboundRecursiveSelf`).
+     * N-042. A reference to an enclosing [RecursiveType] binder, identified
+     * by [depth] as a de Bruijn index (0 = the immediately-enclosing
+     * RecursiveType, 1 = the next one out, ...). The canonical encoding
+     * emits this depth directly.
+     *
+     * Default `depth = 0` preserves the original "innermost only" semantics
+     * — every existing program that uses RecursiveSelf without specifying a
+     * depth continues to behave identically and produces identical hashes.
+     * Programs that nest RecursiveType bodies (e.g., the post-Slice-3
+     * `JsonValue` with `JsonArray(List<JsonValue>)`) reference outer binders
+     * by setting `depth` to the count of intermediate RecursiveType binders.
+     *
+     * A RecursiveSelf whose depth exceeds the count of enclosing
+     * RecursiveType binders is ill-formed (`UnboundRecursiveSelf`).
      */
-    object RecursiveSelf : Node() {
-        override fun toString(): String = "RecursiveSelf"
-    }
+    data class RecursiveSelf(val depth: Int = 0) : Node()
 
     /**
      * N-027. A state machine: a long-running computation modeled as a fixpoint

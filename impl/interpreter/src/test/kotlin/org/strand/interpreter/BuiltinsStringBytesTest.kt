@@ -208,15 +208,79 @@ class BuiltinsStringBytesTest {
     }
 
     @Test
-    fun `Json_Parse array degrades to JsonNull`() {
+    fun `Json_Parse array yields a JsonArrayCons-JsonArrayNil chain`() {
+        // The spliced-variants encoding (corpus 66) avoids the
+        // nested-μ value-construction issue by inlining
+        // JsonArrayCons / JsonArrayNil directly as JsonValue
+        // variants. Each cell points to head: JsonValue and
+        // tail: JsonValue (next cell or JsonArrayNil).
         val fn = lookup("strand-builtin:Json.Parse")
-        // Arrays + objects aren't representable in the current blessed
-        // JsonValue (nested-μ blocker); they degrade to JsonNull rather
-        // than None so the caller knows the input parsed but the
-        // structure wasn't capturable. A nested-μ JsonArray/JsonObject
-        // expansion would replace this.
-        assertEquals(Value.SumV("Some", Value.SumV("JsonNull", null)), fn.invoke(listOf(Value.StringV("[1,2,3]"))))
-        assertEquals(Value.SumV("Some", Value.SumV("JsonNull", null)), fn.invoke(listOf(Value.StringV("{}"))))
+        val result = fn.invoke(listOf(Value.StringV("[1,2,3]"))) as Value.SumV
+        assertEquals("Some", result.case)
+        val heads = mutableListOf<Long>()
+        var cur: Value = result.payload!!
+        while (cur is Value.SumV && cur.case == "JsonArrayCons") {
+            val p = cur.payload as Value.ProductV
+            val h = p.fields.getValue("head") as Value.SumV
+            assertEquals("JsonNumber", h.case)
+            heads += (h.payload as Value.IntV).v
+            cur = p.fields.getValue("tail")
+        }
+        assertEquals(listOf(1L, 2L, 3L), heads)
+        // The terminator is JsonArrayNil.
+        assertEquals(Value.SumV("JsonArrayNil", null), cur)
+    }
+
+    @Test
+    fun `Json_Parse object yields a JsonObjectCons-JsonObjectNil chain`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        val result = fn.invoke(listOf(Value.StringV("{\"a\":1,\"b\":\"two\"}"))) as Value.SumV
+        assertEquals("Some", result.case)
+        val entries = mutableListOf<Pair<String, Value>>()
+        var cur: Value = result.payload!!
+        while (cur is Value.SumV && cur.case == "JsonObjectCons") {
+            val p = cur.payload as Value.ProductV
+            val key = (p.fields.getValue("key") as Value.StringV).v
+            entries += (key to p.fields.getValue("value"))
+            cur = p.fields.getValue("tail")
+        }
+        assertEquals(Value.SumV("JsonObjectNil", null), cur)
+        assertEquals(2, entries.size)
+        assertEquals("a", entries[0].first)
+        assertEquals(Value.SumV("JsonNumber", Value.IntV(1L)), entries[0].second)
+        assertEquals("b", entries[1].first)
+        assertEquals(Value.SumV("JsonString", Value.StringV("two")), entries[1].second)
+    }
+
+    @Test
+    fun `Json_Parse empty object and empty array yield the appropriate Nil variants`() {
+        val fn = lookup("strand-builtin:Json.Parse")
+        assertEquals(
+            Value.SumV("Some", Value.SumV("JsonObjectNil", null)),
+            fn.invoke(listOf(Value.StringV("{}"))),
+        )
+        assertEquals(
+            Value.SumV("Some", Value.SumV("JsonArrayNil", null)),
+            fn.invoke(listOf(Value.StringV("[]"))),
+        )
+    }
+
+    @Test
+    fun `Json_Parse nested arrays and objects round-trip via Stringify`() {
+        val parse = lookup("strand-builtin:Json.Parse")
+        val stringify = lookup("strand-builtin:Json.Stringify")
+        // Use compact JSON (no spaces) since Stringify emits the same form.
+        val inputs = listOf(
+            "[[1,2],[3]]",
+            "{\"x\":[1,2,3]}",
+            "[{\"k\":1},{\"k\":2}]",
+        )
+        for (input in inputs) {
+            val parsed = (parse.invoke(listOf(Value.StringV(input))) as Value.SumV)
+            assertEquals("Some", parsed.case, "expected Some for $input")
+            val stringified = stringify.invoke(listOf(parsed.payload!!))
+            assertEquals(Value.StringV(input), stringified, "round-trip for $input")
+        }
     }
 
     // ---------- Markdown.Parse ----------

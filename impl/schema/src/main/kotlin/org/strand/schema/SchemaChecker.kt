@@ -215,7 +215,7 @@ class SchemaChecker(
             is Node.Pattern,
             is Node.ProductFieldValue,
             is Node.RecursiveType,
-            Node.RecursiveSelf,
+            is Node.RecursiveSelf,
             is Node.Schema,
             is Node.Invariant,
             is Node.StateMachine,

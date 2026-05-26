@@ -61,6 +61,26 @@ class BuiltinsJsonHexTest {
         }
     }
 
+    @Test
+    fun `Json_Stringify handles arrays and objects via spliced variants`() {
+        val parse = lookup("strand-builtin:Json.Parse")
+        val stringify = lookup("strand-builtin:Json.Stringify")
+        // Empty container forms — JsonArrayNil / JsonObjectNil.
+        assertEquals(
+            Value.StringV("[]"),
+            stringify.invoke(listOf(Value.SumV("JsonArrayNil", null))),
+        )
+        assertEquals(
+            Value.StringV("{}"),
+            stringify.invoke(listOf(Value.SumV("JsonObjectNil", null))),
+        )
+        // Parse + stringify round-trip for non-trivial nested shapes.
+        for (input in listOf("[1,2,3]", "{\"a\":1,\"b\":\"x\"}", "[true,null,\"y\"]")) {
+            val parsed = (parse.invoke(listOf(Value.StringV(input))) as Value.SumV).payload!!
+            assertEquals(Value.StringV(input), stringify.invoke(listOf(parsed)), input)
+        }
+    }
+
     // ---------- Bytes hex codecs ----------
 
     @Test
