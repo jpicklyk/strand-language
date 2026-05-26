@@ -1,0 +1,35 @@
+{
+  "skill_name": "strand-add-builtin",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I want to add a new boolean operation node - Bool.Xor. its just a binary boolean function. should be straightforward",
+      "expected_output": "Skill should trigger. Bool.Xor is a monomorphic (Bool, Bool) -> Bool builtin and fits the three-step checklist exactly: (1) register `strand-builtin:Bool.Xor` in `interpreter/Builtins.kt` with a 2-arg Fn doing `BoolV(a.v xor b.v)`, plus a unit test in BuiltinsBoolTest or similar; (2) add `xorT` FunctionType + `xor` ForeignNode entries to `LayerAGrammar.reservedNodes` alongside the existing `andT/and` and `orT/or`, with a Round2PreludeTest-style assertion; (3) document `xor` in `evaluation/dynamic/prompts/strand-system.md` under the Foreign-node builtins table. One commit. The skill should NOT route to strand-add-node — Bool.Xor needs no N-NNN, no canonical encoder change, no verifier rule.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Strand needs Math.Log10 — base-10 logarithm of a float",
+      "expected_output": "Skill should trigger straightforwardly. Monomorphic (Float) -> Float, pure, same shape as the existing Math.Log entry. All three checklist steps apply: register `strand-builtin:Math.Log10` calling `kotlin.math.log10`, add `log10T` + `log10` reserved entries (mirroring `lnT` + `ln`), document in system prompt. Should also note that `ln` already exists for natural log; pick a distinct name like `log10` to avoid collision. Estimated diff is small — about 20 lines across three files plus 2-3 test lines.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I want to add Regex.Match(pattern: String, input: String) -> Option<String> — matches the first occurrence and returns the matched substring or None",
+      "expected_output": "Skill should trigger, but the prelude-entry step (#4) is one of the **documented exceptions** — `Regex.Match` returns `Option<String>` which would require a blessed `Option<T>` in the prelude (doesn't exist yet). The skill should: (1) add the builtin in `interpreter/Builtins.kt` returning `SumV(\"Some\", StringV(...))` or `SumV(\"None\", null)`; (2) write tests covering match / no-match / pattern-compile-error cases; (3) **skip step 4 explicitly with a commit-message note** explaining the Option-return exception (per the documented exception list in impl/CLAUDE.md § \"When adding a new builtin\"); (4) document `Regex.Match` in the system prompt's \"NOT in the prelude\" subsection so agents know to declare an explicit FNT + FRN at the call site. Also: needs a Regex engine choice — Kotlin's `kotlin.text.Regex` (Java's `java.util.regex.Pattern` under the hood) is the obvious default; flag this to the user before coding.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Let's add a new node category called Sequence — a typed list of expressions where each can have its own type, like (Int, String, Bool) but as a single sequence node",
+      "expected_output": "Skill should NOT trigger. Sequence is a new sealed-class variant under `Node` — needs an N-NNN identifier, spec doc update in design/node-algebra.md, INDEX.md registration, canonical encoder dispatch, verifier rule, the whole package. The right skill is `strand-add-node`, not `strand-add-builtin`. The skill should recognize this distinction (its 'When to use this skill vs other approaches' section explicitly excludes new sealed-class variants) and steer the user to `strand-add-node`.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "actually let me add Log.Info(msg: String) -> Unit too — agents need a way to emit debug output. It should declare an effect so capability granting works.",
+      "expected_output": "Skill should trigger. Effectful monomorphic builtin — (String) -> Unit, declares a new effect category Log.Write (not yet in the prelude). All three checklist steps apply, with an extra wrinkle for the new effect category: (1) register `strand-builtin:Log.Info` in Builtins.kt, body prints via `System.err.println` or similar (skill should ask the user about the actual output sink — stderr, a buffer for tests, etc.); (2) add reserved entries for `logT` FunctionType, `log` ForeignNode with `effects = [\"logFx\"]`, AND a new `logFx` EffectCategory entry with `categoryName = \"Log.Write\"`; verify with a small prelude test; (3) document the new reserved names in the system prompt (`log` in Foreign-node builtins, `logFx` in Effect categories, count summaries bumped accordingly). Test coverage: Builtin invocation, capability-granting integration with Interpreter.applyForeign.",
+      "files": []
+    }
+  ]
+}

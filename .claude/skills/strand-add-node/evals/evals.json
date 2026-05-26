@@ -10,7 +10,7 @@
     {
       "id": 2,
       "prompt": "I want to add a new boolean operation node - Bool.Xor. its just a binary boolean function. should be straightforward",
-      "expected_output": "Skill should ASK FOR CLARIFICATION before triggering the full workflow. Bool.Xor is most naturally added as a new builtin in interpreter/Builtins.kt, NOT as a new Node category requiring N-NNN registration. The skill should recognize this distinction (per its own 'When to use this skill vs other approaches' section) and steer the user toward the simpler change rather than running the full 11-step procedure for what is effectively a one-file addition. If user pushes back and wants it as a true new node category, then the skill follows through.",
+      "expected_output": "Skill should NOT trigger its own full workflow. Bool.Xor is a new builtin in interpreter/Builtins.kt, NOT a new Node category requiring N-NNN registration. The skill should recognize this distinction (per its own 'When to use this skill vs other approaches' section) and route the user to the strand-add-builtin skill, which owns the three-step coordinated workflow (Builtins.kt registry, Layer A implicit-prelude entries in LayerAGrammar.kt, system-prompt documentation in evaluation/dynamic/prompts/strand-system.md) plus unit tests. Strand-add-node should explicitly name strand-add-builtin as the right home rather than just 'a simpler change'. If the user pushes back and insists on a true new node category, then this skill follows through with the full 11-step procedure.",
       "files": []
     },
     {
