@@ -105,7 +105,8 @@ value class CategoryTag(val value: Int) {
         val Schema = CategoryTag(32)
         val Invariant = CategoryTag(33)
 
-        // Agent-native capabilities (N-044)
+        // Agent-native capabilities (N-044, N-045)
         val ToolDef = CategoryTag(44)
+        val ResponseSchemaSpec = CategoryTag(45)
     }
 }

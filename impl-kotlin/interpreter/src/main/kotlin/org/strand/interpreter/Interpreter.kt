@@ -257,6 +257,19 @@ class Interpreter(
                 )
             }
 
+            is Node.ResponseSchemaSpec -> {
+                // N-045. The wrapper has no inner expression to evaluate
+                // — the only structural content is the Schema reference,
+                // which the runtime carries forward as a NodeId for
+                // later JSON Schema projection at the LLM.Generate
+                // dispatch site. Constructing the carrier exercises no
+                // effects.
+                Value.ResponseSchemaSpecV(
+                    self = id,
+                    schemaId = node.schema,
+                )
+            }
+
             // Type, effect-declaration, MatchCase, Pattern, and
             // ProductFieldValue nodes are not standalone expressions. The
             // verifier should have caught this; we report it here

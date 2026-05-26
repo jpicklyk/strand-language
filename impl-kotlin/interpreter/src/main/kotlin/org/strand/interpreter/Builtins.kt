@@ -2465,6 +2465,18 @@ object Builtins {
      * Mandatory: `model` (StringV), `messages` (Cons/Nil list).
      * Optional: `system`, `maxTokens`, `tools` (defaults to []),
      *           `responseSchema`, `temperature`, `providerExtras`.
+     *
+     * The `responseSchema` field, when present, carries an
+     * [Value.ResponseSchemaSpecV] (N-045 wrapper) — produced when the
+     * interpreter evaluates a [Node.ResponseSchemaSpec] graph node. The
+     * runtime resolves the wrapper's `schemaId` through
+     * [verifierNodeTypes] to obtain the [TypeExpr.SchemaType] and
+     * projects via [JsonSchemaProjection] to a JSON Schema the provider
+     * library forwards as the constrained-decoding contract. For
+     * backward compatibility a `Value.SumV` payload in the JsonValue
+     * tower convention is still accepted — older fixtures may still
+     * supply the pre-N-045 shape; the legacy fallback is removed when
+     * the next major version of the request shape is cut.
      */
     private fun parseGenerateRequest(p: Value.ProductV): GenerateRequest {
         val model = (reqField(p, "model", "llm-generate") as Value.StringV).v
@@ -2474,7 +2486,7 @@ object Builtins {
         val temperature = (optField(p, "temperature") as? Value.FloatV)?.v
         val toolsList = p.fields["tools"] ?: Value.SumV("Nil", null)
         val tools = parseStrandTools(toolsList)
-        val responseSchema = (optField(p, "responseSchema") as? Value.SumV)?.let { strandJsonValueToElement(it) }
+        val responseSchema = parseResponseSchemaField(optField(p, "responseSchema"))
         val providerExtras = (optField(p, "providerExtras") as? Value.SumV)?.let { strandJsonValueToElement(it) }
         return GenerateRequest(
             model = model,
@@ -2486,6 +2498,52 @@ object Builtins {
             temperature = temperature,
             providerExtras = providerExtras,
         )
+    }
+
+    /**
+     * Translate the `responseSchema` Option payload into the JSON
+     * Schema element the provider library consumes. Accepts:
+     *  - `null`: the Option was None (or the field was absent).
+     *  - [Value.ResponseSchemaSpecV]: the N-045 graph-node-backed
+     *    convention. The wrapper's `schemaId` is looked up in
+     *    [verifierNodeTypes] to obtain the [TypeExpr.SchemaType], then
+     *    projected to JSON Schema via [JsonSchemaProjection.project].
+     *    The verifier has already enforced that the projection
+     *    succeeds (else `ResponseSchemaTypeUnsupported` would have
+     *    fired at admission), so we treat a static rejection as
+     *    defensive and fall back to an empty schema.
+     *  - [Value.SumV] in the JsonValue tower convention: backward-
+     *    compatibility for fixtures that still emit the pre-N-045
+     *    shape. Translated verbatim via [strandJsonValueToElement].
+     *
+     * Any other shape surfaces as a structured `IoFailure` so the
+     * agent sees a clear diagnostic at the provider boundary rather
+     * than a Kotlin-side cast exception.
+     */
+    private fun parseResponseSchemaField(payload: Value?): kotlinx.serialization.json.JsonElement? {
+        if (payload == null) return null
+        return when (payload) {
+            is Value.ResponseSchemaSpecV -> {
+                val schemaType = verifierNodeTypes?.get(payload.schemaId)
+                    as? org.strand.verifier.TypeExpr.SchemaType
+                if (schemaType != null) {
+                    when (val r = org.strand.verifier.JsonSchemaProjection.project(schemaType.valueType)) {
+                        is org.strand.verifier.JsonSchemaProjection.Result.Success -> r.schema
+                        is org.strand.verifier.JsonSchemaProjection.Result.Rejected ->
+                            kotlinx.serialization.json.JsonObject(emptyMap())  // defensive
+                    }
+                } else {
+                    kotlinx.serialization.json.JsonObject(emptyMap())
+                }
+            }
+            // Backward-compatibility path: legacy JsonValue tower
+            // (pre-N-045 fixtures may still emit this shape).
+            is Value.SumV -> strandJsonValueToElement(payload)
+            else -> throw IoFailure(
+                "response-schema-malformed",
+                "expected ResponseSchemaSpecV or JsonValue SumV in responseSchema, got ${payload::class.simpleName}"
+            )
+        }
     }
 
     private fun parseEmbedRequest(p: Value.ProductV): EmbedRequest {

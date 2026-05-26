@@ -759,6 +759,32 @@ sealed class VerifyError {
         val expected: TypeExpr,
         val actual: TypeExpr,
     ) : VerifyError()
+
+    /**
+     * A `ResponseSchemaSpec.schema`'s `valueType` cannot project to JSON
+     * Schema via [JsonSchemaProjection]. This is the static enforcement
+     * of proposal § 3.7's constrained-decoding contract — the provider
+     * library cannot submit a JSON Schema for a TypeExpr variant the
+     * projector rejects (FunctionType, ForallType, unbound
+     * TypeParameter).
+     *
+     * Symmetric to [ToolParamTypeUnsupported] (which fires on N-044
+     * ToolDef parameterSchemas) — both errors mean "the Schema's
+     * valueType has no JSON Schema representation," differing only in
+     * which Schema-bearing position on `GenerateRequest` raised it.
+     *
+     * [at] is the offending node's id (the ResponseSchemaSpec wrapper);
+     * [specId] identifies the same wrapper redundantly so diagnostic
+     * shapes line up with [ToolParamTypeUnsupported.toolDefId] for
+     * call-site walks that may want a uniform field. [reason] mirrors
+     * [org.strand.verifier.JsonSchemaProjection.Result.Reason].
+     */
+    data class ResponseSchemaTypeUnsupported(
+        override val at: NodeId,
+        val specId: NodeId,
+        val rejectedType: TypeExpr,
+        val reason: String,
+    ) : VerifyError()
 }
 
 /** Outcome of verification: either a successful inference or one or more structured errors. */
@@ -827,4 +853,5 @@ internal fun categoryName(node: Node?): String = when (node) {
     is Node.Schema -> "Schema"
     is Node.Invariant -> "Invariant"
     is Node.ToolDef -> "ToolDef"
+    is Node.ResponseSchemaSpec -> "ResponseSchemaSpec"
 }
