@@ -160,4 +160,102 @@ class BuiltinsOpenAITest {
         }
         assertEquals("openai-credentials-missing", ex.kind)
     }
+
+    @Test
+    fun `responseSchema as N-045 wrapper projects through JsonSchemaProjection and reaches provider`() {
+        // Install the synthetic schema entries — both the tool-input
+        // and the response-side schema (a Product with an `answer: String`
+        // field). The wrapper's parameterSchemaId looks up here.
+        val savedNodeTypes = LlmTestSupport.installSyntheticSchemas()
+        try {
+            // Override the synthetic response schema with a non-empty
+            // Product so the projected JSON Schema has visible
+            // `properties`/`required` fields the test can assert on.
+            val answerFld = org.strand.verifier.TypeExpr.Product.Field(
+                name = "answer",
+                type = org.strand.verifier.TypeExpr.Prim(org.strand.core.Primitive.String)
+            )
+            val responseValueType = org.strand.verifier.TypeExpr.Product(
+                origin = org.strand.core.NodeId(-103),
+                fields = listOf(answerFld),
+            )
+            val current = Builtins.verifierNodeTypes!!.toMutableMap()
+            current[LlmTestSupport.syntheticResponseSchemaId] = org.strand.verifier.TypeExpr.SchemaType(
+                schemaId = LlmTestSupport.syntheticResponseSchemaId,
+                valueType = responseValueType,
+                invariants = emptyList(),
+            )
+            Builtins.verifierNodeTypes = current
+
+            captured.canned = LlmHttpClient.HttpResponse(
+                200,
+                """
+                {
+                  "choices": [{
+                    "message": {"role": "assistant", "content": "{\"answer\": \"42\"}"},
+                    "finish_reason": "stop"
+                  }],
+                  "usage": {"prompt_tokens": 5, "completion_tokens": 2}
+                }
+                """.trimIndent().toByteArray(),
+            )
+
+            val req = LlmTestSupport.requestWithResponseSchema("gpt-5", "What is 6 times 7?")
+            val fn = Builtins.lookupHigherOrder("strand-builtin:OpenAI.Chat.Completions")!!
+            fn.invoke(listOf(req), Builtins.ApplyFn { _, _ -> Value.UnitV })
+
+            // The recorded outbound request body should now carry an
+            // OpenAI-format response_format clause whose schema field is
+            // the projected JSON Schema (not a JsonValue tower).
+            assertEquals(1, captured.calls.size)
+            val (_, _, body) = captured.calls[0]
+            val reqJson = LlmTestSupport.json.parseToJsonElement(String(body)).jsonObject
+            val responseFormat = reqJson["response_format"]?.jsonObject
+            assertNotNull(responseFormat, "OpenAI request body should carry response_format")
+            assertEquals("json_schema", responseFormat!!["type"]?.jsonPrimitive?.content)
+            val jsonSchema = responseFormat["json_schema"]?.jsonObject!!
+            val schema = jsonSchema["schema"]?.jsonObject!!
+            // Confirm the schema is the projected form (object with
+            // `properties.answer` of type string), not a JsonValue tower.
+            assertEquals("object", schema["type"]?.jsonPrimitive?.content)
+            val properties = schema["properties"]?.jsonObject!!
+            val answer = properties["answer"]?.jsonObject!!
+            assertEquals("string", answer["type"]?.jsonPrimitive?.content)
+            val required = schema["required"]?.jsonArray!!
+            assertEquals(1, required.size)
+            assertEquals("answer", required[0].jsonPrimitive.content)
+        } finally {
+            Builtins.verifierNodeTypes = savedNodeTypes
+        }
+    }
+
+    @Test
+    fun `responseSchema with missing verifierNodeTypes entry falls back to empty JSON Schema`() {
+        // Defensive path: if the verifierNodeTypes singleton isn't
+        // populated (e.g., tests that drive the builtin directly
+        // without invoking the verifier), the dispatch path falls
+        // back to an empty schema rather than crashing.
+        val savedNodeTypes = Builtins.verifierNodeTypes
+        Builtins.verifierNodeTypes = null
+        try {
+            captured.canned = LlmHttpClient.HttpResponse(
+                200,
+                """{"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}], "usage": {}}""".toByteArray(),
+            )
+            val req = LlmTestSupport.requestWithResponseSchema("gpt-5", "Hi.")
+            val fn = Builtins.lookupHigherOrder("strand-builtin:OpenAI.Chat.Completions")!!
+            // Should not throw — defensive fallback returns {}.
+            fn.invoke(listOf(req), Builtins.ApplyFn { _, _ -> Value.UnitV })
+            assertEquals(1, captured.calls.size)
+            val (_, _, body) = captured.calls[0]
+            val reqJson = LlmTestSupport.json.parseToJsonElement(String(body)).jsonObject
+            val responseFormat = reqJson["response_format"]?.jsonObject
+            assertNotNull(responseFormat, "response_format should still be emitted")
+            // The fallback empty schema produces {}.
+            val schema = responseFormat!!["json_schema"]?.jsonObject?.get("schema")?.jsonObject
+            assertEquals(0, schema?.size ?: -1, "fallback schema should be empty object")
+        } finally {
+            Builtins.verifierNodeTypes = savedNodeTypes
+        }
+    }
 }

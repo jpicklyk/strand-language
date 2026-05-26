@@ -408,7 +408,7 @@ by field name). Use the prelude EffectCategory `llmGenerateFx` /
       system: Option<String>,                     -- system prompt
       maxTokens: Option<Int>,                     -- output token budget
       tools: List<ToolDef>,                       -- (empty list when no tools)
-      responseSchema: Option<JsonValue>,          -- JSON Schema for constrained output
+      responseSchema: Option<ResponseSchemaSpec>, -- Schema for constrained output (N-045 wrapper)
       temperature: Option<Float>,
       providerExtras: Option<JsonValue>           -- pass-through provider-native fields
     }
@@ -460,6 +460,43 @@ type parameters are rejected — the verifier statically rejects any
 `TLD` whose `parameterSchema`'s valueType contains one of those
 variants, raising `ToolParamTypeUnsupported`. The check fires on every
 ToolDef at admission, not just at provider call time.
+
+**Response schemas** (proposal § 3.7) are first-class graph nodes
+(N-045 ResponseSchemaSpec). Each response schema wrapper is a `RSC`
+node with one edge:
+
+    ResponseSchemaSpec:
+      schema: Schema (N-032)                    -- structural schema for the output
+
+The Layer A code is `RSC <schema>`. The `schema` reference MUST point
+at a `SCH` (Schema) node; the verifier statically checks that the
+schema's `valueType` projects to JSON Schema (else
+`ResponseSchemaTypeUnsupported`) using the same irreducible TypeExpr
+subset documented for tool parameter schemas above. The wrapper is
+value-producing — it evaluates to a runtime carrier that the
+LLM.Generate builtin walks at dispatch time to obtain the projected
+JSON Schema (forwarded as `response_format.json_schema.schema` on
+OpenAI, `generationConfig.responseSchema` on Gemini, etc.).
+
+Place the wrapper in the GenerateRequest's `responseSchema` field as
+the `Some` payload of an `Option`:
+
+    responseFieldT PRF "responseSchema" optBytesT
+    ...
+    answerFldT PRF "answer" strT
+    answerT PRD [answerFldT]
+    responseSchema SCH "Answer" answerT []
+    answerSpec RSC responseSchema
+    -- at the call site:
+    schemaSomeFV PFV "responseSchema" (SV optBytesT "Some" answerSpec)
+    requestV PV reqT [modelFV messagesFV toolsFV schemaSomeFV ...]
+
+The two Schema-bearing positions on `GenerateRequest` — `tools`
+(N-044 ToolDef) and `responseSchema` (N-045 ResponseSchemaSpec) — are
+symmetric: both wrap an N-032 Schema through a graph edge, both have
+their valueType projected to JSON Schema at admission, both produce a
+runtime carrier the LLM.Generate builtin reads through
+`Builtins.verifierNodeTypes`.
 
 **Embed shape (`EmbedRequest`)** — agent constructs a ProductV:
 

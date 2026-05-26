@@ -219,6 +219,7 @@ class SchemaChecker(
             is Node.Schema,
             is Node.Invariant,
             is Node.ToolDef,
+            is Node.ResponseSchemaSpec,
             is Node.StateMachine,
             is Node.EventStream,
             is Node.Transition -> null

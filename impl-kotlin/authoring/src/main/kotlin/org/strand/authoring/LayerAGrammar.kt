@@ -1931,5 +1931,25 @@ object LayerAGrammar {
             ),
             producesValue = true,
         ),
+
+        // Agent-native capabilities (N-045 ResponseSchemaSpec)
+        //
+        // RSC <schema: REFERENCE>
+        //
+        // The schema reference must point at a Schema (N-032 SCH); the
+        // verifier statically projects the Schema's valueType to JSON
+        // Schema at admission, raising ResponseSchemaTypeUnsupported for
+        // unsupported variants (FunctionType / ForallType / unbound
+        // TypeParameter). ResponseSchemaSpec is value-producing — it
+        // evaluates to a Value.ResponseSchemaSpecV that slots into a
+        // GenerateRequest's `responseSchema: Option<ResponseSchemaSpec>`
+        // field as the Some payload.
+        "RSC" to CodeSchema(
+            jsonType = "ResponseSchemaSpec",
+            required = listOf(
+                FieldSpec("schema", ArgKind.REFERENCE, "schema"),
+            ),
+            producesValue = true,
+        ),
     )
 }

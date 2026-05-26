@@ -241,6 +241,7 @@ internal class CanonicalEncoder(
         is Node.Invariant -> encodeInvariant(node, stack)
 
         is Node.ToolDef -> encodeToolDef(node, stack)
+        is Node.ResponseSchemaSpec -> encodeResponseSchemaSpec(node, stack)
     }
 
     // ----- Type-position encodings -----
@@ -815,7 +816,7 @@ internal class CanonicalEncoder(
         ))
     }
 
-    // ----- Agent-native capabilities (N-044) -----
+    // ----- Agent-native capabilities (N-044, N-045) -----
 
     private fun encodeToolDef(node: Node.ToolDef, stack: BinderStack): ByteArray {
         // [tag=44, parameterSchema-hash, implementation-hash].
@@ -834,6 +835,19 @@ internal class CanonicalEncoder(
         return encodeWithTag(CategoryTag.ToolDef, listOf(
             CanonicalCbor.encodeBytes(hash(node.parameterSchema, stack)),
             encodeExpressionChild(node.implementation, stack),
+        ))
+    }
+
+    private fun encodeResponseSchemaSpec(node: Node.ResponseSchemaSpec, stack: BinderStack): ByteArray {
+        // [tag=45, schema-hash].
+        //
+        // ResponseSchemaSpec is a one-edge wrapper: its structural identity
+        // is the Schema reference alone. The wrapper has no metadata fields
+        // (no implementation to dispatch, no per-call name to forward),
+        // so two ResponseSchemaSpecs around equal Schemas hash byte-
+        // identically.
+        return encodeWithTag(CategoryTag.ResponseSchemaSpec, listOf(
+            CanonicalCbor.encodeBytes(hash(node.schema, stack)),
         ))
     }
 

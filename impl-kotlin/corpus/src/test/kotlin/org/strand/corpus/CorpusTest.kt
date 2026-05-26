@@ -200,6 +200,19 @@ class CorpusTest {
         // end-to-end by BuiltinsPineconeTest in the interpreter module.
         Case("/corpus/68-vector-pinecone-upsert-query.json", null,
             "Q-038 Phase 1: verify-only structural exemplar for Pinecone upsert + query. Open declares both Vector.Read and Vector.Write; Upsert declares only Vector.Write; Query declares only Vector.Read. provider parameter pinned to literal \"pinecone\", store parameter to literal \"main\". The runtime end-to-end roundtrip lives in BuiltinsPineconeTest with mocked HTTP transport."),
+        // N-045 ResponseSchemaSpec — symmetric counterpart to corpus 67's
+        // ToolDef demonstrator. A minimal verify-only program: build a
+        // Schema for an `{answer: String}` product, wrap it in a
+        // ResponseSchemaSpec node. The verifier projects the schema's
+        // valueType to JSON Schema at admission and would raise
+        // ResponseSchemaTypeUnsupported if the valueType contained
+        // FunctionType / ForallType / unbound TypeParameter. The wrapper
+        // evaluates to a runtime Value.ResponseSchemaSpecV that the
+        // LLM.Generate builtin reads through Builtins.verifierNodeTypes
+        // to project at dispatch time. Root type is Bytes (opaque-handle
+        // convention shared with ToolDef / Resource / MapV).
+        Case("/corpus/69-response-schema-spec.json", null,
+            "verify-only; ResponseSchemaSpec wrapper around a Schema describing {answer: String} — the symmetric counterpart to corpus 67's ToolDef demonstrator. The wrapper carries the schema reference into a value position the LLM.Generate builtin's responseSchema field accepts; the verifier statically projects the schema's valueType to JSON Schema at admission."),
     )
 
     /**

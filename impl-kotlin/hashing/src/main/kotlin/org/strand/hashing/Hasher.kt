@@ -305,6 +305,9 @@ class Hasher(private val rawStore: RawNodeStore) {
                 walk(node.parameterSchema, stack, out)
                 walk(node.implementation, stack, out)
             }
+            is Node.ResponseSchemaSpec -> {
+                walk(node.schema, stack, out)
+            }
             is Node.Invariant -> {
                 // `targetSchema` is intentionally NOT walked here — it is
                 // excluded from the canonical encoding (see

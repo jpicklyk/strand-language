@@ -234,6 +234,7 @@ class Verifier(
                 is Node.SumValue -> inferSumValue(id, node, scope, typeParams)
                 is Node.Handler -> inferHandler(id, node, scope, typeParams)
                 is Node.ToolDef -> inferToolDef(id, node, scope, typeParams)
+                is Node.ResponseSchemaSpec -> inferResponseSchemaSpec(id, node, typeParams)
 
                 is Node.StateMachine -> inferStateMachine(id, node, scope, typeParams)
                 is Node.Transition -> {
@@ -1357,7 +1358,8 @@ class Verifier(
                     is Node.EffectCategory, is Node.EffectDecl, is Node.Pattern,
                     is Node.RecursiveType, is Node.RecursiveSelf,
                     is Node.StateMachine, is Node.EventStream, is Node.Transition,
-                    is Node.Schema, is Node.Invariant, is Node.ToolDef -> Unit
+                    is Node.Schema, is Node.Invariant, is Node.ToolDef,
+                    is Node.ResponseSchemaSpec -> Unit
                 }
             }
             visit(bodyId)
@@ -1491,6 +1493,98 @@ class Verifier(
             recordClosure(id, emptySet())
             // Surface type: opaque Bytes (Strand-side opaque-handle
             // convention, matching Resource / MapV).
+            return TypeExpr.Prim(Primitive.Bytes)
+        }
+
+        /**
+         * Type-check a ResponseSchemaSpec (N-045) per
+         * `agent-native-capabilities.md` § 3.7 and `node-algebra.md`
+         * § Agent-native capabilities.
+         *
+         * Rules:
+         *  1. `schema` must resolve to a [Node.Schema] (else
+         *     [VerifyError.CategoryMismatch]).
+         *  2. The Schema's `valueType` (the type the provider's
+         *     constrained-decoding pass must produce) must project to JSON
+         *     Schema via [JsonSchemaProjection.project]. On `Rejected`,
+         *     report [VerifyError.ResponseSchemaTypeUnsupported] with the
+         *     rejection reason — this is the static enforcement that
+         *     proposal § 3.7's "translate the Schema's valueType into JSON
+         *     Schema" step is well-defined for every Schema reaching a
+         *     responseSchema position.
+         *
+         * Symmetric to [inferToolDef] (N-044) — both wrappers admit a
+         * Schema reference into a value position whose runtime carrier
+         * the LLM.Generate builtin consumes. ResponseSchemaSpec is the
+         * thinner of the two: no implementation to dispatch and no
+         * metadata to forward, so steps 1 and 2 cover the entire rule.
+         *
+         * The wrapper's value-level type is opaque (returned as `Bytes`),
+         * matching the ToolDef convention. Agents declare
+         * `responseSchema: Option<ResponseSchemaSpec>` in the
+         * GenerateRequest using `bytesT` as the Some-payload placeholder;
+         * the LLM.Generate builtin walks the request looking for a
+         * `Value.ResponseSchemaSpecV` in the Some payload.
+         *
+         * Effect closure is empty — constructing the wrapper exercises
+         * no effects.
+         */
+        private fun inferResponseSchemaSpec(
+            id: NodeId,
+            node: Node.ResponseSchemaSpec,
+            typeParams: Set<NodeId>
+        ): TypeExpr {
+            // 1. schema must point at a Schema.
+            val schemaNode = store.getOrNull(node.schema)
+                ?: reportFatal(VerifyError.DanglingReference(
+                    at = id, missing = node.schema,
+                    fromField = "ResponseSchemaSpec.schema"
+                ))
+            if (schemaNode !is Node.Schema) {
+                report(VerifyError.CategoryMismatch(
+                    at = id, field = "ResponseSchemaSpec.schema",
+                    expectedCategory = "Schema",
+                    actualCategory = categoryName(schemaNode)
+                ))
+                throw VerifyAbort()
+            }
+            // Resolve the Schema in type position to obtain its SchemaType.
+            val schemaType = resolveType(node.schema, typeParams)
+            if (schemaType !is TypeExpr.SchemaType) {
+                // Defensive guard — resolveSchema returns SchemaType so
+                // this should not happen on a well-formed graph.
+                report(VerifyError.CategoryMismatch(
+                    at = id, field = "ResponseSchemaSpec.schema (resolved)",
+                    expectedCategory = "SchemaType",
+                    actualCategory = schemaType::class.simpleName ?: "?"
+                ))
+                throw VerifyAbort()
+            }
+
+            // 2. The schema's valueType must project to JSON Schema.
+            //    This is the static enforcement of the proposal § 3.7
+            //    constrained-decoding contract: the provider library
+            //    cannot submit a JSON Schema for a TypeExpr variant
+            //    JsonSchemaProjection rejects.
+            when (val projection = JsonSchemaProjection.project(schemaType.valueType)) {
+                is JsonSchemaProjection.Result.Success -> Unit
+                is JsonSchemaProjection.Result.Rejected -> {
+                    report(VerifyError.ResponseSchemaTypeUnsupported(
+                        at = id,
+                        specId = id,
+                        rejectedType = projection.type,
+                        reason = projection.reason.name,
+                    ))
+                    throw VerifyAbort()
+                }
+            }
+
+            recordClosure(id, emptySet())
+            // Surface type: opaque Bytes (Strand-side opaque-handle
+            // convention, matching ToolDef / Resource / MapV). Agents
+            // place the wrapper into the GenerateRequest's
+            // `responseSchema: Option<bytesT>` Some payload at the call
+            // site.
             return TypeExpr.Prim(Primitive.Bytes)
         }
 

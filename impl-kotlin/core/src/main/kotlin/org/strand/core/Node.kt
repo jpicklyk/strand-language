@@ -289,6 +289,41 @@ sealed class Node {
         val implementation: NodeId,     // an Expression (Lambda, ForeignNode, or TypeAbstraction over one)
     ) : Node()
 
+    /**
+     * N-045. A first-class wrapper that carries a Schema reference into the
+     * value position used by the LLM-generation builtins' `responseSchema`
+     * field. Symmetric to N-044 [ToolDef]: where ToolDef wraps the Schema
+     * that describes a tool's *input*, ResponseSchemaSpec wraps the Schema
+     * that describes the generated *output*.
+     *
+     * Edges:
+     *  - [schema] points at an N-032 Schema describing the structural shape
+     *    the provider's constrained-decoding pass must produce. The
+     *    Schema's `valueType` must project to JSON Schema via
+     *    `JsonSchemaProjection` (verified statically — else
+     *    `ResponseSchemaTypeUnsupported`).
+     *
+     * Unlike ToolDef this wrapper has no metadata content fields: there is
+     * no implementation to dispatch and no per-call name to forward to the
+     * provider. The wrapper's structural identity is the Schema reference
+     * alone, so two wrappers around equal Schemas hash identically.
+     *
+     * At runtime the wrapper evaluates to a [org.strand.interpreter.Value.ResponseSchemaSpecV]
+     * carrying the schema's NodeId; the LLM.Generate builtin resolves the
+     * NodeId through `Builtins.verifierNodeTypes` to obtain the
+     * [org.strand.verifier.TypeExpr.SchemaType], projects via
+     * [org.strand.verifier.JsonSchemaProjection.project], and submits the
+     * resulting JSON Schema to the provider library in the same
+     * `JsonElement?` shape it previously consumed from the
+     * `Option<JsonValue>` expedient.
+     *
+     * See `proposals/implemented/agent-native-capabilities.md` § 3.7 for the
+     * constrained-decoding contract semantics.
+     */
+    data class ResponseSchemaSpec(
+        val schema: NodeId,             // a Schema (N-032)
+    ) : Node()
+
     // ----- Functions and binding (N-014 through N-018, plus N-034) -----
 
     /**

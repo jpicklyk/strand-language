@@ -146,4 +146,33 @@ sealed class Value {
         val parameterSchemaId: NodeId,
         val implementation: Value,
     ) : Value()
+
+    /**
+     * A first-class response-schema declaration (N-045). Produced when
+     * the interpreter evaluates a [Node.ResponseSchemaSpec], typically
+     * reached via a NodeRef inside the `Some` payload of a
+     * `GenerateRequest.responseSchema: Option<ResponseSchemaSpec>` field
+     * at an LLM.Generate call site.
+     *
+     * Carries:
+     *  - [self]: the NodeId of the originating ResponseSchemaSpec, for
+     *    diagnostic provenance.
+     *  - [schemaId]: the NodeId of the [Node.Schema] declaring the
+     *    constrained-decoding output shape. The LLM.Generate builtin
+     *    resolves this through the verifier's `nodeTypes` map
+     *    (transported via [Builtins.verifierNodeTypes]) to obtain a
+     *    [org.strand.verifier.TypeExpr.SchemaType], then runs
+     *    [org.strand.verifier.JsonSchemaProjection] to produce the JSON
+     *    Schema the provider library submits as part of the
+     *    constrained-decoding request.
+     *
+     * Symmetric to [ToolDefV] (the input side of the tool-use protocol
+     * pair) but thinner — no implementation to dispatch, no metadata to
+     * forward. Like [ToolDefV], `ResponseSchemaSpecV` is a runtime-only
+     * value that never enters the canonical store.
+     */
+    data class ResponseSchemaSpecV(
+        val self: NodeId,
+        val schemaId: NodeId,
+    ) : Value()
 }

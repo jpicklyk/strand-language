@@ -25,6 +25,14 @@ internal object LlmTestSupport {
     val syntheticSchemaId: NodeId = NodeId(-100)
 
     /**
+     * Synthetic schema NodeId used by [requestWithResponseSchema] for
+     * the N-045 ResponseSchemaSpec dispatch path. Independent of
+     * [syntheticSchemaId] so tool-input and response schemas can be
+     * installed simultaneously without collision.
+     */
+    val syntheticResponseSchemaId: NodeId = NodeId(-102)
+
+    /**
      * Install the synthetic schema's SchemaType in
      * [Builtins.verifierNodeTypes] so the LLM.Generate tool-dispatch
      * path can project it to JSON Schema. Returns the prior map (if
@@ -40,6 +48,38 @@ internal object LlmTestSupport {
             syntheticSchemaId to TypeExpr.SchemaType(
                 schemaId = syntheticSchemaId,
                 valueType = syntheticValueType,
+                invariants = emptyList(),
+            )
+        )
+        return prior
+    }
+
+    /**
+     * Install both the synthetic tool-input schema (used by
+     * [requestWithTool]) and a synthetic response schema (used by
+     * [requestWithResponseSchema]) so a single test can exercise both
+     * Schema-bearing positions on `GenerateRequest` in one go. Returns
+     * the prior map (if any) for restoration in @AfterEach.
+     */
+    fun installSyntheticSchemas(): Map<NodeId, TypeExpr>? {
+        val prior = Builtins.verifierNodeTypes
+        val toolValueType = TypeExpr.Product(
+            origin = NodeId(-101),
+            fields = emptyList(),
+        )
+        val responseValueType = TypeExpr.Product(
+            origin = NodeId(-103),
+            fields = emptyList(),
+        )
+        Builtins.verifierNodeTypes = mapOf(
+            syntheticSchemaId to TypeExpr.SchemaType(
+                schemaId = syntheticSchemaId,
+                valueType = toolValueType,
+                invariants = emptyList(),
+            ),
+            syntheticResponseSchemaId to TypeExpr.SchemaType(
+                schemaId = syntheticResponseSchemaId,
+                valueType = responseValueType,
                 invariants = emptyList(),
             )
         )
@@ -101,6 +141,31 @@ internal object LlmTestSupport {
         val base = simpleRequest(model, userText)
         return Value.ProductV(base.fields.toMutableMap().apply {
             this["tools"] = toolsList
+        })
+    }
+
+    /**
+     * Build a request whose `responseSchema` field carries the N-045
+     * wrapper convention. Tests should call [installSyntheticSchemas]
+     * (or supply their own [Builtins.verifierNodeTypes] entry mapping
+     * the synthetic id to a [TypeExpr.SchemaType]) so the dispatch
+     * path can project the schema to JSON Schema. The Some payload is
+     * a real [Value.ResponseSchemaSpecV] — the same value the
+     * interpreter produces when evaluating a [org.strand.core.Node.ResponseSchemaSpec]
+     * graph node.
+     */
+    fun requestWithResponseSchema(
+        model: String,
+        userText: String,
+        schemaId: NodeId = syntheticResponseSchemaId,
+    ): Value.ProductV {
+        val spec = Value.ResponseSchemaSpecV(
+            self = NodeId(-201),  // synthetic ResponseSchemaSpec NodeId (negative — no collision)
+            schemaId = schemaId,
+        )
+        val base = simpleRequest(model, userText)
+        return Value.ProductV(base.fields.toMutableMap().apply {
+            this["responseSchema"] = Value.SumV("Some", spec)
         })
     }
 

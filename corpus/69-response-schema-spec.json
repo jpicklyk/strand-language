@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "root": "answerSpec",
+  "nodes": {
+    "strT":          { "type": "PrimitiveType", "kind": "String" },
+    "answerFldT":    { "type": "ProductTypeField", "name": "answer", "fieldType": "strT" },
+    "answerT":       { "type": "ProductType", "fields": ["answerFldT"] },
+    "answerSchema":  { "type": "Schema", "schemaName": "Answer",
+                       "valueType": "answerT", "invariants": [] },
+    "answerSpec":    { "type": "ResponseSchemaSpec", "schema": "answerSchema" }
+  }
+}
