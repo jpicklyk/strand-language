@@ -1,0 +1,14 @@
+{
+  "task_id": "05-sum-list",
+  "config": "strand-layer-a-density-v4",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": false,
+  "status": "exhausted",
+  "converged_at_attempt": null,
+  "total_attempts": 5,
+  "total_input_tokens": 50729,
+  "total_output_tokens": 802,
+  "total_cost_usd": 0.164217,
+  "timestamp": 1779760987
+}

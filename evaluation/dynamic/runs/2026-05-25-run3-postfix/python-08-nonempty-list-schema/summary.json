@@ -1,0 +1,14 @@
+{
+  "task_id": "08-nonempty-list-schema",
+  "config": "python-type-hints",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": true,
+  "status": "converged",
+  "converged_at_attempt": 0,
+  "total_attempts": 1,
+  "total_input_tokens": 1627,
+  "total_output_tokens": 147,
+  "total_cost_usd": 0.007086,
+  "timestamp": 1779760705
+}

@@ -1,0 +1,14 @@
+{
+  "task_id": "08-nonempty-list-schema",
+  "config": "strand-layer-a-density-v4",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": false,
+  "status": "exhausted",
+  "converged_at_attempt": null,
+  "total_attempts": 5,
+  "total_input_tokens": 51392,
+  "total_output_tokens": 763,
+  "total_cost_usd": 0.165621,
+  "timestamp": 1779760989
+}

@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "UnboundRecursiveSelf at #0: at=#0",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "UnboundRecursiveSelf",
+        "at": "0",
+        "detail": "at=#0"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}
