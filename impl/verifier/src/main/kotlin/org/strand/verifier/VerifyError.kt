@@ -354,10 +354,39 @@ sealed class VerifyError {
      * A `RecursiveSelf` node was reached in a position outside any
      * enclosing `RecursiveType` binder. Analogous to
      * `UnboundTypeParameter` for `TypeParameter`.
+     *
+     * The [hint] field carries the most common cause and resolution as
+     * actionable prose. Since data-class `toString` includes property
+     * values, the hint surfaces automatically in the CLI's prose
+     * feedback the agent sees on retry.
      */
     data class UnboundRecursiveSelf(
-        override val at: NodeId
-    ) : VerifyError()
+        override val at: NodeId,
+        val hint: String = COMMON_HINT,
+    ) : VerifyError() {
+        companion object {
+            const val COMMON_HINT: String =
+                "RecursiveSelf reached at a resolution site outside any " +
+                "RecursiveType binder. The most common cause: a ProductType " +
+                "or SumType that contains RecursiveSelf (declared inside an " +
+                "RT body's reference chain) is being used at a top-level " +
+                "construction site such as a ProductValue.ofType, " +
+                "SumValue.ofType, or ParameterDecl.paramType. The Strand " +
+                "convention for recursive types is the inner/outer split " +
+                "(see corpus program 31, recursive-list-head): declare " +
+                "TWO ProductType nodes — an 'inner' product whose recursive " +
+                "field references RecursiveSelf (used by the SumTypeCase " +
+                "INSIDE the RecursiveType body), and an 'outer' product " +
+                "whose same field references the RecursiveType node itself " +
+                "(used by ProductValue / SumValue / function parameter types " +
+                "AT TOP-LEVEL value-construction sites). Both products " +
+                "compare equirecursively-equal under the verifier and the " +
+                "canonical encoder, so the program's hash is unaffected by " +
+                "which one is used where, but the inner form is only valid " +
+                "inside an RT walk and surfaces as this error when used " +
+                "outside one."
+        }
+    }
 
     /**
      * A `RecursiveType`'s body is not contractive: it is, or reduces to,

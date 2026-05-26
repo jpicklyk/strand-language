@@ -310,15 +310,44 @@ third inlines a ProductType into a SumTypeCase's caseType slot.
 **RS cannot be nested.** RecursiveSelf is type-only and the synthesized
 standalone `__expr<n> RS` form would lose its lexical RT binder context
 at canonical-encoding time. Declare RS as a standalone node and
-reference it by id from inside the lexical RT subtree:
+reference it by id from inside the lexical RT subtree.
 
-    selfRef RS                          # standalone RS
-    tailField PRF "tail" selfRef        # PRF references it by id
-    payload PRD [headField tailField]
-    consCase SCS "Cons" payload
+**Recursive types REQUIRE the inner/outer ProductType split.** The
+ProductType that holds the recursive field has two valid forms, and
+real programs need BOTH:
+
+    selfRef RS                                  # standalone RS
+    headFieldInner PRF "head" intT
+    tailFieldInner PRF "tail" selfRef           # INNER: uses RS
+    consInner PRD [headFieldInner tailFieldInner]
+    consCase SCS "Cons" consInner               # SCS uses INNER (inside RT walk)
     nilCase SCS "Nil" _
     listSum SUM [consCase nilCase]
-    listT RT listSum                    # lexical RT wraps the SUM
+    listT RT listSum                            # lexical RT wraps the SUM
+
+    headFieldOuter PRF "head" intT
+    tailFieldOuter PRF "tail" listT             # OUTER: uses listT (the RT itself)
+    consOuter PRD [headFieldOuter tailFieldOuter]
+
+    # Value construction sites use the OUTER product:
+    nilV SV listT "Nil" _
+    one ILT 1
+    consV SV listT "Cons" (PV consOuter [head=1 tail=nilV])
+
+Why the split: the canonical encoder requires `RecursiveSelf` to be
+reachable only through a path that traverses the enclosing
+`RecursiveType` first. The SumTypeCase resolves its `caseType` *during*
+the RT body walk (depth>0), so the inner product's RS reference is
+well-bound. ProductValue and SumValue resolve their `ofType` at
+top-level (depth=0), so a top-level reference to the inner product
+trips `UnboundRecursiveSelf`. The outer product uses the RT node
+directly so it's safe to use at top-level construction sites.
+
+Both products are equirecursively equal — the verifier and the
+canonical encoder treat them as the same type, so the program's hash
+doesn't change based on which is used where; what matters is using
+each in the correct context. Corpus program 31 (recursive-list-head)
+is the canonical reference.
 
 Structural codes (PRC, MC, Pattern variants, EFC, EFD, ESE/ESI/ESO,
 SCH, INV, SCS, PRF, TR) are rejected when nested — declare those as
