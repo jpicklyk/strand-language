@@ -104,7 +104,11 @@ class Round1BackfillPreludeTest {
     fun `httpReq returns the fixed status-body ProductType and declares all three Network effects`() {
         val text = "@v=1 root=a\nempty BYT \"\"\na APP httpReq [\"GET\" \"http://example.com\" empty]"
         val req = nodeOf(text, "httpReq")
-        assertEquals("strand-builtin:Http.Request", req["target"]!!.jsonPrimitive.content)
+        // Q-041: the prelude `httpReq` entry now points at the legacy
+        // Http.RequestFromUrl wrapper (single-URL signature). The
+        // wrapper parses the URL host-side and dispatches to the
+        // seven-arg Http.Request, so the sandbox check fires uniformly.
+        assertEquals("strand-builtin:Http.RequestFromUrl", req["target"]!!.jsonPrimitive.content)
         // All three Network.* effects declared, since the underlying
         // implementation connects + sends + reads.
         assertEffects(req, listOf("connectFx", "netSendFx", "netRecvFx"))

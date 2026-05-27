@@ -118,5 +118,102 @@ object ResourceTable {
  * disk full, broken pipe, unknown handle, etc.). Per the Layer 4 step
  * 2 design call, IO failures are exceptions rather than Result-typed
  * values. The interpreter surfaces them as [InterpretError.IoFailure].
+ *
+ * **Q-042 credential scrubbing.** The constructor runs the supplied
+ * `detail` through [CredentialScrubber.scrub] at construction time and
+ * stores the scrubbed form in [detail]. The raw, unscrubbed text is
+ * preserved in [unscrubbedDetail] for the `ErrorVerbosity.Full`
+ * opt-in path; `Redacted` (default) and `RedactedWithKindOnly`
+ * verbosities never read it. The construction-time scrub is the single
+ * mandatory pass — no per-call-site change is required for upstream
+ * response bodies that interpolate credential values into IoFailure
+ * detail to be redacted automatically.
+ *
+ * Two-arg construction `IoFailure(kind, detail)` is the universal call
+ * pattern; existing call sites in [Builtins], [AnthropicProvider],
+ * [OpenAIProvider], [GeminiProvider], [PineconeProvider], and
+ * [ChromaProvider] benefit from scrubbing without change.
  */
-class IoFailure(val kind: String, val detail: String) : RuntimeException("$kind: $detail")
+class IoFailure(
+    val kind: String,
+    rawDetail: String,
+) : RuntimeException("$kind: ${CredentialScrubber.scrub(rawDetail)}") {
+
+    /**
+     * The scrubbed `detail` exposed to host code that catches the
+     * exception. Every registered credential value (see
+     * [CredentialScrubber.register]) appearing literally in the raw
+     * detail is replaced with the `[REDACTED:<provider>:<key>]`
+     * placeholder before this field is materialised.
+     */
+    val detail: String = CredentialScrubber.scrub(rawDetail)
+
+    /**
+     * The original, unscrubbed detail string. Read only by the
+     * `ErrorVerbosity.Full` materialiser in
+     * [InterpretError.IoFailure] translation — see § 4.5 of
+     * `proposals/implemented/credential-isolation.md`. Production
+     * deployments default to `ErrorVerbosity.Redacted`, in which the
+     * raw value is structurally unreachable from agent-facing error
+     * surfaces.
+     */
+    val unscrubbedDetail: String = rawDetail
+}
+
+/**
+ * Q-041: thrown by [FsSandbox.resolve] and [NetSandbox.checkConnect]
+ * when a `Fs.*` / `Net.Connect` / `Http.Request` call attempts to
+ * reach a resource the active [SandboxPolicy] forbids.
+ *
+ * Caught at the two `applyForeign` sites in [Interpreter] alongside
+ * [IoFailure] and translated to [InterpretError.SandboxViolation]
+ * carrying the call-site NodeId. The structure deliberately mirrors
+ * [IoFailure]: a runtime exception thrown across the foreign-call
+ * boundary, surfaced as a structured [InterpretError] variant.
+ *
+ * Detail strings are passed through [CredentialScrubber.scrub] at
+ * construction — path arguments and hostnames are not credentials,
+ * but defense-in-depth: a future host policy that interpolated
+ * credentials into a path or hostname would still see them scrubbed
+ * before agent-visible surfaces. Mirrors [IoFailure]'s scrubbing
+ * discipline.
+ */
+class SandboxViolation(
+    val kind: SandboxViolationKind,
+    rawDetail: String,
+) : RuntimeException("$kind: ${CredentialScrubber.scrub(rawDetail)}") {
+
+    val detail: String = CredentialScrubber.scrub(rawDetail)
+    val unscrubbedDetail: String = rawDetail
+}
+
+/**
+ * Q-041: discriminator for [SandboxViolation] / [InterpretError.SandboxViolation].
+ * One variant per gate the sandbox enforces. Agents observe the
+ * structured kind so they can adapt without parsing detail strings.
+ */
+enum class SandboxViolationKind {
+    /** A `Fs.*` path resolved outside the configured workspace root. */
+    FsPathEscape,
+
+    /** A `Fs.*` path traversed a symlink while `followSymlinks=false`. */
+    FsSymlinkRejected,
+
+    /** A `Fs.*` builtin was invoked but no workspace root is configured. */
+    FsWorkspaceNotConfigured,
+
+    /** A network host resolved to or named a blocked IP / hostname. */
+    NetHostBlocked,
+
+    /** A non-empty allowlist did not match the host. */
+    NetHostNotAllowlisted,
+
+    /** A hostname was supplied but [DnsPolicy.RequireIpLiteral] is active. */
+    NetHostnameRejected,
+
+    /** [DnsPolicy.RecheckAtConnect] saw the address change between gate and connect. */
+    NetDnsRebindingDetected,
+
+    /** `Http.Request` saw a scheme other than `http` or `https`. */
+    HttpSchemeRejected,
+}

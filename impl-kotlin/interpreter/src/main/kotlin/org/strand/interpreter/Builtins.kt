@@ -261,6 +261,41 @@ object Builtins {
     @Volatile
     var vectorHttpTransport: VectorHttpTransport = JdkHttpTransport
 
+    /**
+     * Q-041: active sandbox policy mediating every `Fs.*` /
+     * `Net.Connect` / `Http.Request` foreign call. The singleton
+     * default is [SandboxPolicy.OPEN_DEFAULT] — no workspace
+     * constraint, no network blocklist — so pre-Q-041 tests and
+     * library callers see unchanged behaviour. The CLI installs
+     * [SandboxPolicy.SECURE_DEFAULT] (or a custom flag-driven
+     * policy) at startup so agent-facing invocations get the
+     * default-deny surface.
+     *
+     * The volatile-singleton pattern matches [clock] /
+     * [credentialProvider] / [random] / [llmHttpClient]: tests
+     * that install a custom policy must not run in parallel with
+     * other tests that touch this field, and must restore the
+     * pre-test value in `@AfterEach`. Per-interpreter policy
+     * injection is a future refactor flagged in the proposal §
+     * 4.4 as non-blocking cleanup.
+     */
+    @Volatile
+    var sandboxPolicy: SandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+
+    /**
+     * Q-041: pluggable DNS resolver used by [NetSandbox]. Defaults
+     * to [SystemNameResolver] which delegates to the JVM's own
+     * `InetAddress.getAllByName`. Sandbox tests inject a
+     * deterministic resolver to exercise multi-A-record SSRF
+     * scenarios without depending on real DNS.
+     *
+     * Mirrors the [clock] / [random] test-injection pattern; tests
+     * that mutate this must restore [SystemNameResolver] in
+     * `@AfterEach` and not run in parallel.
+     */
+    @Volatile
+    var nameResolver: NameResolver = SystemNameResolver
+
     private val registry: Map<String, Fn> = mapOf(
         // Pure arithmetic (no declared effects expected).
         "strand-builtin:Int.Add" to Fn { args ->
@@ -392,6 +427,13 @@ object Builtins {
         // appropriate EffectCategory and grant a CapabilitySet that
         // covers the call site.
 
+        // Q-041: each Fs.* builtin resolves the supplied path through
+        // [FsSandbox.resolve] before invoking the JVM file API. The
+        // resolver enforces workspace containment and symlink rejection
+        // per the active [SandboxPolicy.fs]. Failures raise
+        // [SandboxViolation] which the interpreter translates to
+        // [InterpretError.SandboxViolation] at the call site.
+
         "strand-builtin:Fs.Write" to Fn { args ->
             require(args.size == 2) {
                 "Fs.Write expects 2 args (path: String, bytes: Bytes), got ${args.size}"
@@ -400,8 +442,9 @@ object Builtins {
                 ?: throw IoFailure("filesystem-write", "expected StringV path, got ${args[0]::class.simpleName}")
             val bytes = (args[1] as? Value.BytesV)?.v
                 ?: throw IoFailure("filesystem-write", "expected BytesV content, got ${args[1]::class.simpleName}")
+            val resolved = FsSandbox.resolve(sandboxPolicy.fs, path)
             try {
-                java.nio.file.Files.write(java.nio.file.Paths.get(path), bytes)
+                java.nio.file.Files.write(resolved, bytes)
                 Value.IntV(bytes.size.toLong())
             } catch (e: java.io.IOException) {
                 throw IoFailure("filesystem-write", "$path: ${e.message}")
@@ -416,8 +459,9 @@ object Builtins {
             }
             val path = (args[0] as? Value.StringV)?.v
                 ?: throw IoFailure("filesystem-read", "expected StringV path, got ${args[0]::class.simpleName}")
+            val resolved = FsSandbox.resolve(sandboxPolicy.fs, path)
             try {
-                Value.BytesV(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)))
+                Value.BytesV(java.nio.file.Files.readAllBytes(resolved))
             } catch (e: java.nio.file.NoSuchFileException) {
                 throw IoFailure("filesystem-read", "$path: file does not exist")
             } catch (e: java.io.IOException) {
@@ -435,9 +479,10 @@ object Builtins {
                 ?: throw IoFailure("filesystem-append", "expected StringV path, got ${args[0]::class.simpleName}")
             val bytes = (args[1] as? Value.BytesV)?.v
                 ?: throw IoFailure("filesystem-append", "expected BytesV content, got ${args[1]::class.simpleName}")
+            val resolved = FsSandbox.resolve(sandboxPolicy.fs, path)
             try {
                 java.nio.file.Files.write(
-                    java.nio.file.Paths.get(path),
+                    resolved,
                     bytes,
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.APPEND,
@@ -456,7 +501,8 @@ object Builtins {
             }
             val path = (args[0] as? Value.StringV)?.v
                 ?: throw IoFailure("filesystem-exists", "expected StringV path, got ${args[0]::class.simpleName}")
-            Value.BoolV(java.nio.file.Files.exists(java.nio.file.Paths.get(path)))
+            val resolved = FsSandbox.resolve(sandboxPolicy.fs, path)
+            Value.BoolV(java.nio.file.Files.exists(resolved))
         },
 
         "strand-builtin:Fs.Delete" to Fn { args ->
@@ -465,8 +511,9 @@ object Builtins {
             }
             val path = (args[0] as? Value.StringV)?.v
                 ?: throw IoFailure("filesystem-delete", "expected StringV path, got ${args[0]::class.simpleName}")
+            val resolved = FsSandbox.resolve(sandboxPolicy.fs, path)
             try {
-                Value.BoolV(java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(path)))
+                Value.BoolV(java.nio.file.Files.deleteIfExists(resolved))
             } catch (e: java.io.IOException) {
                 throw IoFailure("filesystem-delete", "$path: ${e.message}")
             }
@@ -478,8 +525,9 @@ object Builtins {
             }
             val path = (args[0] as? Value.StringV)?.v
                 ?: throw IoFailure("filesystem-list", "expected StringV dir path, got ${args[0]::class.simpleName}")
+            val resolved = FsSandbox.resolve(sandboxPolicy.fs, path)
             try {
-                val entries = java.nio.file.Files.list(java.nio.file.Paths.get(path)).use { stream ->
+                val entries = java.nio.file.Files.list(resolved).use { stream ->
                     stream.map { it.fileName.toString() }.sorted().toList()
                 }
                 // Build a SumV-encoded list using the same Cons/Nil
@@ -525,6 +573,12 @@ object Builtins {
 
         "strand-builtin:Net.Connect" to Fn { args ->
             // (host: String, port: Int) -> SocketHandle
+            // Q-041: NetSandbox.checkConnect resolves the host once and
+            // refuses connect when the resolved IP lies in any blocked
+            // range or when the host name is in the blocklist. The
+            // resolved InetAddress is then passed to Socket(InetAddress,
+            // port) so the connect goes to the IP that policy approved
+            // (DNS pin-at-check defence).
             require(args.size == 2) {
                 "Net.Connect expects 2 args (host: String, port: Int), got ${args.size}"
             }
@@ -532,8 +586,9 @@ object Builtins {
                 ?: throw IoFailure("network-connect", "expected StringV host, got ${args[0]::class.simpleName}")
             val port = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("network-connect", "expected IntV port, got ${args[1]::class.simpleName}")
+            val resolvedAddr = NetSandbox.checkConnect(sandboxPolicy.net, host, port.toInt(), nameResolver)
             try {
-                val socket = java.net.Socket(host, port.toInt())
+                val socket = java.net.Socket(resolvedAddr, port.toInt())
                 ResourceTable.register("socket", socket)
             } catch (e: java.io.IOException) {
                 throw IoFailure("network-connect", "$host:$port: ${e.message}")
@@ -611,23 +666,102 @@ object Builtins {
         // Network.Send, E-004 Network.Receive when used. Programs
         // typically combine the three under one CapabilityScope.
 
+        // Q-041 redesigned signature (proposal § 4.3 Option A): the
+        // (host, port) refinement values are positional arguments so
+        // Q-039's projection vocabulary binds them via ArgRef(0) and
+        // ArgRef(1). Scheme is validated against {http, https} —
+        // file:// reaches outside the network-and-sandbox model and
+        // is rejected as HttpSchemeRejected. The legacy single-URL
+        // form is preserved below as Http.RequestFromUrl.
+        //
+        // Headers shape: a SumV-encoded Cons/Nil chain of
+        // ProductV("name", "value") entries, matching the convention
+        // used by Fs.List / String.Split / Process.Spawn arg lists.
+        // The result includes the same shape for response headers.
+
         "strand-builtin:Http.Request" to Fn { args ->
-            // (method: String, url: String, body: Bytes) -> {status: Int, body: Bytes}
-            // body may be empty Bytes for GET/DELETE etc.
-            require(args.size == 3) {
-                "Http.Request expects 3 args (method: String, url: String, body: Bytes), got ${args.size}"
+            // (host: String, port: Int, scheme: String, path: String,
+            //  method: String, headers: List<Header>, body: Bytes)
+            //   -> {status: Int, body: Bytes, headers: List<Header>}
+            require(args.size == 7) {
+                "Http.Request expects 7 args (host, port, scheme, path, method, headers, body), got ${args.size}"
             }
-            val method = (args[0] as? Value.StringV)?.v
-                ?: throw IoFailure("http-request", "expected StringV method, got ${args[0]::class.simpleName}")
-            val urlStr = (args[1] as? Value.StringV)?.v
-                ?: throw IoFailure("http-request", "expected StringV url, got ${args[1]::class.simpleName}")
-            val body = (args[2] as? Value.BytesV)?.v
-                ?: throw IoFailure("http-request", "expected BytesV body, got ${args[2]::class.simpleName}")
+            val host = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV host, got ${args[0]::class.simpleName}")
+            val port = (args[1] as? Value.IntV)?.v
+                ?: throw IoFailure("http-request", "expected IntV port, got ${args[1]::class.simpleName}")
+            val scheme = (args[2] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV scheme, got ${args[2]::class.simpleName}")
+            val pathArg = (args[3] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV path, got ${args[3]::class.simpleName}")
+            val method = (args[4] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV method, got ${args[4]::class.simpleName}")
+            val headersValue = args[5]
+            val body = (args[6] as? Value.BytesV)?.v
+                ?: throw IoFailure("http-request", "expected BytesV body, got ${args[6]::class.simpleName}")
+
+            // Scheme validation: file:// etc. would route around the
+            // network policy entirely. Reject as HttpSchemeRejected.
+            if (scheme.lowercase() !in setOf("http", "https")) {
+                throw SandboxViolation(
+                    SandboxViolationKind.HttpSchemeRejected,
+                    "scheme '$scheme' is not allowed; expected 'http' or 'https'",
+                )
+            }
+
+            // Network sandbox check: refuses cloud-metadata, loopback,
+            // RFC1918, etc. by default. The resolved InetAddress is
+            // what we hand to URI() so the connect goes to the IP that
+            // policy approved (DNS pin-at-check).
+            val resolvedAddr = NetSandbox.checkConnect(sandboxPolicy.net, host, port.toInt(), nameResolver)
+
+            // Decode headers into a Map<String, String> for the
+            // outbound HttpURLConnection. The canonical shape is the
+            // Cons/Nil SumV chain over ProductV{head: {name, value},
+            // tail: <list>} entries — matching Fs.List / String.Split /
+            // Process.Spawn arg lists.
+            val requestHeaders = mutableMapOf<String, String>()
+            var headerCur: Value = headersValue
+            while (true) {
+                val sumV = headerCur
+                if (sumV !is Value.SumV) break
+                if (sumV.case != "Cons") break
+                val node = sumV.payload as? Value.ProductV
+                    ?: throw IoFailure("http-request", "header list Cons payload is not a ProductV")
+                val headProduct = node.fields["head"] as? Value.ProductV
+                    ?: throw IoFailure("http-request", "header entry missing ProductV 'head' field")
+                val name = (headProduct.fields["name"] as? Value.StringV)?.v
+                    ?: throw IoFailure("http-request", "header head missing 'name' String")
+                val value = (headProduct.fields["value"] as? Value.StringV)?.v
+                    ?: throw IoFailure("http-request", "header head missing 'value' String")
+                requestHeaders[name] = value
+                headerCur = node.fields["tail"]
+                    ?: throw IoFailure("http-request", "header list missing 'tail' edge")
+            }
+
+            // Build the URL using the resolved IP literal rather than
+            // the original hostname so the JVM connect cannot redo DNS
+            // and pick a different address. The Host: header still
+            // names the original hostname so the upstream sees a
+            // well-formed request (set explicitly below).
+            val resolvedHost = resolvedAddr.hostAddress.let { addr ->
+                if (resolvedAddr is java.net.Inet6Address) "[$addr]" else addr
+            }
+            val urlStr = "${scheme.lowercase()}://$resolvedHost:$port$pathArg"
             try {
                 val url = java.net.URI(urlStr).toURL()
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = method.uppercase()
                 conn.doInput = true
+                // Preserve the original hostname in the Host header so
+                // virtual-hosted servers route correctly; the request
+                // still goes to the policy-approved IP. (DNS rebinding
+                // mitigation has the IP pinned; Host header is the
+                // standard HTTP/1.1 multiplexing field.)
+                conn.setRequestProperty("Host", "$host:$port")
+                for ((name, value) in requestHeaders) {
+                    conn.setRequestProperty(name, value)
+                }
                 if (body.isNotEmpty()) {
                     conn.doOutput = true
                     conn.outputStream.use { it.write(body) }
@@ -639,10 +773,32 @@ object Builtins {
                 } catch (_: java.io.IOException) {
                     ByteArray(0)
                 }
+                // Build the response headers list as the same
+                // Cons/Nil shape — one ProductV("name", "value") per
+                // header. HttpURLConnection's headerFields() may
+                // include a null key for the status line; skip it.
+                val headerEntries: MutableList<Value> = mutableListOf()
+                for ((name, values) in conn.headerFields) {
+                    if (name == null) continue
+                    for (v in values) {
+                        headerEntries += Value.ProductV(mapOf(
+                            "name" to Value.StringV(name),
+                            "value" to Value.StringV(v),
+                        ))
+                    }
+                }
+                var responseHeaders: Value = Value.SumV("Nil", null)
+                for (entry in headerEntries.reversed()) {
+                    responseHeaders = Value.SumV("Cons", Value.ProductV(mapOf(
+                        "head" to entry,
+                        "tail" to responseHeaders,
+                    )))
+                }
                 conn.disconnect()
                 Value.ProductV(mapOf(
                     "status" to Value.IntV(status.toLong()),
                     "body" to Value.BytesV(responseBody),
+                    "headers" to responseHeaders,
                 ))
             } catch (e: java.net.MalformedURLException) {
                 throw IoFailure("http-request", "$urlStr: malformed URL: ${e.message}")
@@ -653,6 +809,71 @@ object Builtins {
             } catch (e: SecurityException) {
                 throw IoFailure("http-request", "$urlStr: ${e.message}")
             }
+        },
+
+        // Q-041 legacy wrapper: preserves the pre-Q-041 single-URL
+        // signature for backward compatibility with corpus / test
+        // fixtures that haven't migrated to the seven-arg form. The
+        // wrapper parses the URL host-side, extracts (host, port,
+        // scheme, path), and dispatches through the same code path
+        // — so the sandbox check fires uniformly. Returns the
+        // pre-Q-041 product shape {status: Int, body: Bytes} (no
+        // headers) so callers can drop in without changes.
+        "strand-builtin:Http.RequestFromUrl" to Fn { args ->
+            // (method: String, url: String, body: Bytes) -> {status: Int, body: Bytes}
+            require(args.size == 3) {
+                "Http.RequestFromUrl expects 3 args (method: String, url: String, body: Bytes), got ${args.size}"
+            }
+            val method = (args[0] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV method, got ${args[0]::class.simpleName}")
+            val urlStr = (args[1] as? Value.StringV)?.v
+                ?: throw IoFailure("http-request", "expected StringV url, got ${args[1]::class.simpleName}")
+            val body = (args[2] as? Value.BytesV)?.v
+                ?: throw IoFailure("http-request", "expected BytesV body, got ${args[2]::class.simpleName}")
+
+            // Parse the URL host-side so the underlying call sees
+            // structured fields. Default port: 80 for http, 443 for
+            // https. The path includes the query string if any.
+            val uri = try {
+                java.net.URI(urlStr)
+            } catch (e: java.net.URISyntaxException) {
+                throw IoFailure("http-request", "$urlStr: URI syntax: ${e.message}")
+            }
+            val scheme = uri.scheme ?: "http"
+            val host = uri.host
+                ?: throw IoFailure("http-request", "$urlStr: missing host")
+            val effectivePort = if (uri.port > 0) uri.port
+                else when (scheme.lowercase()) {
+                    "https" -> 443
+                    "http" -> 80
+                    else -> 80  // The seven-arg form will reject non-http schemes anyway.
+                }
+            val pathAndQuery = buildString {
+                append(if (uri.rawPath.isNullOrEmpty()) "/" else uri.rawPath)
+                if (!uri.rawQuery.isNullOrEmpty()) append("?").append(uri.rawQuery)
+            }
+
+            // Dispatch to the seven-arg builtin so the sandbox check
+            // and projection-friendly path both run once. We construct
+            // an empty header list (the legacy signature had none).
+            val componentRequest = lookup("strand-builtin:Http.Request")
+                ?: throw IoFailure("http-request", "internal: Http.Request not registered")
+            val response = componentRequest.invoke(listOf(
+                Value.StringV(host),
+                Value.IntV(effectivePort.toLong()),
+                Value.StringV(scheme),
+                Value.StringV(pathAndQuery),
+                Value.StringV(method),
+                Value.SumV("Nil", null),  // no headers in legacy form
+                Value.BytesV(body),
+            )) as Value.ProductV
+
+            // Return the pre-Q-041 shape: drop the `headers` field so
+            // legacy callers still see {status, body}.
+            Value.ProductV(mapOf(
+                "status" to response.fields.getValue("status"),
+                "body" to response.fields.getValue("body"),
+            ))
         },
 
         // Layer 4 step 2 — Process + env builtins. Spawn/Wait use

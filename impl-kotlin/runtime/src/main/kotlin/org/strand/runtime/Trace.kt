@@ -1,5 +1,6 @@
 package org.strand.runtime
 
+import org.strand.core.ExhaustionKind
 import org.strand.interpreter.Value
 
 /**
@@ -38,13 +39,31 @@ sealed class TraceStep {
 }
 
 /**
- * Why a [Trace] terminated. Layer 6 step 1 only ever emits [EventsExhausted];
- * step 2's supervisor patterns will introduce additional reasons (explicit
- * termination, unrecoverable failure, supervisor-initiated stop).
+ * Why a [Trace] terminated. Layer 6 step 1 emits [EventsExhausted] for the
+ * normal case; Q-040 added [ResourceExhaustion] when a per-event closure
+ * invocation breached the host's [org.strand.core.EvaluationLimits].
  */
-enum class HaltReason {
+sealed class HaltReason {
     /** The supplied event list was consumed in full; no events remain. */
-    EventsExhausted,
+    object EventsExhausted : HaltReason() {
+        override fun toString(): String = "EventsExhausted"
+    }
+
+    /**
+     * Q-040: a per-event closure invocation exhausted a host resource
+     * limit. [kind] discriminates the dimension; [atEventIndex] is the
+     * zero-based index in the events list where the breach was raised
+     * — the event whose closure invocation tripped the cap.
+     *
+     * The trace's `steps` list contains all successfully-processed
+     * events strictly before this index; the failing event itself
+     * does not produce a `TraceStep.Step` because the closure call
+     * threw before the step could complete.
+     */
+    data class ResourceExhaustion(
+        val kind: ExhaustionKind,
+        val atEventIndex: Int,
+    ) : HaltReason()
 }
 
 /**

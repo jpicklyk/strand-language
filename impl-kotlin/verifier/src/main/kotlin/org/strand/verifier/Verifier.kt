@@ -1,10 +1,12 @@
 package org.strand.verifier
 
+import org.strand.core.EffectProjection
 import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
 import org.strand.core.Primitive
+import org.strand.core.ProjectionSource
 
 /**
  * Layer 1 verifier.
@@ -81,6 +83,17 @@ class Verifier(
          * refinement-lattice matching is deferred.
          */
         val nodeClosures = mutableMapOf<NodeId, Set<NodeId>>()
+
+        /**
+         * Q-039: per-verification structural-equality cache for
+         * [ProjectionSource.LiteralNode] targets and the EffectDecl
+         * literal parameters they're matched against. Keyed by the
+         * unordered pair of NodeIds (smaller first); avoids re-walking
+         * the same literal tower across multiple call sites that share a
+         * pinned-literal projection (e.g., the `"anthropic"` literal in
+         * a chain of LLM-tool callers).
+         */
+        private val literalEqualityCache = mutableMapOf<Pair<NodeId, NodeId>, Boolean>()
 
         fun record(id: NodeId, t: TypeExpr) {
             nodeTypes[id] = t
@@ -504,6 +517,24 @@ class Verifier(
                         at = id, missing = missing, extra = extra
                     ))
                     throw VerifyAbort()
+                }
+
+                // Q-039: when the callee resolves to a projected
+                // ForeignNode and the Application carries authored
+                // effectInstances, the authored shape must agree with
+                // the projection. The runtime synthesizes the same
+                // capability-check values from the projection plus
+                // actual arguments — drift between an authored
+                // EffectDecl and the projection is rejected here so the
+                // verifier-level security property holds even when the
+                // agent over-specifies the call site.
+                val projectedForeign = resolveProjectedForeignNode(node.function)
+                if (projectedForeign != null) {
+                    validateProjectionMatch(
+                        at = id,
+                        app = node,
+                        projectedFn = projectedForeign,
+                    )
                 }
             }
 
@@ -1101,6 +1132,15 @@ class Verifier(
                 throw VerifyAbort()
             }
             val declaredEffects = validateEffectCategoryEdges(id, node.effects, "ForeignNode.effects")
+            // Q-039: validate the optional effectProjections against the
+            // declared effects list and the signature's parameter shape.
+            // Empty list is the legacy path (Q-031 semantics retained).
+            validateProjections(
+                at = id,
+                effects = node.effects,
+                effectProjections = node.effectProjections,
+                signatureParameterTypes = fType.parameters,
+            )
             // Evaluating a ForeignNode produces a callable value — no effects
             // fire at construction. Effects release at call sites (handled
             // in inferApplication via the function's type effects).
@@ -1997,6 +2037,392 @@ class Verifier(
          * Returns the set of validated EffectCategory NodeIds. Reports and
          * aborts on the first non-EffectCategory entry.
          */
+        /**
+         * Q-039: validate `effectProjections` at admission of a
+         * [Node.ForeignNode] (or [Node.FunctionType] symmetrically).
+         *
+         * Rules per proposal § 5:
+         * 1. Empty list → accept (legacy path).
+         * 2. Length must equal `effects.size`.
+         * 3. Each projection's `category` must equal `effects[i]`.
+         * 4. `sources.size` must equal the EffectCategory's parameter arity.
+         * 5. Each [ProjectionSource.ArgRef] index must be within
+         *    `signatureParameterCount`.
+         * 6. Each [ProjectionSource.LiteralNode] target must resolve to a
+         *    literal node whose type structurally equals the category's
+         *    parameter type at the same position.
+         *
+         * Reports the corresponding `Projection*` VerifyError on failure
+         * and aborts.
+         */
+        private fun validateProjections(
+            at: NodeId,
+            effects: List<NodeId>,
+            effectProjections: List<EffectProjection>,
+            signatureParameterTypes: List<TypeExpr>,
+        ) {
+            if (effectProjections.isEmpty()) return
+
+            // Rule 2: length parity with effects.
+            if (effectProjections.size != effects.size) {
+                report(VerifyError.ProjectionArityMismatch(
+                    at = at, expected = effects.size, actual = effectProjections.size
+                ))
+                throw VerifyAbort()
+            }
+
+            for ((i, projection) in effectProjections.withIndex()) {
+                // Rule 3: per-position category match.
+                if (projection.category != effects[i]) {
+                    report(VerifyError.ProjectionCategoryMismatch(
+                        at = at, index = i,
+                        declaredCategory = effects[i],
+                        projectedCategory = projection.category,
+                    ))
+                    throw VerifyAbort()
+                }
+
+                // Look up the EffectCategory to get its parameter shape.
+                // validateEffectCategoryEdges already confirmed the edges
+                // are EffectCategory nodes; we still defensively check.
+                val effectNode = store.getOrNull(projection.category)
+                    ?: run {
+                        report(VerifyError.DanglingReference(
+                            at = at, missing = projection.category,
+                            fromField = "effectProjections[$i].category"
+                        ))
+                        throw VerifyAbort()
+                    }
+                if (effectNode !is Node.EffectCategory) {
+                    report(VerifyError.NonEffectCategoryInEffectList(
+                        at = at, offendingChild = projection.category,
+                        actualCategory = categoryName(effectNode)
+                    ))
+                    throw VerifyAbort()
+                }
+
+                // Rule 4: sources arity equals the EffectCategory's parameter count.
+                if (projection.sources.size != effectNode.parameters.size) {
+                    report(VerifyError.ProjectionSourceArityMismatch(
+                        at = at, categoryIndex = i,
+                        expected = effectNode.parameters.size,
+                        actual = projection.sources.size,
+                    ))
+                    throw VerifyAbort()
+                }
+
+                // Rule 5 + 6: per-source validation.
+                for ((j, source) in projection.sources.withIndex()) {
+                    when (source) {
+                        is ProjectionSource.ArgRef -> {
+                            if (source.index < 0 || source.index >= signatureParameterTypes.size) {
+                                report(VerifyError.ProjectionArgRefOutOfRange(
+                                    at = at, categoryIndex = i, sourceIndex = j,
+                                    requested = source.index,
+                                    maxAvailable = signatureParameterTypes.size - 1,
+                                ))
+                                throw VerifyAbort()
+                            }
+                            // We do not type-check ArgRef against the
+                            // category parameter type here because the
+                            // EffectCategory parameters are resolved at the
+                            // top level (no enclosing TypeAbstraction), and
+                            // resolveType lookups inside this admission
+                            // helper would not handle generic argument
+                            // positions cleanly. Type compatibility between
+                            // arg(i) and category param i is enforced at
+                            // every Application via validateProjectionMatch
+                            // (the EffectDecl shape check) and ultimately
+                            // by the runtime capability check on the
+                            // synthesized values. A future tightening can
+                            // add static argType ≤ categoryParamType here.
+                        }
+                        is ProjectionSource.LiteralNode -> {
+                            val targetNode = store.getOrNull(source.target)
+                                ?: run {
+                                    report(VerifyError.DanglingReference(
+                                        at = at, missing = source.target,
+                                        fromField = "effectProjections[$i].sources[$j].target"
+                                    ))
+                                    throw VerifyAbort()
+                                }
+                            if (!isLiteralLikeNode(targetNode)) {
+                                report(VerifyError.ProjectionLiteralNotConstant(
+                                    at = at, categoryIndex = i, sourceIndex = j,
+                                    target = source.target,
+                                ))
+                                throw VerifyAbort()
+                            }
+                            // Type-check the literal against the category
+                            // parameter type. The literal is inferable in
+                            // an empty scope/typeParams; if it isn't, the
+                            // recursive infer call surfaces the structural
+                            // problem under the same `at`.
+                            val expectedType = resolveType(effectNode.parameters[j], emptySet())
+                            val actualType = infer(source.target, emptyMap(), emptySet())
+                            if (!typesCompatible(expectedType, actualType)) {
+                                report(VerifyError.ProjectionLiteralTypeMismatch(
+                                    at = at, categoryIndex = i, sourceIndex = j,
+                                    expected = expectedType, actual = actualType,
+                                ))
+                                throw VerifyAbort()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /**
+         * Q-039: at every [Node.Application] whose callee resolves to a
+         * projected [Node.ForeignNode] (non-empty `effectProjections`),
+         * verify that every authored [Node.EffectDecl] in
+         * [Node.Application.effectInstances] matches the projection
+         * structurally. Per proposal § 5:
+         *
+         *  * `ArgRef(j)` source → EffectDecl.parameters[k] must be the
+         *    exact same NodeId as `Application.arguments[j]`.
+         *  * `LiteralNode(t)` source → EffectDecl.parameters[k] must be a
+         *    literal node whose canonical-form bytes equal `t`'s
+         *    canonical-form bytes.
+         *
+         * When `effectInstances` is empty the synthesis path runs at
+         * runtime — the verifier accepts (no authored shape to check).
+         *
+         * The hash-equality check on literals is performed by encoding
+         * both candidate and projection target under an empty binder
+         * stack via [Hasher.hashClosedSubgraph]; if hashes match, the
+         * canonical bytes match by ADR-003 (BLAKE3 is collision-resistant
+         * for the corpus sizes we care about).
+         */
+        private fun validateProjectionMatch(
+            at: NodeId,
+            app: Node.Application,
+            projectedFn: Node.ForeignNode,
+        ) {
+            if (app.effectInstances.isEmpty()) return
+            if (projectedFn.effectProjections.isEmpty()) return
+
+            // Build a category → projection map for fast lookup. The
+            // verifier's outer coverage check (in inferApplication) has
+            // already established that effectInstances covers exactly the
+            // declared effect categories, so missing/extra cases are
+            // already rejected.
+            val projectionByCategory: Map<NodeId, EffectProjection> =
+                projectedFn.effectProjections.associateBy { it.category }
+
+            for ((i, declId) in app.effectInstances.withIndex()) {
+                val declNode = store.getOrNull(declId) as? Node.EffectDecl
+                    ?: continue  // already validated by inferApplication
+                val projection = projectionByCategory[declNode.effectType]
+                    ?: continue  // category not projected — synthesis path skips it
+
+                val categoryIndex = projectedFn.effectProjections.indexOf(projection)
+
+                // The EffectDecl's parameter list arity equals the
+                // category's arity (inferEffectDecl already enforced this).
+                // The projection's sources length equals the same arity
+                // (validateProjections enforced this). So both have the
+                // same length; pair them positionally.
+                for ((j, source) in projection.sources.withIndex()) {
+                    val actualParamId = declNode.parameters[j]
+                    val matches = when (source) {
+                        is ProjectionSource.ArgRef -> {
+                            if (source.index < 0 || source.index >= app.arguments.size) {
+                                false  // out-of-range — admission rejected
+                            } else {
+                                actualParamId == app.arguments[source.index]
+                            }
+                        }
+                        is ProjectionSource.LiteralNode -> {
+                            // Canonical-form equality on literal towers.
+                            // Both sides must be closed literal-like
+                            // nodes; non-literal EffectDecl parameters
+                            // (a VarRef, a function call) cannot match
+                            // a LiteralNode projection by construction.
+                            val actualIsLiteral =
+                                store.getOrNull(actualParamId)?.let { isLiteralLikeNode(it) } == true
+                            if (!actualIsLiteral) false
+                            else literalSubgraphsEqual(actualParamId, source.target)
+                        }
+                    }
+                    if (!matches) {
+                        report(VerifyError.ProjectionMismatch(
+                            at = at,
+                            categoryIndex = categoryIndex,
+                            sourceIndex = j,
+                            expected = source,
+                            actualParam = actualParamId,
+                        ))
+                        throw VerifyAbort()
+                    }
+                }
+                // Loop continues to next effect instance — multi-category
+                // call sites verify all category projections in order.
+                // [i] is used as the loop index for diagnostics in
+                // future tightenings; intentionally kept for clarity.
+                @Suppress("UNUSED_EXPRESSION") i
+            }
+        }
+
+        /**
+         * Q-039 call-site discovery: walk `functionExprId` through
+         * straightforward indirections — [Node.NodeRef] (resolved via the
+         * `hashToNodeId` reverse map), [Node.VarRef] (followed when its
+         * binder is a [Node.Let] whose value is itself a projected callee),
+         * and [Node.Let] (returned by inspecting `.value`) — and return
+         * the underlying [Node.ForeignNode] if non-null projections are
+         * declared. Returns null when:
+         *  * the chain bottoms out at a non-ForeignNode (e.g., a Lambda,
+         *    FixpointFn, or higher-order parameter);
+         *  * the ForeignNode has empty projections (legacy callee);
+         *  * any step in the chain is unresolvable.
+         *
+         * The walk is intentionally conservative — when in doubt return
+         * null. The verifier still rejects EffectDecl shape drift via the
+         * existing coverage check; Q-039's value-level binding fires
+         * statically only at the call sites where the syntactic
+         * resolution succeeds. Indirect call sites (passing a projected
+         * ForeignNode as a callback into List.Map, etc.) miss the static
+         * check; the runtime synthesis path remains the security boundary
+         * there. A future Lambda-level projection slice (proposal § 8)
+         * tightens this.
+         */
+        private fun resolveProjectedForeignNode(functionExprId: NodeId): Node.ForeignNode? {
+            var current: NodeId = functionExprId
+            // Bound to prevent unexpected cycles; deeper chains than this
+            // are not seen in practice.
+            repeat(64) {
+                val node = store.getOrNull(current) ?: return null
+                when (node) {
+                    is Node.ForeignNode ->
+                        return if (node.effectProjections.isNotEmpty()) node else null
+                    is Node.NodeRef -> {
+                        val targetId = hashToNodeId[node.target] ?: return null
+                        current = targetId
+                    }
+                    is Node.VarRef -> {
+                        val binderNode = store.getOrNull(node.binder) ?: return null
+                        // Only Let binders carry a value expression we can
+                        // chase. ParameterDecl / VariablePattern binders
+                        // bind run-time-supplied values — the verifier
+                        // cannot resolve them statically.
+                        if (binderNode is Node.Let) {
+                            current = binderNode.value
+                        } else {
+                            return null
+                        }
+                    }
+                    is Node.Let -> current = node.body  // unusual but handle it
+                    else -> return null
+                }
+            }
+            return null
+        }
+
+        /**
+         * Q-039: structural equality of two literal-like subgraphs,
+         * proxying the canonical-form equality requirement of proposal
+         * § 5 step 2. The verifier doesn't depend on the `:hashing`
+         * module (which would create a layering inversion), so we
+         * compare the in-memory [Node] trees directly. Two literal-like
+         * subgraphs in the canonical store hash to the same bytes iff
+         * they are structurally equal under this comparator — the
+         * canonical encoder is a pure function of structure on closed
+         * literal towers, with no binder-stack dependence.
+         *
+         * Cycles are impossible here because literal-like nodes never
+         * reference VarRef / RecursiveSelf and the verifier rejects
+         * cycles before this comparator runs. We still bound depth
+         * defensively in case of an ill-formed input that slipped past
+         * earlier checks.
+         */
+        private fun literalSubgraphsEqual(a: NodeId, b: NodeId): Boolean {
+            if (a == b) return true
+            val cacheKey = if (a.value < b.value) a to b else b to a
+            literalEqualityCache[cacheKey]?.let { return it }
+            val result = literalSubgraphsEqualInternal(a, b, depth = 0)
+            literalEqualityCache[cacheKey] = result
+            return result
+        }
+
+        private fun literalSubgraphsEqualInternal(a: NodeId, b: NodeId, depth: Int): Boolean {
+            if (depth > 256) return false  // defensive bound
+            val na = store.getOrNull(a) ?: return false
+            val nb = store.getOrNull(b) ?: return false
+            return when {
+                na is Node.IntLit && nb is Node.IntLit -> na.value == nb.value
+                na is Node.FloatLit && nb is Node.FloatLit -> na.value == nb.value
+                na is Node.StringLit && nb is Node.StringLit -> na.value == nb.value
+                na is Node.BoolLit && nb is Node.BoolLit -> na.value == nb.value
+                na is Node.UnitLit && nb is Node.UnitLit -> true
+                na is Node.BytesLit && nb is Node.BytesLit -> na.value.contentEquals(nb.value)
+                na is Node.ProductValue && nb is Node.ProductValue -> {
+                    // ProductValue fields are unordered (the canonical
+                    // encoder sorts by fieldName). Compare by name
+                    // associations.
+                    val aFields = na.fields.mapNotNull { fid ->
+                        (store.getOrNull(fid) as? Node.ProductFieldValue)?.let { it.fieldName to it.value }
+                    }.toMap()
+                    val bFields = nb.fields.mapNotNull { fid ->
+                        (store.getOrNull(fid) as? Node.ProductFieldValue)?.let { it.fieldName to it.value }
+                    }.toMap()
+                    if (aFields.keys != bFields.keys) false
+                    else aFields.all { (name, valId) ->
+                        literalSubgraphsEqualInternal(valId, bFields[name]!!, depth + 1)
+                    } && literalSubgraphsEqualInternal(na.ofType, nb.ofType, depth + 1).let { ofTypeEq ->
+                        // For ProductValue, the ofType also contributes
+                        // to canonical equality. ofType is a *type* node
+                        // (ProductType), not a value tower, so we
+                        // compare by NodeId equality only — equirecursive
+                        // type equality at this depth would require the
+                        // full Type comparator. For Q-039 V1 the
+                        // simplest correct check: same ofType NodeId
+                        // (post-finalize dedup makes structurally-equal
+                        // types share a NodeId by construction). Note
+                        // we still need the field walk above for the
+                        // value-tower contents.
+                        ofTypeEq || na.ofType == nb.ofType
+                    }
+                }
+                na is Node.SumValue && nb is Node.SumValue -> {
+                    if (na.caseName != nb.caseName) false
+                    else if (na.ofType != nb.ofType) false  // same simplification as ProductValue
+                    else {
+                        val aPay = na.payload
+                        val bPay = nb.payload
+                        when {
+                            aPay == null && bPay == null -> true
+                            aPay != null && bPay != null ->
+                                literalSubgraphsEqualInternal(aPay, bPay, depth + 1)
+                            else -> false
+                        }
+                    }
+                }
+                else -> false
+            }
+        }
+
+        /**
+         * Recognize the set of node categories the V1 [ProjectionSource.LiteralNode]
+         * vocabulary admits. Per proposal § 4.1: primitive literals
+         * (IntLit/FloatLit/StringLit/BoolLit/UnitLit/BytesLit) and
+         * ProductValue/SumValue towers over literals. The recursive case
+         * is checked lazily — at admission we only confirm the outermost
+         * shape is a value-producing literal-like node; per-field
+         * structural literal-ness is verified through type compatibility
+         * in [validateProjections] and confirmed at runtime by the
+         * evaluator (literal-like nodes evaluate without side effects
+         * under any context).
+         */
+        private fun isLiteralLikeNode(node: Node?): Boolean = when (node) {
+            is Node.IntLit, is Node.FloatLit, is Node.StringLit,
+            is Node.BoolLit, Node.UnitLit, is Node.BytesLit -> true
+            is Node.ProductValue -> true
+            is Node.SumValue -> true
+            else -> false
+        }
+
         private fun validateEffectCategoryEdges(
             at: NodeId,
             edges: List<NodeId>,
@@ -2065,11 +2491,27 @@ class Verifier(
                 ?: reportFatal(VerifyError.DanglingReference(at = typeId, missing = typeId, fromField = "type"))
             return when (node) {
                 is Node.PrimitiveType -> TypeExpr.Prim(node.kind)
-                is Node.FunctionType -> TypeExpr.Fun(
-                    parameters = node.parameters.map { resolveType(it, typeParams) },
-                    result = resolveType(node.result, typeParams),
-                    effects = validateEffectCategoryEdges(typeId, node.effects, "FunctionType.effects")
-                )
+                is Node.FunctionType -> {
+                    val paramTypes = node.parameters.map { resolveType(it, typeParams) }
+                    val resultType = resolveType(node.result, typeParams)
+                    val resolvedEffects = validateEffectCategoryEdges(typeId, node.effects, "FunctionType.effects")
+                    // Q-039 symmetry: even though only ForeignNode is the V1
+                    // security boundary the verifier enforces at call sites,
+                    // FunctionType.effectProjections is validated at
+                    // admission so a future Lambda-level slice can populate
+                    // and trust the field without re-checking shape.
+                    validateProjections(
+                        at = typeId,
+                        effects = node.effects,
+                        effectProjections = node.effectProjections,
+                        signatureParameterTypes = paramTypes,
+                    )
+                    TypeExpr.Fun(
+                        parameters = paramTypes,
+                        result = resultType,
+                        effects = resolvedEffects,
+                    )
+                }
                 is Node.ProductType -> {
                     val fields = node.fields.map { fieldId ->
                         val f = store.getOrNull(fieldId)

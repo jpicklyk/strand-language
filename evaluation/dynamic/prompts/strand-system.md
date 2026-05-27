@@ -98,6 +98,15 @@ positional arguments, and a tiny example.
 
 - `FN target:String foreignType:ref [effects:[refs]]` — ForeignNode (produces value). `myAdd FN "strand-builtin:Int.Add" addT`. Most common builtins are pre-bound in the implicit prelude.
 
+ForeignNodes (and FunctionType nodes for symmetry) also accept an optional
+`effectProjections` field — see § Foreign effect projections (Q-039) below
+for the canonical dag-json shape. Layer A does not yet have a code for the
+inline projection objects; programs that need explicit projections on
+non-prelude ForeignNodes emit canonical dag-json directly. The implicit
+prelude entries for `Fs.*` and `Net.Connect` carry their projections
+automatically — agents using `fsWrite`, `netConnect`, etc. by reserved
+name get the security property for free.
+
 ### Control flow
 
 - `MAT scrutinee:ref cases:[refs]` — Match (produces value). `m MAT v [c1 c2]`
@@ -138,6 +147,115 @@ positional arguments, and a tiny example.
 
 - `SCH schemaName:String valueType:ref invariants:[refs]` — Schema. `posInt SCH "PositiveInt" intT [posInv]`
 - `INV invariantName:String targetSchema:ref body:ref` — Invariant. `posInv INV "positive" posInt isPosLambda`
+
+## Foreign effect projections (Q-039)
+
+When a `ForeignNode` declares parameterized effect categories (e.g.,
+`Filesystem.Write{path}`, `Network.Connect{host, port}`,
+`LLM.Generate{provider, model}`), the security model needs the
+capability-check parameter values to be the same values the foreign
+code actually consumes. Strand expresses this binding via an optional
+`effectProjections` field on `ForeignNode` (and symmetrically on
+`FunctionType`).
+
+Each entry in `effectProjections` covers one of the function's
+declared effect categories positionally — entry `i` projects
+`effects[i]`. The projection lists one `ProjectionSource` per
+EffectCategory parameter; the runtime synthesizes the capability-
+check value from that source plus the actual evaluated argument
+values.
+
+Two source variants in V1:
+
+- `{"kind": "ArgRef", "index": N}` — the parameter value is the
+  function's positional argument at index `N`. The interpreter passes
+  `argumentValues[N]` straight to the capability check, so the
+  capability-check value IS the value the foreign code receives. No
+  drift possible. Used for `path` on `Fs.Write` (`ArgRef(0)`), for
+  `(host, port)` on `Net.Connect` (`[ArgRef(0), ArgRef(1)]`), and so
+  on.
+- `{"kind": "LiteralNode", "target": "<author-id>"}` — the parameter
+  value is the binding-controlled literal node at `target`. Used to
+  pin a `provider` slot on per-provider LLM/Vector bindings (e.g.,
+  `LiteralNode("anthropicLit")` where `anthropicLit` is a
+  `StringLit("anthropic")`). The agent cannot spoof a different
+  provider via an authored EffectDecl — the verifier rejects any
+  EffectDecl whose corresponding parameter does not canonical-hash-
+  equal the pinned literal.
+
+Canonical dag-json shape for a projected `Fs.Write`:
+
+```
+{
+  "type": "ForeignNode",
+  "target": "strand-builtin:Fs.Write",
+  "foreignType": "writeT",
+  "effects": ["writeFx"],
+  "effectProjections": [
+    {
+      "category": "writeFx",
+      "sources": [{"kind": "ArgRef", "index": 0}]
+    }
+  ]
+}
+```
+
+`Application.effectInstances` is optional at every call of a
+projected ForeignNode. When omitted, the interpreter synthesizes
+capability-check values from the projection plus the evaluated
+arguments. When supplied, the verifier requires the authored
+EffectDecl to match the projection structurally:
+
+- `ArgRef(j)` source → EffectDecl parameter at the same position
+  must be the exact same NodeId as `Application.arguments[j]`. A
+  drift attempt — fresh literal with the same value but a different
+  NodeId — raises `ProjectionMismatch`. This is the load-bearing
+  Q-039 verifier rule.
+- `LiteralNode(t)` source → EffectDecl parameter must be a literal
+  node whose canonical-form bytes equal `t`'s canonical-form bytes.
+
+Reserved prelude entries (`fsRead`, `fsWrite`, `fsAppend`, `fsExists`,
+`fsDelete`, `netConnect`) carry their projections automatically.
+Programs that use these names by reserved id inherit the security
+property — the agent does not need to author `effectProjections`
+manually. Programs that emit ForeignNodes outside the prelude need
+the explicit `effectProjections` field in canonical dag-json (Layer
+A does not have a compact code for inline projection objects in
+this slice).
+
+Verifier rules at admission of a ForeignNode with projections:
+
+- `ProjectionArityMismatch` — projection list length does not equal
+  `effects.size`.
+- `ProjectionCategoryMismatch` — the projection at position `i`
+  declares a different `category` from `effects[i]`.
+- `ProjectionSourceArityMismatch` — the projection's `sources` list
+  length does not equal the EffectCategory's parameter count.
+- `ProjectionArgRefOutOfRange` — an `ArgRef(i)` references an index
+  outside the function's parameter range.
+- `ProjectionLiteralNotConstant` — a `LiteralNode` target does not
+  resolve to a literal node (IntLit/FloatLit/StringLit/BoolLit/
+  UnitLit/BytesLit/ProductValue/SumValue over literals).
+- `ProjectionLiteralTypeMismatch` — a `LiteralNode` target's type
+  does not structurally equal the EffectCategory parameter type at
+  the same position.
+
+Verifier rule at every Application of a projected ForeignNode with
+non-empty `effectInstances`:
+
+- `ProjectionMismatch` — an EffectDecl parameter does not match the
+  projection's source at the same position.
+
+Migrated bindings (initial Q-039 slice): `Fs.Read`, `Fs.Write`,
+`Fs.Append`, `Fs.Exists`, `Fs.Delete`, `Net.Connect`. The
+per-provider LLM and Vector bindings, `Http.Request`, `Process.Spawn`,
+and `Crypto.Sign/Encrypt/Decrypt` are deferred to follow-up slices —
+their signatures need redesign (Http.Request via Q-041) or
+EffectCategory parameter changes (Crypto.RandomBytes) that exceed
+the scope of the initial security-restoration slice. ForeignNodes
+without `effectProjections` continue under legacy Q-031 semantics;
+the security gap on those bindings persists until migration
+completes.
 
 ## Implicit prelude
 
@@ -229,9 +347,9 @@ Foreign-node builtins (94):
     blake3 sha256 md5               — Hash.* digests (Bytes -> Bytes, raw output, no multi-hash prefix)
     randInt randFloat randBytes     — Random.* (effectful; each declares cryptoFx for E-024 Crypto.RandomBytes)
     hexOf                           — Bytes.FormatHex (lowercase output)
-    fsRead fsWrite fsAppend fsExists fsDelete   — Fs.* filesystem (effectful; readFx for Read/Exists, writeFx for Write/Append/Delete)
-    netConnect netSend netRecv netClose         — Net.* sockets (effectful; netConnect→connectFx, netSend→netSendFx, netRecv→netRecvFx, netClose has no effect — closing the dual of opening)
-    httpReq                                     — Http.Request → {status: Int, body: Bytes} (effectful; declares connectFx, netSendFx, netRecvFx)
+    fsRead fsWrite fsAppend fsExists fsDelete   — Fs.* filesystem (effectful; readFx for Read/Exists, writeFx for Write/Append/Delete). Q-039: each pins its effect's `path` refinement parameter to ArgRef(0) — the verifier and runtime synthesize the capability-check value from the function's first argument.
+    netConnect netSend netRecv netClose         — Net.* sockets (effectful; netConnect→connectFx, netSend→netSendFx, netRecv→netRecvFx, netClose has no effect — closing the dual of opening). Q-039: netConnect pins connectFx's (host, port) refinement parameters to ArgRef(0) and ArgRef(1).
+    httpReq                                     — Http.RequestFromUrl → {status: Int, body: Bytes} (effectful; declares connectFx, netSendFx, netRecvFx). Q-041 legacy single-URL wrapper; the new seven-arg Http.Request signature stays out of the prelude (its response shape includes a recursive header list that the implicit prelude can't express). Construct the seven-arg form via explicit FNT + FRN at the use site.
     procWait                                    — Process.Wait → exit code Int (effectful; declares procWaitFx)
     sleep                                       — Time.Sleep (effectful; declares sleepFx)
     strLen subStr indexOf contains replace      — String.* core (pure)
@@ -583,13 +701,57 @@ Sync JVM sockets. Async actor-loop integration is a follow-up; for now
     strand-builtin:Net.Send(handle: Int, bytes: Bytes) -> Int  (bytes written)
     strand-builtin:Net.Receive(handle: Int, maxBytes: Int) -> Bytes  (empty on EOF)
     strand-builtin:Net.Close(handle: Int) -> Unit  (idempotent)
-    strand-builtin:Http.Request(method: String, url: String, body: Bytes)
+    strand-builtin:Http.Request(
+        host: String, port: Int, scheme: String, path: String,
+        method: String, headers: List<{name: String, value: String}>,
+        body: Bytes,
+    ) -> {status: Int, body: Bytes, headers: List<{name: String, value: String}>}
+    strand-builtin:Http.RequestFromUrl(method: String, url: String, body: Bytes)
         -> {status: Int, body: Bytes}
 
-`Http.Request` wraps URL parsing + socket + HTTP/1.1 framing. HTTPS via
-the JVM's default truststore. Effect categories: declare `Network.Connect`,
-`Network.Send`, `Network.Receive` (or a single `Network.*` if your
-policy is broad).
+`Http.Request` is the canonical seven-arg signature — the
+`(host, port)` arguments are positional so Q-039's projection vocabulary
+can bind capability-check parameters to them via `ArgRef(0)` /
+`ArgRef(1)`. The scheme is validated to be `http` or `https`; other
+schemes (e.g., `file://`) raise `SandboxViolation(HttpSchemeRejected)`.
+Effect categories: declare `Network.Connect`, `Network.Send`,
+`Network.Receive` (or a single `Network.*` if your policy is broad).
+
+`Http.RequestFromUrl` is a legacy single-URL convenience wrapper that
+parses host-side and dispatches to the seven-arg form, so the sandbox
+runs uniformly. Returns the pre-Q-041 shape `{status, body}` (no
+headers). Use the seven-arg form for new code so capability-check
+values bind to actual function arguments; use `Http.RequestFromUrl`
+when you have a URL string already in hand and don't care about
+fine-grained projection.
+
+### I/O sandbox (`SandboxPolicy`)
+
+Every `Fs.*`, `Net.Connect`, and `Http.Request` call passes through a
+host-configured `SandboxPolicy(fs: FsPolicy, net: NetPolicy)` at the
+foreign-call boundary. Default (CLI invocations): workspace-rooted
+filesystem (current working directory; escape via `..`, absolute
+paths outside, or symlinks raises `SandboxViolation(FsPathEscape |
+FsSymlinkRejected)`); network default-deny on loopback, RFC1918,
+link-local, multicast, broadcast, IPv6 ULA, and cloud-metadata IPs
+(`169.254.169.254`, `metadata.google.internal`, etc.); DNS
+`PinAtCheck` so the second resolution cannot subvert the first.
+Violations raise `InterpretError.SandboxViolation(at, kind, detail)`
+distinct from `IoFailure` (host OS error), `CapabilityViolation`
+(category absent), and `RefinementViolation` (category present but
+pattern doesn't cover).
+
+The sandbox is **runtime policy, not a graph property** — the verifier
+does not see it, the canonical encoding does not record it. Two
+evaluations of the same canonical graph under different policies
+produce different results.
+
+CLI relaxation flags (default-deny otherwise):
+
+    --workspace-root <path>      directory below which Fs.* paths must lie
+    --allow-fs-escape            permit Fs.* paths outside workspace root
+    --allow-host <glob>          add host glob to network allowlist (repeatable)
+    --allow-net-internal         disable network default-deny + blocked-range list
 
 ### Process + env (`Process.*`)
 

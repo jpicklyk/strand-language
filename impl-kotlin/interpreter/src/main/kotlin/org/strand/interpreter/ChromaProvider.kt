@@ -62,14 +62,14 @@ object ChromaProvider {
      * handle of kind `chroma_collection`.
      */
     fun open(config: ChromaCollectionConfig): Value.Resource {
-        val apiKey = Builtins.credentialProvider.resolve(PROVIDER_NAME, "api_key")
+        val apiCredential = Builtins.credentialProvider.resolve(PROVIDER_NAME, "api_key")
         // Resolve the collection id by name. Chroma's REST returns
         // {"id": "...", "name": "...", ...} on success.
         val response = Builtins.vectorHttpTransport.execute(
             HttpRequest(
                 method = "GET",
                 url = "${normalizeUrl(config.serverUrl)}/api/v1/collections/${config.collectionName}",
-                headers = standardHeaders(apiKey),
+                headers = standardHeaders(apiCredential),
             )
         )
         if (response.status !in 200..299) {
@@ -83,7 +83,7 @@ object ChromaProvider {
             ?: throw IoFailure("chroma-open", "collection response missing 'id'")
         return ResourceTable.register(
             "chroma_collection",
-            ChromaCollectionHandle(config, apiKey, collectionId),
+            ChromaCollectionHandle(config, apiCredential, collectionId),
         )
     }
 
@@ -116,7 +116,7 @@ object ChromaProvider {
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "upsert"),
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
                 body = json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8),
             )
         )
@@ -156,7 +156,7 @@ object ChromaProvider {
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "query"),
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
                 body = json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8),
             )
         )
@@ -197,7 +197,7 @@ object ChromaProvider {
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "delete"),
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
                 body = json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8),
             )
         )
@@ -229,7 +229,7 @@ object ChromaProvider {
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "get"),
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
                 body = json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8),
             )
         )
@@ -260,13 +260,18 @@ object ChromaProvider {
 
     private fun normalizeUrl(url: String): String = url.trimEnd('/')
 
-    private fun standardHeaders(apiKey: String?): Map<String, String> {
+    // Q-042: single auditable `.reveal()` call site for the Chroma
+    // provider. The revealed value flows into the `X-Chroma-Token`
+    // header map and never leaves this function. Chroma can run locally
+    // without auth, so the credential is optional — the header is
+    // omitted entirely when no credential is configured.
+    private fun standardHeaders(apiCredential: Credential?): Map<String, String> {
         val headers = mutableMapOf(
             "Content-Type" to "application/json",
             "Accept" to "application/json",
         )
-        if (apiKey != null) {
-            headers["X-Chroma-Token"] = apiKey
+        if (apiCredential != null) {
+            headers["X-Chroma-Token"] = apiCredential.reveal()
         }
         return headers
     }

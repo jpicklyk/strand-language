@@ -31,6 +31,7 @@ class ProviderRefinementTest {
 
     @BeforeEach
     fun setUp() {
+        CredentialScrubber.resetForTesting()
         captured = RecordingHttpClient()
         captured.canned = LlmHttpClient.HttpResponse(
             200,
@@ -47,6 +48,7 @@ class ProviderRefinementTest {
     fun tearDown() {
         Builtins.llmHttpClient = savedClient
         Builtins.credentialProvider = savedCredentials
+        CredentialScrubber.resetForTesting()
     }
 
     private data class Loaded(

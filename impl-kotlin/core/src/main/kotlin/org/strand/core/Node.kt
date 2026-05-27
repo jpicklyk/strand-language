@@ -86,11 +86,23 @@ sealed class Node {
      * the function may exercise; an empty list denotes a pure function. Two
      * FunctionTypes are equal only when their parameters, result, AND
      * effect sets are equal.
+     *
+     * [effectProjections] (Q-039) optionally pins each effect's parameter
+     * values to specific function arguments or binding-controlled literals,
+     * eliminating the EffectDecl–argument drift attack at the verifier
+     * level. When non-empty, its length must equal `effects.size`; entry i
+     * projects effect `effects[i]`. Empty list (the default) preserves
+     * legacy semantics — every pre-Q-039 FunctionType hashes byte-identically
+     * via the encoder's non-empty gate. Lambda-level projections are
+     * deferred (see proposal § 8); the field exists on FunctionType for
+     * symmetry with [ForeignNode] but only ForeignNode is the V1 security
+     * boundary the verifier enforces against.
      */
     data class FunctionType(
         val parameters: List<NodeId>,
         val result: NodeId,
-        val effects: List<NodeId> = emptyList()  // each an EffectCategory
+        val effects: List<NodeId> = emptyList(),  // each an EffectCategory
+        val effectProjections: List<EffectProjection> = emptyList()
     ) : Node()
 
     /**
@@ -434,7 +446,23 @@ sealed class Node {
     data class ForeignNode(
         val target: String,
         val foreignType: NodeId,                  // a FunctionType
-        val effects: List<NodeId> = emptyList()   // each an EffectCategory
+        val effects: List<NodeId> = emptyList(),  // each an EffectCategory
+        /**
+         * Q-039 effect projections: one entry per [effects][i] when
+         * non-empty. Each projection pins the parameter values for its
+         * effect category to specific function-argument positions
+         * ([ProjectionSource.ArgRef]) or to binding-controlled literal
+         * nodes ([ProjectionSource.LiteralNode]). The verifier requires
+         * every Application of this ForeignNode whose effectInstances is
+         * non-empty to match the projection structurally; the interpreter
+         * synthesizes the capability-check parameter values from the
+         * projection plus the actual evaluated arguments, eliminating
+         * drift between the capability-check value and the value the
+         * foreign code receives. Empty list (the default) is the legacy
+         * path — Q-031 semantics, with the security caveat documented in
+         * `security-index.md`.
+         */
+        val effectProjections: List<EffectProjection> = emptyList()
     ) : Node()
 
     // ----- Control flow (N-023..N-026) -----
@@ -740,6 +768,87 @@ sealed class OverflowPolicy {
     data class Sample(val intervalNanos: Long) : OverflowPolicy() {
         init { require(intervalNanos > 0) { "Sample.intervalNanos must be > 0, got $intervalNanos" } }
     }
+}
+
+/**
+ * Q-039 effect projection: pins each parameter of one [Node.EffectCategory]
+ * to a [ProjectionSource] describing where the parameter value comes from
+ * at every call site. Carried on [Node.ForeignNode.effectProjections] (and
+ * symmetrically on [Node.FunctionType.effectProjections]) — one entry per
+ * `effects[i]`.
+ *
+ * The verifier enforces at admission that:
+ *  * the projection's [category] matches the corresponding `effects[i]`;
+ *  * [sources] length equals `EffectCategory.parameters.size`;
+ *  * every [ProjectionSource.ArgRef] index is within the function's
+ *    parameter range;
+ *  * every [ProjectionSource.LiteralNode] target resolves to a literal
+ *    node whose type structurally equals the category's parameter type.
+ *
+ * At every Application of a projected ForeignNode whose `effectInstances`
+ * is non-empty, the verifier additionally requires each EffectDecl
+ * parameter expression to match the projection structurally:
+ *  * `ArgRef(j)` source → `EffectDecl.parameters[k] == Application.arguments[j]`
+ *    by NodeId equality;
+ *  * `LiteralNode(t)` source → `EffectDecl.parameters[k]` is a literal node
+ *    whose canonical encoding equals `t`'s canonical encoding.
+ *
+ * See `proposals/implemented/foreign-effect-projections.md` for the full
+ * specification.
+ */
+data class EffectProjection(
+    /** The [Node.EffectCategory] this projection covers. */
+    val category: NodeId,
+    /**
+     * Per-parameter source list. Length equals
+     * `EffectCategory.parameters.size` (verifier-enforced).
+     */
+    val sources: List<ProjectionSource>,
+)
+
+/**
+ * The source for one effect-category parameter value at a projected
+ * ForeignNode call site (Q-039).
+ *
+ *  * [ArgRef] — the parameter value is the function's positional argument
+ *    at the given index. The verifier requires `0 <= index <
+ *    signature.parameters.size`; the interpreter passes
+ *    `argumentValues[index]` straight to the capability check, so the
+ *    capability-check value IS the value the foreign code receives — no
+ *    drift possible.
+ *  * [LiteralNode] — the parameter value is the binding-controlled
+ *    literal node referenced by [target]. The verifier requires `target`
+ *    to resolve to a literal node ([Node.IntLit], [Node.FloatLit],
+ *    [Node.StringLit], [Node.BoolLit], [Node.UnitLit], [Node.BytesLit],
+ *    or a ProductValue/SumValue tower over literals) whose type
+ *    structurally equals the category parameter type. At runtime the
+ *    interpreter evaluates the literal node to a [org.strand.interpreter.Value]
+ *    and passes it to the capability check.
+ *
+ * V1's source vocabulary is intentionally minimal — `ArgRef` covers the
+ * common case (host/port to `Net.Connect`, path to `Fs.Write`, length to
+ * `Crypto.RandomBytes`), `LiteralNode` covers binding-pinned values
+ * (provider = "anthropic" on `Anthropic.Messages.Create`). Derived sources
+ * (`HostOfUrl(arg(0))`, `Selected(arg(0), 2)`) are deferred per the
+ * proposal § 8.
+ *
+ * The canonical encoding tags these as small ints (0=ArgRef, 1=LiteralNode);
+ * positions are stable forever.
+ */
+sealed class ProjectionSource {
+    /**
+     * The parameter value is the function's positional argument at
+     * [index]. The verifier enforces `0 <= index <
+     * signature.parameters.size` at admission.
+     */
+    data class ArgRef(val index: Int) : ProjectionSource()
+
+    /**
+     * The parameter value is the literal node referenced by [target].
+     * The verifier enforces at admission that [target] resolves to a
+     * literal node of the right type.
+     */
+    data class LiteralNode(val target: NodeId) : ProjectionSource()
 }
 
 /**

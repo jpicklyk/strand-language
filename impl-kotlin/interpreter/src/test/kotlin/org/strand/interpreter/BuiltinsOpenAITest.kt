@@ -5,6 +5,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -23,6 +24,9 @@ class BuiltinsOpenAITest {
 
     @BeforeEach
     fun setUp() {
+        // Q-042: clear the scrubber registry; StaticCredentialProvider
+        // re-registers on first resolve.
+        CredentialScrubber.resetForTesting()
         captured = RecordingHttpClient()
         Builtins.llmHttpClient = captured
         Builtins.credentialProvider = StaticCredentialProvider(mapOf("openai" to "sk-openai-test"))
@@ -32,6 +36,7 @@ class BuiltinsOpenAITest {
     fun tearDown() {
         Builtins.llmHttpClient = savedClient
         Builtins.credentialProvider = savedCredentials
+        CredentialScrubber.resetForTesting()
     }
 
     @Test
@@ -257,5 +262,32 @@ class BuiltinsOpenAITest {
         } finally {
             Builtins.verifierNodeTypes = savedNodeTypes
         }
+    }
+
+    // -- Q-042 scenario 4: upstream 401 echoing the API key is scrubbed --
+
+    @Test
+    fun `Q-042 upstream 401 echoing the API key has the key scrubbed in IoFailure detail`() {
+        // setUp registered `sk-openai-test` (14 chars) — above the scrubber's
+        // 8-character minimum. A misconfigured proxy echoing the key in
+        // the 401 body must surface a scrubbed IoFailure.
+        captured.canned = LlmHttpClient.HttpResponse(
+            401,
+            """{"error":{"message":"Invalid API key sk-openai-test","type":"authentication_error"}}""".toByteArray(),
+        )
+        val req = LlmTestSupport.simpleRequest("gpt-5", "Hi.")
+        val fn = Builtins.lookupHigherOrder("strand-builtin:OpenAI.Chat.Completions")!!
+        val ex = assertThrows<IoFailure> {
+            fn.invoke(listOf(req), Builtins.ApplyFn { _, _ -> Value.UnitV })
+        }
+        assertEquals("openai-http-status", ex.kind)
+        assertFalse("sk-openai-test" in ex.detail,
+            "API key leaked through scrubbed IoFailure detail: ${ex.detail}")
+        assertTrue("[REDACTED:openai:api_key]" in ex.detail,
+            "scrubbed placeholder should appear in detail: ${ex.detail}")
+        // Structural diagnostics survive.
+        assertTrue("authentication_error" in ex.detail)
+        // Unscrubbed form retains the raw value.
+        assertTrue("sk-openai-test" in ex.unscrubbedDetail)
     }
 }

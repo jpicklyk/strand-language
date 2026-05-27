@@ -11,14 +11,23 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.strand.authoring.Authoring
 import org.strand.authoring.AuthoringException
 import org.strand.authoring.ConstraintGrammar
+import org.strand.core.ErrorVerbosity
+import org.strand.core.EvaluationLimits
+import org.strand.core.IngestError
 import org.strand.core.JsonIngest
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.hashing.FinalizedProgram
 import org.strand.hashing.Hasher
+import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
+import org.strand.interpreter.EscapePolicy
+import org.strand.interpreter.FsPolicy
+import org.strand.interpreter.HostPattern
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.InterpretException
+import org.strand.interpreter.NetPolicy
+import org.strand.interpreter.SandboxPolicy
 import org.strand.interpreter.Value
 import org.strand.runtime.EventCodec
 import org.strand.runtime.MachineGroup
@@ -33,13 +42,121 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
+ * Q-040 + Q-041 + Q-042 CLI flag set. `--max-steps`, `--max-stack-depth`,
+ * `--max-allocated-values`, `--wall-clock-ms`, `--max-json-depth`,
+ * `--max-node-count`, and `--max-ingest-bytes` all take a single
+ * numeric value (Long for the {steps, allocated, wall-clock, ingest-bytes}
+ * dimensions; Int for {stack-depth, json-depth, node-count}). Q-042
+ * adds `--error-verbosity {redacted|full|kind-only}` for the credential-
+ * isolation surface. Absent flags inherit from [EvaluationLimits.DEFAULTS].
+ *
+ * Q-041 adds `--workspace-root <path>`, `--allow-fs-escape`,
+ * `--allow-host <glob>` (repeatable), and `--allow-net-internal` for
+ * the sandbox surface. Absent flags inherit from
+ * [SandboxPolicy.SECURE_DEFAULT] — CLI invocations are agent-facing so
+ * they get the default-deny policy. (The library default on
+ * [Builtins.sandboxPolicy] is the open variant so the 895-test
+ * baseline runs unchanged; CLI overrides the singleton at startup.)
+ *
+ * Returns the parsed [EvaluationLimits], the parsed [SandboxPolicy],
+ * and the residual flag set (flags not in the Q-040 / Q-041 / Q-042
+ * vocabulary, for the per-subcommand parser to dispatch against
+ * `--grant-all` / `--metrics` / `--emit-json` / etc.).
+ */
+private fun parseLimits(flags: List<String>): Triple<EvaluationLimits, SandboxPolicy, Set<String>> {
+    var limits = EvaluationLimits.DEFAULTS
+    // CLI default is secure; flags relax it.
+    var fsPolicy = SandboxPolicy.SECURE_DEFAULT.fs
+    var netPolicy = SandboxPolicy.SECURE_DEFAULT.net
+    val remaining = mutableSetOf<String>()
+    var i = 0
+    while (i < flags.size) {
+        val flag = flags[i]
+        val v = { f: String ->
+            val raw = flags.getOrNull(i + 1)
+                ?: error("$f requires an argument")
+            i++
+            raw
+        }
+        when (flag) {
+            "--max-steps" -> {
+                val n = v(flag).toLongOrNull() ?: error("--max-steps requires a Long")
+                limits = limits.copy(maxSteps = n)
+            }
+            "--max-stack-depth" -> {
+                val n = v(flag).toIntOrNull() ?: error("--max-stack-depth requires an Int")
+                limits = limits.copy(maxStackDepth = n)
+            }
+            "--max-allocated-values" -> {
+                val n = v(flag).toLongOrNull() ?: error("--max-allocated-values requires a Long")
+                limits = limits.copy(maxAllocatedValues = n)
+            }
+            "--wall-clock-ms" -> {
+                val n = v(flag).toLongOrNull() ?: error("--wall-clock-ms requires a Long")
+                limits = limits.copy(wallClockBudgetMillis = n)
+            }
+            "--max-json-depth" -> {
+                val n = v(flag).toIntOrNull() ?: error("--max-json-depth requires an Int")
+                limits = limits.copy(maxJsonDepth = n)
+            }
+            "--max-node-count" -> {
+                val n = v(flag).toIntOrNull() ?: error("--max-node-count requires an Int")
+                limits = limits.copy(maxNodeCount = n)
+            }
+            "--max-ingest-bytes" -> {
+                val n = v(flag).toLongOrNull() ?: error("--max-ingest-bytes requires a Long")
+                limits = limits.copy(maxIngestBytes = n)
+            }
+            "--error-verbosity" -> {
+                val raw = v(flag)
+                val verbosity = when (raw) {
+                    "redacted" -> ErrorVerbosity.Redacted
+                    "full" -> {
+                        // Q-042 § 4.5: Full mode logs a warning at runtime
+                        // entry so operators see the non-default surfacing.
+                        System.err.println(
+                            "warning: --error-verbosity=full surfaces unscrubbed IoFailure detail " +
+                                "(may include credential values); use only in dev/debug environments"
+                        )
+                        ErrorVerbosity.Full
+                    }
+                    "kind-only" -> ErrorVerbosity.RedactedWithKindOnly
+                    else -> error("--error-verbosity expects {redacted|full|kind-only}, got '$raw'")
+                }
+                limits = limits.copy(errorVerbosity = verbosity)
+            }
+            "--workspace-root" -> {
+                val rawPath = v(flag)
+                val root = java.nio.file.Paths.get(rawPath).toAbsolutePath()
+                fsPolicy = fsPolicy.copy(workspaceRoot = root)
+            }
+            "--allow-fs-escape" -> {
+                fsPolicy = fsPolicy.copy(escape = EscapePolicy.Allow)
+            }
+            "--allow-host" -> {
+                val pattern = v(flag)
+                netPolicy = netPolicy.copy(
+                    allowedHosts = netPolicy.allowedHosts + HostPattern(pattern),
+                )
+            }
+            "--allow-net-internal" -> {
+                netPolicy = netPolicy.copy(defaultDeny = false, blockedRanges = emptyList())
+            }
+            else -> remaining += flag
+        }
+        i++
+    }
+    return Triple(limits, SandboxPolicy(fs = fsPolicy, net = netPolicy), remaining)
+}
+
+/**
  * Parse, finalize, and return the canonical [FinalizedProgram] alongside
  * the ingest result. The ingest is preserved (rather than just the
  * finalized form) so commands that need the author-id-to-NodeId map
  * (`strand group`'s routed events) can resolve user-named streams.
  */
-private fun loadFinalizedWithIngest(text: String): Pair<JsonIngest.IngestResult, FinalizedProgram> {
-    val ingest = JsonIngest.parse(text)
+private fun loadFinalizedWithIngest(text: String, limits: EvaluationLimits = EvaluationLimits.DEFAULTS): Pair<JsonIngest.IngestResult, FinalizedProgram> {
+    val ingest = JsonIngest.parse(text, limits)
     val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
     return ingest to finalized
 }
@@ -50,8 +167,8 @@ private fun loadFinalizedWithIngest(text: String): Pair<JsonIngest.IngestResult,
  * verifier and interpreter need the canonical [NodeStore] (with
  * Hash-bearing NodeRefs) plus the `hashToNodeId` reverse map.
  */
-private fun loadFinalized(text: String): FinalizedProgram =
-    loadFinalizedWithIngest(text).second
+private fun loadFinalized(text: String, limits: EvaluationLimits = EvaluationLimits.DEFAULTS): FinalizedProgram =
+    loadFinalizedWithIngest(text, limits).second
 
 /**
  * Build a permissive [CapabilitySet] that grants wildcard patterns for every
@@ -130,16 +247,21 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         exitProcess(2)
     }
     val path = args[1]
-    val flags = args.drop(2).toSet()
-    val grantAll = "--grant-all" in flags
-    val unknown = flags - setOf("--grant-all")
+    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(2))
+    val grantAll = "--grant-all" in remaining
+    val unknown = remaining - setOf("--grant-all")
     if (unknown.isNotEmpty()) {
         System.err.println("unknown flags: ${unknown.joinToString(", ")}")
         usage()
         exitProcess(2)
     }
     val text = File(path).readText()
-    val finalized = loadFinalized(text)
+    val finalized = try {
+        loadFinalized(text, limits)
+    } catch (e: IngestError) {
+        System.err.println("ingest failed: ${e.message}")
+        exitProcess(1)
+    }
     val verifier = Verifier(finalized.store, finalized.hashToNodeId)
     when (val result = verifier.verify(finalized.root)) {
         is VerifyResult.Failed -> {
@@ -153,19 +275,24 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // evaluate any pure-expression invariants on statically-known
             // values. Violations halt; deferred diagnostics are surfaced
             // (informational, per the proposal's default disposition).
-            if (!runSchemaCheck(finalized, result)) exitProcess(1)
+            if (!runSchemaCheck(finalized, result, limits)) exitProcess(1)
             if (command == "run") {
+                // Q-041: install the sandbox policy on the Builtins
+                // singleton before eval. The library default is
+                // open; CLI invocations override to secure (or to
+                // whatever the flags request).
+                val priorSandbox = Builtins.sandboxPolicy
+                Builtins.sandboxPolicy = sandboxPolicy
                 try {
                     val interp = Interpreter(finalized.store, finalized.hashToNodeId)
-                    val value = if (grantAll) {
-                        interp.eval(finalized.root, capabilities = grantAllCapabilities(finalized))
-                    } else {
-                        interp.eval(finalized.root)
-                    }
+                    val caps = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY
+                    val value = interp.eval(finalized.root, caps, limits)
                     println("value: $value")
                 } catch (e: InterpretException) {
                     System.err.println("interpretation failed: ${e.error}")
                     exitProcess(1)
+                } finally {
+                    Builtins.sandboxPolicy = priorSandbox
                 }
             }
         }
@@ -179,8 +306,17 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
  * statically-known value. Returns true when the schema-check passes or no
  * Schema-typed positions exist in the graph.
  */
-private fun runSchemaCheck(finalized: FinalizedProgram, verifyResult: VerifyResult.Ok): Boolean {
-    val schemaResult = SchemaChecker(finalized.store, finalized.hashToNodeId, verifyResult).check()
+private fun runSchemaCheck(
+    finalized: FinalizedProgram,
+    verifyResult: VerifyResult.Ok,
+    limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
+): Boolean {
+    val schemaResult = SchemaChecker(
+        finalized.store,
+        finalized.hashToNodeId,
+        verifyResult,
+        limits = limits,
+    ).check()
     for (deferred in schemaResult.deferred) {
         System.err.println("schema-check deferred: $deferred")
     }
@@ -199,9 +335,9 @@ private fun runMachine(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val flags = args.drop(4).toSet()
-    val grantAll = "--grant-all" in flags
-    val unknown = flags - setOf("--grant-all")
+    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(4))
+    val grantAll = "--grant-all" in remaining
+    val unknown = remaining - setOf("--grant-all")
     if (unknown.isNotEmpty()) {
         System.err.println("unknown flags: ${unknown.joinToString(", ")}")
         usage()
@@ -209,7 +345,12 @@ private fun runMachine(args: Array<String>) {
     }
 
     val programText = File(programPath).readText()
-    val finalized = loadFinalized(programText)
+    val finalized = try {
+        loadFinalized(programText, limits)
+    } catch (e: IngestError) {
+        System.err.println("ingest failed: ${e.message}")
+        exitProcess(1)
+    }
     val verifier = Verifier(finalized.store, finalized.hashToNodeId)
     when (val result = verifier.verify(finalized.root)) {
         is VerifyResult.Failed -> {
@@ -221,17 +362,22 @@ private fun runMachine(args: Array<String>) {
             // Layer 7 step 1: SchemaChecker also runs for `strand machine`,
             // matching `verify` / `run` semantics so a malformed Schema-bearing
             // value halts before any state-machine evaluation occurs.
-            if (!runSchemaCheck(finalized, result)) exitProcess(1)
+            if (!runSchemaCheck(finalized, result, limits)) exitProcess(1)
             val eventsText = File(eventsPath).readText()
             val events = EventCodec.parseEventList(eventsText)
             val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
+            // Q-041: install sandbox policy for the duration of the run.
+            val priorSandbox = Builtins.sandboxPolicy
+            Builtins.sandboxPolicy = sandboxPolicy
             try {
                 val caps = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY
-                val trace = runtime.runMachine(finalized.root, events, caps)
+                val trace = runtime.runMachine(finalized.root, events, caps, limits)
                 printTrace(trace)
             } catch (e: InterpretException) {
                 System.err.println("machine evaluation failed: ${e.error}")
                 exitProcess(1)
+            } finally {
+                Builtins.sandboxPolicy = priorSandbox
             }
         }
     }
@@ -277,10 +423,10 @@ private fun runGroup(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val flags = args.drop(4).toSet()
-    val grantAll = "--grant-all" in flags
-    val emitMetrics = "--metrics" in flags
-    val unknown = flags - setOf("--grant-all", "--metrics")
+    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(4))
+    val grantAll = "--grant-all" in remaining
+    val emitMetrics = "--metrics" in remaining
+    val unknown = remaining - setOf("--grant-all", "--metrics")
     if (unknown.isNotEmpty()) {
         System.err.println("unknown flags: ${unknown.joinToString(", ")}")
         usage()
@@ -288,7 +434,12 @@ private fun runGroup(args: Array<String>) {
     }
 
     val programText = File(programPath).readText()
-    val (ingest, finalized) = loadFinalizedWithIngest(programText)
+    val (ingest, finalized) = try {
+        loadFinalizedWithIngest(programText, limits)
+    } catch (e: IngestError) {
+        System.err.println("ingest failed: ${e.message}")
+        exitProcess(1)
+    }
     val verifier = Verifier(finalized.store, finalized.hashToNodeId)
     val verifyResult = verifier.verify(finalized.root)
     if (verifyResult is VerifyResult.Failed) {
@@ -340,10 +491,13 @@ private fun runGroup(args: Array<String>) {
     val nameByNodeId: Map<NodeId, String> = ingest.nameMap.entries
         .associate { (name, id) -> id to name }
 
+    // Q-041: install sandbox policy for the duration of the group run.
+    val priorSandbox = Builtins.sandboxPolicy
+    Builtins.sandboxPolicy = sandboxPolicy
     try {
         runBlocking {
             val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
-            val handle = runtime.runGroup(group, this)
+            val handle = runtime.runGroup(group, this, limits)
 
             // Send routed events on their designated input streams, then
             // close all external inputs so the actors halt naturally.
@@ -371,6 +525,8 @@ private fun runGroup(args: Array<String>) {
     } catch (e: InterpretException) {
         System.err.println("group evaluation failed: ${e.error}")
         exitProcess(1)
+    } finally {
+        Builtins.sandboxPolicy = priorSandbox
     }
 }
 
@@ -511,9 +667,9 @@ private fun runTranslate(args: Array<String>) {
 private fun usage() {
     System.err.println("usage:")
     System.err.println("  strand verify    <file.json>")
-    System.err.println("  strand run       <file.json> [--grant-all]")
-    System.err.println("  strand machine   <file.json> --events <events.json> [--grant-all]")
-    System.err.println("  strand group     <file.json> --events <events.json> [--grant-all] [--metrics]")
+    System.err.println("  strand run       <file.json> [--grant-all] [<limits>...]")
+    System.err.println("  strand machine   <file.json> --events <events.json> [--grant-all] [<limits>...]")
+    System.err.println("  strand group     <file.json> --events <events.json> [--grant-all] [--metrics] [<limits>...]")
     System.err.println("  strand author    <file.layer-a> [--emit-json]")
     System.err.println("  strand translate <file.json>  → emit Layer A reverse projection (Q-036)")
     System.err.println("  strand grammar                → emit Layer B constraint grammar (GBNF)")
@@ -524,4 +680,28 @@ private fun usage() {
     System.err.println("  --metrics:   after `strand group` completes, print a RuntimeMetrics snapshot")
     System.err.println("               (Layer 6 step 3 slice 3.4) showing per-instance and per-stream")
     System.err.println("               counters.")
+    System.err.println()
+    System.err.println("  Q-040 evaluation limits (each takes a numeric arg):")
+    System.err.println("    --max-steps <Long>           total dispatch steps (default 10_000_000)")
+    System.err.println("    --max-stack-depth <Int>      max recursion depth (default 4096)")
+    System.err.println("    --max-allocated-values <Long> total Value allocations (default 1_000_000)")
+    System.err.println("    --wall-clock-ms <Long>       wall-clock budget (default 30_000)")
+    System.err.println("    --max-json-depth <Int>       ingest JSON nesting cap (default 512)")
+    System.err.println("    --max-node-count <Int>       ingest node-count cap (default 100_000)")
+    System.err.println("    --max-ingest-bytes <Long>    ingest byte-size cap (default 67_108_864)")
+    System.err.println()
+    System.err.println("  Q-042 error-redaction (single flag):")
+    System.err.println("    --error-verbosity <mode>     where <mode> is one of:")
+    System.err.println("                                   redacted   (default — IoFailure.detail scrubbed of registered")
+    System.err.println("                                              credentials via CredentialScrubber)")
+    System.err.println("                                   full       (dev/debug only — surfaces unscrubbed detail; logs warning)")
+    System.err.println("                                   kind-only  (most restrictive — strips detail entirely)")
+    System.err.println()
+    System.err.println("  Q-041 sandbox flags (default-deny; flags relax the secure default):")
+    System.err.println("    --workspace-root <path>      directory below which Fs.* paths must lie (default cwd)")
+    System.err.println("    --allow-fs-escape            permit Fs.* paths outside workspace root (default deny)")
+    System.err.println("    --allow-host <glob>          add host glob to network allowlist (repeatable)")
+    System.err.println("    --allow-net-internal         disable network default-deny + blocked-range list")
+    System.err.println("                                 (use only for trusted environments — opens RFC1918,")
+    System.err.println("                                 loopback, link-local, cloud-metadata to outbound calls)")
 }

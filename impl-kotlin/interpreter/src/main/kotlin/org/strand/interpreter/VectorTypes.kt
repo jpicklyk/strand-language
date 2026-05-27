@@ -162,10 +162,14 @@ data class ChromaCollectionConfig(
  * Internal Pinecone handle held by the [ResourceTable]. Pinecone's
  * REST endpoints accept the index host plus an API key; the handle
  * caches both so subsequent operations don't have to resolve them.
+ *
+ * Q-042: the credential field is the opaque [Credential] wrapper, not a
+ * raw String. The single `.reveal()` call site lives in
+ * [PineconeProvider.standardHeaders] (the header builder).
  */
 internal data class PineconeIndexHandle(
     val config: PineconeIndexConfig,
-    val apiKey: String,
+    val apiCredential: Credential,
     val baseUrl: String,
 )
 
@@ -173,10 +177,15 @@ internal data class PineconeIndexHandle(
  * Internal Chroma handle held by the [ResourceTable]. Chroma's REST
  * endpoints are keyed on collection UUID; the handle caches the UUID
  * resolved at Open time.
+ *
+ * Q-042: the credential field is the opaque [Credential] wrapper (or
+ * `null` when Chroma runs locally without auth). The single `.reveal()`
+ * call site lives in [ChromaProvider.standardHeaders] (the header
+ * builder), guarded by a null check.
  */
 internal data class ChromaCollectionHandle(
     val config: ChromaCollectionConfig,
-    val apiKey: String?,
+    val apiCredential: Credential?,
     val collectionId: String,
 )
 

@@ -60,13 +60,13 @@ object PineconeProvider {
      * the index already exists (the agent created it out of band).
      */
     fun open(config: PineconeIndexConfig): Value.Resource {
-        val apiKey = Builtins.credentialProvider.resolve(PROVIDER_NAME, "api_key")
+        val apiCredential = Builtins.credentialProvider.resolve(PROVIDER_NAME, "api_key")
             ?: throw IoFailure("pinecone-open", "no PINECONE_API_KEY configured")
         val baseUrl = config.host
             ?: "https://${config.indexName}-${config.environment}.svc.pinecone.io"
         return ResourceTable.register(
             "pinecone_index",
-            PineconeIndexHandle(config, apiKey, baseUrl),
+            PineconeIndexHandle(config, apiCredential, baseUrl),
         )
     }
 
@@ -99,7 +99,7 @@ object PineconeProvider {
             HttpRequest(
                 method = "POST",
                 url = "${h.baseUrl}/vectors/upsert",
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
                 body = json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8),
             )
         )
@@ -133,7 +133,7 @@ object PineconeProvider {
             HttpRequest(
                 method = "POST",
                 url = "${h.baseUrl}/query",
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
                 body = json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8),
             )
         )
@@ -163,7 +163,7 @@ object PineconeProvider {
             HttpRequest(
                 method = "POST",
                 url = "${h.baseUrl}/vectors/delete",
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
                 body = json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8),
             )
         )
@@ -185,7 +185,7 @@ object PineconeProvider {
             HttpRequest(
                 method = "GET",
                 url = "${h.baseUrl}/vectors/fetch?$query",
-                headers = standardHeaders(h.apiKey),
+                headers = standardHeaders(h.apiCredential),
             )
         )
         if (response.status !in 200..299) {
@@ -218,8 +218,13 @@ object PineconeProvider {
         return QueryHit(id, score, metadata, vector)
     }
 
-    private fun standardHeaders(apiKey: String): Map<String, String> = mapOf(
-        "Api-Key" to apiKey,
+    // Q-042: single auditable `.reveal()` call site for the Pinecone
+    // provider. The revealed value flows into the `Api-Key` HTTP header
+    // map and never leaves this function — every other interpolation of
+    // the credential inside [PineconeProvider] stays within the
+    // [Credential] wrapper.
+    private fun standardHeaders(apiCredential: Credential): Map<String, String> = mapOf(
+        "Api-Key" to apiCredential.reveal(),
         "Content-Type" to "application/json",
         "Accept" to "application/json",
     )

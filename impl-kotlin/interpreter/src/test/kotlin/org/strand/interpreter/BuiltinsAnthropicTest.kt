@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -32,6 +33,10 @@ class BuiltinsAnthropicTest {
 
     @BeforeEach
     fun setUp() {
+        // Q-042: clear the global scrubber registry so each test starts
+        // with a known empty state. The StaticCredentialProvider below
+        // re-registers `sk-test-key` on its first resolve call.
+        CredentialScrubber.resetForTesting()
         captured = RecordingHttpClient()
         Builtins.llmHttpClient = captured
         Builtins.credentialProvider = StaticCredentialProvider(mapOf("anthropic" to "sk-test-key"))
@@ -41,6 +46,7 @@ class BuiltinsAnthropicTest {
     fun tearDown() {
         Builtins.llmHttpClient = savedClient
         Builtins.credentialProvider = savedCredentials
+        CredentialScrubber.resetForTesting()
     }
 
     @Test
@@ -159,5 +165,70 @@ class BuiltinsAnthropicTest {
         }
         assertEquals("anthropic-embed-not-supported", ex.kind)
         assertTrue(ex.detail.contains("Voyage"))
+    }
+
+    // -- Q-042 scenario 5: JVM IOException with embedded credential is scrubbed --
+
+    @Test
+    fun `Q-042 IOException whose message embeds the credential is scrubbed`() {
+        // Simulate the JVM IOException-message-leak pathway: an upstream
+        // network failure throws an IOException whose `.message` includes
+        // the credential value (e.g., proxies that interpolate the
+        // Authorization or x-api-key header into the diagnostic). The
+        // resulting IoFailure must be scrubbed.
+        val faultyClient = object : LlmHttpClient {
+            override fun post(
+                url: String,
+                headers: List<Pair<String, String>>,
+                body: ByteArray,
+            ): LlmHttpClient.HttpResponse {
+                throw java.io.IOException(
+                    "connection refused; original request carried x-api-key=sk-test-key",
+                )
+            }
+        }
+        Builtins.llmHttpClient = faultyClient
+        val req = LlmTestSupport.simpleRequest("claude-opus-4-7", "Hi.")
+        val fn = Builtins.lookupHigherOrder("strand-builtin:Anthropic.Messages.Create")!!
+        val ex = assertThrows<IoFailure> {
+            fn.invoke(listOf(req), Builtins.ApplyFn { _, _ -> Value.UnitV })
+        }
+        assertEquals("anthropic-http", ex.kind)
+        assertFalse("sk-test-key" in ex.detail,
+            "credential leaked through scrubbed IOException-derived detail: ${ex.detail}")
+        assertTrue("[REDACTED:anthropic:api_key]" in ex.detail)
+        assertTrue("connection refused" in ex.detail)
+    }
+
+    // -- Q-042 scenario 4: upstream 401 echoing the API key is scrubbed --
+
+    @Test
+    fun `Q-042 upstream 401 echoing the API key has the key scrubbed in IoFailure detail`() {
+        // The setUp() installed `sk-test-key` for "anthropic"; the scrubber
+        // registered it when the StaticCredentialProvider returned the
+        // Credential. A misconfigured upstream that echoes the key back
+        // in the 401 body must surface as a scrubbed IoFailure.
+        captured.canned = LlmHttpClient.HttpResponse(
+            401,
+            """{"error":"authentication failed: api_key=sk-test-key"}""".toByteArray(),
+        )
+        val req = LlmTestSupport.simpleRequest("claude-opus-4-7", "Hi.")
+        val fn = Builtins.lookupHigherOrder("strand-builtin:Anthropic.Messages.Create")!!
+        val ex = assertThrows<IoFailure> {
+            fn.invoke(listOf(req), Builtins.ApplyFn { _, _ -> Value.UnitV })
+        }
+        assertEquals("anthropic-http-status", ex.kind)
+        // The raw key MUST NOT appear in the scrubbed detail.
+        assertFalse("sk-test-key" in ex.detail,
+            "API key leaked through scrubbed IoFailure detail: ${ex.detail}")
+        // The structural diagnostic ("authentication failed") survives.
+        assertTrue("authentication failed" in ex.detail,
+            "structural diagnostic should be preserved")
+        // The placeholder is in its expected shape.
+        assertTrue("[REDACTED:anthropic:api_key]" in ex.detail,
+            "scrubbed placeholder should be in detail: ${ex.detail}")
+        // The unscrubbed form still carries the raw value (for Full
+        // verbosity opt-in).
+        assertTrue("sk-test-key" in ex.unscrubbedDetail)
     }
 }

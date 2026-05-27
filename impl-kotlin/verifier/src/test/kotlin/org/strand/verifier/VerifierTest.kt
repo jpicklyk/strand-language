@@ -2021,4 +2021,313 @@ class VerifierTest {
         assertTrue(f.errors.any { it is VerifyError.InvariantTargetMismatch },
             "expected InvariantTargetMismatch, got ${f.errors}")
     }
+
+    // ====================================================================
+    // Q-039 foreign-effect-projections — verifier rules
+    // ====================================================================
+
+    /**
+     * Scenario 4 from the proposal § 7. A `Filesystem.Write`-projected
+     * `Fs.Write` binding receives an authored EffectDecl whose `path`
+     * parameter is a *fresh* StringLit("/safe") while the function's
+     * `arguments[0]` is a different StringLit("/etc/shadow"). The two
+     * literals have different NodeIds — the projection's `ArgRef(0)`
+     * source requires NodeId equality, so the verifier reports
+     * `ProjectionMismatch`.
+     */
+    @Test
+    fun `Q-039 ProjectionMismatch when authored EffectDecl drifts from ArgRef projection`() {
+        val r = verify("""{
+          "version": 1, "root": "writeApp",
+          "nodes": {
+            "intT":    { "type": "PrimitiveType", "kind": "Int" },
+            "strT":    { "type": "PrimitiveType", "kind": "String" },
+            "bytesT":  { "type": "PrimitiveType", "kind": "Bytes" },
+            "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                        "parameters": ["strT"] },
+            "writeT":  { "type": "FunctionType",
+                        "parameters": ["strT", "bytesT"],
+                        "result": "intT" },
+            "writeFn": { "type": "ForeignNode",
+                        "target": "strand-builtin:Fs.Write",
+                        "foreignType": "writeT",
+                        "effects": ["writeFx"],
+                        "effectProjections": [
+                          { "category": "writeFx",
+                            "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                        ] },
+            "shadow":  { "type": "StringLit", "value": "/etc/shadow" },
+            "safe":    { "type": "StringLit", "value": "/safe" },
+            "bytes":   { "type": "BytesLit", "value": "deadbeef" },
+            "authoredDecl": { "type": "EffectDecl",
+                              "effectType": "writeFx",
+                              "parameters": ["safe"] },
+            "writeApp": { "type": "Application", "function": "writeFn",
+                          "arguments": ["shadow", "bytes"],
+                          "effectInstances": ["authoredDecl"] }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.ProjectionMismatch },
+            "expected ProjectionMismatch, got ${f.errors}")
+    }
+
+    /**
+     * Scenario 6 from the proposal § 7. A `Network.Connect`-projected
+     * binding declares only one ProjectionSource for a two-parameter
+     * EffectCategory, surfacing as `ProjectionSourceArityMismatch` at
+     * admission.
+     */
+    @Test
+    fun `Q-039 ProjectionSourceArityMismatch when sources omit a category parameter`() {
+        val r = verify("""{
+          "version": 1, "root": "connectFn",
+          "nodes": {
+            "intT":   { "type": "PrimitiveType", "kind": "Int" },
+            "strT":   { "type": "PrimitiveType", "kind": "String" },
+            "connectFx": { "type": "EffectCategory", "categoryName": "Network.Connect",
+                          "parameters": ["strT", "intT"] },
+            "connectT": { "type": "FunctionType",
+                          "parameters": ["strT", "intT"],
+                          "result": "intT" },
+            "connectFn": { "type": "ForeignNode",
+                          "target": "strand-builtin:Net.Connect",
+                          "foreignType": "connectT",
+                          "effects": ["connectFx"],
+                          "effectProjections": [
+                            { "category": "connectFx",
+                              "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                          ] }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.ProjectionSourceArityMismatch },
+            "expected ProjectionSourceArityMismatch, got ${f.errors}")
+    }
+
+    /**
+     * Scenario 7 from the proposal § 7. A projection's `ArgRef(5)`
+     * references a position that does not exist in the function's
+     * 2-parameter signature, surfacing as `ProjectionArgRefOutOfRange`
+     * at admission.
+     */
+    @Test
+    fun `Q-039 ProjectionArgRefOutOfRange when ArgRef index exceeds signature arity`() {
+        val r = verify("""{
+          "version": 1, "root": "writeFn",
+          "nodes": {
+            "intT":   { "type": "PrimitiveType", "kind": "Int" },
+            "strT":   { "type": "PrimitiveType", "kind": "String" },
+            "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+            "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                        "parameters": ["strT"] },
+            "writeT":  { "type": "FunctionType",
+                        "parameters": ["strT", "bytesT"],
+                        "result": "intT" },
+            "writeFn": { "type": "ForeignNode",
+                        "target": "strand-builtin:Fs.Write",
+                        "foreignType": "writeT",
+                        "effects": ["writeFx"],
+                        "effectProjections": [
+                          { "category": "writeFx",
+                            "sources": [ { "kind": "ArgRef", "index": 5 } ] }
+                        ] }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.ProjectionArgRefOutOfRange },
+            "expected ProjectionArgRefOutOfRange, got ${f.errors}")
+    }
+
+    /**
+     * Scenario 8 from the proposal § 7. A projection source is a
+     * `LiteralNode` whose target's type does not structurally equal the
+     * category parameter type. Here the category parameter is `String`
+     * but the literal is an `IntLit`, surfacing as
+     * `ProjectionLiteralTypeMismatch`.
+     */
+    @Test
+    fun `Q-039 ProjectionLiteralTypeMismatch when literal type does not match category param`() {
+        val r = verify("""{
+          "version": 1, "root": "anthropicFn",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "strT":  { "type": "PrimitiveType", "kind": "String" },
+            "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+            "llmGenFx": { "type": "EffectCategory", "categoryName": "LLM.Generate",
+                          "parameters": ["strT", "strT"] },
+            "sigT":  { "type": "FunctionType",
+                      "parameters": ["bytesT"],
+                      "result": "bytesT" },
+            "wrongLit": { "type": "IntLit", "value": 42 },
+            "modelLit": { "type": "StringLit", "value": "claude-3-5-sonnet" },
+            "anthropicFn": { "type": "ForeignNode",
+                            "target": "strand-builtin:Anthropic.Messages.Create",
+                            "foreignType": "sigT",
+                            "effects": ["llmGenFx"],
+                            "effectProjections": [
+                              { "category": "llmGenFx",
+                                "sources": [
+                                  { "kind": "LiteralNode", "target": "wrongLit" },
+                                  { "kind": "LiteralNode", "target": "modelLit" }
+                                ] }
+                            ] }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.ProjectionLiteralTypeMismatch },
+            "expected ProjectionLiteralTypeMismatch, got ${f.errors}")
+    }
+
+    /**
+     * Admission-level coverage: when the projection length does not
+     * equal `effects.size`, the verifier raises
+     * `ProjectionArityMismatch` (rule 2 of proposal § 5).
+     */
+    @Test
+    fun `Q-039 ProjectionArityMismatch when projection count disagrees with effects count`() {
+        val r = verify("""{
+          "version": 1, "root": "writeFn",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "strT":  { "type": "PrimitiveType", "kind": "String" },
+            "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+            "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                        "parameters": ["strT"] },
+            "readFx":  { "type": "EffectCategory", "categoryName": "Filesystem.Read",
+                        "parameters": ["strT"] },
+            "writeT":  { "type": "FunctionType",
+                        "parameters": ["strT", "bytesT"],
+                        "result": "intT" },
+            "writeFn": { "type": "ForeignNode",
+                        "target": "strand-builtin:Fs.Write",
+                        "foreignType": "writeT",
+                        "effects": ["writeFx", "readFx"],
+                        "effectProjections": [
+                          { "category": "writeFx",
+                            "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                        ] }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.ProjectionArityMismatch },
+            "expected ProjectionArityMismatch, got ${f.errors}")
+    }
+
+    /**
+     * Admission-level coverage: when a projection's `category` does
+     * not equal the same-position entry in `effects`, the verifier
+     * raises `ProjectionCategoryMismatch` (rule 3 of proposal § 5).
+     */
+    @Test
+    fun `Q-039 ProjectionCategoryMismatch when projection category disagrees with effects position`() {
+        val r = verify("""{
+          "version": 1, "root": "writeFn",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "strT":  { "type": "PrimitiveType", "kind": "String" },
+            "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+            "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                        "parameters": ["strT"] },
+            "readFx":  { "type": "EffectCategory", "categoryName": "Filesystem.Read",
+                        "parameters": ["strT"] },
+            "writeT":  { "type": "FunctionType",
+                        "parameters": ["strT", "bytesT"],
+                        "result": "intT" },
+            "writeFn": { "type": "ForeignNode",
+                        "target": "strand-builtin:Fs.Write",
+                        "foreignType": "writeT",
+                        "effects": ["writeFx"],
+                        "effectProjections": [
+                          { "category": "readFx",
+                            "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                        ] }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.ProjectionCategoryMismatch },
+            "expected ProjectionCategoryMismatch, got ${f.errors}")
+    }
+
+    /**
+     * Admission-level coverage: when a [ProjectionSource.LiteralNode]
+     * target does not resolve to a literal node, the verifier raises
+     * `ProjectionLiteralNotConstant` (rule 6 of proposal § 5).
+     */
+    @Test
+    fun `Q-039 ProjectionLiteralNotConstant when target is not a literal`() {
+        val r = verify("""{
+          "version": 1, "root": "fn",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "strT":  { "type": "PrimitiveType", "kind": "String" },
+            "bytesT":{ "type": "PrimitiveType", "kind": "Bytes" },
+            "llmFx": { "type": "EffectCategory", "categoryName": "LLM.Generate",
+                      "parameters": ["strT"] },
+            "addT":  { "type": "FunctionType",
+                      "parameters": ["intT", "intT"], "result": "intT" },
+            "addFn": { "type": "ForeignNode",
+                      "target": "strand-builtin:Int.Add",
+                      "foreignType": "addT" },
+            "sigT":  { "type": "FunctionType",
+                      "parameters": ["bytesT"],
+                      "result": "bytesT" },
+            "fn":    { "type": "ForeignNode",
+                      "target": "strand-builtin:Anthropic.Messages.Create",
+                      "foreignType": "sigT",
+                      "effects": ["llmFx"],
+                      "effectProjections": [
+                        { "category": "llmFx",
+                          "sources": [
+                            { "kind": "LiteralNode", "target": "addFn" }
+                          ] }
+                      ] }
+          }
+        }""")
+        val f = r as VerifyResult.Failed
+        assertTrue(f.errors.any { it is VerifyError.ProjectionLiteralNotConstant },
+            "expected ProjectionLiteralNotConstant, got ${f.errors}")
+    }
+
+    /**
+     * Happy path: a well-formed projection admits and a matching
+     * authored EffectDecl at the call site verifies clean. This is
+     * scenarios 1 + 3 from the proposal § 7 combined — the verifier
+     * accepts both forms (synthesis path when effectInstances is
+     * empty, structural-match path when it's populated).
+     */
+    @Test
+    fun `Q-039 well-formed projection with NodeId-matched authored EffectDecl verifies`() {
+        val r = verify("""{
+          "version": 1, "root": "writeApp",
+          "nodes": {
+            "intT":    { "type": "PrimitiveType", "kind": "Int" },
+            "strT":    { "type": "PrimitiveType", "kind": "String" },
+            "bytesT":  { "type": "PrimitiveType", "kind": "Bytes" },
+            "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                        "parameters": ["strT"] },
+            "writeT":  { "type": "FunctionType",
+                        "parameters": ["strT", "bytesT"],
+                        "result": "intT" },
+            "writeFn": { "type": "ForeignNode",
+                        "target": "strand-builtin:Fs.Write",
+                        "foreignType": "writeT",
+                        "effects": ["writeFx"],
+                        "effectProjections": [
+                          { "category": "writeFx",
+                            "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                        ] },
+            "safe":    { "type": "StringLit", "value": "/safe" },
+            "bytes":   { "type": "BytesLit", "value": "deadbeef" },
+            "authoredDecl": { "type": "EffectDecl",
+                              "effectType": "writeFx",
+                              "parameters": ["safe"] },
+            "writeApp": { "type": "Application", "function": "writeFn",
+                          "arguments": ["safe", "bytes"],
+                          "effectInstances": ["authoredDecl"] }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Ok,
+            "expected Ok for a well-formed Q-039 projection at a matching call site, got $r")
+    }
 }

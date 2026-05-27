@@ -1,5 +1,6 @@
 package org.strand.schema
 
+import org.strand.core.EvaluationLimits
 import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
@@ -63,6 +64,14 @@ class SchemaChecker(
      * returns surface as an error in [check] either way).
      */
     private val invariantEvaluator: ((NodeId, Value) -> Value)? = null,
+    /**
+     * Q-040: host-configured evaluation limits for invariant-body
+     * evaluation. Each invariant body runs under a fresh
+     * [Interpreter.EvalCounters] (invariants are independent — exhausting
+     * one's budget doesn't affect another). Defaults to
+     * [EvaluationLimits.DEFAULTS].
+     */
+    private val limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
 ) {
 
     private val interpreter = Interpreter(store, hashToNodeId)
@@ -238,7 +247,17 @@ class SchemaChecker(
         // pass [invariantEvaluator]; the override is for cross-engine
         // equivalence tests.
         invariantEvaluator?.let { return it(bodyId, value) }
-        val fn = interpreter.eval(bodyId)
-        return interpreter.applyCallable(fn = fn, args = listOf(value))
+        // Q-040: evaluate under host-configured limits. The body lookup
+        // gets its own counters (the verifier admits the body Lambda,
+        // so the lookup is cheap); the apply gets a fresh counters slot
+        // too — invariant evaluation is a single bounded call, not a
+        // recursive walk across a corpus.
+        val fn = interpreter.eval(bodyId, capabilities = org.strand.interpreter.CapabilitySet.EMPTY, limits = limits)
+        return interpreter.applyCallable(
+            fn = fn,
+            args = listOf(value),
+            capabilities = org.strand.interpreter.CapabilitySet.EMPTY,
+            limits = limits,
+        )
     }
 }

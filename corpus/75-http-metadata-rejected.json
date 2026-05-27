@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "root": "httpApp",
+  "nodes": {
+    "intT":        { "type": "PrimitiveType", "kind": "Int" },
+    "strT":        { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":      { "type": "PrimitiveType", "kind": "Bytes" },
+
+    "statusField": { "type": "ProductTypeField", "name": "status",
+                     "fieldType": "intT" },
+    "bodyField":   { "type": "ProductTypeField", "name": "body",
+                     "fieldType": "bytesT" },
+    "httpRespT":   { "type": "ProductType",
+                     "fields": ["statusField", "bodyField"] },
+
+    "connectFx":   { "type": "EffectCategory", "categoryName": "Network.Connect",
+                     "parameters": ["strT", "intT"] },
+    "sendFx":      { "type": "EffectCategory", "categoryName": "Network.Send",
+                     "parameters": [] },
+    "recvFx":      { "type": "EffectCategory", "categoryName": "Network.Receive",
+                     "parameters": [] },
+
+    "httpReqT":    { "type": "FunctionType",
+                     "parameters": ["strT", "strT", "bytesT"],
+                     "result": "httpRespT" },
+
+    "httpReqFn":   { "type": "ForeignNode",
+                     "target": "strand-builtin:Http.RequestFromUrl",
+                     "foreignType": "httpReqT",
+                     "effects": ["connectFx", "sendFx", "recvFx"] },
+
+    "method":      { "type": "StringLit", "value": "GET" },
+    "metaUrl":     { "type": "StringLit",
+                     "value": "http://169.254.169.254/latest/meta-data/" },
+    "emptyBody":   { "type": "BytesLit", "value": "" },
+
+    "httpApp":     { "type": "Application", "function": "httpReqFn",
+                     "arguments": ["method", "metaUrl", "emptyBody"] }
+  }
+}

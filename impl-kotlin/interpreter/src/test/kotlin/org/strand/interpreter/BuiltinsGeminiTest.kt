@@ -5,6 +5,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -23,6 +24,7 @@ class BuiltinsGeminiTest {
 
     @BeforeEach
     fun setUp() {
+        CredentialScrubber.resetForTesting()
         captured = RecordingHttpClient()
         Builtins.llmHttpClient = captured
         Builtins.credentialProvider = StaticCredentialProvider(mapOf("gemini" to "AIza-test"))
@@ -32,6 +34,7 @@ class BuiltinsGeminiTest {
     fun tearDown() {
         Builtins.llmHttpClient = savedClient
         Builtins.credentialProvider = savedCredentials
+        CredentialScrubber.resetForTesting()
     }
 
     @Test
@@ -145,5 +148,31 @@ class BuiltinsGeminiTest {
             fn.invoke(listOf(req), Builtins.ApplyFn { _, _ -> Value.UnitV })
         }
         assertEquals("gemini-credentials-missing", ex.kind)
+    }
+
+    // -- Q-042 scenario 4: upstream 401 echoing the API key is scrubbed --
+
+    @Test
+    fun `Q-042 upstream 400 echoing the API key has the key scrubbed in IoFailure detail`() {
+        // Gemini's pattern: API key is in the URL `?key=...` rather than
+        // a header, so the leak vectors are slightly different — an
+        // upstream that echoes the request URL or the key directly is
+        // still scrubbed.
+        captured.canned = LlmHttpClient.HttpResponse(
+            400,
+            """{"error":{"message":"API key not valid: AIza-test","status":"INVALID_ARGUMENT"}}""".toByteArray(),
+        )
+        val req = LlmTestSupport.simpleRequest("gemini-pro-2.0", "Hi.")
+        val fn = Builtins.lookupHigherOrder("strand-builtin:Gemini.GenerateContent")!!
+        val ex = assertThrows<IoFailure> {
+            fn.invoke(listOf(req), Builtins.ApplyFn { _, _ -> Value.UnitV })
+        }
+        assertEquals("gemini-http-status", ex.kind)
+        assertFalse("AIza-test" in ex.detail,
+            "API key leaked through scrubbed IoFailure detail: ${ex.detail}")
+        assertTrue("[REDACTED:gemini:api_key]" in ex.detail,
+            "scrubbed placeholder should appear in detail: ${ex.detail}")
+        assertTrue("INVALID_ARGUMENT" in ex.detail)
+        assertTrue("AIza-test" in ex.unscrubbedDetail)
     }
 }

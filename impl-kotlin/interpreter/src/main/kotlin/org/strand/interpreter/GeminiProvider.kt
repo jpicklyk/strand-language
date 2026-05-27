@@ -44,7 +44,7 @@ object GeminiProvider {
         client: LlmHttpClient = DefaultLlmHttpClient,
         credentials: CredentialProvider = Builtins.credentialProvider,
     ): GenerateResult {
-        val key = credentials.apiKey("gemini")
+        val credential = credentials.apiKey("gemini")
             ?: throw IoFailure(
                 "gemini-credentials-missing",
                 "no API key configured for provider 'gemini' (env: GEMINI_API_KEY or GOOGLE_API_KEY)",
@@ -88,7 +88,10 @@ object GeminiProvider {
             }
         }
 
-        val url = "$BASE_URL/${req.model}:generateContent?key=$key"
+        // Q-042: single auditable `.reveal()` call site for Gemini generate.
+        // Gemini's auth pattern is query-string (`?key=...`), not header — the
+        // revealed value flows into the URL builder below.
+        val url = "$BASE_URL/${req.model}:generateContent?key=${credential.reveal()}"
         val headers = listOf("Content-Type" to "application/json")
 
         val response = try {
@@ -118,7 +121,7 @@ object GeminiProvider {
         client: LlmHttpClient = DefaultLlmHttpClient,
         credentials: CredentialProvider = Builtins.credentialProvider,
     ): ByteArray {
-        val key = credentials.apiKey("gemini")
+        val credential = credentials.apiKey("gemini")
             ?: throw IoFailure(
                 "gemini-credentials-missing",
                 "no API key configured for provider 'gemini' (env: GEMINI_API_KEY or GOOGLE_API_KEY)",
@@ -133,7 +136,10 @@ object GeminiProvider {
             if (req.dimensions != null) put("outputDimensionality", JsonPrimitive(req.dimensions))
         }
 
-        val url = "$BASE_URL/${req.model}:embedContent?key=$key"
+        // Q-042: single auditable `.reveal()` call site for Gemini embed.
+        // Gemini's auth pattern is query-string (`?key=...`); the revealed
+        // value flows into the URL builder below.
+        val url = "$BASE_URL/${req.model}:embedContent?key=${credential.reveal()}"
         val headers = listOf("Content-Type" to "application/json")
 
         val response = try {

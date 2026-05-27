@@ -1,22 +1,84 @@
 # I/O Builtin Sandboxing
 
-**Document:** `proposals/io-builtin-sandboxing.md`
-**Status:** Draft proposal
-**Date:** 2026-05-26
-**Concerns:** [`design/security-model.md`](../design/security-model.md), [`decisions/ADR-005-foreign-nodes.md`](../decisions/ADR-005-foreign-nodes.md), [`proposals/foreign-effect-projections.md`](foreign-effect-projections.md), [Q-006](../open-questions.md#Q-006), [Q-039](../open-questions.md#Q-039), [Q-041](../open-questions.md#Q-041), [`security-index.md`](../security-index.md) § Finding 3
+**Document:** `proposals/implemented/io-builtin-sandboxing.md`
+**Status:** Implemented (2026-05-27 in the Kotlin/JVM reference implementation)
+**Date:** 2026-05-26 (proposal), 2026-05-27 (implementation note)
+**Concerns:** [`design/security-model.md`](../../design/security-model.md), [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md), [`proposals/implemented/foreign-effect-projections.md`](foreign-effect-projections.md), [Q-006](../../open-questions.md#Q-006), [Q-039](../../open-questions.md#Q-039), [Q-041](../../open-questions.md#Q-041), [`security-index.md`](../../security-index.md) § Finding 3
 **Scope:** Medium
 
-This proposal closes the I/O sandboxing gap recorded as Finding 3 in the 2026-05-26 audit ([`security-index.md`](../security-index.md)). It adds a host-configured `SandboxPolicy` that mediates every `Fs.*`, `Net.Connect`, and `Http.Request` call at the foreign-call boundary, and redesigns the `Http.Request` binding so its (host, port) refinement values are positional arguments accessible to [Q-039](#Q-039)'s projection mechanism. Q-039 and Q-041 together form the foreign-call security boundary: Q-039 binds capability-check values to actual arguments; Q-041 independently constrains what those argument values are allowed to be.
+## Implementation note (2026-05-27)
+
+The proposal landed under Q-041 with five recorded deviations from the
+specification. Hash invariance is preserved across all 68 pre-Q-041
+corpus programs (the proposal touches no node encoding). Full
+`gradle test` clean — 922 tests pass, 1 skipped (Windows-symlink test),
+zero failures, zero regressions across the 895 pre-Q-041 baseline.
+
+**Deviations from the proposal worth recording:**
+
+1. **Singleton default is OPEN, CLI default is SECURE.** § 4.4 specifies
+   `Builtins.sandboxPolicy` as the singleton without naming its default.
+   The implementation ships `SandboxPolicy.OPEN_DEFAULT` (no workspace
+   constraint, no network deny-list) as the singleton default so the
+   895-test pre-Q-041 baseline runs unchanged — existing
+   `BuiltinsIoTest` cases that hit `@TempDir` paths and `127.0.0.1`
+   sockets continue to work. CLI invocations override the singleton at
+   startup with `SandboxPolicy.SECURE_DEFAULT` (workspace = JVM working
+   directory; default-deny network with the proposal's full blocked
+   ranges; `PinAtCheck` DNS). The sandbox-specific test files
+   (`SandboxPolicyTest`, `CorpusSandboxTest`) install their own
+   policies in `@BeforeEach` and reset in `@AfterEach`. Documented in
+   `SandboxPolicy.OPEN_DEFAULT` KDoc.
+
+2. **`httpReq` prelude entry points at the legacy wrapper.** § 4.3 calls
+   the new seven-arg signature canonical and the single-URL wrapper
+   "legacy." The implementation keeps the prelude name `httpReq` but
+   redirects its target to `strand-builtin:Http.RequestFromUrl` —
+   preserving the prelude FunctionType shape `(String, String, Bytes)
+   -> {status: Int, body: Bytes}` while reusing the agent-visible name.
+   The new seven-arg `Http.Request` is **not** in the prelude because
+   its response includes a recursive headers list type that the
+   implicit prelude cannot express in a static FunctionType. Agents
+   that want the projection-friendly form construct an explicit
+   FunctionType + ForeignNode at the use site (the same documented
+   pattern used by `Fs.List`, `Process.Spawn`, `Json.Parse`).
+
+3. **Header representation.** § 4.3 leaves the header shape open
+   ("`Map<String, String>` or a `List<{name, value}>` product — follow
+   the existing convention"). The new `Http.Request` ships
+   `List<{name, value}>` as a canonical Cons/Nil SumV chain over
+   ProductV entries — matching the convention used by `Fs.List`,
+   `String.Split`, and `Process.Spawn` argument lists. The response
+   product gains a `headers` field of the same shape.
+
+4. **Windows symlink test skipped.** § 7 scenario 4 requires
+   `Files.createSymbolicLink` for the fixture; on Windows this
+   requires Administrator privileges. The implementation marks the
+   symlink test with `@DisabledOnOs(OS.WINDOWS)` per the proposal's
+   "may need test-skip if symlinks aren't permitted" allowance. The
+   Unix path remains exercised by Linux/macOS CI.
+
+5. **Hostname blocklist as a separate field.** § 4.5 lists the
+   cloud-metadata hostname blocklist as part of `NetPolicy.blockedRanges`
+   conceptually. The implementation factors hostnames into their own
+   `NetPolicy.blockedHostnames: Set<String>` field so the IP-range
+   check and hostname check are separately auditable (the IP check
+   fires regardless of how the host was named; the hostname check
+   fires regardless of where the name resolves). The composition
+   matches the proposal's intent — both gates compose to deny
+   cloud-metadata access — with cleaner internal layering.
+
+This proposal closes the I/O sandboxing gap recorded as Finding 3 in the 2026-05-26 audit ([`security-index.md`](../../security-index.md)). It adds a host-configured `SandboxPolicy` that mediates every `Fs.*`, `Net.Connect`, and `Http.Request` call at the foreign-call boundary, and redesigns the `Http.Request` binding so its (host, port) refinement values are positional arguments accessible to [Q-039](#Q-039)'s projection mechanism. Q-039 and Q-041 together form the foreign-call security boundary: Q-039 binds capability-check values to actual arguments; Q-041 independently constrains what those argument values are allowed to be.
 
 ## 1. Problem statement
 
-The Layer 4 step 2 builtins wired real OS calls into the interpreter. Path arguments pass straight to `java.nio.file.Paths.get(path)` ([`Builtins.kt`](../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) lines ~395–501); `Net.Connect` accepts any `(host, port)` pair (~line 506); `Http.Request` accepts any URL through `URI(urlStr).toURL().openConnection()` (~line 625). No path traversal check, no SSRF guard, no workspace root.
+The Layer 4 step 2 builtins wired real OS calls into the interpreter. Path arguments pass straight to `java.nio.file.Paths.get(path)` ([`Builtins.kt`](../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) lines ~395–501); `Net.Connect` accepts any `(host, port)` pair (~line 506); `Http.Request` accepts any URL through `URI(urlStr).toURL().openConnection()` (~line 625). No path traversal check, no SSRF guard, no workspace root.
 
 The threats are concrete. **Path traversal** — `../../../../etc/passwd` or `C:\Windows\System32\config\SAM` reaches the filesystem outside any intended working area. **SSRF against cloud metadata** — `Http.Request("GET", "http://169.254.169.254/latest/meta-data/iam/security-credentials/", _)` returns AWS instance-role credentials; `metadata.google.internal` and `169.254.169.254/metadata/v1/` expose GCP and Azure equivalents. **Loopback and RFC1918 scanning** — `Net.Connect("127.0.0.1", 6379)` reaches in-process Redis; `Net.Connect("10.0.0.1", 22)` probes the LAN. **Link-local and `file://`** — `169.254.0.0/16` and `file:///etc/shadow` reach further surface. **DNS rebinding** — `attacker.example.com` resolves to a public IP at policy-check time and to `127.0.0.1` at connect time, defeating naive resolve-then-check.
 
 [Q-039](#Q-039) closes the EffectDecl-drift attack: once `Fs.Write` carries `effectProjections=[{Filesystem.Write, [ArgRef(0)]}]`, the capability check is provably against `arguments[0]`. But the capability set may grant wildcard refinements (the `--grant-all` demo mode, tests, permissive policies), in which case Q-039's structural binding still admits whatever path the agent supplies. And legacy ForeignNodes without `effectProjections` retain the original drift. Q-039 closes *one* attack class (capability spoofing); Q-041 closes the orthogonal class — the capability genuinely permits the operation but the runtime should still refuse because the argument names an out-of-policy resource. The two together form the foreign-call security boundary.
 
-[`security-model.md`](../design/security-model.md) § Foreign binding trust enumerates four defences: signed provenance, reproducible builds, curated registry, and *runtime sandbox observation*. The last is the mechanism this proposal advances. The foreign-call boundary is structurally narrow — every effectful operation eventually reaches a `Fn.invoke` — which is the right place to enforce per-resource policy.
+[`security-model.md`](../../design/security-model.md) § Foreign binding trust enumerates four defences: signed provenance, reproducible builds, curated registry, and *runtime sandbox observation*. The last is the mechanism this proposal advances. The foreign-call boundary is structurally narrow — every effectful operation eventually reaches a `Fn.invoke` — which is the right place to enforce per-resource policy.
 
 ## 2. Prior art
 
@@ -113,7 +175,7 @@ A legacy wrapper `Http.RequestFromUrl(method, url, body)` is preserved for backw
 
 ### 4.4 SandboxPolicy threading
 
-`Builtins.sandboxPolicy: SandboxPolicy` is a `@Volatile` field on the `Builtins` singleton, set by the interpreter at program startup and cleared at completion. Mirrors how `credentialProvider`, `llmHttpClient`, `clock`, and `random` are wired today ([`Builtins.kt`](../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) lines ~90–230). Per-`Fn` lookup cost is one volatile read. A future refactor could thread the policy explicitly through `applyForeign` alongside `CapabilitySet` and `List<ActiveHandler>`; flagged as non-blocking cleanup.
+`Builtins.sandboxPolicy: SandboxPolicy` is a `@Volatile` field on the `Builtins` singleton, set by the interpreter at program startup and cleared at completion. Mirrors how `credentialProvider`, `llmHttpClient`, `clock`, and `random` are wired today ([`Builtins.kt`](../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) lines ~90–230). Per-`Fn` lookup cost is one volatile read. A future refactor could thread the policy explicitly through `applyForeign` alongside `CapabilitySet` and `List<ActiveHandler>`; flagged as non-blocking cleanup.
 
 CLI flags on `strand run`, `strand machine`, `strand group`:
 
@@ -134,7 +196,7 @@ Default (no flags): `FsPolicy(workspaceRoot = cwd, escape = Deny, followSymlinks
 
 **None.** Sandboxing is runtime policy, not a graph property. The graph never knows whether it runs under workspace-rooted or full-fs policy; nothing in the canonical encoding records it. The verifier ensures every effect declaration is consistent; the sandbox enforces policy on top.
 
-The separation is deliberate. Per [ADR-005](../decisions/ADR-005-foreign-nodes.md)'s trust model, the foreign call site is the trust boundary; the verifier reasons about graph topology and effect closure; the runtime reasons about per-call resource policy. The layers compose: an agent that crafts a path-traversal payload runs into the verifier (must declare `Filesystem.Write` and obtain a grant), then Q-039's projection check (path argument must be the capability-check value), then Q-041's sandbox check (path argument must resolve inside workspace). All three must pass.
+The separation is deliberate. Per [ADR-005](../../decisions/ADR-005-foreign-nodes.md)'s trust model, the foreign call site is the trust boundary; the verifier reasons about graph topology and effect closure; the runtime reasons about per-call resource policy. The layers compose: an agent that crafts a path-traversal payload runs into the verifier (must declare `Filesystem.Write` and obtain a grant), then Q-039's projection check (path argument must be the capability-check value), then Q-041's sandbox check (path argument must resolve inside workspace). All three must pass.
 
 ## 6. Interpreter / runtime semantics
 
@@ -253,14 +315,14 @@ enum class SandboxViolationKind {
 ## References
 
 **Outgoing references:**
-- [`design/security-model.md`](../design/security-model.md) — § Foreign binding trust (the trust-model layer this proposal advances), § Threat model (malicious AI agent, compromised foreign code)
-- [`decisions/ADR-005-foreign-nodes.md`](../decisions/ADR-005-foreign-nodes.md) — ForeignNode as the security boundary; runtime sandbox observation as one of the four trust mechanisms
+- [`design/security-model.md`](../../design/security-model.md) — § Foreign binding trust (the trust-model layer this proposal advances), § Threat model (malicious AI agent, compromised foreign code)
+- [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md) — ForeignNode as the security boundary; runtime sandbox observation as one of the four trust mechanisms
 - [`proposals/foreign-effect-projections.md`](foreign-effect-projections.md) — Q-039, the defence-in-depth partner; the `Http.Request` redesign is enabled by Q-039's projection vocabulary
-- [`security-index.md`](../security-index.md) — § Finding 3, the audit motivation
-- [`open-questions.md`](../open-questions.md) — Q-006, Q-039, Q-041
+- [`security-index.md`](../../security-index.md) — § Finding 3, the audit motivation
+- [`open-questions.md`](../../open-questions.md) — Q-006, Q-039, Q-041
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-041 points at this proposal
+- [`open-questions.md`](../../open-questions.md) — Q-041 points at this proposal
 - [`proposals/README.md`](README.md)
-- [`security-index.md`](../security-index.md) — Q-041 row links here
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
+- [`security-index.md`](../../security-index.md) — Q-041 row links here
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section

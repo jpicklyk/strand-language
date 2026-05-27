@@ -51,6 +51,7 @@ class VectorRefinementTest {
 
     @BeforeEach
     fun setUp() {
+        CredentialScrubber.resetForTesting()
         transport = InMemoryHttpTransport()
         // Match any URL with a benign success response so the actual
         // builtin invocation doesn't blow up on missing matchers.
@@ -67,6 +68,7 @@ class VectorRefinementTest {
         Builtins.vectorHttpTransport = JdkHttpTransport
         Builtins.credentialProvider = EnvCredentialProvider
         ResourceTable.resetForTest()
+        CredentialScrubber.resetForTesting()
     }
 
     /**
@@ -202,7 +204,7 @@ class VectorRefinementTest {
         // Register a fake handle the builtin can look up.
         ResourceTable.register("pinecone_index", PineconeIndexHandle(
             PineconeIndexConfig("main", "us-east-1", VectorMetric.Cosine, 3, "http://stub"),
-            "pk-test",
+            Credential("pk-test-1234abcd", "pinecone", "api_key"),
             "http://stub",
         ))
         // The runtime args call delete with handle id 99999 — not the
@@ -277,7 +279,7 @@ class VectorRefinementTest {
         // Pre-register a pinecone handle so the runtime lookup succeeds.
         ResourceTable.register("pinecone_index", PineconeIndexHandle(
             PineconeIndexConfig("main", "us-east-1", VectorMetric.Cosine, 3, "http://stub"),
-            "pk-test",
+            Credential("pk-test-1234abcd", "pinecone", "api_key"),
             "http://stub",
         ))
         val caps = CapabilitySet(mapOf(readFx to listOf(
