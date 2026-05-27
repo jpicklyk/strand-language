@@ -2,57 +2,13 @@
 
 **Document:** `proposals/stdlib-future-builtins.md`
 **Status:** Tracking catalog. Persists across rounds and is updated as gaps close or new ones surface.
-**Last revised:** 2026-05-26
+**Last revised:** 2026-05-27 (Round 4 shipped — Float arithmetic + comparisons, Bool.Eq/Bytes.Eq, polymorphic List structure ops + Int-specialized reducers, Path.*, DateTime.*, Markdown.Stringify. ~39 new builtin entries; section deleted from this catalog.)
 
 ## Purpose
 
-Catalogues builtin capabilities that are absent from the current registry (~110 builtins across 18 namespaces after stdlib expansion rounds 1–3). Each entry is grouped by readiness: agreed slice for the next round, candidate for a future round, open design question requiring a dedicated proposal before any builtin lands, or deferred to a specific milestone. Strand-distinctive agent-native capabilities — `LLM.*`, vectors and embeddings, agent-state primitives, model routing — are tracked separately as a research proposal because they may shape stdlib and node-algebra requirements before the rest of this catalog ships.
+Catalogues builtin capabilities that are absent from the current registry (~150 builtins across 19 namespaces after stdlib expansion rounds 1–4). Each entry is grouped by readiness: candidate for a future round, open design question requiring a dedicated proposal before any builtin lands, or deferred to a specific milestone. Strand-distinctive agent-native capabilities — `LLM.*`, vectors and embeddings, agent-state primitives, model routing — are tracked separately as a research proposal because they may shape stdlib and node-algebra requirements before the rest of this catalog ships.
 
 This document is not a draft proposal in the strict sense used elsewhere in `proposals/`. It is a living menu that persists as rounds are shipped. When a slice graduates from this catalog to execution, the corresponding entries are deleted in the same commit that lands the builtins.
-
-## Round 4 — agreed next slice
-
-Mechanical execution against the `strand-add-builtin` skill. None of the entries below need new node algebra, new effect categories, or any design pass — they are gaps that the round-1 / round-2 / round-3 sweeps left behind.
-
-### Float arithmetic and comparisons
-
-`Float.FromInt` is currently the only Float-typed primitive. `Math.*` operates on Float values via `Sqrt`/`Pow`/`Log`/`Exp`/`Sin`/`Cos`/`Tan`, but there is no way to add two Floats.
-
-- `Float.Add`, `Float.Sub`, `Float.Mul`, `Float.Div`, `Float.Neg`
-- `Float.Eq`, `Float.Lt`, `Float.Le`, `Float.Gt`, `Float.Ge`
-
-### Missing equality variants
-
-- `Bool.Eq`, `Bytes.Eq`
-
-### List reducers and structure ops
-
-Higher-order infrastructure shipped in round-2 slice 2 covers the underlying machinery. These are convenience reducers and structural ops.
-
-- `List.Sort` (uses the round-2 `FnH` higher-order interface for the comparator callback)
-- `List.Range` (Int start, Int end → Int list)
-- `List.Zip`, `List.Unzip`
-- `List.Distinct`
-- `List.Sum`, `List.Product`, `List.Min`, `List.Max` (Int-specific specializations of Fold)
-
-### Path operations
-
-Pure path-string manipulation. No filesystem effects — only `Fs.*` carries E-006 / E-007.
-
-- `Path.Join`, `Path.Basename`, `Path.Dirname`, `Path.Extension`, `Path.Normalize`
-
-### DateTime
-
-`Time.Now` returns Int millis. Agents currently cannot determine the day, format a timestamp, or parse a date.
-
-- `DateTime.FormatIso` (Int millis → String, ISO 8601)
-- `DateTime.ParseIso` (String → Option<Int>)
-- `DateTime.Year`, `DateTime.Month`, `DateTime.Day`, `DateTime.Hour`, `DateTime.Minute`, `DateTime.Second`
-- `DateTime.AddDays`, `DateTime.AddHours`, `DateTime.AddMinutes`, `DateTime.AddSeconds`
-
-### Markdown symmetry
-
-- `Markdown.Stringify` (mirrors `Json.Stringify`)
 
 ## Round 5+ candidates
 

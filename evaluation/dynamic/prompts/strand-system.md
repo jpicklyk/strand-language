@@ -273,15 +273,16 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (82):
+FunctionType signatures (110):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
     negT                            — (Int) -> Int
     notT                            — (Bool) -> Bool
-    andT orT                        — (Bool, Bool) -> Bool
+    andT orT eqBoolT                — (Bool, Bool) -> Bool
     concatT                         — (String, String) -> String
     eqStrT                          — (String, String) -> Bool
+    eqBytesT                        — (Bytes, Bytes) -> Bool
     nowT                            — () -> Int
     absT signT                      — (Int) -> Int
     minT maxT mmodT                 — (Int, Int) -> Int
@@ -332,13 +333,23 @@ FunctionType signatures (82):
     pineconeDeleteT chromaDeleteT   — (Int, Bytes) -> Unit  (handle, ids ProductV-list)
     pineconeQueryT chromaQueryT     — (Int, Bytes) -> Bytes (handle, QueryRequest -> List<QueryHit>; both products carried in Bytes-placeholder slot)
     pineconeFetchT chromaGetT       — (Int, Bytes) -> Bytes (handle, ids list -> List<QueryHit>)
+    fAddT fSubT fMulT fDivT         — (Float, Float) -> Float
+    fNegT                           — (Float) -> Float
+    fEqT fLtT fLeT fGtT fGeT        — (Float, Float) -> Bool
+    pathJoinT                       — (String, String) -> String
+    pathBaseT pathDirT pathExtT pathNormT  — (String) -> String
+    dtFormatIsoT                    — (Int) -> String  (millis -> ISO 8601 UTC)
+    dtYearT dtMonthT dtDayT dtHourT dtMinuteT dtSecondT  — (Int) -> Int  (UTC component extraction)
+    dtAddDaysT dtAddHoursT dtAddMinutesT dtAddSecondsT   — (Int, Int) -> Int  (millis + n -> new millis)
 
-Foreign-node builtins (94):
+Foreign-node builtins (122):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
     not and or                      — Bool combinators
+    eqBool                          — Bool.Eq (Bool, Bool) -> Bool
     concat eqStr                    — String operations
+    eqBytes                         — Bytes.Eq (Bytes, Bytes) -> Bool  (content equality)
     now                             — Time.Now (effectful; declares nowFx)
     abs sign min max mmod           — Math.* Int operations (mmod is true math modulo, always >= 0 for positive divisor)
     floor ceil round                — Math.* Float -> Int rounding
@@ -369,6 +380,12 @@ Foreign-node builtins (94):
     chromaOpen chromaClose                      — Q-038 Chroma lifecycle (Open declares both vectorReadFx and vectorWriteFx).
     chromaAdd chromaDelete                      — Chroma writes (each declares vectorWriteFx).
     chromaQuery chromaGet                       — Chroma reads (each declares vectorReadFx).
+    fAdd fSub fMul fDiv fNeg                    — Float arithmetic (round-4). Div by zero yields +/- Infinity (IEEE 754); 0.0/0.0 is NaN.
+    fEq fLt fLe fGt fGe                         — Float comparisons (round-4). NaN compared to anything is false (IEEE 754).
+    pathJoin pathBase pathDir pathExt pathNorm  — Path.Join / Basename / Dirname / Extension / Normalize (round-4 pure path-string ops; no filesystem access, no effect)
+    dtFormatIso                                 — DateTime.FormatIso (Int millis -> ISO 8601 UTC String). Pure.
+    dtYear dtMonth dtDay dtHour dtMinute dtSecond  — DateTime UTC component extractors (Int millis -> Int). Pure.
+    dtAddDays dtAddHours dtAddMinutes dtAddSeconds  — DateTime arithmetic (Int millis + Int n -> Int millis). Calendar-aware. Pure.
 
 Effect categories (20):
 
@@ -399,14 +416,18 @@ list. A state machine with output streams must also declare `sendFx`.
 **Builtins NOT in the prelude (require explicit FN + FNT declarations
 at the use site):** the polymorphic / Option-returning / blessed-library-typed
 ones — `List.*` operations (Map / Filter / Fold / Find / Any / All / Length /
-Reverse / Take / Drop / Concat / Nth, all polymorphic in element type),
+Reverse / Take / Drop / Concat / Nth / Sort / Range / Zip / Unzip / Distinct /
+Sum / Product / Min / Max, all polymorphic in element type or returning Option
+or taking List<Int>),
 `Fs.List` (returns List<String>), `Process.Spawn` (takes List<String>),
 `Process.EnvVar` / `String.ParseInt` / `String.ParseFloat` /
-`Bytes.ParseUtf8` / `Bytes.ParseHex` / `Bytes.ParseBase64` (Option-returning),
+`Bytes.ParseUtf8` / `Bytes.ParseHex` / `Bytes.ParseBase64` /
+`DateTime.ParseIso` (all Option-returning),
 `String.Split` / `String.Join` (polymorphic List<String>),
 `Json.Parse` / `Json.Stringify` (typed against a specific JsonValue schema
-— corpus 54 flat or corpus 66 JsonValueFull), `Markdown.Parse` (typed against
-the corpus 61 MarkdownDocument schema), `Regex.Match` (Option<String>) /
+— corpus 54 flat or corpus 66 JsonValueFull), `Markdown.Parse` /
+`Markdown.Stringify` (typed against the corpus 61 MarkdownDocument schema),
+`Regex.Match` (Option<String>) /
 `Regex.FindAll` (List<String>) / `Regex.Split` (List<String>),
 `Map.Empty` / `Map.Get` / `Map.Put` / `Map.Remove` / `Map.Has` / `Map.Size` /
 `Map.Keys` / `Map.Values` / `Map.Entries` / `Map.Fold` (opaque-handle Map<K,V>
@@ -980,6 +1001,136 @@ Typical Layer A density usage:
 The lambda's `parameters` and `effects` follow the standard LAM
 shape; the FunctionType for the lambda parameter of the higher-
 order builtin must match its arity.
+
+## Stdlib expansion round 4
+
+Mechanical additions on top of Layer 4 step 2 + Round 2. Six
+families: Float arithmetic + comparisons, the missing equality
+variants Bool.Eq / Bytes.Eq, polymorphic List structure ops +
+Int-specialized reducers, pure Path manipulation, DateTime,
+Markdown.Stringify.
+
+### Float arithmetic and comparisons (`Float.*`)
+
+Pure. Mirror the Int.* arithmetic surface. Strand has no implicit
+numeric coercion, so use `toFloat` / `toIntTrunc` to move between
+Int and Float when needed.
+
+    strand-builtin:Float.Add(a, b: Float) -> Float
+    strand-builtin:Float.Sub(a, b: Float) -> Float
+    strand-builtin:Float.Mul(a, b: Float) -> Float
+    strand-builtin:Float.Div(a, b: Float) -> Float    -- IEEE 754; div by zero is +/- Infinity, 0.0/0.0 is NaN
+    strand-builtin:Float.Neg(a: Float) -> Float
+
+    strand-builtin:Float.Eq(a, b: Float) -> Bool      -- IEEE 754 == (NaN != NaN)
+    strand-builtin:Float.Lt(a, b: Float) -> Bool
+    strand-builtin:Float.Le(a, b: Float) -> Bool
+    strand-builtin:Float.Gt(a, b: Float) -> Bool
+    strand-builtin:Float.Ge(a, b: Float) -> Bool
+
+Prelude shortcuts: `fAdd`, `fSub`, `fMul`, `fDiv`, `fNeg`,
+`fEq`, `fLt`, `fLe`, `fGt`, `fGe`.
+
+### Missing equality variants
+
+    strand-builtin:Bool.Eq(a, b: Bool) -> Bool
+    strand-builtin:Bytes.Eq(a, b: Bytes) -> Bool      -- content equality, not reference
+
+Prelude shortcuts: `eqBool`, `eqBytes` (mirror the existing `eqInt`,
+`eqStr`).
+
+### List structure ops and reducers (`List.*` round-4 additions)
+
+Polymorphic in element type (or Int-typed payload for the reducers).
+NOT in the prelude — declare explicit FN + FNT at the use site.
+
+    strand-builtin:List.Sort(list, comparator: (A, A) -> Bool) -> List<A>
+        -- Stable sort. Comparator returns true when first arg should
+        -- come before second. Pass `lt` for ascending Int, `gt` for
+        -- descending, etc. Higher-order (lives in higher-order registry).
+    strand-builtin:List.Range(start, end: Int) -> List<Int>
+        -- Inclusive start, exclusive end. Empty if start >= end.
+    strand-builtin:List.Zip(a: List<A>, b: List<B>) -> List<{first: A, second: B}>
+        -- Stops at shorter list's end.
+    strand-builtin:List.Unzip(pairs: List<{first, second}>) -> {first: List<A>, second: List<B>}
+        -- Inverse of List.Zip.
+    strand-builtin:List.Distinct(list: List<A>) -> List<A>
+        -- Preserves first occurrence; uses Value structural equality.
+    strand-builtin:List.Sum(list: List<Int>) -> Int       -- 0 for empty
+    strand-builtin:List.Product(list: List<Int>) -> Int   -- 1 for empty
+    strand-builtin:List.Min(list: List<Int>) -> Option<Int>  -- None for empty
+    strand-builtin:List.Max(list: List<Int>) -> Option<Int>  -- None for empty
+
+### Path operations (`Path.*`)
+
+Pure path-string manipulation. NO filesystem access, NO effect
+category. Uses java.nio.file.Paths under the hood — separator
+behavior is platform-aware (forward slash on POSIX, backslash on
+Windows). Lexical-only normalization; resolving symlinks needs
+`Fs.*` under capability.
+
+    strand-builtin:Path.Join(a, b: String) -> String      -- joins with platform separator
+    strand-builtin:Path.Basename(path: String) -> String  -- last component
+    strand-builtin:Path.Dirname(path: String) -> String   -- parent dir, "" if none
+    strand-builtin:Path.Extension(path: String) -> String -- ext without leading dot
+                                                          -- "" for no ext, hidden files, trailing dot
+    strand-builtin:Path.Normalize(path: String) -> String -- collapses . and .. lexically
+
+Prelude shortcuts: `pathJoin`, `pathBase`, `pathDir`, `pathExt`, `pathNorm`.
+
+### DateTime (`DateTime.*`)
+
+All pure. Operates on Int millis the caller provides (typically
+from `Time.Now`, but any source works). UTC throughout — local-
+time and timezone handling are not in this slice.
+
+    strand-builtin:DateTime.FormatIso(millis: Int) -> String
+        -- ISO 8601 UTC with millisecond precision, e.g.,
+        -- "2026-05-27T15:30:45.123Z"
+    strand-builtin:DateTime.ParseIso(s: String) -> Option<Int>
+        -- Some(millis) on success, None on parse failure.
+        -- Accepts any ISO 8601 instant the JVM parser handles.
+
+    strand-builtin:DateTime.Year(millis: Int) -> Int    -- full year (e.g., 2026)
+    strand-builtin:DateTime.Month(millis: Int) -> Int   -- 1-12
+    strand-builtin:DateTime.Day(millis: Int) -> Int     -- 1-31 (day-of-month)
+    strand-builtin:DateTime.Hour(millis: Int) -> Int    -- 0-23
+    strand-builtin:DateTime.Minute(millis: Int) -> Int  -- 0-59
+    strand-builtin:DateTime.Second(millis: Int) -> Int  -- 0-59
+
+    strand-builtin:DateTime.AddDays(millis, days: Int) -> Int
+        -- Calendar-aware (handles month/year boundaries, leap days).
+    strand-builtin:DateTime.AddHours(millis, hours: Int) -> Int
+    strand-builtin:DateTime.AddMinutes(millis, minutes: Int) -> Int
+    strand-builtin:DateTime.AddSeconds(millis, seconds: Int) -> Int
+
+Prelude shortcuts: `dtFormatIso`, `dtYear`, `dtMonth`, `dtDay`,
+`dtHour`, `dtMinute`, `dtSecond`, `dtAddDays`, `dtAddHours`,
+`dtAddMinutes`, `dtAddSeconds`. `dtParseIso` is NOT in the prelude
+(Option-returning).
+
+### Markdown.Stringify
+
+Inverse of `Markdown.Parse`, typed against the canonical corpus-61
+MarkdownDocument shape:
+
+    MarkdownDocument = μ. Cons({head: MarkdownBlock, tail: <self>}) | Nil
+    MarkdownBlock = Heading{level: Int, text: String}
+                  | Paragraph{text: String}
+                  | CodeBlock{language: String, code: String}
+                  | HorizontalRule
+
+NOT in the prelude — the MarkdownDocument shape is agent-chosen
+and not expressible as a single monomorphic FNT.
+
+    strand-builtin:Markdown.Stringify(doc: MarkdownDocument) -> String
+
+Heading level is clamped to 1-6 on output. Multiple blocks are
+joined by `\n\n` (blank line). Backward compat: a Paragraph block
+whose payload is a bare StringV (the shape `Markdown.Parse`
+currently produces) is treated as the text directly, so
+`Markdown.Parse → Markdown.Stringify` round-trips a single
+paragraph verbatim.
 
 ## Vector stores (`Pinecone.*`, `Chroma.*`)
 

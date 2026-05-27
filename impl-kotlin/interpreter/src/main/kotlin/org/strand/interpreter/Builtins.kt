@@ -346,6 +346,10 @@ object Builtins {
             require(args.size == 2) { "Bool.Or expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.BoolV).v || (args[1] as Value.BoolV).v)
         },
+        "strand-builtin:Bool.Eq" to Fn { args ->
+            require(args.size == 2) { "Bool.Eq expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.BoolV).v == (args[1] as Value.BoolV).v)
+        },
 
         // Pure Int comparisons: pair with Match on a BoolLit pattern to give
         // conditional logic.
@@ -1092,6 +1096,13 @@ object Builtins {
             Value.BytesV(a + b)
         },
 
+        "strand-builtin:Bytes.Eq" to Fn { args ->
+            // Content equality (Kotlin `==` on ByteArray is reference
+            // equality; use contentEquals for value-equal semantics).
+            require(args.size == 2) { "Bytes.Eq expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.BytesV).v.contentEquals((args[1] as Value.BytesV).v))
+        },
+
         "strand-builtin:Bytes.ParseUtf8" to Fn { args ->
             // (b: Bytes) -> Option<String>. None on invalid UTF-8.
             require(args.size == 1) { "Bytes.ParseUtf8 expects 1 arg, got ${args.size}" }
@@ -1177,6 +1188,84 @@ object Builtins {
                 "tail" to Value.SumV("Nil", null),
             )))
             Value.SumV("Some", singleton)
+        },
+
+        // Stdlib expansion round 4 — Markdown.Stringify (Phase 4 #1).
+        // Inverse of Markdown.Parse, but typed against the canonical
+        // corpus-61 MarkdownDocument shape: a recursive list of
+        // MarkdownBlock variants where each block is one of
+        //   Heading(level: Int, text: String)
+        //   Paragraph(text: String)
+        //   CodeBlock(language: String, code: String)
+        //   HorizontalRule (no payload)
+        //
+        // Backward compat for Markdown.Parse's flat Paragraph encoding:
+        // when a Paragraph block's payload is a bare StringV (not a
+        // ProductV wrapping {text}), treat it as the text directly.
+        // This means a round-trip through Parse → Stringify works for
+        // single-paragraph inputs and a hand-constructed corpus-61
+        // document Stringify-ies to standard Markdown.
+        //
+        // NOT in the prelude (agent-typed payload — the agent picks
+        // the exact MarkdownDocument shape; no single monomorphic
+        // FNT fits). Use an explicit FN + FNT at the call site.
+        "strand-builtin:Markdown.Stringify" to Fn { args ->
+            require(args.size == 1) { "Markdown.Stringify expects 1 arg (doc: MarkdownDocument), got ${args.size}" }
+            val out = StringBuilder()
+            var cur: Value = args[0]
+            var first = true
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val node = sumV.payload as Value.ProductV
+                val block = node.fields.getValue("head") as Value.SumV
+                if (!first) out.append("\n\n")
+                first = false
+                when (block.case) {
+                    "Heading" -> {
+                        val product = block.payload as Value.ProductV
+                        val level = (product.fields.getValue("level") as Value.IntV).v.toInt().coerceIn(1, 6)
+                        val text = (product.fields.getValue("text") as Value.StringV).v
+                        out.append("#".repeat(level)).append(' ').append(text)
+                    }
+                    "Paragraph" -> {
+                        // Accept both the canonical ProductV{text} shape
+                        // and the legacy bare-StringV shape Markdown.Parse
+                        // produces today.
+                        val text = when (val p = block.payload) {
+                            is Value.ProductV -> (p.fields.getValue("text") as Value.StringV).v
+                            is Value.StringV -> p.v
+                            else -> throw IoFailure("markdown-stringify",
+                                "Paragraph payload must be ProductV{text} or StringV, got ${p?.let { it::class.simpleName }}")
+                        }
+                        out.append(text)
+                    }
+                    "CodeBlock" -> {
+                        val product = block.payload as Value.ProductV
+                        val lang = (product.fields.getValue("language") as Value.StringV).v
+                        val code = (product.fields.getValue("code") as Value.StringV).v
+                        out.append("```").append(lang).append('\n').append(code).append("\n```")
+                    }
+                    "HorizontalRule" -> out.append("---")
+                    "Quote" -> {
+                        // Tolerate the round-4 catalog's older Quote case
+                        // (proposal listed Quote alongside Heading/Paragraph/
+                        // CodeBlock — corpus 61 ships HorizontalRule
+                        // instead). Treat Quote.text as a blockquote line.
+                        val text = when (val p = block.payload) {
+                            is Value.ProductV -> (p.fields.getValue("text") as Value.StringV).v
+                            is Value.StringV -> p.v
+                            else -> throw IoFailure("markdown-stringify",
+                                "Quote payload must be ProductV{text} or StringV, got ${p?.let { it::class.simpleName }}")
+                        }
+                        out.append("> ").append(text)
+                    }
+                    else -> throw IoFailure("markdown-stringify",
+                        "unknown MarkdownBlock case '${block.case}' — expected Heading|Paragraph|CodeBlock|HorizontalRule|Quote")
+                }
+                cur = node.fields.getValue("tail")
+            }
+            Value.StringV(out.toString())
         },
 
         // Stdlib expansion round 2 — Math.* builtins. Pure.
@@ -1295,6 +1384,57 @@ object Builtins {
             // Distinct from Math.Floor (which rounds toward -infinity).
             require(args.size == 1) { "Int.FromFloatTrunc expects 1 arg (f: Float), got ${args.size}" }
             Value.IntV((args[0] as Value.FloatV).v.toLong())
+        },
+
+        // Stdlib expansion round 4 — Float arithmetic and comparisons.
+        // Mirrors the Int.* arithmetic surface; Math.* covers the
+        // irreducibly-real-valued operations (sqrt, pow, trig, log/exp).
+        // All pure. Division by zero produces +/- Infinity per IEEE 754
+        // (no exception thrown — matches Kotlin Double semantics).
+        // Comparison operators use IEEE 754 ordering: NaN compared to
+        // anything (including itself) is false for Lt/Le/Gt/Ge and false
+        // for Eq. Agents that need NaN-aware checks should use
+        // Math-style sentinels or wrap.
+
+        "strand-builtin:Float.Add" to Fn { args ->
+            require(args.size == 2) { "Float.Add expects 2 args, got ${args.size}" }
+            Value.FloatV((args[0] as Value.FloatV).v + (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Sub" to Fn { args ->
+            require(args.size == 2) { "Float.Sub expects 2 args, got ${args.size}" }
+            Value.FloatV((args[0] as Value.FloatV).v - (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Mul" to Fn { args ->
+            require(args.size == 2) { "Float.Mul expects 2 args, got ${args.size}" }
+            Value.FloatV((args[0] as Value.FloatV).v * (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Div" to Fn { args ->
+            require(args.size == 2) { "Float.Div expects 2 args, got ${args.size}" }
+            Value.FloatV((args[0] as Value.FloatV).v / (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Neg" to Fn { args ->
+            require(args.size == 1) { "Float.Neg expects 1 arg, got ${args.size}" }
+            Value.FloatV(-(args[0] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Eq" to Fn { args ->
+            require(args.size == 2) { "Float.Eq expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.FloatV).v == (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Lt" to Fn { args ->
+            require(args.size == 2) { "Float.Lt expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.FloatV).v < (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Le" to Fn { args ->
+            require(args.size == 2) { "Float.Le expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.FloatV).v <= (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Gt" to Fn { args ->
+            require(args.size == 2) { "Float.Gt expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.FloatV).v > (args[1] as Value.FloatV).v)
+        },
+        "strand-builtin:Float.Ge" to Fn { args ->
+            require(args.size == 2) { "Float.Ge expects 2 args, got ${args.size}" }
+            Value.BoolV((args[0] as Value.FloatV).v >= (args[1] as Value.FloatV).v)
         },
 
         // Stdlib expansion round 2 — Hash.* builtins. Pure. All take
@@ -1454,6 +1594,170 @@ object Builtins {
                 i--
             }
             Value.SumV("None", null)
+        },
+
+        // Stdlib expansion round 4 — List structure ops + Int-specialized
+        // reducers. All polymorphic (or Int-typed payload); none fit the
+        // monomorphic prelude shape, so each requires an explicit FNT +
+        // FRN at the use site. The reducers (Sum/Product/Min/Max) are
+        // convenience wrappers around the Fold pattern; the structure
+        // ops (Range/Zip/Unzip/Distinct) cover gaps in the round-2
+        // primitives.
+
+        "strand-builtin:List.Range" to Fn { args ->
+            // (start: Int, end: Int) -> List<Int>
+            // Inclusive start, exclusive end. Empty if start >= end.
+            require(args.size == 2) { "List.Range expects 2 args (start, end: Int), got ${args.size}" }
+            val start = (args[0] as Value.IntV).v
+            val end = (args[1] as Value.IntV).v
+            var result: Value = Value.SumV("Nil", null)
+            var i = end - 1
+            while (i >= start) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf(
+                    "head" to Value.IntV(i), "tail" to result,
+                )))
+                i--
+            }
+            result
+        },
+
+        "strand-builtin:List.Zip" to Fn { args ->
+            // (a: List<A>, b: List<B>) -> List<{first: A, second: B}>
+            // Stops at the shorter list's end.
+            require(args.size == 2) { "List.Zip expects 2 args (a, b), got ${args.size}" }
+            val pairs = mutableListOf<Value>()
+            var ca: Value = args[0]
+            var cb: Value = args[1]
+            while (true) {
+                val sa = ca as? Value.SumV ?: break
+                val sb = cb as? Value.SumV ?: break
+                if (sa.case != "Cons" || sb.case != "Cons") break
+                val pa = sa.payload as Value.ProductV
+                val pb = sb.payload as Value.ProductV
+                pairs += Value.ProductV(mapOf(
+                    "first" to pa.fields.getValue("head"),
+                    "second" to pb.fields.getValue("head"),
+                ))
+                ca = pa.fields.getValue("tail")
+                cb = pb.fields.getValue("tail")
+            }
+            var result: Value = Value.SumV("Nil", null)
+            for (p in pairs.reversed()) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to p, "tail" to result)))
+            }
+            result
+        },
+
+        "strand-builtin:List.Unzip" to Fn { args ->
+            // (pairs: List<{first, second}>) -> {first: List<A>, second: List<B>}
+            // Inverse of List.Zip.
+            require(args.size == 1) { "List.Unzip expects 1 arg (pairs), got ${args.size}" }
+            val firsts = mutableListOf<Value>()
+            val seconds = mutableListOf<Value>()
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                val pair = payload.fields.getValue("head") as Value.ProductV
+                firsts += pair.fields.getValue("first")
+                seconds += pair.fields.getValue("second")
+                cur = payload.fields.getValue("tail")
+            }
+            var firstList: Value = Value.SumV("Nil", null)
+            for (h in firsts.reversed()) {
+                firstList = Value.SumV("Cons", Value.ProductV(mapOf("head" to h, "tail" to firstList)))
+            }
+            var secondList: Value = Value.SumV("Nil", null)
+            for (h in seconds.reversed()) {
+                secondList = Value.SumV("Cons", Value.ProductV(mapOf("head" to h, "tail" to secondList)))
+            }
+            Value.ProductV(mapOf("first" to firstList, "second" to secondList))
+        },
+
+        "strand-builtin:List.Distinct" to Fn { args ->
+            // (list: List<A>) -> List<A>
+            // Preserves first occurrence; uses Value structural equality
+            // (Kotlin data class equals walks the structure).
+            require(args.size == 1) { "List.Distinct expects 1 arg (list), got ${args.size}" }
+            val seen = linkedSetOf<Value>()
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                seen += payload.fields.getValue("head")
+                cur = payload.fields.getValue("tail")
+            }
+            var result: Value = Value.SumV("Nil", null)
+            for (h in seen.reversed()) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to h, "tail" to result)))
+            }
+            result
+        },
+
+        "strand-builtin:List.Sum" to Fn { args ->
+            // (list: List<Int>) -> Int. Empty list returns 0.
+            require(args.size == 1) { "List.Sum expects 1 arg (list: List<Int>), got ${args.size}" }
+            var sum = 0L
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                sum += (payload.fields.getValue("head") as Value.IntV).v
+                cur = payload.fields.getValue("tail")
+            }
+            Value.IntV(sum)
+        },
+
+        "strand-builtin:List.Product" to Fn { args ->
+            // (list: List<Int>) -> Int. Empty list returns 1.
+            require(args.size == 1) { "List.Product expects 1 arg (list: List<Int>), got ${args.size}" }
+            var product = 1L
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                product *= (payload.fields.getValue("head") as Value.IntV).v
+                cur = payload.fields.getValue("tail")
+            }
+            Value.IntV(product)
+        },
+
+        "strand-builtin:List.Min" to Fn { args ->
+            // (list: List<Int>) -> Option<Int>. None for empty list.
+            require(args.size == 1) { "List.Min expects 1 arg (list: List<Int>), got ${args.size}" }
+            var minOpt: Long? = null
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                val n = (payload.fields.getValue("head") as Value.IntV).v
+                if (minOpt == null || n < minOpt) minOpt = n
+                cur = payload.fields.getValue("tail")
+            }
+            if (minOpt == null) Value.SumV("None", null)
+            else Value.SumV("Some", Value.IntV(minOpt))
+        },
+
+        "strand-builtin:List.Max" to Fn { args ->
+            // (list: List<Int>) -> Option<Int>. None for empty list.
+            require(args.size == 1) { "List.Max expects 1 arg (list: List<Int>), got ${args.size}" }
+            var maxOpt: Long? = null
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                val n = (payload.fields.getValue("head") as Value.IntV).v
+                if (maxOpt == null || n > maxOpt) maxOpt = n
+                cur = payload.fields.getValue("tail")
+            }
+            if (maxOpt == null) Value.SumV("None", null)
+            else Value.SumV("Some", Value.IntV(maxOpt))
         },
 
         // Stdlib expansion round 2 — Json.Stringify. Inverse of
@@ -2080,6 +2384,189 @@ object Builtins {
             val ids = VectorValueMarshal.toStringList(args[1])
             VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids))
         },
+
+        // ===== Stdlib expansion round 4 (2026-05-27) =====
+        // Path.* — pure path-string manipulation (no filesystem access,
+        // no effect category). Uses java.nio.file.Paths for separator
+        // handling so behavior matches platform convention (forward
+        // slashes on POSIX, backslashes on Windows). Lexical only —
+        // Path.Normalize collapses . and .. tokens without consulting
+        // the actual filesystem; resolving symlinks needs Fs.* under
+        // capability.
+
+        "strand-builtin:Path.Join" to Fn { args ->
+            // (a: String, b: String) -> String. Joins two path
+            // segments with the platform separator. If b is absolute,
+            // it replaces a (matches Paths.get + resolve semantics).
+            require(args.size == 2) { "Path.Join expects 2 args (a, b: String), got ${args.size}" }
+            val a = (args[0] as Value.StringV).v
+            val b = (args[1] as Value.StringV).v
+            Value.StringV(java.nio.file.Paths.get(a).resolve(b).toString())
+        },
+
+        "strand-builtin:Path.Basename" to Fn { args ->
+            // (path: String) -> String. Last component. Empty for "/"
+            // or empty input (java.nio.file.Path.fileName returns null
+            // for root paths; we coerce to "").
+            require(args.size == 1) { "Path.Basename expects 1 arg (path: String), got ${args.size}" }
+            val path = (args[0] as Value.StringV).v
+            val name = java.nio.file.Paths.get(path).fileName?.toString() ?: ""
+            Value.StringV(name)
+        },
+
+        "strand-builtin:Path.Dirname" to Fn { args ->
+            // (path: String) -> String. Parent directory. Empty for
+            // bare names (no separator). Mirrors POSIX dirname's
+            // "no parent" behavior.
+            require(args.size == 1) { "Path.Dirname expects 1 arg (path: String), got ${args.size}" }
+            val path = (args[0] as Value.StringV).v
+            val parent = java.nio.file.Paths.get(path).parent?.toString() ?: ""
+            Value.StringV(parent)
+        },
+
+        "strand-builtin:Path.Extension" to Fn { args ->
+            // (path: String) -> String. File extension without the
+            // leading dot ("txt" for "foo.txt"). Empty for paths
+            // without a dotted suffix in the last component. A leading
+            // dot in the last component (".bashrc") is treated as no
+            // extension (matches POSIX convention for hidden files).
+            require(args.size == 1) { "Path.Extension expects 1 arg (path: String), got ${args.size}" }
+            val name = java.nio.file.Paths.get((args[0] as Value.StringV).v)
+                .fileName?.toString() ?: ""
+            val dot = name.lastIndexOf('.')
+            val ext = if (dot <= 0 || dot == name.length - 1) "" else name.substring(dot + 1)
+            Value.StringV(ext)
+        },
+
+        "strand-builtin:Path.Normalize" to Fn { args ->
+            // (path: String) -> String. Lexical normalization: collapses
+            // . and .. segments, removes duplicate separators. Does NOT
+            // resolve symlinks or check the filesystem.
+            require(args.size == 1) { "Path.Normalize expects 1 arg (path: String), got ${args.size}" }
+            val path = (args[0] as Value.StringV).v
+            Value.StringV(java.nio.file.Paths.get(path).normalize().toString())
+        },
+
+        // ===== Stdlib expansion round 4 — DateTime.* =====
+        // All pure (no clock access — they operate on Int millis the
+        // caller provides, typically from Time.Now). UTC throughout;
+        // local-time / timezone handling is a future slice if a real
+        // workload needs it.
+        //
+        // FormatIso / ParseIso use ISO 8601 with millisecond precision
+        // and a `Z` suffix (e.g., "2026-05-27T15:30:45.123Z"). The
+        // *.Year/Month/Day/Hour/Minute/Second extractors return UTC
+        // components: Year is the full year (2026), Month is 1-12, Day
+        // is 1-31, Hour is 0-23, Minute is 0-59, Second is 0-59.
+        // *.Add* arithmetic returns new Int millis.
+
+        "strand-builtin:DateTime.FormatIso" to Fn { args ->
+            // (millis: Int) -> String. ISO 8601 UTC, millisecond precision.
+            require(args.size == 1) { "DateTime.FormatIso expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val instant = java.time.Instant.ofEpochMilli(millis)
+            Value.StringV(java.time.format.DateTimeFormatter.ISO_INSTANT.format(instant))
+        },
+
+        "strand-builtin:DateTime.ParseIso" to Fn { args ->
+            // (s: String) -> Option<Int>. Some(millis) on success, None
+            // on parse failure. Accepts any ISO 8601 instant the JVM
+            // parser handles (with or without fractional seconds).
+            require(args.size == 1) { "DateTime.ParseIso expects 1 arg (s: String), got ${args.size}" }
+            val s = (args[0] as Value.StringV).v
+            try {
+                val instant = java.time.Instant.parse(s)
+                Value.SumV("Some", Value.IntV(instant.toEpochMilli()))
+            } catch (_: java.time.format.DateTimeParseException) {
+                Value.SumV("None", null)
+            }
+        },
+
+        "strand-builtin:DateTime.Year" to Fn { args ->
+            require(args.size == 1) { "DateTime.Year expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val zdt = java.time.ZonedDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC,
+            )
+            Value.IntV(zdt.year.toLong())
+        },
+        "strand-builtin:DateTime.Month" to Fn { args ->
+            // 1-12 (matches ISO 8601 / calendar convention, not Java's
+            // 0-based Calendar.MONTH).
+            require(args.size == 1) { "DateTime.Month expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val zdt = java.time.ZonedDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC,
+            )
+            Value.IntV(zdt.monthValue.toLong())
+        },
+        "strand-builtin:DateTime.Day" to Fn { args ->
+            // 1-31 (day-of-month).
+            require(args.size == 1) { "DateTime.Day expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val zdt = java.time.ZonedDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC,
+            )
+            Value.IntV(zdt.dayOfMonth.toLong())
+        },
+        "strand-builtin:DateTime.Hour" to Fn { args ->
+            // 0-23.
+            require(args.size == 1) { "DateTime.Hour expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val zdt = java.time.ZonedDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC,
+            )
+            Value.IntV(zdt.hour.toLong())
+        },
+        "strand-builtin:DateTime.Minute" to Fn { args ->
+            // 0-59.
+            require(args.size == 1) { "DateTime.Minute expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val zdt = java.time.ZonedDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC,
+            )
+            Value.IntV(zdt.minute.toLong())
+        },
+        "strand-builtin:DateTime.Second" to Fn { args ->
+            // 0-59 (leap seconds clamp to 59 per java.time semantics).
+            require(args.size == 1) { "DateTime.Second expects 1 arg (millis: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val zdt = java.time.ZonedDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(millis), java.time.ZoneOffset.UTC,
+            )
+            Value.IntV(zdt.second.toLong())
+        },
+
+        "strand-builtin:DateTime.AddDays" to Fn { args ->
+            // (millis: Int, days: Int) -> Int. Calendar-aware day
+            // addition (handles month/year boundaries, leap days).
+            require(args.size == 2) { "DateTime.AddDays expects 2 args (millis, days: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val days = (args[1] as Value.IntV).v
+            val instant = java.time.Instant.ofEpochMilli(millis).plus(days, java.time.temporal.ChronoUnit.DAYS)
+            Value.IntV(instant.toEpochMilli())
+        },
+        "strand-builtin:DateTime.AddHours" to Fn { args ->
+            require(args.size == 2) { "DateTime.AddHours expects 2 args (millis, hours: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val hours = (args[1] as Value.IntV).v
+            val instant = java.time.Instant.ofEpochMilli(millis).plus(hours, java.time.temporal.ChronoUnit.HOURS)
+            Value.IntV(instant.toEpochMilli())
+        },
+        "strand-builtin:DateTime.AddMinutes" to Fn { args ->
+            require(args.size == 2) { "DateTime.AddMinutes expects 2 args (millis, minutes: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val minutes = (args[1] as Value.IntV).v
+            val instant = java.time.Instant.ofEpochMilli(millis).plus(minutes, java.time.temporal.ChronoUnit.MINUTES)
+            Value.IntV(instant.toEpochMilli())
+        },
+        "strand-builtin:DateTime.AddSeconds" to Fn { args ->
+            require(args.size == 2) { "DateTime.AddSeconds expects 2 args (millis, seconds: Int), got ${args.size}" }
+            val millis = (args[0] as Value.IntV).v
+            val seconds = (args[1] as Value.IntV).v
+            val instant = java.time.Instant.ofEpochMilli(millis).plus(seconds, java.time.temporal.ChronoUnit.SECONDS)
+            Value.IntV(instant.toEpochMilli())
+        },
     )
 
     /**
@@ -2210,6 +2697,43 @@ object Builtins {
                 cur = payload.fields.getValue("tail")
             }
             Value.BoolV(true)
+        },
+
+        // Stdlib expansion round 4 — List.Sort. Stable sort over the
+        // Cons/Nil chain using a Bool comparator `(a, b) -> a < b`. The
+        // Bool shape matches the existing predicate convention (List.Filter,
+        // List.Any, List.All) — agents don't have to think in three-way
+        // signed-Int comparator semantics, and the existing `lt` /
+        // `Float.Lt` / `String.Eq`-style builtins can be passed directly.
+        //
+        // Internally: walks the input into a Kotlin MutableList, runs
+        // sortWith using a Comparator that calls apply.apply, then
+        // rebuilds Cons/Nil. The Java mergeSort under sortWith is
+        // stable so equal elements retain their original order.
+        "strand-builtin:List.Sort" to FnH { args, apply ->
+            require(args.size == 2) { "List.Sort expects 2 args (list, comparator), got ${args.size}" }
+            val lessThan = args[1]
+            val elements = mutableListOf<Value>()
+            var cur: Value = args[0]
+            while (true) {
+                val sumV = cur as? Value.SumV ?: break
+                if (sumV.case != "Cons") break
+                val payload = sumV.payload as Value.ProductV
+                elements += payload.fields.getValue("head")
+                cur = payload.fields.getValue("tail")
+            }
+            elements.sortWith(Comparator { a, b ->
+                val aLtB = (apply.apply(lessThan, listOf(a, b)) as Value.BoolV).v
+                if (aLtB) -1 else {
+                    val bLtA = (apply.apply(lessThan, listOf(b, a)) as Value.BoolV).v
+                    if (bLtA) 1 else 0
+                }
+            })
+            var result: Value = Value.SumV("Nil", null)
+            for (e in elements.reversed()) {
+                result = Value.SumV("Cons", Value.ProductV(mapOf("head" to e, "tail" to result)))
+            }
+            result
         },
 
         // Stdlib expansion round 3 phase 3 — Map.Fold (higher-order).
