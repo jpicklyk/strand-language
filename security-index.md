@@ -49,7 +49,7 @@ A security audit of the Kotlin reference implementation surfaced four implementa
 | [Q-039](open-questions.md#Q-039) | EffectDecl–argument coupling: bind capability-check parameters to the actual foreign-call arguments at the verifier level | Critical | Drafted — [`proposals/foreign-effect-projections.md`](proposals/foreign-effect-projections.md) (2026-05-26) |
 | [Q-040](open-questions.md#Q-040) | Interpreter resource limits: ingest depth caps, evaluation step counter, recursion/Fixpoint bounds, memory ceiling | High | Drafted — [`proposals/interpreter-resource-limits.md`](proposals/interpreter-resource-limits.md) (2026-05-26) |
 | [Q-041](open-questions.md#Q-041) | I/O builtin sandboxing: workspace-rooted Fs.* paths, SSRF guard on Http.Request and Net.Connect, defense-in-depth at the foreign-call boundary | High | Drafted — [`proposals/io-builtin-sandboxing.md`](proposals/io-builtin-sandboxing.md) (2026-05-26) |
-| Q-042 | Credential isolation and error redaction: scrub upstream HTTP error content before it surfaces through `InterpretError.IoFailure` | Medium | Pending |
+| [Q-042](open-questions.md#Q-042) | Credential isolation and error redaction: scrub upstream HTTP error content before it surfaces through `InterpretError.IoFailure` | Medium | Drafted — [`proposals/credential-isolation.md`](proposals/credential-isolation.md) (2026-05-26) |
 
 ### Already resolved (security-relevant)
 
@@ -128,7 +128,8 @@ How current implementation coverage maps onto the [`security-model.md`](design/s
 - [`proposals/foreign-effect-projections.md`](proposals/foreign-effect-projections.md) — Q-039 proposal cites § Finding 1 as the audit motivation
 - [`proposals/interpreter-resource-limits.md`](proposals/interpreter-resource-limits.md) — Q-040 proposal cites § Finding 2 as the audit motivation
 - [`proposals/io-builtin-sandboxing.md`](proposals/io-builtin-sandboxing.md) — Q-041 proposal cites § Finding 3 as the audit motivation
-- [`open-questions.md`](open-questions.md) — Q-039, Q-040, Q-041 entries cite this index
+- [`proposals/credential-isolation.md`](proposals/credential-isolation.md) — Q-042 proposal cites § Finding 4 as the audit motivation
+- [`open-questions.md`](open-questions.md) — Q-039, Q-040, Q-041, Q-042 entries cite this index
 - [`impl-kotlin/CLAUDE.md`](impl-kotlin/CLAUDE.md) — Known gaps section references this index from the "With proposals" subsection
 
-Additional incoming references will be added as the Q-042 proposal is drafted.
+All four audit-surfaced findings now have proposals; this index is the cross-cut.
