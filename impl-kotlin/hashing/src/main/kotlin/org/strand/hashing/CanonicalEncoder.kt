@@ -1,10 +1,12 @@
 package org.strand.hashing
 
 import org.strand.core.ConsumerMode
+import org.strand.core.EffectProjection
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
 import org.strand.core.OverflowPolicy
+import org.strand.core.ProjectionSource
 import org.strand.core.RawNodeStore
 import org.strand.core.StoredNode
 
@@ -308,11 +310,20 @@ internal class CanonicalEncoder(
             .map { hash(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
-        return encodeWithTag(CategoryTag.FunctionType, listOf(
+        val baseFields = listOf(
             CanonicalCbor.encodeArray(paramEncodings),
             encodeTypePositionChild(node.result, stack),
             CanonicalCbor.encodeArray(effectHashes),
-        ))
+        )
+        // Q-039: `effectProjections` is gated on non-empty — pre-Q-039
+        // FunctionTypes (no projections) hash byte-identically to their
+        // post-Q-039 form.
+        val allFields = if (node.effectProjections.isEmpty()) {
+            baseFields
+        } else {
+            baseFields + encodeEffectProjectionList(node.effectProjections, stack)
+        }
+        return encodeWithTag(CategoryTag.FunctionType, allFields)
     }
 
     private fun encodeRecursiveType(node: Node.RecursiveType, stack: BinderStack): ByteArray {
@@ -474,19 +485,86 @@ internal class CanonicalEncoder(
     }
 
     private fun encodeForeignNode(node: Node.ForeignNode, stack: BinderStack): ByteArray {
-        // [tag=20, target-utf8-bytes, foreignType-hash, sorted-effect-hashes]
+        // [tag=20, target-utf8-bytes, foreignType-hash, sorted-effect-hashes,
+        //  effectProjections?]
         // The optional `binding → Provenance` edge is metadata-excluded and
         // therefore not present in the canonical encoding (Layer 4 step 1
         // does not yet model the binding edge in the in-memory ADT either).
+        //
+        // Q-039: `effectProjections` is gated on non-empty — pre-Q-039
+        // ForeignNodes (no projections) hash byte-identically to their
+        // post-Q-039 form, so every existing corpus program's hash is
+        // unchanged.
         val effectHashes = node.effects
             .map { hash(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
-        return encodeWithTag(CategoryTag.ForeignNode, listOf(
+        val baseFields = listOf(
             CanonicalCbor.encodeBytes(node.target.toByteArray(Charsets.UTF_8)),
             CanonicalCbor.encodeBytes(hash(node.foreignType, stack)),
             CanonicalCbor.encodeArray(effectHashes),
+        )
+        val allFields = if (node.effectProjections.isEmpty()) {
+            baseFields
+        } else {
+            baseFields + encodeEffectProjectionList(node.effectProjections, stack)
+        }
+        return encodeWithTag(CategoryTag.ForeignNode, allFields)
+    }
+
+    /**
+     * Encode a non-empty list of [EffectProjection] as a single CBOR field
+     * (per Q-039 § 4.2). Used by [encodeForeignNode] and
+     * [encodeFunctionType]; called only when the list is non-empty so the
+     * gate on the calling side preserves pre-Q-039 hashes.
+     *
+     * The projection list is *positional* — its order matches the order of
+     * the enclosing node's `effects` list (each projection covers the
+     * same-index effect). Unlike `effects` (which is encoded as a sorted
+     * set), `effectProjections` is encoded in declaration order because
+     * its order is structural (it parallels `effects`).
+     */
+    private fun encodeEffectProjectionList(
+        projections: List<EffectProjection>,
+        stack: BinderStack,
+    ): ByteArray {
+        val entries = projections.map { proj -> encodeEffectProjection(proj, stack) }
+        return CanonicalCbor.encodeArray(entries)
+    }
+
+    private fun encodeEffectProjection(
+        proj: EffectProjection,
+        stack: BinderStack,
+    ): ByteArray {
+        // Each projection encodes as [category-hash, [source, source, ...]].
+        // The category hash is computed via `hash(...)` so two projections
+        // covering structurally-equal categories produce identical bytes.
+        // Sources are encoded in declaration order — their order is
+        // structural (positional within the EffectCategory.parameters).
+        val sourceEntries = proj.sources.map { src -> encodeProjectionSource(src, stack) }
+        return CanonicalCbor.encodeArray(listOf(
+            CanonicalCbor.encodeBytes(hash(proj.category, stack)),
+            CanonicalCbor.encodeArray(sourceEntries),
         ))
+    }
+
+    private fun encodeProjectionSource(
+        src: ProjectionSource,
+        stack: BinderStack,
+    ): ByteArray {
+        // Tagged-union encoding: [tag, payload]. Tag 0 = ArgRef (payload =
+        // index as CBOR uint), Tag 1 = LiteralNode (payload = target hash
+        // as CBOR bytes). Positions stable forever per Q-039 § 4.2.
+        return when (src) {
+            is ProjectionSource.ArgRef -> CanonicalCbor.encodeArray(listOf(
+                CanonicalCbor.encodeUint(0),
+                CanonicalCbor.encodeUint(src.index.toLong()),
+            ))
+            is ProjectionSource.LiteralNode -> CanonicalCbor.encodeArray(listOf(
+                CanonicalCbor.encodeUint(1),
+                CanonicalCbor.encodeBytes(hash(src.target, stack)),
+            ))
+        }
     }
 
     // ----- Effects and capabilities -----

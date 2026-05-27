@@ -305,6 +305,31 @@ object DagJsonEmitter {
         for ((k, v) in spec.refListFields) {
             fields[k] = JsonArray(v.map { JsonPrimitive(it) })
         }
+        // Q-039: emit effectProjections when non-empty. Each projection
+        // is an object with `category` and `sources`; each source is
+        // either {kind:"ArgRef", index:N} or {kind:"LiteralNode", target:"<id>"}.
+        // Matches the schema in [JsonIngest.optionalEffectProjections].
+        if (spec.effectProjections.isNotEmpty()) {
+            val projections = spec.effectProjections.map { proj ->
+                val sources = proj.sources.map { src ->
+                    when (src) {
+                        is LayerAGrammar.ReservedProjectionSource.ArgRef -> JsonObject(mapOf(
+                            "kind" to JsonPrimitive("ArgRef"),
+                            "index" to JsonPrimitive(src.index),
+                        ))
+                        is LayerAGrammar.ReservedProjectionSource.LiteralNode -> JsonObject(mapOf(
+                            "kind" to JsonPrimitive("LiteralNode"),
+                            "target" to JsonPrimitive(src.target),
+                        ))
+                    }
+                }
+                JsonObject(mapOf(
+                    "category" to JsonPrimitive(proj.category),
+                    "sources" to JsonArray(sources),
+                ))
+            }
+            fields["effectProjections"] = JsonArray(projections)
+        }
         return JsonObject(fields)
     }
 

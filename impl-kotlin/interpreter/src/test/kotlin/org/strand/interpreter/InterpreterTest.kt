@@ -1137,4 +1137,218 @@ class InterpreterTest {
         val v = Interpreter(store, hashToNodeId).eval(root)
         assertEquals(Value.IntV(2L), v)
     }
+
+    // ====================================================================
+    // Q-039 foreign-effect-projections — interpreter synthesis
+    // ====================================================================
+
+    /**
+     * Build a Strand graph that calls a projected `Filesystem.Write`
+     * ForeignNode. The ForeignNode declares `effectProjections=[{
+     * writeFx, [ArgRef(0)] }]` so the interpreter synthesizes the
+     * capability-check value directly from `arguments[0]` — no
+     * authored EffectDecl appears at the inner Application.
+     *
+     * The outer wrapper Lambda is preserved so the path argument has a
+     * VarRef-binder shape that mirrors the Q-031 fixtures.
+     */
+    private fun buildProjectedFilesystemWriteCall(path: String): Loaded = ingestAndGetIds("""{
+        "version": 1, "root": "outerApp",
+        "nodes": {
+          "intT":      { "type": "PrimitiveType", "kind": "Int" },
+          "strT":      { "type": "PrimitiveType", "kind": "String" },
+          "fsWriteFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                         "parameters": ["strT"] },
+          "writeT":    { "type": "FunctionType", "parameters": ["strT"], "result": "intT",
+                         "effects": ["fsWriteFx"] },
+          "write":     { "type": "ForeignNode",
+                         "target": "strand-builtin:Test.EffectfulNoOp",
+                         "foreignType": "writeT",
+                         "effects": ["fsWriteFx"],
+                         "effectProjections": [
+                           { "category": "fsWriteFx",
+                             "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                         ] },
+          "outerP":    { "type": "ParameterDecl", "name": "p", "paramType": "strT" },
+          "pRef":      { "type": "VarRef", "binder": "outerP" },
+          "innerApp":  { "type": "Application", "function": "write",
+                         "arguments": ["pRef"] },
+          "outerLam":  { "type": "Lambda", "parameters": ["outerP"], "body": "innerApp",
+                         "effects": ["fsWriteFx"] },
+          "pathLit":   { "type": "StringLit", "value": ${jsonString(path)} },
+          "outerApp":  { "type": "Application", "function": "outerLam",
+                         "arguments": ["pathLit"] }
+        }
+      }""")
+
+    /**
+     * Q-039 scenario 1 from the proposal § 7. A projected `Fs.Write`
+     * called with `/safe` under a capability grant of
+     * `Filesystem.Write{path: "/safe"}`. The interpreter synthesizes
+     * the capability-check value from `arguments[0]`; the refinement
+     * check passes; the foreign dispatch returns.
+     */
+    @Test
+    fun `Q-039 scenario 1 - projection synthesis happy path with matching capability`() {
+        val (store, root, names, hashToNodeId) = buildProjectedFilesystemWriteCall("/safe")
+        val fsWriteFx = names.getValue("fsWriteFx")
+        val granted = CapabilitySet(mapOf(fsWriteFx to listOf(
+            CapabilityPattern(listOf(
+                CapabilityArgument.Concrete(Value.StringV("/safe")),
+            ))
+        )))
+        val v = Interpreter(store, hashToNodeId).eval(root, granted)
+        // Test.EffectfulNoOp returns IntV(0); what matters here is the
+        // refinement check let the dispatch through.
+        assertEquals(Value.IntV(0L), v)
+    }
+
+    /**
+     * Q-039 scenario 2 from the proposal § 7. A projected `Fs.Write`
+     * called with `/etc/shadow` under a capability grant of only
+     * `Filesystem.Write{path: "/safe"}`. The interpreter synthesizes
+     * the capability-check value from `arguments[0]` — the *actual*
+     * `/etc/shadow` — so the refinement check fails and the foreign
+     * code never receives the unauthorized path. Closes the
+     * security-index.md § Finding 1 attack at the runtime layer.
+     */
+    @Test
+    fun `Q-039 scenario 2 - drift attempt blocked because synthesis sees the real arg`() {
+        val (store, root, names, hashToNodeId) = buildProjectedFilesystemWriteCall("/etc/shadow")
+        val fsWriteFx = names.getValue("fsWriteFx")
+        val granted = CapabilitySet(mapOf(fsWriteFx to listOf(
+            CapabilityPattern(listOf(
+                CapabilityArgument.Concrete(Value.StringV("/safe")),
+            ))
+        )))
+        val ex = assertThrows(InterpretException::class.java) {
+            Interpreter(store, hashToNodeId).eval(root, granted)
+        }
+        val err = ex.error as InterpretError.RefinementViolation
+        assertEquals(fsWriteFx, err.category)
+        // The requirement carries the ACTUAL argument value, not the
+        // authored EffectDecl literal — this is the load-bearing Q-039
+        // invariant.
+        assertEquals(listOf(Value.StringV("/etc/shadow")), err.requirement)
+    }
+
+    /**
+     * Q-039 scenario 11 from the proposal § 7. A projected `Net.Connect`
+     * binding with `effectProjections=[{Network.Connect, [ArgRef(0),
+     * ArgRef(1)]}]` called with `("api.example.com", 443)`. The
+     * interpreter synthesizes a two-element parameter list from the
+     * two arguments; the refinement check matches a concrete grant.
+     */
+    @Test
+    fun `Q-039 scenario 11 - multi-source projection synthesizes both host and port`() {
+        val (store, root, names, hashToNodeId) = ingestAndGetIds("""{
+            "version": 1, "root": "outerApp",
+            "nodes": {
+              "intT":       { "type": "PrimitiveType", "kind": "Int" },
+              "strT":       { "type": "PrimitiveType", "kind": "String" },
+              "netConnFx":  { "type": "EffectCategory", "categoryName": "Network.Connect",
+                              "parameters": ["strT", "intT"] },
+              "connectT":   { "type": "FunctionType", "parameters": ["strT", "intT"], "result": "intT",
+                              "effects": ["netConnFx"] },
+              "connect":    { "type": "ForeignNode", "target": "strand-builtin:Network.Connect",
+                              "foreignType": "connectT", "effects": ["netConnFx"],
+                              "effectProjections": [
+                                { "category": "netConnFx",
+                                  "sources": [
+                                    { "kind": "ArgRef", "index": 0 },
+                                    { "kind": "ArgRef", "index": 1 }
+                                  ] }
+                              ] },
+              "outerH":     { "type": "ParameterDecl", "name": "h", "paramType": "strT" },
+              "outerP":     { "type": "ParameterDecl", "name": "p", "paramType": "intT" },
+              "hRef":       { "type": "VarRef", "binder": "outerH" },
+              "pRef":       { "type": "VarRef", "binder": "outerP" },
+              "innerApp":   { "type": "Application", "function": "connect",
+                              "arguments": ["hRef", "pRef"] },
+              "outerLam":   { "type": "Lambda", "parameters": ["outerH", "outerP"],
+                              "body": "innerApp", "effects": ["netConnFx"] },
+              "hostLit":    { "type": "StringLit", "value": "api.example.com" },
+              "portLit":    { "type": "IntLit", "value": 443 },
+              "outerApp":   { "type": "Application", "function": "outerLam",
+                              "arguments": ["hostLit", "portLit"] }
+            }
+          }""")
+        val netConn = names.getValue("netConnFx")
+        val granted = CapabilitySet(mapOf(netConn to listOf(
+            CapabilityPattern(listOf(
+                CapabilityArgument.Concrete(Value.StringV("api.example.com")),
+                CapabilityArgument.Concrete(Value.IntV(443L)),
+            ))
+        )))
+        val v = Interpreter(store, hashToNodeId).eval(root, granted)
+        // Reference Network.Connect builtin returns IntV(1); refinement
+        // check passed so dispatch went through.
+        assertEquals(Value.IntV(1L), v)
+    }
+
+    /**
+     * Q-039 scenario 10 from the proposal § 7. An outer Lambda passes
+     * its path argument through to a projected `Fs.Write` ForeignNode
+     * inside its body. The outer Application could carry an authored
+     * EffectDecl claiming `/safe` (legacy Q-031 path) but the inner
+     * call site synthesizes from `arguments[0]` — the actual path the
+     * foreign code sees. Capability check fires at the *inner* site
+     * with the real path, raising `RefinementViolation`. Demonstrates
+     * that the security property survives Lambda intermediation even
+     * when the outer call site might lie.
+     */
+    @Test
+    fun `Q-039 scenario 10 - closure propagation through Lambda preserves security at inner foreign call`() {
+        // Wrap the projected writer in TWO Lambdas — an outer wrapper
+        // that the outer caller might use to "smuggle" a different
+        // path. Q-039 synthesis still fires at the inner Fs.Write.
+        val (store, root, names, hashToNodeId) = ingestAndGetIds("""{
+            "version": 1, "root": "outerApp",
+            "nodes": {
+              "intT":      { "type": "PrimitiveType", "kind": "Int" },
+              "strT":      { "type": "PrimitiveType", "kind": "String" },
+              "fsWriteFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                             "parameters": ["strT"] },
+              "writeT":    { "type": "FunctionType", "parameters": ["strT"], "result": "intT",
+                             "effects": ["fsWriteFx"] },
+              "write":     { "type": "ForeignNode",
+                             "target": "strand-builtin:Test.EffectfulNoOp",
+                             "foreignType": "writeT",
+                             "effects": ["fsWriteFx"],
+                             "effectProjections": [
+                               { "category": "fsWriteFx",
+                                 "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                             ] },
+              "innerP":    { "type": "ParameterDecl", "name": "p", "paramType": "strT" },
+              "innerPRef": { "type": "VarRef", "binder": "innerP" },
+              "innerCall": { "type": "Application", "function": "write",
+                             "arguments": ["innerPRef"] },
+              "innerLam":  { "type": "Lambda", "parameters": ["innerP"], "body": "innerCall",
+                             "effects": ["fsWriteFx"] },
+              "outerP":    { "type": "ParameterDecl", "name": "q", "paramType": "strT" },
+              "outerPRef": { "type": "VarRef", "binder": "outerP" },
+              "outerCall": { "type": "Application", "function": "innerLam",
+                             "arguments": ["outerPRef"] },
+              "outerLam":  { "type": "Lambda", "parameters": ["outerP"], "body": "outerCall",
+                             "effects": ["fsWriteFx"] },
+              "evil":      { "type": "StringLit", "value": "/etc/shadow" },
+              "outerApp":  { "type": "Application", "function": "outerLam",
+                             "arguments": ["evil"] }
+            }
+          }""")
+        val fsWriteFx = names.getValue("fsWriteFx")
+        val granted = CapabilitySet(mapOf(fsWriteFx to listOf(
+            CapabilityPattern(listOf(
+                CapabilityArgument.Concrete(Value.StringV("/safe")),
+            ))
+        )))
+        val ex = assertThrows(InterpretException::class.java) {
+            Interpreter(store, hashToNodeId).eval(root, granted)
+        }
+        val err = ex.error as InterpretError.RefinementViolation
+        assertEquals(fsWriteFx, err.category)
+        // The synthesis at the inner Fs.Write site sees the real value
+        // flowing through both Lambdas — `/etc/shadow`, not `/safe`.
+        assertEquals(listOf(Value.StringV("/etc/shadow")), err.requirement)
+    }
 }

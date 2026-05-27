@@ -1,29 +1,43 @@
 # Foreign Effect Projections
 
-**Document:** `proposals/foreign-effect-projections.md`
-**Status:** Draft proposal
-**Date:** 2026-05-26
-**Concerns:** [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md), [`design/security-model.md`](../design/security-model.md), [`decisions/ADR-004-effects-as-edges.md`](../decisions/ADR-004-effects-as-edges.md), [`decisions/ADR-005-foreign-nodes.md`](../decisions/ADR-005-foreign-nodes.md), [`proposals/implemented/refinement-lattice-capability-matching.md`](implemented/refinement-lattice-capability-matching.md), [Q-005](../open-questions.md#Q-005), [Q-031](../open-questions.md#Q-031), [Q-039](../open-questions.md#Q-039), [`security-index.md`](../security-index.md) § Finding 1
+**Document:** `proposals/implemented/foreign-effect-projections.md`
+**Status:** Implemented 2026-05-27 (Kotlin/JVM reference implementation)
+**Original date:** 2026-05-26
+**Concerns:** [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`design/security-model.md`](../../design/security-model.md), [`decisions/ADR-004-effects-as-edges.md`](../../decisions/ADR-004-effects-as-edges.md), [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md), [`proposals/implemented/refinement-lattice-capability-matching.md`](refinement-lattice-capability-matching.md), [Q-005](../../open-questions.md#Q-005), [Q-031](../../open-questions.md#Q-031), [Q-039](../../open-questions.md#Q-039), [`security-index.md`](../../security-index.md) § Finding 1
 **Scope:** Medium
 
-This proposal closes the implementation-level security gap surfaced by the 2026-05-26 audit (recorded as [Q-039](../open-questions.md#Q-039) and Finding 1 in [`security-index.md`](../security-index.md)). It does so by adding a *projection* field to `ForeignNode` and `FunctionType` that binds each foreign-binding's declared effect parameters to the function's actual call-site arguments. The proposal restores the security property that [Q-031](../open-questions.md#Q-031) and [Q-005](../open-questions.md#Q-005) jointly promise: at every refined capability check, the value being checked is the value the foreign code will actually consume.
+## Implementation note (2026-05-27)
+
+The implementation landed across `core/Node.kt` (schema), `core/Json.kt` (ingest), `hashing/CanonicalEncoder.kt` (canonical encoding gated on non-empty), `verifier/Verifier.kt` + `verifier/VerifyError.kt` (seven new error variants, admission + per-Application validators), `interpreter/Interpreter.kt` (synthesis path in `applyForeign`), and `authoring/LayerAGrammar.kt` + `authoring/DagJsonEmitter.kt` (reserved-prelude entries carry their projections; the inline-projection Layer A code remains future work). Six prelude entries (`fsRead`, `fsWrite`, `fsAppend`, `fsExists`, `fsDelete`, `netConnect`) now ship with projections. Corpus 70 (happy path) and 71 (drift-rejected negative) exercise end-to-end. Eight verifier tests cover the seven error variants plus the well-formed accept; four interpreter tests cover synthesis happy path, drift blocked, multi-source projection, and Lambda-intermediated closure propagation. Full `./gradlew test` is green across every existing module; pre-Q-039 corpus hashes are byte-identical because the canonical encoder gates `effectProjections` on non-empty.
+
+Three deviations from the proposal text worth recording:
+
+1. **Per-provider LLM and Vector migration deferred.** The proposal § 4.4 sketches `Anthropic.Messages.Create` projecting `provider = LiteralNode("anthropic"), model = ArgRef(0)`. The current binding signature is `(bytesT) -> bytesT` — the model name lives inside the bytesT request product, not as a positional argument — so an honest projection would require either redesigning the binding signature to surface `model` as a positional argument (a binding-redesign slice beyond Q-039's scope) or extending the projection vocabulary with derived sources (`Selected(arg(0), "model")`) which proposal § 8 explicitly defers. The migration of these eighteen bindings is recorded as a follow-up; the security gap on LLM/Vector bindings persists until that slice. The migrated `Fs.*` and `Net.Connect` cover the load-bearing host-machine attack surface.
+
+2. **Crypto.RandomBytes deferred.** The proposal § 9 lists `Crypto.RandomBytes → [ArgRef(0)]` in the initial migration slice. The current `cryptoFx` reserved-prelude entry declares the EffectCategory with no parameters, and the three Random.* builtins (`randInt(min, max)`, `randFloat()`, `randBytes(n)`) all declare it. Migrating only `randBytes` to a parameterized `Crypto.RandomBytes{length: Int}` would either (a) require splitting the effect category (a spec change that diverges from `design/effects-and-capabilities.md` § E-024), or (b) leave `randInt`/`randFloat` declaring a no-parameter category while `randBytes` declares the parameterized one (an awkward asymmetry). The proposal § 8 acknowledges that wildcard-only categories like Crypto.RandomBytes get marginal benefit from projections; deferring the migration keeps the prelude consistent until a wider effect-category refresh.
+
+3. **Corpus slots shifted to 70/73.** The orchestrator's brief specified slots 69/70 for the happy-path and drift programs. Slot 69 was already occupied by `69-response-schema-spec.json` (N-045 demonstrator that landed on main 2026-05-26 in commit 8fb0faf). Slots 71/72 were reserved by an in-flight Q-040 (interpreter resource limits) worktree for `Fixpoint-no-base-case` and `deep-Application-chain`. To avoid collision Q-039's two corpus programs occupy slots 70 and 73 instead. The semantics are identical to the orchestrator's intent — only the registry slot shifted.
+
+The Layer A grammar gained no new code for inline projection objects in this slice; non-prelude ForeignNodes that need explicit projections emit canonical dag-json directly. The reserved-prelude entries carry their projections through `DagJsonEmitter.synthesizeReserved`. The reverse round-trip (canonical → Layer A density-v4 → canonical) preserves byte-identity for the migrated prelude entries because the canonical-hash equality check is the gating discriminator, not field-by-field matching.
+
+This proposal closes the implementation-level security gap surfaced by the 2026-05-26 audit (recorded as [Q-039](../../open-questions.md#Q-039) and Finding 1 in [`security-index.md`](../../security-index.md)). It does so by adding a *projection* field to `ForeignNode` and `FunctionType` that binds each foreign-binding's declared effect parameters to the function's actual call-site arguments. The proposal restores the security property that [Q-031](../../open-questions.md#Q-031) and [Q-005](../../open-questions.md#Q-005) jointly promise: at every refined capability check, the value being checked is the value the foreign code will actually consume.
 
 ## 1. Problem statement
 
-[Q-031](../open-questions.md#Q-031) made `Application.effectInstances` load-bearing: at every effectful call, the agent declares EffectDecls whose evaluated parameters are matched against granted `CapabilityPattern`s in the runtime context. The matching algorithm in [`CapabilitySet.kt`](../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/CapabilitySet.kt) implements refinement-lattice coverage correctly. The verifier enforces EffectDecl shape — arity, parameter types, category coverage — at admission time.
+[Q-031](../../open-questions.md#Q-031) made `Application.effectInstances` load-bearing: at every effectful call, the agent declares EffectDecls whose evaluated parameters are matched against granted `CapabilityPattern`s in the runtime context. The matching algorithm in [`CapabilitySet.kt`](../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/CapabilitySet.kt) implements refinement-lattice coverage correctly. The verifier enforces EffectDecl shape — arity, parameter types, category coverage — at admission time.
 
 What neither the verifier nor the runtime enforces is the *coupling* between the EffectDecl's parameter expressions and the foreign function's value arguments. The proposal text for Q-031 noted this informally:
 
 > The expressions are typically VarRefs into the application's arguments (which is how the "host" and "port" arguments to a `connect` builtin become the EffectDecl's parameters) but may be any expression of the right type.
 
-In practice, "any expression of the right type" leaves the security model dependent on the agent's honesty. Concretely (verified against [`Interpreter.kt`](../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Interpreter.kt) lines 759–836 and [`Builtins.kt`](../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) lines 395–501):
+In practice, "any expression of the right type" leaves the security model dependent on the agent's honesty. Concretely (verified against [`Interpreter.kt`](../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Interpreter.kt) lines 759–836 and [`Builtins.kt`](../../impl-kotlin/interpreter/src/main/kotlin/org/strand/interpreter/Builtins.kt) lines 395–501):
 
 1. `evalEffectInstances` evaluates the EffectDecl parameter expressions and produces `Map<EffectCategory NodeId, List<Value>>`.
 2. `checkCapabilities` matches those evaluated parameter values against granted patterns.
 3. `applyForeign` evaluates `Application.arguments` independently and passes those values to the builtin.
 4. Nothing requires the values in step (1) to equal the values in step (3).
 
-The exploit shape: a graph declares `Filesystem.Write{path: "/var/log/app.log"}` as its effect instance — matching a granted `Filesystem.Write{path: "/var/log/app.log"}` pattern — while passing `/etc/shadow` as the function's first argument. `Files.write(Paths.get("/etc/shadow"), bytes)` runs. This invalidates the parameter-tagged-capability defense that [`security-model.md`](../design/security-model.md) § Confused deputy synthesis promises:
+The exploit shape: a graph declares `Filesystem.Write{path: "/var/log/app.log"}` as its effect instance — matching a granted `Filesystem.Write{path: "/var/log/app.log"}` pattern — while passing `/etc/shadow` as the function's first argument. `Files.write(Paths.get("/etc/shadow"), bytes)` runs. This invalidates the parameter-tagged-capability defense that [`security-model.md`](../../design/security-model.md) § Confused deputy synthesis promises:
 
 > A program that holds `Filesystem.Write{path: "/var/log/app.log"}` because the design called for that capability specifically is not vulnerable to confused-deputy through the path parameter.
 
@@ -45,7 +59,7 @@ Add an *effect projection* field to `ForeignNode` (and to `FunctionType` for sym
 
 The verifier requires that every `Application` of a ForeignNode-with-projections has `effectInstances` *consistent* with the projection: each EffectDecl parameter expression is either the same NodeId as the indicated `Application.arguments[j]`, or a literal node whose canonical-encoding value equals the indicated literal. The runtime then synthesizes the capability-check parameter values from the projection and the actual evaluated arguments — guaranteed identical to what the foreign code sees.
 
-ForeignNodes without projections continue to work under the current Q-031 semantics, with a known security caveat tracked in [`security-index.md`](../security-index.md). Existing parameterized-effect bindings (Fs.*, Net.*, Process.*, Crypto.*, LLM providers, Vector providers) are migrated to declare projections.
+ForeignNodes without projections continue to work under the current Q-031 semantics, with a known security caveat tracked in [`security-index.md`](../../security-index.md). Existing parameterized-effect bindings (Fs.*, Net.*, Process.*, Crypto.*, LLM providers, Vector providers) are migrated to declare projections.
 
 Lambda-level projections are deliberately deferred to a follow-up (§ 8); the security boundary is the foreign-call site, and tightening ForeignNode closes the attack surface even when intermediate Lambdas misdeclare.
 
@@ -312,16 +326,16 @@ For ForeignNodes without `effectProjections`, the existing Q-031 path runs uncha
 ## References
 
 **Outgoing references:**
-- [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md) — § Effect closure semantics, § Capability mechanism, § Confused deputy mitigation
-- [`design/security-model.md`](../design/security-model.md) — § Confused deputy synthesis (the property this proposal restores)
-- [`decisions/ADR-004-effects-as-edges.md`](../decisions/ADR-004-effects-as-edges.md) — effect declarations as graph topology
-- [`decisions/ADR-005-foreign-nodes.md`](../decisions/ADR-005-foreign-nodes.md) — ForeignNode as the security boundary
-- [`proposals/implemented/refinement-lattice-capability-matching.md`](implemented/refinement-lattice-capability-matching.md) — Q-031, prior art for the EffectDecl mechanism
-- [`security-index.md`](../security-index.md) — Finding 1, the audit entry that motivated this proposal
-- [`open-questions.md`](../open-questions.md) — Q-005, Q-031, Q-039
+- [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md) — § Effect closure semantics, § Capability mechanism, § Confused deputy mitigation
+- [`design/security-model.md`](../../design/security-model.md) — § Confused deputy synthesis (the property this proposal restores)
+- [`decisions/ADR-004-effects-as-edges.md`](../../decisions/ADR-004-effects-as-edges.md) — effect declarations as graph topology
+- [`decisions/ADR-005-foreign-nodes.md`](../../decisions/ADR-005-foreign-nodes.md) — ForeignNode as the security boundary
+- [`proposals/implemented/refinement-lattice-capability-matching.md`](refinement-lattice-capability-matching.md) — Q-031, prior art for the EffectDecl mechanism
+- [`security-index.md`](../../security-index.md) — Finding 1, the audit entry that motivated this proposal
+- [`open-questions.md`](../../open-questions.md) — Q-005, Q-031, Q-039
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-039 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`security-index.md`](../security-index.md) — Q-039 row links here
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
+- [`open-questions.md`](../../open-questions.md) — Q-039 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`security-index.md`](../../security-index.md) — Q-039 row links here
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section

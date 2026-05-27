@@ -3,6 +3,7 @@ package org.strand.verifier
 import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
+import org.strand.core.ProjectionSource
 
 /**
  * Structured verification errors.
@@ -758,6 +759,112 @@ sealed class VerifyError {
         override val at: NodeId,
         val expected: TypeExpr,
         val actual: TypeExpr,
+    ) : VerifyError()
+
+    // ----- Foreign effect projections (Q-039) -----
+
+    /**
+     * The length of [Node.ForeignNode.effectProjections] (or symmetrically
+     * [Node.FunctionType.effectProjections]) does not equal the length of
+     * the declared `effects` list. When projections are present at all
+     * they must cover every effect category — partial projection lists
+     * are ill-formed.
+     */
+    data class ProjectionArityMismatch(
+        override val at: NodeId,
+        val expected: Int,
+        val actual: Int,
+    ) : VerifyError()
+
+    /**
+     * At a positional index in `effectProjections`, the projection's
+     * declared `category` does not equal the `effects[index]` it is
+     * supposed to cover. Projections are positional — entry `i` must
+     * project effect `i`.
+     */
+    data class ProjectionCategoryMismatch(
+        override val at: NodeId,
+        val index: Int,
+        val declaredCategory: NodeId,
+        val projectedCategory: NodeId,
+    ) : VerifyError()
+
+    /**
+     * An EffectProjection's `sources` list length does not equal its
+     * EffectCategory's `parameters` arity. Every category parameter must
+     * have exactly one source.
+     */
+    data class ProjectionSourceArityMismatch(
+        override val at: NodeId,
+        val categoryIndex: Int,
+        val expected: Int,
+        val actual: Int,
+    ) : VerifyError()
+
+    /**
+     * A [ProjectionSource.ArgRef] index is outside the function's
+     * parameter range. ArgRef must reference one of the function's
+     * positional arguments — indices 0 through `signature.parameters.size - 1`.
+     */
+    data class ProjectionArgRefOutOfRange(
+        override val at: NodeId,
+        val categoryIndex: Int,
+        val sourceIndex: Int,
+        val requested: Int,
+        val maxAvailable: Int,
+    ) : VerifyError()
+
+    /**
+     * A [ProjectionSource.LiteralNode] target does not resolve to a
+     * literal node. Per the proposal § 4.1, only [Node.IntLit],
+     * [Node.FloatLit], [Node.StringLit], [Node.BoolLit], [Node.UnitLit],
+     * [Node.BytesLit], and (recursively) ProductValue/SumValue towers
+     * over literals are accepted in V1.
+     */
+    data class ProjectionLiteralNotConstant(
+        override val at: NodeId,
+        val categoryIndex: Int,
+        val sourceIndex: Int,
+        val target: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A [ProjectionSource.LiteralNode] target's type does not
+     * structurally equal the EffectCategory parameter type at the
+     * corresponding position. The capability check would fail at every
+     * call because the wrong-typed value cannot match the granted
+     * pattern shape.
+     */
+    data class ProjectionLiteralTypeMismatch(
+        override val at: NodeId,
+        val categoryIndex: Int,
+        val sourceIndex: Int,
+        val expected: TypeExpr,
+        val actual: TypeExpr,
+    ) : VerifyError()
+
+    /**
+     * At a call site of a projected function, an EffectDecl parameter
+     * expression does not match the projection's source for the same
+     * position. For `ArgRef(j)`, the EffectDecl parameter must be the
+     * exact same NodeId as `Application.arguments[j]`; for
+     * `LiteralNode(t)`, the EffectDecl parameter must be a literal node
+     * whose canonical-form bytes equal `t`'s canonical-form bytes.
+     *
+     * The intent of authoring EffectDecls when the callee is projected
+     * is to make the call site self-documenting — the projection
+     * synthesizes the same values at runtime, so an authored
+     * EffectDecl must agree structurally with what the synthesis would
+     * produce. Drift is rejected at the verifier so the agent learns
+     * exactly which parameter disagreed (which is the foundation of the
+     * Q-039 security property).
+     */
+    data class ProjectionMismatch(
+        override val at: NodeId,
+        val categoryIndex: Int,
+        val sourceIndex: Int,
+        val expected: ProjectionSource,
+        val actualParam: NodeId,
     ) : VerifyError()
 
     /**

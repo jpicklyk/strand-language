@@ -160,10 +160,62 @@ object LayerAGrammar {
         val refFields: Map<String, String> = emptyMap(),
         /** List-of-references fields keyed by JSON field name; values are reserved-name ids. */
         val refListFields: Map<String, List<String>> = emptyMap(),
+        /**
+         * Q-039: Optional `effectProjections` field, populated by reserved
+         * ForeignNode specs that pin each declared effect's parameter
+         * values to specific argument positions or literal nodes.
+         *
+         * Each [ReservedEffectProjection] carries its EffectCategory
+         * reserved name (transitively-closed dependency, like `refFields`)
+         * plus an ordered list of [ReservedProjectionSource]s. Empty
+         * list — the default — preserves the legacy ForeignNode shape
+         * exactly; pre-Q-039 reserved entries hash byte-identically.
+         */
+        val effectProjections: List<ReservedEffectProjection> = emptyList(),
     ) {
         /** Reserved-name ids this node depends on (must also be synthesized). */
         val dependencies: Set<String>
-            get() = refFields.values.toSet() + refListFields.values.flatten().toSet()
+            get() = refFields.values.toSet() +
+                refListFields.values.flatten().toSet() +
+                effectProjections.flatMap { proj ->
+                    listOf(proj.category) + proj.sources.mapNotNull {
+                        (it as? ReservedProjectionSource.LiteralNode)?.target
+                    }
+                }.toSet()
+    }
+
+    /**
+     * Q-039: a reserved-node-spec EffectProjection. Mirrors
+     * [org.strand.core.EffectProjection] but uses reserved-name
+     * strings ([category] and [ReservedProjectionSource.LiteralNode.target])
+     * instead of NodeIds — the [DagJsonEmitter] resolves these names
+     * through the standard prelude transitive closure.
+     */
+    data class ReservedEffectProjection(
+        /** Reserved-name id of the EffectCategory this projection covers. */
+        val category: String,
+        /** Per-position projection source. */
+        val sources: List<ReservedProjectionSource>,
+    )
+
+    /**
+     * Q-039: a reserved-node-spec ProjectionSource. Mirrors
+     * [org.strand.core.ProjectionSource]; the [LiteralNode] target is a
+     * reserved-name string (resolved through the prelude transitive
+     * closure) rather than a NodeId.
+     */
+    sealed class ReservedProjectionSource {
+        /** Projects to the foreign function's positional argument [index]. */
+        data class ArgRef(val index: Int) : ReservedProjectionSource()
+
+        /**
+         * Projects to the literal node bound at the reserved-name
+         * [target]. The reserved node referenced must produce a literal
+         * value (IntLit, FloatLit, StringLit, BoolLit, BytesLit). The
+         * common case in V1 is the per-provider `"anthropic"` /
+         * `"openai"` etc. string literal.
+         */
+        data class LiteralNode(val target: String) : ReservedProjectionSource()
     }
 
     /**
@@ -917,44 +969,90 @@ object LayerAGrammar {
             refFields = mapOf("result" to "stringT"),
         ),
 
-        // ForeignNode entries — filesystem
+        // ForeignNode entries — filesystem. Q-039 projections pin the
+        // path refinement parameter to the function's first argument
+        // (the path string the foreign code receives). The verifier
+        // and runtime synthesize the capability-check value directly
+        // from `arguments[0]` — no drift possible.
         "fsRead" to ReservedNodeSpec(
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Fs.Read"),
             refFields = mapOf("foreignType" to "fsReadT"),
             refListFields = mapOf("effects" to listOf("readFx")),
+            effectProjections = listOf(
+                ReservedEffectProjection(
+                    category = "readFx",
+                    sources = listOf(ReservedProjectionSource.ArgRef(0)),
+                ),
+            ),
         ),
         "fsWrite" to ReservedNodeSpec(
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Fs.Write"),
             refFields = mapOf("foreignType" to "fsWriteT"),
             refListFields = mapOf("effects" to listOf("writeFx")),
+            effectProjections = listOf(
+                ReservedEffectProjection(
+                    category = "writeFx",
+                    sources = listOf(ReservedProjectionSource.ArgRef(0)),
+                ),
+            ),
         ),
         "fsAppend" to ReservedNodeSpec(
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Fs.Append"),
             refFields = mapOf("foreignType" to "fsAppendT"),
             refListFields = mapOf("effects" to listOf("writeFx")),
+            effectProjections = listOf(
+                ReservedEffectProjection(
+                    category = "writeFx",
+                    sources = listOf(ReservedProjectionSource.ArgRef(0)),
+                ),
+            ),
         ),
         "fsExists" to ReservedNodeSpec(
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Fs.Exists"),
             refFields = mapOf("foreignType" to "fsExistsT"),
             refListFields = mapOf("effects" to listOf("readFx")),
+            effectProjections = listOf(
+                ReservedEffectProjection(
+                    category = "readFx",
+                    sources = listOf(ReservedProjectionSource.ArgRef(0)),
+                ),
+            ),
         ),
         "fsDelete" to ReservedNodeSpec(
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Fs.Delete"),
             refFields = mapOf("foreignType" to "fsDeleteT"),
             refListFields = mapOf("effects" to listOf("writeFx")),
+            effectProjections = listOf(
+                ReservedEffectProjection(
+                    category = "writeFx",
+                    sources = listOf(ReservedProjectionSource.ArgRef(0)),
+                ),
+            ),
         ),
 
-        // ForeignNode entries — network sockets + HTTP
+        // ForeignNode entries — network sockets + HTTP. Q-039:
+        // `netConnect` pins the connectFx (Network.Connect{host, port})
+        // refinement parameters to function arguments 0 and 1 — the
+        // same host/port the foreign code actually opens a socket to.
         "netConnect" to ReservedNodeSpec(
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Net.Connect"),
             refFields = mapOf("foreignType" to "netConnectT"),
             refListFields = mapOf("effects" to listOf("connectFx")),
+            effectProjections = listOf(
+                ReservedEffectProjection(
+                    category = "connectFx",
+                    sources = listOf(
+                        ReservedProjectionSource.ArgRef(0),
+                        ReservedProjectionSource.ArgRef(1),
+                    ),
+                ),
+            ),
         ),
         "netSend" to ReservedNodeSpec(
             jsonType = "ForeignNode",
