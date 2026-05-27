@@ -3,6 +3,7 @@ package org.strand.runtime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.strand.core.EvaluationLimits
 import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
@@ -78,6 +79,13 @@ internal class RuntimeContext(
      * path. Null preserves the original interpreter behavior.
      */
     val dispatcherFactory: TransitionDispatcherFactory? = null,
+    /**
+     * Q-040: shared evaluation limits for every spawned instance in this
+     * group. Each actor gets its own [Interpreter.EvalCounters] (the proposal's
+     * "independent per-instance budgets" contract); this carrier propagates
+     * the limit policy uniformly across the group.
+     */
+    val limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
 ) {
     private val instancesMap = ConcurrentHashMap<InstanceId, MachineInstance>()
     private val actorJobsMap = ConcurrentHashMap<InstanceId, Job>()
@@ -99,8 +107,10 @@ internal class RuntimeContext(
         // bound to THIS group's runtime context (Spawn from inside the
         // transition spawns into this group, not some other one).
         val perActorInterpreter = Interpreter(store, hashToNodeId, foreignDispatcher)
-        val transitionFnValue = perActorInterpreter.eval(node.transitionFn, capabilities)
-        val initialStateValue = perActorInterpreter.eval(node.initialState, capabilities)
+        // Q-040: build under the group's limits so eval-time caps apply
+        // from instance construction through every per-event call.
+        val transitionFnValue = perActorInterpreter.eval(node.transitionFn, capabilities, limits)
+        val initialStateValue = perActorInterpreter.eval(node.initialState, capabilities, limits)
 
         // Wire the new instance's I/O through the existing buses. The
         // streams declared by the spawned machine must already exist in
@@ -139,6 +149,7 @@ internal class RuntimeContext(
             outputBuses = outputBuses,
             recorder = recorder,
             halted = false,
+            limits = limits,
         )
         // Increment producer count on each output bus BEFORE launching the
         // actor — slice 3.6's bus.producerHalted() decrements; we must

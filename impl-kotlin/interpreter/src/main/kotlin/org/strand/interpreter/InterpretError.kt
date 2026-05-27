@@ -1,5 +1,6 @@
 package org.strand.interpreter
 
+import org.strand.core.ExhaustionKind
 import org.strand.core.Hash
 import org.strand.core.NodeId
 
@@ -10,9 +11,14 @@ import org.strand.core.NodeId
  * the verifier catches cannot occur here. The errors below are the residual
  * shapes that remain — defensive checks plus host-runtime failures we choose
  * to surface as language-level errors.
+ *
+ * The [at] field is nullable on a single variant ([ResourceExhaustion]) because
+ * the bytecode VM does not currently carry source-mapping from opcodes back to
+ * NodeIds; every other variant carries a non-null NodeId attributing the error
+ * to a specific graph site.
  */
 sealed class InterpretError {
-    abstract val at: NodeId
+    abstract val at: NodeId?
 
     /** A reference resolved to a missing node at runtime. */
     data class MissingNode(override val at: NodeId, val missing: NodeId) : InterpretError()
@@ -111,6 +117,31 @@ sealed class InterpretError {
         override val at: NodeId,
         val kind: String,
         val detail: String,
+    ) : InterpretError()
+
+    /**
+     * Q-040: a host-configured resource cap was exceeded at evaluation
+     * time. The interpreter and the bytecode VM both raise this shape;
+     * the runtime maps to it from `VmResourceExhaustion` at the public
+     * boundary so host code sees a single error variant regardless of
+     * which backend evaluated.
+     *
+     * [kind] discriminates the dimension. [at] is non-null when the
+     * tree-walking interpreter raises (it tracks the current NodeId in
+     * its dispatch loop); it is null when the bytecode VM raises
+     * because opcodes do not carry NodeIds in slice 1 (a Q-017 step 2
+     * source-mapping follow-up may fill this in).
+     *
+     * [current] is the observed counter value at the moment of
+     * exhaustion; [limit] is the configured cap. Both are encoded as
+     * `Long` so step / allocation / wall-clock / stack-depth values
+     * share a uniform shape (the stack-depth value upcasts from Int).
+     */
+    data class ResourceExhaustion(
+        override val at: NodeId?,
+        val kind: ExhaustionKind,
+        val current: Long,
+        val limit: Long,
     ) : InterpretError()
 }
 

@@ -6,6 +6,8 @@ import kotlinx.coroutines.selects.select
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.interpreter.Interpreter
+import org.strand.interpreter.InterpretError
+import org.strand.interpreter.InterpretException
 import org.strand.interpreter.Value
 
 /**
@@ -47,6 +49,15 @@ internal class MachineActor(
     private val inputStreamIndex: Map<NodeId, Int> =
         instance.node.inputStreams.withIndex().associate { (i, id) -> id to i }
 
+    /**
+     * Q-040: per-actor [Interpreter.EvalCounters]. Each actor gets its own
+     * counter — actors are independent execution contexts, so a fixpoint
+     * exhausting one actor's step budget does not affect another. The
+     * counter accumulates across the actor's events (one logical
+     * lifetime, one budget) per the proposal's contract.
+     */
+    private val evalCounters: Interpreter.EvalCounters = Interpreter.EvalCounters()
+
     /** The main actor loop. Runs until all input channels close or [MachineInstance.halted] becomes true. */
     suspend fun run() {
         val openChannels = instance.inputChannels.toMutableMap()
@@ -66,7 +77,20 @@ internal class MachineActor(
                 instance.counters.recordEventReceived()
                 val event = wrapEvent(streamId, payload)
                 instance.recorder?.record(event)
-                stepOnce(event)
+                try {
+                    stepOnce(event)
+                } catch (e: InterpretException) {
+                    // Q-040: a ResourceExhaustion thrown by the per-event
+                    // closure invocation halts THIS actor cleanly — other
+                    // actors in the same group keep running. The actor
+                    // breaks out of its event loop and the `finally` block
+                    // closes outputs through the bus producer-halt counter.
+                    if (e.error is InterpretError.ResourceExhaustion) {
+                        instance.halted = true
+                        break
+                    }
+                    throw e
+                }
             }
             instance.halted = true
         } finally {
@@ -130,6 +154,8 @@ internal class MachineActor(
                 fn = instance.transitionFnValue,
                 args = listOf(instance.currentState, event),
                 capabilities = instance.capabilities,
+                counters = evalCounters,
+                limits = instance.limits,
             )
         // Slice 3.4 metrics: record transition latency immediately after the
         // interpreter call returns; counter increment is paired so a snapshot

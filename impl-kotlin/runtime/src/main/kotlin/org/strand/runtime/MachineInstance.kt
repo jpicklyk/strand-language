@@ -1,6 +1,7 @@
 package org.strand.runtime
 
 import kotlinx.coroutines.channels.Channel
+import org.strand.core.EvaluationLimits
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.interpreter.CapabilitySet
@@ -115,4 +116,9 @@ internal class MachineInstance(
      * care about metrics simply doesn't call `metrics()`.
      */
     val counters: InstanceCounters = InstanceCounters(),
+    /**
+     * Q-040: host-configured evaluation limits for this instance's
+     * per-event closure invocations. Defaults to [EvaluationLimits.DEFAULTS].
+     */
+    val limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
 )

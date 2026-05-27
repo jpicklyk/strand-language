@@ -7,12 +7,15 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.launch
 import org.strand.core.ConsumerMode
+import org.strand.core.EvaluationLimits
 import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.Interpreter
+import org.strand.interpreter.InterpretError
+import org.strand.interpreter.InterpretException
 import org.strand.interpreter.Value
 
 /**
@@ -75,8 +78,25 @@ class StateMachineRuntime(
         machine: NodeId,
         events: List<Value>,
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
+    ): Trace = runMachine(machine, events, capabilities, EvaluationLimits.DEFAULTS)
+
+    /**
+     * Q-040: drive a machine under explicit host-configured [limits]. The
+     * per-event closure invocations share one [Interpreter.EvalCounters]
+     * across the whole event fold — `runMachine` is one logical evaluation,
+     * one budget. A breach mid-event surfaces as a
+     * [HaltReason.ResourceExhaustion] on the trace's terminating halt
+     * record; the per-step closure invocation that hit the cap does NOT
+     * produce a [TraceStep.Step] (the call threw before the step could
+     * complete).
+     */
+    fun runMachine(
+        machine: NodeId,
+        events: List<Value>,
+        capabilities: CapabilitySet,
+        limits: EvaluationLimits,
     ): Trace {
-        val instance = buildInstance(machine, events, capabilities)
+        val instance = buildInstance(machine, events, capabilities, limits)
         val steps = mutableListOf<TraceStep.Step>()
         // Step 1 is a single-input-stream machine; the input queue we built
         // is the only one. We could equally loop over `events` directly,
@@ -84,15 +104,29 @@ class StateMachineRuntime(
         // loop will operate on (so the surrounding control flow stays
         // recognizable across the rewrite).
         val (inputStreamId, queue) = instance.inputQueues.entries.single()
+        // Q-040: one logical run, one EvalCounters budget. Allocated here
+        // so the per-event applyCallable invocations share state — the
+        // proposal's § 4.5 contract.
+        val counters = Interpreter.EvalCounters()
+        var resourceHalt: HaltReason.ResourceExhaustion? = null
+        var eventIndex = 0
         while (queue.isNotEmpty() && !instance.halted) {
             val event = queue.removeFirst()
-            steps += stepOnce(instance, event)
+            try {
+                steps += stepOnce(instance, event, counters, limits)
+            } catch (e: InterpretException) {
+                val err = e.error
+                if (err is InterpretError.ResourceExhaustion) {
+                    resourceHalt = HaltReason.ResourceExhaustion(err.kind, eventIndex)
+                    break
+                }
+                throw e
+            }
+            eventIndex++
         }
-        // Step 1 only halts on event-list exhaustion. Step 2 will add
-        // explicit termination and supervisor-initiated halts.
         val halt = TraceStep.Halt(
             finalState = instance.currentState,
-            reason = HaltReason.EventsExhausted,
+            reason = resourceHalt ?: HaltReason.EventsExhausted,
         )
         // inputStreamId is unused at this point; kept assigned to silence
         // the destructuring "val unused" complaint. The variable exists to
@@ -125,7 +159,19 @@ class StateMachineRuntime(
      * dispatcher). Tests typically pass a `TestScope` for virtual-time
      * scheduling; production callers pass a scope on `Dispatchers.Default`.
      */
-    fun runGroup(group: MachineGroup, scope: CoroutineScope): MachineGroupHandle {
+    fun runGroup(group: MachineGroup, scope: CoroutineScope): MachineGroupHandle =
+        runGroup(group, scope, EvaluationLimits.DEFAULTS)
+
+    /**
+     * Q-040: per-actor [EvalCounters] each carrying [limits]. The
+     * `runGroup` proposal contract is that each actor gets its own
+     * counter — actors are independent execution contexts and exhaustion
+     * in one does not affect another. Per-machine limits could be
+     * threaded distinctly via a `Map<NodeId, EvaluationLimits>` in a
+     * future slice; the current implementation uses one shared limits
+     * value across all actors in the group.
+     */
+    fun runGroup(group: MachineGroup, scope: CoroutineScope, limits: EvaluationLimits): MachineGroupHandle {
         // Pass 0: validate topology. Slice 3.6 relaxations: multi-producer
         // fan-in always allowed; multi-consumer allowed when the stream's
         // consumerMode is Broadcast. Fails fast before allocating any
@@ -198,6 +244,7 @@ class StateMachineRuntime(
             capabilities = group.capabilities,
             recordInputs = group.recordInputs,
             dispatcherFactory = group.dispatcherFactory,
+            limits = limits,
         )
 
         // Pass 2: spawn one initial actor per declared machine. Each
@@ -299,6 +346,23 @@ class StateMachineRuntime(
         additionalEvents: List<Value>,
         nodeIdToHash: Map<NodeId, Hash>,
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
+    ): Trace = resume(machineId, snapshot, additionalEvents, nodeIdToHash, capabilities, EvaluationLimits.DEFAULTS)
+
+    /**
+     * Q-040: resume under explicit [limits]. Allocates a fresh
+     * [Interpreter.EvalCounters] (snapshot-resume resets the budget by
+     * design — counter state is not part of the [Snapshot] format in
+     * slice 3.3). A `resume` call exhausting mid-event surfaces as a
+     * [HaltReason.ResourceExhaustion] on the trace's terminating halt
+     * record, the same shape `runMachine` produces.
+     */
+    fun resume(
+        machineId: NodeId,
+        snapshot: Snapshot,
+        additionalEvents: List<Value>,
+        nodeIdToHash: Map<NodeId, Hash>,
+        capabilities: CapabilitySet,
+        limits: EvaluationLimits,
     ): Trace {
         // Integrity check: the machine has not been recompiled.
         val actualHash = nodeIdToHash[machineId]
@@ -319,7 +383,7 @@ class StateMachineRuntime(
             "Layer 6 step 3 slice 3.3 sync resume requires exactly 1 input stream " +
                 "(matching runMachine); got ${node.inputStreams.size}"
         }
-        val transitionFnValue = interpreter.eval(node.transitionFn, capabilities)
+        val transitionFnValue = interpreter.eval(node.transitionFn, capabilities, limits)
         val inputStreamId = node.inputStreams.single()
         val inputQueues = mapOf<NodeId, ArrayDeque<Value>>(
             inputStreamId to ArrayDeque(additionalEvents)
@@ -335,18 +399,35 @@ class StateMachineRuntime(
             inputQueues = inputQueues,
             outputSinks = outputSinks,
             halted = false,
+            limits = limits,
         )
         val steps = mutableListOf<TraceStep.Step>()
         val queue = instance.inputQueues.getValue(inputStreamId)
+        // Q-040: snapshot-resume allocates a fresh EvalCounters (the
+        // resume receives a fresh budget; counter state is NOT persisted
+        // in Snapshot in slice 3.3).
+        val counters = Interpreter.EvalCounters()
+        var resourceHalt: HaltReason.ResourceExhaustion? = null
+        var eventIndex = 0
         while (queue.isNotEmpty() && !instance.halted) {
             val event = queue.removeFirst()
-            steps += stepOnce(instance, event)
+            try {
+                steps += stepOnce(instance, event, counters, limits)
+            } catch (e: InterpretException) {
+                val err = e.error
+                if (err is InterpretError.ResourceExhaustion) {
+                    resourceHalt = HaltReason.ResourceExhaustion(err.kind, eventIndex)
+                    break
+                }
+                throw e
+            }
+            eventIndex++
         }
         return Trace(
             steps = steps,
             final = TraceStep.Halt(
                 finalState = instance.currentState,
-                reason = HaltReason.EventsExhausted,
+                reason = resourceHalt ?: HaltReason.EventsExhausted,
             ),
         )
     }
@@ -391,6 +472,7 @@ class StateMachineRuntime(
         machineId: NodeId,
         events: List<Value>,
         capabilities: CapabilitySet,
+        limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
     ): MachineInstance {
         val node = store.get(machineId) as? Node.StateMachine
             ?: error(
@@ -403,8 +485,8 @@ class StateMachineRuntime(
             "Layer 6 step 1 runtime requires exactly 1 input stream; " +
                 "got ${node.inputStreams.size} — the verifier should have rejected this."
         }
-        val transitionFnValue = interpreter.eval(node.transitionFn, capabilities)
-        val initialStateValue = interpreter.eval(node.initialState, capabilities)
+        val transitionFnValue = interpreter.eval(node.transitionFn, capabilities, limits)
+        val initialStateValue = interpreter.eval(node.initialState, capabilities, limits)
         val inputStreamId = node.inputStreams.single()
         val inputQueues = mapOf<NodeId, ArrayDeque<Value>>(
             inputStreamId to ArrayDeque(events)
@@ -420,6 +502,7 @@ class StateMachineRuntime(
             inputQueues = inputQueues,
             outputSinks = outputSinks,
             halted = false,
+            limits = limits,
         )
     }
 
@@ -442,7 +525,12 @@ class StateMachineRuntime(
      * are unconditional; mismatches indicate either a verifier bug or that
      * the runtime was handed an unverified graph.
      */
-    private fun stepOnce(instance: MachineInstance, event: Value): TraceStep.Step {
+    private fun stepOnce(
+        instance: MachineInstance,
+        event: Value,
+        counters: Interpreter.EvalCounters = Interpreter.EvalCounters(),
+        limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
+    ): TraceStep.Step {
         val before = instance.currentState
         // Track A.4: dispatch through the per-instance dispatcher when
         // one was supplied (VM-backed in test scenarios, etc.); fall
@@ -454,6 +542,8 @@ class StateMachineRuntime(
                 fn = instance.transitionFnValue,
                 args = listOf(before, event),
                 capabilities = instance.capabilities,
+                counters = counters,
+                limits = limits,
             )
         val resultProduct = resultValue as? Value.ProductV
             ?: error(

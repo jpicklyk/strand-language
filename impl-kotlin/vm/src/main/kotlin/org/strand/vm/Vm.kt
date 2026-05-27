@@ -4,7 +4,12 @@ import org.strand.bytecode.Chunk
 import org.strand.bytecode.ChunkTable
 import org.strand.bytecode.Constant
 import org.strand.bytecode.Opcode
+import org.strand.core.EvaluationLimits
+import org.strand.core.ExhaustionKind
+import org.strand.core.NodeId
 import org.strand.interpreter.Builtins
+import org.strand.interpreter.InterpretError
+import org.strand.interpreter.InterpretException
 import org.strand.interpreter.Value
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -50,8 +55,16 @@ class Vm(private val table: ChunkTable) {
      * [VmCapabilityViolation], matching the interpreter's `Interpreter.eval`
      * default).
      */
-    fun run(initialCaps: Set<Int> = emptySet()): Value {
-        val raw = evaluate(initialCaps)
+    fun run(initialCaps: Set<Int> = emptySet()): Value =
+        run(initialCaps, EvaluationLimits.DEFAULTS)
+
+    /**
+     * Q-040: VM run under explicit [limits]. Breaches surface as
+     * [InterpretError.ResourceExhaustion] (with `atNode = null` —
+     * opcodes do not carry NodeIds in slice 1).
+     */
+    fun run(initialCaps: Set<Int>, limits: EvaluationLimits): Value {
+        val raw = evaluate(initialCaps, limits)
         return raw as? Value
             ?: error("HALT expected a Value at top of stack, got ${raw::class.simpleName}")
     }
@@ -66,14 +79,22 @@ class Vm(private val table: ChunkTable) {
      * The return type is [Any] because the top-of-stack at HALT may be
      * any of the VM's runtime representations; callers cast appropriately.
      */
-    fun evaluate(initialCaps: Set<Int> = emptySet()): Any {
+    fun evaluate(initialCaps: Set<Int> = emptySet()): Any =
+        evaluate(initialCaps, EvaluationLimits.DEFAULTS)
+
+    /**
+     * Q-040: evaluate under explicit [limits]. Allocates a fresh
+     * [VmCounters]; same shape as [Interpreter]'s `EvalCounters` but
+     * uses `frames.size` for stack-depth accounting.
+     */
+    fun evaluate(initialCaps: Set<Int>, limits: EvaluationLimits): Any {
         currentCaps = initialCaps
         capStack.clear()
         handlers.clear()
         val frame = Frame(chunk = table.root, captures = emptyArray())
         val frames = ArrayDeque<Frame>()
         frames.addLast(frame)
-        return runLoop(frames)
+        return runLoopMapped(frames, limits)
     }
 
     /**
@@ -90,7 +111,13 @@ class Vm(private val table: ChunkTable) {
      * capabilities the closure declares; [caps] is set as the current
      * capability context for the apply duration.
      */
-    fun applyClosure(closure: Any, args: List<Value>, caps: Set<Int>): Value {
+    fun applyClosure(closure: Any, args: List<Value>, caps: Set<Int>): Value =
+        applyClosure(closure, args, caps, EvaluationLimits.DEFAULTS)
+
+    /**
+     * Q-040: applyClosure under explicit [limits].
+     */
+    fun applyClosure(closure: Any, args: List<Value>, caps: Set<Int>, limits: EvaluationLimits): Value {
         currentCaps = caps
         // Note: we do NOT clear capStack / handlers here; the caller may
         // be invoking this from inside an active CapabilityScope or Handler
@@ -119,10 +146,31 @@ class Vm(private val table: ChunkTable) {
             }
             else -> error("applyClosure: $closure is not callable (got ${closure::class.simpleName})")
         }
-        val raw = runLoop(frames)
+        val raw = runLoopMapped(frames, limits)
         return raw as? Value
             ?: error("applyClosure: callable returned ${raw::class.simpleName}, expected a Value")
     }
+
+    /**
+     * Q-040: [runLoop] wrapper that maps the VM-internal
+     * [VmResourceExhaustion] to the shared
+     * [InterpretError.ResourceExhaustion] shape so host callers do not
+     * have to catch two distinct exception types. The mapping uses
+     * `atNode = null` because slice 1 of the bytecode VM does not
+     * carry source NodeIds on opcodes (Q-017 step 2 source-mapping is
+     * a follow-up).
+     */
+    private fun runLoopMapped(frames: ArrayDeque<Frame>, limits: EvaluationLimits): Any =
+        try {
+            runLoop(frames, limits)
+        } catch (e: VmResourceExhaustion) {
+            throw InterpretException(InterpretError.ResourceExhaustion(
+                at = e.atNode,
+                kind = e.kind,
+                current = e.current,
+                limit = e.limit,
+            ))
+        }
 
     /**
      * The dispatch loop, extracted so [run], [evaluate], and [applyClosure]
@@ -130,8 +178,61 @@ class Vm(private val table: ChunkTable) {
      * empty (RET to the bottom) or HALT fires. Returns the top-of-stack
      * value at termination (may be Value or VmClosure or other).
      */
-    private fun runLoop(frames: ArrayDeque<Frame>): Any {
+    private fun runLoop(frames: ArrayDeque<Frame>, limits: EvaluationLimits): Any {
+        // Q-040 per-evaluation counters: steps + allocations only. Stack
+        // depth is read from frames.size at each step (no separate
+        // counter needed); wall clock samples System.nanoTime() every
+        // [EvaluationLimits.wallClockSampleEvery] steps from this anchor.
+        var steps = 0L
+        var allocated = 0L
+        val startNanos = System.nanoTime()
+        // Allocation guard. Called from every Value-construction site
+        // (PUSH_*, MAKE_FOREIGN, PRODUCT_NEW, SUM_NEW, EQ, SUM_CASE_IS,
+        // SUM_PAYLOAD, MAKE_CLOSURE, MAKE_FIXPOINT). Increment-then-
+        // compare so the error reports the actual count past the cap.
+        fun bumpAllocation() {
+            allocated++
+            if (allocated > limits.maxAllocatedValues) {
+                throw VmResourceExhaustion(
+                    kind = ExhaustionKind.AllocatedValues,
+                    atNode = null,
+                    current = allocated,
+                    limit = limits.maxAllocatedValues,
+                )
+            }
+        }
         while (true) {
+            // Per-step guards. Increment-then-compare matches the
+            // interpreter's contract for the error count value.
+            steps++
+            if (steps > limits.maxSteps) {
+                throw VmResourceExhaustion(
+                    kind = ExhaustionKind.Steps,
+                    atNode = null,
+                    current = steps,
+                    limit = limits.maxSteps,
+                )
+            }
+            if (frames.size > limits.maxStackDepth) {
+                throw VmResourceExhaustion(
+                    kind = ExhaustionKind.StackDepth,
+                    atNode = null,
+                    current = frames.size.toLong(),
+                    limit = limits.maxStackDepth.toLong(),
+                )
+            }
+            if (limits.wallClockSampleEvery > 0 &&
+                steps % limits.wallClockSampleEvery == 0L) {
+                val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L
+                if (elapsedMs > limits.wallClockBudgetMillis) {
+                    throw VmResourceExhaustion(
+                        kind = ExhaustionKind.WallClock,
+                        atNode = null,
+                        current = elapsedMs,
+                        limit = limits.wallClockBudgetMillis,
+                    )
+                }
+            }
             val current = frames.last()
             val op = Opcode.fromByte(current.code[current.pc])
             current.pc++
@@ -141,23 +242,28 @@ class Vm(private val table: ChunkTable) {
 
                 Opcode.PUSH_INT -> {
                     val c = current.constant() as Constant.IntC
+                    bumpAllocation()
                     current.stack.add(Value.IntV(c.value))
                 }
                 Opcode.PUSH_FLOAT -> {
                     val c = current.constant() as Constant.FloatC
+                    bumpAllocation()
                     current.stack.add(Value.FloatV(c.value))
                 }
                 Opcode.PUSH_STRING -> {
                     val c = current.constant() as Constant.StringC
+                    bumpAllocation()
                     current.stack.add(Value.StringV(c.value))
                 }
                 Opcode.PUSH_BOOL -> {
                     val c = current.constant() as Constant.BoolC
+                    bumpAllocation()
                     current.stack.add(Value.BoolV(c.value))
                 }
                 Opcode.PUSH_UNIT -> current.stack.add(Value.UnitV)
                 Opcode.PUSH_BYTES -> {
                     val c = current.constant() as Constant.BytesC
+                    bumpAllocation()
                     current.stack.add(Value.BytesV(c.value))
                 }
 
@@ -188,6 +294,7 @@ class Vm(private val table: ChunkTable) {
                 Opcode.MAKE_FOREIGN -> {
                     val targetC = current.constant() as Constant.ForeignTargetC
                     val effectsC = current.constant() as Constant.EffectsC
+                    bumpAllocation()
                     current.stack.add(VmForeign(targetC.target, effectsC.effectIds))
                 }
 
@@ -222,6 +329,7 @@ class Vm(private val table: ChunkTable) {
                         fields[c.names[i]] = current.stack[startIdx + i] as Value
                     }
                     repeat(count) { current.stack.removeLast() }
+                    bumpAllocation()
                     current.stack.add(Value.ProductV(fields))
                 }
 
@@ -239,12 +347,14 @@ class Vm(private val table: ChunkTable) {
                     // case has one; otherwise emit a nullary SumV.
                     val c = current.constant() as Constant.SumCaseC
                     val payload = if (c.hasPayload) current.stack.removeLast() as Value else null
+                    bumpAllocation()
                     current.stack.add(Value.SumV(c.caseName, payload))
                 }
 
                 Opcode.EQ -> {
                     val rhs = current.stack.removeLast()
                     val lhs = current.stack.removeLast()
+                    bumpAllocation()
                     current.stack.add(Value.BoolV(lhs == rhs))
                 }
 
@@ -252,6 +362,7 @@ class Vm(private val table: ChunkTable) {
                     val c = current.constant() as Constant.StringC
                     val sum = current.stack.removeLast() as? Value.SumV
                         ?: error("SUM_CASE_IS: top of stack is not a SumV")
+                    bumpAllocation()
                     current.stack.add(Value.BoolV(sum.case == c.value))
                 }
 
@@ -288,6 +399,7 @@ class Vm(private val table: ChunkTable) {
                         captureArray[i] = current.stack[startIdx + i]
                     }
                     repeat(captureCount) { current.stack.removeLast() }
+                    bumpAllocation()
                     current.stack.add(VmFixpoint(chunkIdx, captureArray, effectsC.effectIds))
                 }
 
@@ -305,6 +417,7 @@ class Vm(private val table: ChunkTable) {
                         captureArray[i] = current.stack[startIdx + i]
                     }
                     repeat(captureCount) { current.stack.removeLast() }
+                    bumpAllocation()
                     current.stack.add(VmClosure(chunkIdx, captureArray, effectsC.effectIds))
                 }
 
@@ -573,3 +686,24 @@ class VmOpcodeNotImplemented(val op: Opcode) :
  * because [Value] is sealed in `:interpreter`).
  */
 class VmNoMatchingCase : RuntimeException("VM: no Match case matched the scrutinee")
+
+/**
+ * Q-040 VM-internal exception. Raised by [Vm.runLoop] when a resource
+ * cap is breached and translated to the shared
+ * [InterpretError.ResourceExhaustion] at the [Vm.runLoopMapped] public
+ * boundary so host callers see a single error shape regardless of
+ * which backend evaluated.
+ *
+ * [atNode] is always null in slice 1 because opcodes do not carry
+ * NodeIds; a Q-017 step 2 source-mapping follow-up may fill this in.
+ * The interpreter's `InterpretError.ResourceExhaustion.at` accepts
+ * null precisely so the VM-mapped variant has a place to land.
+ */
+class VmResourceExhaustion(
+    val kind: ExhaustionKind,
+    val atNode: NodeId?,
+    val current: Long,
+    val limit: Long,
+) : RuntimeException(
+    "VM resource exhausted: kind=$kind current=$current limit=$limit at=$atNode"
+)

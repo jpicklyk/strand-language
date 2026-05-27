@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "root": "fixApp",
+  "nodes": {
+    "unitT":     { "type": "PrimitiveType", "kind": "Unit" },
+    "fT":        { "type": "FunctionType", "parameters": ["unitT"], "result": "unitT" },
+    "rec":       { "type": "ParameterDecl", "name": "rec", "paramType": "fT" },
+    "x":         { "type": "ParameterDecl", "name": "x", "paramType": "unitT" },
+    "recRef":    { "type": "VarRef", "binder": "rec" },
+    "unitLit":   { "type": "UnitLit" },
+    "innerCall": { "type": "Application", "function": "recRef", "arguments": ["unitLit"] },
+    "body":      { "type": "Lambda", "parameters": ["rec", "x"], "body": "innerCall" },
+    "fix":       { "type": "Fixpoint", "recursionType": "fT", "body": "body" },
+    "arg":       { "type": "UnitLit" },
+    "fixApp":    { "type": "Application", "function": "fix", "arguments": ["arg"] }
+  }
+}
