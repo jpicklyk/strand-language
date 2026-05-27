@@ -40,6 +40,13 @@ package org.strand.core
  *    Reaching this cap raises [ExhaustionKind.NodeCount].
  *  - [maxIngestBytes]: maximum byte size of an ingested program. Reaching
  *    this cap raises [ExhaustionKind.IngestBytes].
+ *  - [errorVerbosity] (Q-042): how aggressively agent-visible runtime
+ *    error messages are scrubbed of credential values. See
+ *    [ErrorVerbosity] for variant semantics. Default is
+ *    [ErrorVerbosity.Redacted] — every `IoFailure.detail` runs through
+ *    the centralised `CredentialScrubber` before exposure. Production
+ *    deployments stay on this default; dev environments may opt up to
+ *    [ErrorVerbosity.Full] with the understood leakage risk.
  */
 data class EvaluationLimits(
     val maxSteps: Long = 10_000_000L,
@@ -50,6 +57,7 @@ data class EvaluationLimits(
     val maxJsonDepth: Int = 512,
     val maxNodeCount: Int = 100_000,
     val maxIngestBytes: Long = 64L * 1024L * 1024L,
+    val errorVerbosity: ErrorVerbosity = ErrorVerbosity.Redacted,
 ) {
     companion object {
         /**
@@ -65,6 +73,12 @@ data class EvaluationLimits(
          * and for tests that need to exhaust a single specific dimension
          * without tripping any of the others. Production callers should
          * use [DEFAULTS] or a custom tightened policy, not [PERMISSIVE].
+         *
+         * **Q-042 note:** [errorVerbosity] is deliberately preserved at
+         * [ErrorVerbosity.Redacted] in PERMISSIVE — "permissive" means
+         * resource limits, not credential leakage. A benchmark that
+         * happens to interact with the credential surface should not
+         * accidentally expose secrets.
          */
         val PERMISSIVE = EvaluationLimits(
             maxSteps = Long.MAX_VALUE,
@@ -75,6 +89,7 @@ data class EvaluationLimits(
             maxJsonDepth = Int.MAX_VALUE,
             maxNodeCount = Int.MAX_VALUE,
             maxIngestBytes = Long.MAX_VALUE,
+            errorVerbosity = ErrorVerbosity.Redacted,
         )
     }
 }

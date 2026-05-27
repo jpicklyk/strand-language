@@ -30,6 +30,7 @@ class BuiltinsPineconeTest {
 
     @BeforeEach
     fun setUp() {
+        CredentialScrubber.resetForTesting()
         transport = InMemoryHttpTransport()
         Builtins.vectorHttpTransport = transport
         Builtins.credentialProvider = InMemoryCredentialProvider(mapOf(
@@ -42,6 +43,7 @@ class BuiltinsPineconeTest {
         Builtins.vectorHttpTransport = JdkHttpTransport
         Builtins.credentialProvider = EnvCredentialProvider
         ResourceTable.resetForTest()
+        CredentialScrubber.resetForTesting()
     }
 
     private fun openConfigValue(): Value.ProductV = Value.ProductV(mapOf(
@@ -275,5 +277,38 @@ class BuiltinsPineconeTest {
         lookup("strand-builtin:Pinecone.Index.Delete").invoke(listOf(handle, listOfStrings("a")))
         lookup("strand-builtin:Pinecone.Index.Fetch").invoke(listOf(handle, listOfStrings("a")))
         lookup("strand-builtin:Pinecone.Index.Close").invoke(listOf(handle))
+    }
+
+    // -- Q-042 scenario 4: upstream response echoing the API key is scrubbed --
+
+    @Test
+    fun `Q-042 upstream error echoing the API key has the key scrubbed in IoFailure detail`() {
+        // The setUp() installed `pk-test-1234` (12 chars) — above the
+        // scrubber's 8-character minimum, so the value is registered.
+        // A misconfigured upstream that echoes the key back in its
+        // error response must surface as scrubbed IoFailure detail.
+        val handle = lookup("strand-builtin:Pinecone.Index.Open").invoke(listOf(openConfigValue()))
+        transport.on(
+            "POST",
+            "$testHost/vectors/upsert",
+            HttpResponse(
+                401,
+                """{"error":"unauthorized — provided Api-Key=pk-test-1234 is invalid"}""".toByteArray(),
+            ),
+        )
+        val items = listOfItems(upsertItem("doc1", vec(1f, 0f, 0f), metadata()))
+        val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
+            lookup("strand-builtin:Pinecone.Index.Upsert").invoke(listOf(handle, items))
+        }
+        assertEquals("pinecone-upsert", ex.kind)
+        org.junit.jupiter.api.Assertions.assertFalse(
+            "pk-test-1234" in ex.detail,
+            "API key leaked through scrubbed IoFailure detail: ${ex.detail}",
+        )
+        assertTrue("[REDACTED:pinecone:api_key]" in ex.detail,
+            "scrubbed placeholder should appear in detail: ${ex.detail}")
+        assertTrue("unauthorized" in ex.detail)
+        // The unscrubbed form preserves the raw value for ErrorVerbosity.Full.
+        assertTrue("pk-test-1234" in ex.unscrubbedDetail)
     }
 }

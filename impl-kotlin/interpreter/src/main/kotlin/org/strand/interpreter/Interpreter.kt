@@ -243,6 +243,35 @@ class Interpreter(
         val startNanos: Long = System.nanoTime(),
     )
 
+    /**
+     * Q-042: translate a runtime [IoFailure] thrown by a foreign call into
+     * the verifier-translated [InterpretError.IoFailure] surfaced to the
+     * agent, honouring the active [ErrorVerbosity].
+     *
+     *  - [ErrorVerbosity.Redacted] (default) reads the already-scrubbed
+     *    `io.detail` field — every registered credential value has been
+     *    replaced with its `[REDACTED:<provider>:<key>]` placeholder.
+     *  - [ErrorVerbosity.Full] reads `io.unscrubbedDetail` — the raw
+     *    interpolated text. Opt-in, dev/debug only.
+     *  - [ErrorVerbosity.RedactedWithKindOnly] strips the detail
+     *    entirely, surfacing only the structured `kind` discriminator.
+     *
+     * The verbosity arrives via [EvaluationLimits.errorVerbosity] threaded
+     * from the runtime entry point through the existing limits-plumbing.
+     */
+    private fun translateIoFailure(
+        at: NodeId,
+        io: IoFailure,
+        limits: EvaluationLimits,
+    ): InterpretError.IoFailure {
+        val detail = when (limits.errorVerbosity) {
+            org.strand.core.ErrorVerbosity.Redacted -> io.detail
+            org.strand.core.ErrorVerbosity.Full -> io.unscrubbedDetail
+            org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
+        }
+        return InterpretError.IoFailure(at = at, kind = io.kind, detail = detail)
+    }
+
     private fun eval(
         id: NodeId,
         env: Map<NodeId, Value>,
@@ -699,7 +728,11 @@ class Interpreter(
         }
         is Value.ForeignFn -> {
             checkCapabilities(id, callable.node.effects, emptyMap(), context)
-            foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
+            try {
+                foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
+            } catch (io: IoFailure) {
+                throw InterpretException(translateIoFailure(id, io, limits))
+            }
             val builtin = Builtins.lookup(callable.node.target)
                 ?: throw InterpretException(
                     InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
@@ -707,9 +740,7 @@ class Interpreter(
             try {
                 builtin.invoke(args)
             } catch (io: IoFailure) {
-                throw InterpretException(
-                    InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
-                )
+                throw InterpretException(translateIoFailure(id, io, limits))
             }
         }
         is Value.FixpointFn -> {
@@ -831,7 +862,11 @@ class Interpreter(
             evalEffectInstances(env, context, handlers, app, counters, limits)
         }
         checkCapabilities(id, fn.node.effects, instances, context)
-        foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
+        try {
+            foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
+        } catch (io: IoFailure) {
+            throw InterpretException(translateIoFailure(id, io, limits))
+        }
         // Higher-order lookup wins over standard lookup; the registries
         // are disjoint so this ordering is conservative.
         val higherOrder = Builtins.lookupHigherOrder(fn.node.target)
@@ -842,9 +877,7 @@ class Interpreter(
             return try {
                 higherOrder.invoke(args, apply)
             } catch (io: IoFailure) {
-                throw InterpretException(
-                    InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
-                )
+                throw InterpretException(translateIoFailure(id, io, limits))
             }
         }
         val builtin = Builtins.lookup(fn.node.target)
@@ -856,10 +889,10 @@ class Interpreter(
         } catch (io: IoFailure) {
             // Translate runtime IoFailure (thrown by Layer 4 step 2
             // builtins on actual OS failures) into a structured
-            // InterpretError carrying the call-site NodeId.
-            throw InterpretException(
-                InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
-            )
+            // InterpretError carrying the call-site NodeId. Q-042
+            // routes through [translateIoFailure] to honour the active
+            // [ErrorVerbosity] in the threaded limits.
+            throw InterpretException(translateIoFailure(id, io, limits))
         }
     }
 
@@ -927,7 +960,11 @@ class Interpreter(
                 // callbacks (passing e.g. Bool.Not as a List.Map fn) are
                 // rare but legitimate — and they don't recurse into the
                 // higher-order machinery because Bool.Not is a standard Fn.
-                foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
+                try {
+                    foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
+                } catch (io: IoFailure) {
+                    throw InterpretException(translateIoFailure(id, io, limits))
+                }
                 val builtin = Builtins.lookup(callable.node.target)
                     ?: throw InterpretException(
                         InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
@@ -935,9 +972,7 @@ class Interpreter(
                 try {
                     builtin.invoke(args)
                 } catch (io: IoFailure) {
-                    throw InterpretException(
-                        InterpretError.IoFailure(at = id, kind = io.kind, detail = io.detail)
-                    )
+                    throw InterpretException(translateIoFailure(id, io, limits))
                 }
             }
             else -> throw InterpretException(

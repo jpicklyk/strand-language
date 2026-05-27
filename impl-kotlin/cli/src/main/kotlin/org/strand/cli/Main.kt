@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.strand.authoring.Authoring
 import org.strand.authoring.AuthoringException
 import org.strand.authoring.ConstraintGrammar
+import org.strand.core.ErrorVerbosity
 import org.strand.core.EvaluationLimits
 import org.strand.core.IngestError
 import org.strand.core.JsonIngest
@@ -35,16 +36,18 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
- * Q-040 CLI flag set. `--max-steps`, `--max-stack-depth`,
+ * Q-040 + Q-042 CLI flag set. `--max-steps`, `--max-stack-depth`,
  * `--max-allocated-values`, `--wall-clock-ms`, `--max-json-depth`,
  * `--max-node-count`, and `--max-ingest-bytes` all take a single
  * numeric value (Long for the {steps, allocated, wall-clock, ingest-bytes}
- * dimensions; Int for {stack-depth, json-depth, node-count}). Absent
- * flags inherit from [EvaluationLimits.DEFAULTS].
+ * dimensions; Int for {stack-depth, json-depth, node-count}). Q-042
+ * adds `--error-verbosity {redacted|full|kind-only}` for the credential-
+ * isolation surface. Absent flags inherit from [EvaluationLimits.DEFAULTS].
  *
  * Returns the parsed [EvaluationLimits] together with the residual flag
- * set (flags not in the Q-040 vocabulary, for the per-subcommand parser
- * to dispatch against `--grant-all` / `--metrics` / `--emit-json` / etc.).
+ * set (flags not in the Q-040 / Q-042 vocabulary, for the per-subcommand
+ * parser to dispatch against `--grant-all` / `--metrics` / `--emit-json` /
+ * etc.).
  */
 private fun parseLimits(flags: List<String>): Pair<EvaluationLimits, Set<String>> {
     var limits = EvaluationLimits.DEFAULTS
@@ -54,7 +57,7 @@ private fun parseLimits(flags: List<String>): Pair<EvaluationLimits, Set<String>
         val flag = flags[i]
         val v = { f: String ->
             val raw = flags.getOrNull(i + 1)
-                ?: error("$f requires a numeric argument")
+                ?: error("$f requires an argument")
             i++
             raw
         }
@@ -86,6 +89,24 @@ private fun parseLimits(flags: List<String>): Pair<EvaluationLimits, Set<String>
             "--max-ingest-bytes" -> {
                 val n = v(flag).toLongOrNull() ?: error("--max-ingest-bytes requires a Long")
                 limits = limits.copy(maxIngestBytes = n)
+            }
+            "--error-verbosity" -> {
+                val raw = v(flag)
+                val verbosity = when (raw) {
+                    "redacted" -> ErrorVerbosity.Redacted
+                    "full" -> {
+                        // Q-042 § 4.5: Full mode logs a warning at runtime
+                        // entry so operators see the non-default surfacing.
+                        System.err.println(
+                            "warning: --error-verbosity=full surfaces unscrubbed IoFailure detail " +
+                                "(may include credential values); use only in dev/debug environments"
+                        )
+                        ErrorVerbosity.Full
+                    }
+                    "kind-only" -> ErrorVerbosity.RedactedWithKindOnly
+                    else -> error("--error-verbosity expects {redacted|full|kind-only}, got '$raw'")
+                }
+                limits = limits.copy(errorVerbosity = verbosity)
             }
             else -> remaining += flag
         }
@@ -616,4 +637,11 @@ private fun usage() {
     System.err.println("    --max-json-depth <Int>       ingest JSON nesting cap (default 512)")
     System.err.println("    --max-node-count <Int>       ingest node-count cap (default 100_000)")
     System.err.println("    --max-ingest-bytes <Long>    ingest byte-size cap (default 67_108_864)")
+    System.err.println()
+    System.err.println("  Q-042 error-redaction (single flag):")
+    System.err.println("    --error-verbosity <mode>     where <mode> is one of:")
+    System.err.println("                                   redacted   (default — IoFailure.detail scrubbed of registered")
+    System.err.println("                                              credentials via CredentialScrubber)")
+    System.err.println("                                   full       (dev/debug only — surfaces unscrubbed detail; logs warning)")
+    System.err.println("                                   kind-only  (most restrictive — strips detail entirely)")
 }

@@ -26,6 +26,7 @@ class BuiltinsChromaTest {
 
     @BeforeEach
     fun setUp() {
+        CredentialScrubber.resetForTesting()
         transport = InMemoryHttpTransport()
         Builtins.vectorHttpTransport = transport
         Builtins.credentialProvider = InMemoryCredentialProvider(mapOf(
@@ -44,6 +45,7 @@ class BuiltinsChromaTest {
         Builtins.vectorHttpTransport = JdkHttpTransport
         Builtins.credentialProvider = EnvCredentialProvider
         ResourceTable.resetForTest()
+        CredentialScrubber.resetForTesting()
     }
 
     private fun openConfigValue(): Value.ProductV = Value.ProductV(mapOf(
@@ -263,5 +265,38 @@ class BuiltinsChromaTest {
         }
         assertEquals("chroma-upsert", ex.kind)
         assertTrue(ex.detail.contains("500"))
+    }
+
+    // -- Q-042 scenario 4: upstream response echoing the API key is scrubbed --
+
+    @Test
+    fun `Q-042 upstream error echoing the API key has the key scrubbed in IoFailure detail`() {
+        // setUp registered `chroma-test-token` (17 chars). A misconfigured
+        // upstream that echoes the X-Chroma-Token value back in its error
+        // response must surface as scrubbed IoFailure detail.
+        val handle = lookup("strand-builtin:Chroma.Collection.Open").invoke(listOf(openConfigValue()))
+        transport.on(
+            "POST",
+            "$server/api/v1/collections/$collectionId/upsert",
+            HttpResponse(
+                401,
+                """{"detail":"forbidden token chroma-test-token rejected by policy"}""".toByteArray(),
+            ),
+        )
+        val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
+            lookup("strand-builtin:Chroma.Collection.Add").invoke(listOf(
+                handle,
+                listOfItems(upsertItem("a", vec(1f, 0f, 0f), emptyMetadata())),
+            ))
+        }
+        assertEquals("chroma-upsert", ex.kind)
+        org.junit.jupiter.api.Assertions.assertFalse(
+            "chroma-test-token" in ex.detail,
+            "API key leaked through scrubbed IoFailure detail: ${ex.detail}",
+        )
+        assertTrue("[REDACTED:chroma:api_key]" in ex.detail,
+            "scrubbed placeholder should appear in detail: ${ex.detail}")
+        assertTrue("forbidden" in ex.detail)
+        assertTrue("chroma-test-token" in ex.unscrubbedDetail)
     }
 }

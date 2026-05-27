@@ -38,7 +38,7 @@ object AnthropicProvider {
         client: LlmHttpClient = DefaultLlmHttpClient,
         credentials: CredentialProvider = Builtins.credentialProvider,
     ): GenerateResult {
-        val key = credentials.apiKey("anthropic")
+        val credential = credentials.apiKey("anthropic")
             ?: throw IoFailure(
                 "anthropic-credentials-missing",
                 "no API key configured for provider 'anthropic' (env: ANTHROPIC_API_KEY)",
@@ -75,8 +75,12 @@ object AnthropicProvider {
             }
         }
 
+        // Q-042: single auditable `.reveal()` call site for the Anthropic
+        // provider. The revealed value is consumed by the HTTP header
+        // builder below and immediately leaves scope; the [Credential]
+        // wrapper protects every other interpolation site in this file.
         val headers = listOf(
-            "x-api-key" to key,
+            "x-api-key" to credential.reveal(),
             "anthropic-version" to API_VERSION,
             "content-type" to "application/json",
         )

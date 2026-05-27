@@ -118,5 +118,44 @@ object ResourceTable {
  * disk full, broken pipe, unknown handle, etc.). Per the Layer 4 step
  * 2 design call, IO failures are exceptions rather than Result-typed
  * values. The interpreter surfaces them as [InterpretError.IoFailure].
+ *
+ * **Q-042 credential scrubbing.** The constructor runs the supplied
+ * `detail` through [CredentialScrubber.scrub] at construction time and
+ * stores the scrubbed form in [detail]. The raw, unscrubbed text is
+ * preserved in [unscrubbedDetail] for the `ErrorVerbosity.Full`
+ * opt-in path; `Redacted` (default) and `RedactedWithKindOnly`
+ * verbosities never read it. The construction-time scrub is the single
+ * mandatory pass — no per-call-site change is required for upstream
+ * response bodies that interpolate credential values into IoFailure
+ * detail to be redacted automatically.
+ *
+ * Two-arg construction `IoFailure(kind, detail)` is the universal call
+ * pattern; existing call sites in [Builtins], [AnthropicProvider],
+ * [OpenAIProvider], [GeminiProvider], [PineconeProvider], and
+ * [ChromaProvider] benefit from scrubbing without change.
  */
-class IoFailure(val kind: String, val detail: String) : RuntimeException("$kind: $detail")
+class IoFailure(
+    val kind: String,
+    rawDetail: String,
+) : RuntimeException("$kind: ${CredentialScrubber.scrub(rawDetail)}") {
+
+    /**
+     * The scrubbed `detail` exposed to host code that catches the
+     * exception. Every registered credential value (see
+     * [CredentialScrubber.register]) appearing literally in the raw
+     * detail is replaced with the `[REDACTED:<provider>:<key>]`
+     * placeholder before this field is materialised.
+     */
+    val detail: String = CredentialScrubber.scrub(rawDetail)
+
+    /**
+     * The original, unscrubbed detail string. Read only by the
+     * `ErrorVerbosity.Full` materialiser in
+     * [InterpretError.IoFailure] translation — see § 4.5 of
+     * `proposals/implemented/credential-isolation.md`. Production
+     * deployments default to `ErrorVerbosity.Redacted`, in which the
+     * raw value is structurally unreachable from agent-facing error
+     * surfaces.
+     */
+    val unscrubbedDetail: String = rawDetail
+}

@@ -39,7 +39,7 @@ object OpenAIProvider {
         client: LlmHttpClient = DefaultLlmHttpClient,
         credentials: CredentialProvider = Builtins.credentialProvider,
     ): GenerateResult {
-        val key = credentials.apiKey("openai")
+        val credential = credentials.apiKey("openai")
             ?: throw IoFailure(
                 "openai-credentials-missing",
                 "no API key configured for provider 'openai' (env: OPENAI_API_KEY)",
@@ -85,8 +85,10 @@ object OpenAIProvider {
             }
         }
 
+        // Q-042: single auditable `.reveal()` call site for OpenAI generate.
+        // The revealed value is consumed by the Bearer-token header below.
         val headers = listOf(
-            "Authorization" to "Bearer $key",
+            "Authorization" to "Bearer ${credential.reveal()}",
             "Content-Type" to "application/json",
         )
 
@@ -117,7 +119,7 @@ object OpenAIProvider {
         client: LlmHttpClient = DefaultLlmHttpClient,
         credentials: CredentialProvider = Builtins.credentialProvider,
     ): ByteArray {
-        val key = credentials.apiKey("openai")
+        val credential = credentials.apiKey("openai")
             ?: throw IoFailure(
                 "openai-credentials-missing",
                 "no API key configured for provider 'openai' (env: OPENAI_API_KEY)",
@@ -130,8 +132,10 @@ object OpenAIProvider {
             if (req.dimensions != null) put("dimensions", JsonPrimitive(req.dimensions))
         }
 
+        // Q-042: single auditable `.reveal()` call site for OpenAI embed.
+        // The revealed value is consumed by the Bearer-token header below.
         val headers = listOf(
-            "Authorization" to "Bearer $key",
+            "Authorization" to "Bearer ${credential.reveal()}",
             "Content-Type" to "application/json",
         )
 

@@ -30,6 +30,7 @@ class ToolDispatchLoopTest {
 
     @BeforeEach
     fun setUp() {
+        CredentialScrubber.resetForTesting()
         captured = RecordingHttpClient()
         Builtins.llmHttpClient = captured
         Builtins.credentialProvider = StaticCredentialProvider(mapOf("anthropic" to "sk-test"))
@@ -41,6 +42,7 @@ class ToolDispatchLoopTest {
         Builtins.llmHttpClient = savedClient
         Builtins.credentialProvider = savedCredentials
         Builtins.verifierNodeTypes = savedNodeTypes
+        CredentialScrubber.resetForTesting()
     }
 
     @Test
