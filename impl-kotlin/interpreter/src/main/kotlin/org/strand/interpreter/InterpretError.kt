@@ -143,6 +143,29 @@ sealed class InterpretError {
         val current: Long,
         val limit: Long,
     ) : InterpretError()
+
+    /**
+     * Q-041: a `Fs.*`, `Net.Connect`, or `Http.Request` builtin saw an
+     * argument that the active [SandboxPolicy] forbids. Distinct from
+     * [CapabilityViolation] (the category itself was not granted) and
+     * [RefinementViolation] (the granted category did not cover the
+     * requirement). Sandbox violations indicate that the capability
+     * permits the operation but the runtime refuses because the
+     * argument names an out-of-policy resource (path traversal,
+     * cloud-metadata IP, etc.).
+     *
+     * [kind] discriminates the gate that rejected the argument; [detail]
+     * is a human-readable description of what was tried. The detail
+     * string has been run through [CredentialScrubber.scrub] at
+     * runtime-exception construction so it cannot leak registered
+     * credentials even if a future policy interpolates them into a
+     * path or hostname.
+     */
+    data class SandboxViolation(
+        override val at: NodeId,
+        val kind: SandboxViolationKind,
+        val detail: String,
+    ) : InterpretError()
 }
 
 class InterpretException(val error: InterpretError) : RuntimeException(error.toString())

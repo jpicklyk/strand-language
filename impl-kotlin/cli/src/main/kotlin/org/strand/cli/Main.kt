@@ -19,9 +19,15 @@ import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.hashing.FinalizedProgram
 import org.strand.hashing.Hasher
+import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
+import org.strand.interpreter.EscapePolicy
+import org.strand.interpreter.FsPolicy
+import org.strand.interpreter.HostPattern
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.InterpretException
+import org.strand.interpreter.NetPolicy
+import org.strand.interpreter.SandboxPolicy
 import org.strand.interpreter.Value
 import org.strand.runtime.EventCodec
 import org.strand.runtime.MachineGroup
@@ -36,7 +42,7 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
- * Q-040 + Q-042 CLI flag set. `--max-steps`, `--max-stack-depth`,
+ * Q-040 + Q-041 + Q-042 CLI flag set. `--max-steps`, `--max-stack-depth`,
  * `--max-allocated-values`, `--wall-clock-ms`, `--max-json-depth`,
  * `--max-node-count`, and `--max-ingest-bytes` all take a single
  * numeric value (Long for the {steps, allocated, wall-clock, ingest-bytes}
@@ -44,13 +50,24 @@ import kotlin.system.exitProcess
  * adds `--error-verbosity {redacted|full|kind-only}` for the credential-
  * isolation surface. Absent flags inherit from [EvaluationLimits.DEFAULTS].
  *
- * Returns the parsed [EvaluationLimits] together with the residual flag
- * set (flags not in the Q-040 / Q-042 vocabulary, for the per-subcommand
- * parser to dispatch against `--grant-all` / `--metrics` / `--emit-json` /
- * etc.).
+ * Q-041 adds `--workspace-root <path>`, `--allow-fs-escape`,
+ * `--allow-host <glob>` (repeatable), and `--allow-net-internal` for
+ * the sandbox surface. Absent flags inherit from
+ * [SandboxPolicy.SECURE_DEFAULT] — CLI invocations are agent-facing so
+ * they get the default-deny policy. (The library default on
+ * [Builtins.sandboxPolicy] is the open variant so the 895-test
+ * baseline runs unchanged; CLI overrides the singleton at startup.)
+ *
+ * Returns the parsed [EvaluationLimits], the parsed [SandboxPolicy],
+ * and the residual flag set (flags not in the Q-040 / Q-041 / Q-042
+ * vocabulary, for the per-subcommand parser to dispatch against
+ * `--grant-all` / `--metrics` / `--emit-json` / etc.).
  */
-private fun parseLimits(flags: List<String>): Pair<EvaluationLimits, Set<String>> {
+private fun parseLimits(flags: List<String>): Triple<EvaluationLimits, SandboxPolicy, Set<String>> {
     var limits = EvaluationLimits.DEFAULTS
+    // CLI default is secure; flags relax it.
+    var fsPolicy = SandboxPolicy.SECURE_DEFAULT.fs
+    var netPolicy = SandboxPolicy.SECURE_DEFAULT.net
     val remaining = mutableSetOf<String>()
     var i = 0
     while (i < flags.size) {
@@ -108,11 +125,28 @@ private fun parseLimits(flags: List<String>): Pair<EvaluationLimits, Set<String>
                 }
                 limits = limits.copy(errorVerbosity = verbosity)
             }
+            "--workspace-root" -> {
+                val rawPath = v(flag)
+                val root = java.nio.file.Paths.get(rawPath).toAbsolutePath()
+                fsPolicy = fsPolicy.copy(workspaceRoot = root)
+            }
+            "--allow-fs-escape" -> {
+                fsPolicy = fsPolicy.copy(escape = EscapePolicy.Allow)
+            }
+            "--allow-host" -> {
+                val pattern = v(flag)
+                netPolicy = netPolicy.copy(
+                    allowedHosts = netPolicy.allowedHosts + HostPattern(pattern),
+                )
+            }
+            "--allow-net-internal" -> {
+                netPolicy = netPolicy.copy(defaultDeny = false, blockedRanges = emptyList())
+            }
             else -> remaining += flag
         }
         i++
     }
-    return limits to remaining
+    return Triple(limits, SandboxPolicy(fs = fsPolicy, net = netPolicy), remaining)
 }
 
 /**
@@ -213,7 +247,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         exitProcess(2)
     }
     val path = args[1]
-    val (limits, remaining) = parseLimits(args.drop(2))
+    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(2))
     val grantAll = "--grant-all" in remaining
     val unknown = remaining - setOf("--grant-all")
     if (unknown.isNotEmpty()) {
@@ -243,6 +277,12 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // (informational, per the proposal's default disposition).
             if (!runSchemaCheck(finalized, result, limits)) exitProcess(1)
             if (command == "run") {
+                // Q-041: install the sandbox policy on the Builtins
+                // singleton before eval. The library default is
+                // open; CLI invocations override to secure (or to
+                // whatever the flags request).
+                val priorSandbox = Builtins.sandboxPolicy
+                Builtins.sandboxPolicy = sandboxPolicy
                 try {
                     val interp = Interpreter(finalized.store, finalized.hashToNodeId)
                     val caps = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY
@@ -251,6 +291,8 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                 } catch (e: InterpretException) {
                     System.err.println("interpretation failed: ${e.error}")
                     exitProcess(1)
+                } finally {
+                    Builtins.sandboxPolicy = priorSandbox
                 }
             }
         }
@@ -293,7 +335,7 @@ private fun runMachine(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val (limits, remaining) = parseLimits(args.drop(4))
+    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(4))
     val grantAll = "--grant-all" in remaining
     val unknown = remaining - setOf("--grant-all")
     if (unknown.isNotEmpty()) {
@@ -324,6 +366,9 @@ private fun runMachine(args: Array<String>) {
             val eventsText = File(eventsPath).readText()
             val events = EventCodec.parseEventList(eventsText)
             val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
+            // Q-041: install sandbox policy for the duration of the run.
+            val priorSandbox = Builtins.sandboxPolicy
+            Builtins.sandboxPolicy = sandboxPolicy
             try {
                 val caps = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY
                 val trace = runtime.runMachine(finalized.root, events, caps, limits)
@@ -331,6 +376,8 @@ private fun runMachine(args: Array<String>) {
             } catch (e: InterpretException) {
                 System.err.println("machine evaluation failed: ${e.error}")
                 exitProcess(1)
+            } finally {
+                Builtins.sandboxPolicy = priorSandbox
             }
         }
     }
@@ -376,7 +423,7 @@ private fun runGroup(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val (limits, remaining) = parseLimits(args.drop(4))
+    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(4))
     val grantAll = "--grant-all" in remaining
     val emitMetrics = "--metrics" in remaining
     val unknown = remaining - setOf("--grant-all", "--metrics")
@@ -444,6 +491,9 @@ private fun runGroup(args: Array<String>) {
     val nameByNodeId: Map<NodeId, String> = ingest.nameMap.entries
         .associate { (name, id) -> id to name }
 
+    // Q-041: install sandbox policy for the duration of the group run.
+    val priorSandbox = Builtins.sandboxPolicy
+    Builtins.sandboxPolicy = sandboxPolicy
     try {
         runBlocking {
             val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
@@ -475,6 +525,8 @@ private fun runGroup(args: Array<String>) {
     } catch (e: InterpretException) {
         System.err.println("group evaluation failed: ${e.error}")
         exitProcess(1)
+    } finally {
+        Builtins.sandboxPolicy = priorSandbox
     }
 }
 
@@ -644,4 +696,12 @@ private fun usage() {
     System.err.println("                                              credentials via CredentialScrubber)")
     System.err.println("                                   full       (dev/debug only — surfaces unscrubbed detail; logs warning)")
     System.err.println("                                   kind-only  (most restrictive — strips detail entirely)")
+    System.err.println()
+    System.err.println("  Q-041 sandbox flags (default-deny; flags relax the secure default):")
+    System.err.println("    --workspace-root <path>      directory below which Fs.* paths must lie (default cwd)")
+    System.err.println("    --allow-fs-escape            permit Fs.* paths outside workspace root (default deny)")
+    System.err.println("    --allow-host <glob>          add host glob to network allowlist (repeatable)")
+    System.err.println("    --allow-net-internal         disable network default-deny + blocked-range list")
+    System.err.println("                                 (use only for trusted environments — opens RFC1918,")
+    System.err.println("                                 loopback, link-local, cloud-metadata to outbound calls)")
 }

@@ -1071,12 +1071,21 @@ object LayerAGrammar {
             stringFields = mapOf("target" to "strand-builtin:Net.Close"),
             refFields = mapOf("foreignType" to "netCloseT"),
         ),
-        // Http.Request declares all three Network.* effects since the
-        // underlying implementation establishes a connection, sends
-        // the request, and reads the response.
+        // Q-041: the prelude `httpReq` entry now points at the legacy
+        // Http.RequestFromUrl wrapper (single-URL signature, preserved
+        // for backward compatibility). The new component-style
+        // Http.Request — seven positional args (host, port, scheme,
+        // path, method, headers, body) — is NOT in the prelude because
+        // the response shape includes a recursive headers list that
+        // cannot be expressed in the implicit prelude's static FunctionType.
+        // Agents that want the projection-friendly form construct
+        // explicit FNT + FRN at the use site.
+        //
+        // Effect set is unchanged: connect, send, receive — the
+        // wrapper dispatches through the same code path.
         "httpReq" to ReservedNodeSpec(
             jsonType = "ForeignNode",
-            stringFields = mapOf("target" to "strand-builtin:Http.Request"),
+            stringFields = mapOf("target" to "strand-builtin:Http.RequestFromUrl"),
             refFields = mapOf("foreignType" to "httpReqT"),
             refListFields = mapOf("effects" to listOf("connectFx", "netSendFx", "netRecvFx")),
         ),

@@ -260,7 +260,11 @@ class BuiltinsIoTest {
             }
             serverThread.start()
 
-            val fn = Builtins.lookup("strand-builtin:Http.Request")!!
+            // Q-041: Http.Request is now the seven-arg signature; the legacy
+// three-arg call uses Http.RequestFromUrl which parses host-side
+// and dispatches to the same path. This test exercises the
+// legacy shape.
+val fn = Builtins.lookup("strand-builtin:Http.RequestFromUrl")!!
             val result = fn.invoke(listOf(
                 Value.StringV("GET"),
                 Value.StringV("http://127.0.0.1:$port/"),
@@ -308,7 +312,11 @@ class BuiltinsIoTest {
             }
             serverThread.start()
 
-            val fn = Builtins.lookup("strand-builtin:Http.Request")!!
+            // Q-041: Http.Request is now the seven-arg signature; the legacy
+// three-arg call uses Http.RequestFromUrl which parses host-side
+// and dispatches to the same path. This test exercises the
+// legacy shape.
+val fn = Builtins.lookup("strand-builtin:Http.RequestFromUrl")!!
             val payload = "post payload from strand".toByteArray(Charsets.UTF_8)
             val result = fn.invoke(listOf(
                 Value.StringV("POST"),
@@ -326,7 +334,11 @@ class BuiltinsIoTest {
 
     @Test
     fun `Http_Request with malformed URL raises IoFailure`() {
-        val fn = Builtins.lookup("strand-builtin:Http.Request")!!
+        // Q-041: Http.Request is now the seven-arg signature; the legacy
+// three-arg call uses Http.RequestFromUrl which parses host-side
+// and dispatches to the same path. This test exercises the
+// legacy shape.
+val fn = Builtins.lookup("strand-builtin:Http.RequestFromUrl")!!
         val ex = org.junit.jupiter.api.assertThrows<IoFailure> {
             fn.invoke(listOf(
                 Value.StringV("GET"),

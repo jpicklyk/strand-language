@@ -288,7 +288,7 @@ The interpreter changes are localised to three surfaces:
 - [`proposals/implemented/agent-native-capabilities.md`](agent-native-capabilities.md) — § 4.4 credential provider design (Q-037 Phase 1)
 - [`proposals/implemented/agent-native-vector-stores.md`](agent-native-vector-stores.md) — § 4.2 credential provider design (Q-038 Phase 1)
 - [`proposals/implemented/interpreter-resource-limits.md`](interpreter-resource-limits.md) — `EvaluationLimits` carrier this proposal grafts onto
-- [`proposals/io-builtin-sandboxing.md`](../io-builtin-sandboxing.md) — `SandboxPolicy` neighbour; subprocess-environment filtering is shared territory
+- [`proposals/implemented/io-builtin-sandboxing.md`](io-builtin-sandboxing.md) — `SandboxPolicy` neighbour; subprocess-environment filtering is shared territory
 - [`security-index.md`](../../security-index.md) — Finding 4, the audit entry that motivated this proposal
 - [`open-questions.md`](../../open-questions.md) — Q-042
 

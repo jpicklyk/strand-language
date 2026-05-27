@@ -349,7 +349,7 @@ Foreign-node builtins (94):
     hexOf                           — Bytes.FormatHex (lowercase output)
     fsRead fsWrite fsAppend fsExists fsDelete   — Fs.* filesystem (effectful; readFx for Read/Exists, writeFx for Write/Append/Delete). Q-039: each pins its effect's `path` refinement parameter to ArgRef(0) — the verifier and runtime synthesize the capability-check value from the function's first argument.
     netConnect netSend netRecv netClose         — Net.* sockets (effectful; netConnect→connectFx, netSend→netSendFx, netRecv→netRecvFx, netClose has no effect — closing the dual of opening). Q-039: netConnect pins connectFx's (host, port) refinement parameters to ArgRef(0) and ArgRef(1).
-    httpReq                                     — Http.Request → {status: Int, body: Bytes} (effectful; declares connectFx, netSendFx, netRecvFx)
+    httpReq                                     — Http.RequestFromUrl → {status: Int, body: Bytes} (effectful; declares connectFx, netSendFx, netRecvFx). Q-041 legacy single-URL wrapper; the new seven-arg Http.Request signature stays out of the prelude (its response shape includes a recursive header list that the implicit prelude can't express). Construct the seven-arg form via explicit FNT + FRN at the use site.
     procWait                                    — Process.Wait → exit code Int (effectful; declares procWaitFx)
     sleep                                       — Time.Sleep (effectful; declares sleepFx)
     strLen subStr indexOf contains replace      — String.* core (pure)
@@ -701,13 +701,57 @@ Sync JVM sockets. Async actor-loop integration is a follow-up; for now
     strand-builtin:Net.Send(handle: Int, bytes: Bytes) -> Int  (bytes written)
     strand-builtin:Net.Receive(handle: Int, maxBytes: Int) -> Bytes  (empty on EOF)
     strand-builtin:Net.Close(handle: Int) -> Unit  (idempotent)
-    strand-builtin:Http.Request(method: String, url: String, body: Bytes)
+    strand-builtin:Http.Request(
+        host: String, port: Int, scheme: String, path: String,
+        method: String, headers: List<{name: String, value: String}>,
+        body: Bytes,
+    ) -> {status: Int, body: Bytes, headers: List<{name: String, value: String}>}
+    strand-builtin:Http.RequestFromUrl(method: String, url: String, body: Bytes)
         -> {status: Int, body: Bytes}
 
-`Http.Request` wraps URL parsing + socket + HTTP/1.1 framing. HTTPS via
-the JVM's default truststore. Effect categories: declare `Network.Connect`,
-`Network.Send`, `Network.Receive` (or a single `Network.*` if your
-policy is broad).
+`Http.Request` is the canonical seven-arg signature — the
+`(host, port)` arguments are positional so Q-039's projection vocabulary
+can bind capability-check parameters to them via `ArgRef(0)` /
+`ArgRef(1)`. The scheme is validated to be `http` or `https`; other
+schemes (e.g., `file://`) raise `SandboxViolation(HttpSchemeRejected)`.
+Effect categories: declare `Network.Connect`, `Network.Send`,
+`Network.Receive` (or a single `Network.*` if your policy is broad).
+
+`Http.RequestFromUrl` is a legacy single-URL convenience wrapper that
+parses host-side and dispatches to the seven-arg form, so the sandbox
+runs uniformly. Returns the pre-Q-041 shape `{status, body}` (no
+headers). Use the seven-arg form for new code so capability-check
+values bind to actual function arguments; use `Http.RequestFromUrl`
+when you have a URL string already in hand and don't care about
+fine-grained projection.
+
+### I/O sandbox (`SandboxPolicy`)
+
+Every `Fs.*`, `Net.Connect`, and `Http.Request` call passes through a
+host-configured `SandboxPolicy(fs: FsPolicy, net: NetPolicy)` at the
+foreign-call boundary. Default (CLI invocations): workspace-rooted
+filesystem (current working directory; escape via `..`, absolute
+paths outside, or symlinks raises `SandboxViolation(FsPathEscape |
+FsSymlinkRejected)`); network default-deny on loopback, RFC1918,
+link-local, multicast, broadcast, IPv6 ULA, and cloud-metadata IPs
+(`169.254.169.254`, `metadata.google.internal`, etc.); DNS
+`PinAtCheck` so the second resolution cannot subvert the first.
+Violations raise `InterpretError.SandboxViolation(at, kind, detail)`
+distinct from `IoFailure` (host OS error), `CapabilityViolation`
+(category absent), and `RefinementViolation` (category present but
+pattern doesn't cover).
+
+The sandbox is **runtime policy, not a graph property** — the verifier
+does not see it, the canonical encoding does not record it. Two
+evaluations of the same canonical graph under different policies
+produce different results.
+
+CLI relaxation flags (default-deny otherwise):
+
+    --workspace-root <path>      directory below which Fs.* paths must lie
+    --allow-fs-escape            permit Fs.* paths outside workspace root
+    --allow-host <glob>          add host glob to network allowlist (repeatable)
+    --allow-net-internal         disable network default-deny + blocked-range list
 
 ### Process + env (`Process.*`)
 

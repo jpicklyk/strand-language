@@ -272,6 +272,32 @@ class Interpreter(
         return InterpretError.IoFailure(at = at, kind = io.kind, detail = detail)
     }
 
+    /**
+     * Q-041: translate a runtime [SandboxViolation] thrown by
+     * [FsSandbox.resolve] or [NetSandbox.checkConnect] (or by a builtin
+     * that detects an out-of-policy scheme, etc.) into the
+     * verifier-translated [InterpretError.SandboxViolation] surfaced to
+     * the agent.
+     *
+     * Mirrors [translateIoFailure]: same verbosity branching, same
+     * scrubbed-vs-unscrubbed detail discipline. The detail strings are
+     * built from path arguments and host/port values — none of which
+     * should contain credentials — but the verbosity gate is honoured
+     * defensively in case a future policy interpolates them.
+     */
+    private fun translateSandboxViolation(
+        at: NodeId,
+        sv: SandboxViolation,
+        limits: EvaluationLimits,
+    ): InterpretError.SandboxViolation {
+        val detail = when (limits.errorVerbosity) {
+            org.strand.core.ErrorVerbosity.Redacted -> sv.detail
+            org.strand.core.ErrorVerbosity.Full -> sv.unscrubbedDetail
+            org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
+        }
+        return InterpretError.SandboxViolation(at = at, kind = sv.kind, detail = detail)
+    }
+
     private fun eval(
         id: NodeId,
         env: Map<NodeId, Value>,
@@ -732,6 +758,8 @@ class Interpreter(
                 foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
             } catch (io: IoFailure) {
                 throw InterpretException(translateIoFailure(id, io, limits))
+            } catch (sv: SandboxViolation) {
+                throw InterpretException(translateSandboxViolation(id, sv, limits))
             }
             val builtin = Builtins.lookup(callable.node.target)
                 ?: throw InterpretException(
@@ -741,6 +769,8 @@ class Interpreter(
                 builtin.invoke(args)
             } catch (io: IoFailure) {
                 throw InterpretException(translateIoFailure(id, io, limits))
+            } catch (sv: SandboxViolation) {
+                throw InterpretException(translateSandboxViolation(id, sv, limits))
             }
         }
         is Value.FixpointFn -> {
@@ -866,6 +896,8 @@ class Interpreter(
             foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
         } catch (io: IoFailure) {
             throw InterpretException(translateIoFailure(id, io, limits))
+        } catch (sv: SandboxViolation) {
+            throw InterpretException(translateSandboxViolation(id, sv, limits))
         }
         // Higher-order lookup wins over standard lookup; the registries
         // are disjoint so this ordering is conservative.
@@ -878,6 +910,8 @@ class Interpreter(
                 higherOrder.invoke(args, apply)
             } catch (io: IoFailure) {
                 throw InterpretException(translateIoFailure(id, io, limits))
+            } catch (sv: SandboxViolation) {
+                throw InterpretException(translateSandboxViolation(id, sv, limits))
             }
         }
         val builtin = Builtins.lookup(fn.node.target)
@@ -893,6 +927,12 @@ class Interpreter(
             // routes through [translateIoFailure] to honour the active
             // [ErrorVerbosity] in the threaded limits.
             throw InterpretException(translateIoFailure(id, io, limits))
+        } catch (sv: SandboxViolation) {
+            // Q-041: runtime SandboxViolation thrown by FsSandbox /
+            // NetSandbox / Http scheme validation. Translated through
+            // the verbosity-aware helper so detail is scrubbed when
+            // policy demands.
+            throw InterpretException(translateSandboxViolation(id, sv, limits))
         }
     }
 
@@ -964,6 +1004,8 @@ class Interpreter(
                     foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
                 } catch (io: IoFailure) {
                     throw InterpretException(translateIoFailure(id, io, limits))
+                } catch (sv: SandboxViolation) {
+                    throw InterpretException(translateSandboxViolation(id, sv, limits))
                 }
                 val builtin = Builtins.lookup(callable.node.target)
                     ?: throw InterpretException(
@@ -973,6 +1015,8 @@ class Interpreter(
                     builtin.invoke(args)
                 } catch (io: IoFailure) {
                     throw InterpretException(translateIoFailure(id, io, limits))
+                } catch (sv: SandboxViolation) {
+                    throw InterpretException(translateSandboxViolation(id, sv, limits))
                 }
             }
             else -> throw InterpretException(
