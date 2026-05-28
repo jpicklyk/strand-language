@@ -1,0 +1,32 @@
+# Layer A form: helper LAM whose body calls Filesystem.Write (stubbed
+# to 0 in the eval environment) and adds 1; main applies and adds 10.
+# Probes UncoveredEffects when the LAM omits [writeFx] from its
+# effects list.
+@v=1 root=app
+intT PRM Int
+strT PRM String
+
+# Effect category with a String path parameter (refinement-bearing).
+writeFx EFC "Filesystem.Write" [strT]
+
+# Filesystem.Write builtin: (String) -> Int, declares Filesystem.Write.
+writeT FNT [strT] intT [writeFx]
+write FN "strand-builtin:Filesystem.Write" writeT [writeFx]
+
+# Int.Add builtin: (Int, Int) -> Int, pure.
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+
+# Helper LAM: appendLog calls Filesystem.Write then adds 1. The LAM
+# MUST declare [writeFx] because its body exercises Filesystem.Write.
+path STR "/tmp/strand-eval.log"
+writeDecl EFD writeFx [path]
+callWrite APP write [path] [] [writeDecl]
+one ILT 1
+helperBody APP add [callWrite one]
+appendLog LAM [] helperBody [writeFx]
+
+# Main program: apply the helper, add 10.
+callHelper APP appendLog []
+ten ILT 10
+app APP add [callHelper ten]

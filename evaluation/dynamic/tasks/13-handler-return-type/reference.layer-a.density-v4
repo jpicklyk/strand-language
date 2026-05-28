@@ -1,0 +1,8 @@
+# Task 13 — Handler intercepts Time.Now returning 99; body adds 1.
+# Probes HandlerSignatureMismatch when handle's return type differs.
+# Uses the implicit prelude for now, nowFx, add.
+@v=1 root=outer
+callNow APP now []
+bodyAdd APP add [callNow 1]
+handleLam LAM [] 99
+outer H nowFx handleLam bodyAdd

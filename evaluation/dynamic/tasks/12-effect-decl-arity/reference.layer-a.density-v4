@@ -1,0 +1,16 @@
+# Task 12 — Net.Connect with multi-parameter EffectCategory. Probes
+# EffectDecl arity/type mismatch against a (String, Int) category.
+# A Handler intercepts the Network.Connect call and returns 42, so
+# the program is deterministic without an actual network call.
+# Uses the implicit prelude for intT, stringT, add.
+@v=1 root=outer
+connectFx EFC "Network.Connect" [stringT intT]
+connectT FNT [stringT intT] intT [connectFx]
+connect FN "strand-builtin:Net.Connect" connectT [connectFx]
+host STR "localhost"
+port ILT 8080
+connectDecl EFD connectFx [host port]
+callConnect APP connect [host port] [] [connectDecl]
+addOne APP add [callConnect 1]
+handleLam LAM [h:stringT p:intT] 42
+outer H connectFx handleLam addOne

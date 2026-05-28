@@ -1,0 +1,16 @@
+# Layer A form: Handler intercepts Time.Now and returns 99; body
+# adds 1 producing 100. Probes HandlerSignatureMismatch when the
+# handle lambda's return type doesn't match Time.Now's `() -> Int`.
+@v=1 root=outer
+intT PRM Int
+timeFx EFC "Time.Now"
+nowT FNT [] intT [timeFx]
+now FN "strand-builtin:Time.Now" nowT [timeFx]
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+callNow APP now []
+one ILT 1
+bodyAdd APP add [callNow one]
+ninetyNine ILT 99
+handleLam LAM [] ninetyNine
+outer H timeFx handleLam bodyAdd

@@ -30,18 +30,18 @@ from strand_eval.types import FeedbackFormat, RunResult, VerifyResult
 
 # Default path to the gradle-installed CLI. Operators can override via the
 # STRAND_CLI env var when the binary lives elsewhere.
-_DEFAULT_CLI_RELATIVE = Path("impl/cli/build/install/cli/bin/cli")
+_DEFAULT_CLI_RELATIVE = Path("impl-kotlin/cli/build/install/cli/bin/cli")
 
 
 def _repo_root() -> Path:
     """Locate the strand-language repository root.
 
-    Walks up from this file until a `CLAUDE.md` and `impl/` sibling appear,
-    which is the project-root signature.
+    Walks up from this file until a `CLAUDE.md` and `impl-kotlin/` sibling
+    appear, which is the project-root signature.
     """
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / "CLAUDE.md").exists() and (parent / "impl").exists():
+        if (parent / "CLAUDE.md").exists() and (parent / "impl-kotlin").exists():
             return parent
     # Fallback: three levels up from this file
     # (.../evaluation/dynamic/strand_eval/languages/strand.py → repo root)

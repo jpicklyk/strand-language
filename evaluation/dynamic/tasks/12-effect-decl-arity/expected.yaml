@@ -1,0 +1,11 @@
+check: pure-value
+description: |
+  Open a connection to localhost:8080 via Net.Connect (stubbed to
+  return socket handle 42), then add 1. Final value 43. Probes
+  `EffectDeclArityMismatch` / `EffectDeclParameterTypeMismatch` when
+  the EffectDecl's parameter list doesn't match the EffectCategory.
+value:
+  type: int
+  representation:
+    python: "43"
+    strand: "IntV(v=43)"

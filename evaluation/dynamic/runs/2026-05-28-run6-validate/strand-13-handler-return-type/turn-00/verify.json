@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "error_prose": null,
+  "error_json": null,
+  "canonical_dag_json": "{\"version\":1,\"root\":\"program\",\"nodes\":{\"nowDecl\":{\"type\":\"EffectDecl\",\"effectType\":\"nowFx\",\"parameters\":[]},\"nowCall\":{\"type\":\"Application\",\"function\":\"now\",\"arguments\":[],\"typeArguments\":[],\"effectInstances\":[\"nowDecl\"]},\"bodyExpr\":{\"type\":\"Application\",\"function\":\"add\",\"arguments\":[\"nowCall\",\"__lit0\"]},\"handleT\":{\"type\":\"FunctionType\",\"parameters\":[],\"result\":\"intT\"},\"handleLam\":{\"type\":\"Lambda\",\"parameters\":[],\"body\":\"__lit1\",\"effects\":[\"nowFx\"]},\"program\":{\"type\":\"Handler\",\"intercept\":\"nowFx\",\"handle\":\"handleLam\",\"body\":\"bodyExpr\"},\"__lit0\":{\"type\":\"IntLit\",\"value\":1},\"__lit1\":{\"type\":\"IntLit\",\"value\":99},\"intT\":{\"type\":\"PrimitiveType\",\"kind\":\"Int\"},\"addT\":{\"type\":\"FunctionType\",\"result\":\"intT\",\"parameters\":[\"intT\",\"intT\"]},\"nowT\":{\"type\":\"FunctionType\",\"result\":\"intT\",\"parameters\":[]},\"add\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Int.Add\",\"foreignType\":\"addT\"},\"now\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Time.Now\",\"foreignType\":\"nowT\",\"effects\":[\"nowFx\"]},\"nowFx\":{\"type\":\"EffectCategory\",\"categoryName\":\"Time.Now\"}}}"
+}

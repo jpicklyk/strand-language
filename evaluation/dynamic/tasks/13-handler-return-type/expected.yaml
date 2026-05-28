@@ -1,0 +1,10 @@
+check: pure-value
+description: |
+  Handler intercepts Time.Now and returns 99; body adds 1, producing
+  100. Probes `HandlerSignatureMismatch` when the handle lambda's
+  return type doesn't match Time.Now's `() -> Int` signature.
+value:
+  type: int
+  representation:
+    python: "100"
+    strand: "IntV(v=100)"

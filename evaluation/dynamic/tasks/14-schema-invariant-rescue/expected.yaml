@@ -1,0 +1,6 @@
+check: schema-validation
+description: |
+  PositiveInt Schema with x > 0 invariant. Construct a value of the
+  schema from `10 - 4` (folds to 6, passes). Probes
+  `SchemaInvariantViolation` when the agent emits `4 - 10` (folds to
+  -6) or otherwise produces a non-positive value via subtraction.

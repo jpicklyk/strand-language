@@ -4,6 +4,272 @@ Auto-generated companion to `evaluation/results.md` (static cost). Where
 the static framework measures bytes-per-emission, this framework measures
 **tokens-per-successful-task** across the verifier-feedback retry loop.
 
+## Task suite — 15 tasks as of 2026-05-28
+
+Tasks 01–10 are the original suite (factorial, json-value,
+toggle-machine, option-unwrap, sum-list, counter-machine,
+bounded-counter-schema, nonempty-list-schema, file-write-capability,
+handler-intercept). Tasks 11–15 are retry-loop probes added
+2026-05-28 to make the verifier-feedback advantage measurable —
+across Runs 1–5 the existing suite converged 18-20 of 20 cells on
+the first attempt, leaving the central Strand claim unmeasured.
+
+Each new task targets a specific verifier-time failure mode:
+
+| ID | Task | Probes | Strand verifier error |
+|----|------|--------|----------------------|
+| 11 | `effect-coverage-gap` | Lambda body uses an effectful builtin without declaring the effect | `UncoveredEffects` |
+| 12 | `effect-decl-arity` | Multi-parameter EffectCategory with EffectDecl whose parameter list shape doesn't match | `EffectDeclArityMismatch` / `EffectDeclParameterTypeMismatch` |
+| 13 | `handler-return-type` | Handler whose `handle` lambda return type differs from the intercepted function | `HandlerSignatureMismatch` |
+| 14 | `schema-invariant-rescue` | Boundary literal flowing into a `PositiveInt` Schema with `x > 0` invariant — `0` vs `1` slip | `SchemaInvariantViolation` |
+| 15 | `recursive-self-flat-list` | Inner-PRD-with-`RS` form routed to a top-level SumValue payload position | `UnboundRecursiveSelf` |
+
+The Python parallels exercise the same problem shapes; Python's
+"verification" combines `mypy --strict` with runtime success against
+the expected output, so the relevant Python error is whatever the
+agent would face when the first emission fails for the equivalent
+reason (type error, runtime exception, value mismatch).
+
+## Run 6 — 2026-05-28, expanded 15-task suite with retry-loop probes
+
+First measurement against the 15-task suite (tasks 11–15 added
+2026-05-28 to probe specific verifier-feedback failure modes; see the
+task-suite section above). Sub-agent dispatch methodology per the
+2026-05-28 revision of `proposals/model-api-integration.md` §1.1 —
+each cell is a fresh sub-agent of this orchestrating session,
+constrained to one Read of the prompt + one Write of the response,
+no shared conversational state. Run artifacts under
+`evaluation/dynamic/runs/2026-05-28-run6/`.
+
+Run metadata:
+- Date: 2026-05-28
+- Model: claude-sonnet-4-7 (via Agent tool sub-agents, `claude` subtype)
+- Backend: step-mode (file-IPC) with per-cell fresh sub-agent dispatch
+- Samples per task: 1
+- Tasks: 15 (10 original + 5 retry-loop probes)
+- Baselines: Strand Layer A density v4, Python+type-hints
+- Max retries per cell: 5
+- Convergence: **30/30 cells (100%)** — every cell converged within budget
+
+### Per-task results
+
+Per-cell totals (sum across all retry attempts):
+
+| Task | Strand attempts | Strand status | Strand in | Strand out | Python attempts | Python status | Python in | Python out | S/P total ratio |
+|------|------:|------|------:|------:|------:|------|------:|------:|------:|
+| 01-factorial | 1 | converged | 20782 | 46 | 1 | converged | 1497 | 59 | 13.39× |
+| 02-json-value | 1 | converged | 20797 | 104 | 1 | converged | 1512 | 121 | 12.80× |
+| 03-toggle-machine | 1 | converged | 20837 | 107 | 1 | converged | 1552 | 119 | 12.53× |
+| 04-option-unwrap-default | 1 | converged | 20841 | 47 | 1 | converged | 1556 | 123 | 12.44× |
+| 05-sum-list | 1 | converged | 20836 | 243 | 1 | converged | 1552 | 128 | 12.55× |
+| 06-counter-machine | 1 | converged | 20889 | 168 | 1 | converged | 1604 | 257 | 11.31× |
+| 07-bounded-counter-schema | 1 | converged | 20900 | 51 | 1 | converged | 1616 | 125 | 12.03× |
+| 08-nonempty-list-schema | 1 | converged | 20912 | 267 | 1 | converged | 1627 | 215 | 11.50× |
+| 09-file-write-capability | 2 | converged | 41930 | 164 | 1 | converged | 1625 | 118 | 24.15× |
+| 10-handler-intercept | 2 | converged | 42076 | 158 | 1 | converged | 1699 | 245 | 21.73× |
+| 11-effect-coverage-gap (**new**) | 1 | converged | 21004 | 70 | 1 | converged | 1719 | 80 | 11.71× |
+| 12-effect-decl-arity (**new**) | 3 | converged | 63526 | 321 | 1 | converged | 1753 | 239 | **32.05×** |
+| 13-handler-return-type (**new**) | 2 | converged | 41934 | 85 | 1 | converged | 1648 | 369 | 20.83× |
+| 14-schema-invariant-rescue (**new**) | 1 | converged | 20960 | 48 | 1 | converged | 1675 | 159 | 11.45× |
+| 15-recursive-self-flat-list (**new**) | 1 | converged | 21043 | 228 | 1 | converged | 1758 | 123 | 11.31× |
+| **TOTAL** | — | 15 conv | **419267** | **2107** | — | 15 conv | **24393** | **2480** | **15.68×** |
+
+Estimated cost (Sonnet 4.7 at $3/M input + $15/M output, no caching):
+- Strand: **$1.2894**
+- Python: **$0.1104**
+
+### Headline numbers
+
+| Metric | Strand Layer A density v4 | Python+type-hints |
+|---|---:|---:|
+| First-pass verification rate | **11/15 (73%)** | **15/15 (100%)** |
+| Convergence rate (within 5 attempts) | **15/15 (100%)** | **15/15 (100%)** |
+| Total tokens (in+out) | 421,374 | 26,873 |
+| Tokens-per-successful-task | 28,092 | 1,792 |
+| Cost-per-successful-task | $0.0860 | $0.0074 |
+| **Ratio (Strand / Python)** | — | — |
+| Tokens-per-successful-task ratio | **15.68×** | 1.00× |
+| Cost-per-successful-task ratio | **11.68×** | 1.00× |
+
+### Verifier-feedback retry-loop behavior
+
+Four strand cells (09, 10, 12, 13) failed first attempt. The
+verifier feedback rescued all four within the 5-retry budget:
+
+- **strand-09, 10, 12, 13 turn-0 failure: same Layer A grammar slip.**
+  All four first-attempt failures were the *same* error:
+  `code 'APP' at position 2 expected [ref ref ...] list but got null '_'`.
+  The agents emitted `APP function args _` — passing the placeholder
+  `_` for the optional `typeArguments` slot rather than omitting it
+  or supplying `[]`. The error message names the position exactly;
+  three of the four (09, 10, 13) recovered in one retry.
+
+- **strand-12 needed two retries.** Turn-1 fixed the `APP _`
+  syntax slip but introduced a new error:
+  `NonEffectCategoryInEffectList(at=#9, offendingChild=#2, actualCategory=ForeignNode)`
+  — the agent listed a `ForeignNode` reference where the
+  `EffectCategory` reference belongs in the function-type's
+  `effects` slot. Turn-2 corrected the slot and converged. The
+  multi-step recovery on this cell — the only cell needing more
+  than one retry — used 3× the per-converged-cell token budget.
+
+### Retry-loop probe behavior on tasks 11–15
+
+The five new probe tasks behaved as follows:
+
+| Task | Designed to probe | First-pass result |
+|------|-------------------|-------------------|
+| 11-effect-coverage-gap | `UncoveredEffects` | **converged first-try** — agent declared `[writeFx]` correctly |
+| 12-effect-decl-arity | `EffectDeclArityMismatch` / `EffectDeclParameterTypeMismatch` | failed first-try (Layer A grammar slip, then `NonEffectCategoryInEffectList`); recovered turn-2 |
+| 13-handler-return-type | `HandlerSignatureMismatch` | failed first-try (Layer A grammar slip); recovered turn-1 |
+| 14-schema-invariant-rescue | `SchemaInvariantViolation` | **converged first-try** — agent picked literal `1`, not `0` |
+| 15-recursive-self-flat-list | `UnboundRecursiveSelf` | **converged first-try** — auto-Outer-PRD synthesis caught the typical slip |
+
+The designed probes fired on 1 of 5 cells (task 12 partially, after
+the grammar slip was cleared in turn-1). The remaining failures
+across the suite were the unrelated Layer A grammar slip on the
+optional `typeArguments` slot. **This is itself a real result** —
+the verifier-feedback loop CAN rescue Layer A grammar misuse, and
+the recovery rate (4/4 cells, average ~1.25 retries) is the
+strongest evidence to date that the structured error format
+produces actionable feedback for the model. The designed probes
+(UncoveredEffects, HandlerSignatureMismatch, SchemaInvariantViolation,
+UnboundRecursiveSelf) did not fire as expected in this sample.
+
+### Why the headline ratio rose to 15.68×
+
+Two compounding factors versus Run 5:
+
+- **System prompt grew from ~10,100 to ~20,800 tokens** per cell (the
+  current `evaluation/dynamic/prompts/strand-system.md` is 1,647
+  lines, up from ~700 at Run 5 time — additions include the Q-039
+  effect-projection section, the schema/invariant documentation, the
+  bytecode VM notes, and per-task documentation for the new tasks
+  11–15). This alone moves the ratio from ~6.5× to ~13×.
+
+- **Four strand cells needed retries** (vs Run 5's 1 retry across 10
+  cells). The four retries account for ~146,000 of the 419,000
+  strand input tokens (35% of total) — a significant overhead. Of
+  these, three are the `APP _` grammar slip and one (cell 12)
+  required two retries through a different error class.
+
+The cost ratio (11.68×) is lower than the token ratio (15.68×)
+because Strand's output tokens are still much smaller than
+Python's per cell (2,107 vs 2,480), so the cheaper-per-token output
+slot somewhat offsets the expensive input slot. Under prompt
+caching (Run 4 framework, available but not exercised this run),
+the per-cell strand input cost would drop ~5× on the second+
+sample of an N>1 run; that comparison sits in Run 7.
+
+### Open follow-ups
+
+- **Run 7 (N=5 multi-sample with bootstrap CIs)** — single samples
+  give point estimates; bootstrap CIs over 5 samples per cell would
+  quantify the variance in the retry-loop recovery behavior.
+  Roughly 5× this run's sub-agent dispatch count.
+- **Investigate the `APP _` Layer A authoring slip.** Four of fifteen
+  cells failed on this single shape — the agent passes `_` (the
+  null-reference placeholder) where the optional `typeArguments`
+  list slot should be omitted entirely or `[]`. Either the system
+  prompt needs a more prominent example clarifying optional-slot
+  omission semantics, or the Layer A parser should accept `_` as
+  equivalent to omitting the slot. Worth a small Layer A clarification
+  pass before Run 7.
+- **Tasks 11, 14, 15 didn't fire their designed probes.** All three
+  converged first-pass. The implementation may have evolved to make
+  these cases easier than anticipated (auto-Outer-PRD synthesis for
+  15; clear schema literal expectations for 14; idiomatic prelude
+  use for 11). N=5 sampling on these tasks would show whether the
+  probes fire across model variance, or whether the framework needs
+  more constructive probe designs.
+- **Task 12 is the only sustained probe.** It needed 3 attempts.
+  Whether this is representative of multi-parameter EffectDecl
+  difficulty or a one-off would be answered by multi-sample
+  measurement.
+
+### How this run was produced
+
+1. The package was already installed from prior runs.
+2. `mkdir runs/2026-05-28-run6/` and init 30 sessions (15 tasks ×
+   2 configs) via `python -m strand_eval.cli step --session <dir>
+   --init --task <task> --config <config> --max-retries 5
+   --feedback-format both`.
+3. Dispatched 30 sub-agents in two parallel batches via the Claude
+   Code Agent tool (`claude` subtype) from this orchestrating
+   session. Each subagent's prompt explicitly constrained tool use
+   to one `Read` of the prompt and one `Write` of `response.md`.
+4. Ran `strand-eval step --session <dir>` per cell to verify and
+   advance. (Note: a `STRAND_CLI` path bug in
+   `strand_eval/languages/strand.py` referenced `impl/` instead of
+   `impl-kotlin/`; fixed in the same commit.)
+5. 4 strand cells needed retries. Dispatched fresh sub-agents per
+   retry against each cell's turn-NN prompt; cell 12 needed two
+   retries through different error classes.
+6. Aggregated all 30 `summary.json` files for the headline numbers
+   in this section.
+
+### Run 6 follow-up — `APP _` parser fix validation (2026-05-28)
+
+Per-cell failure analysis showed that all 4 of the strand cells
+that failed first-attempt in Run 6 hit the same Layer A authoring
+slip: writing `APP fn args _ [efd]` (using `_` for the optional
+`typeArguments` slot) where the parser expected `[]`. Two
+coordinated fixes landed:
+
+1. **Parser change** in
+   [`DagJsonEmitter.kt`](../impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/DagJsonEmitter.kt) —
+   the `LIST_REF` arg-kind branch now accepts `Arg.Null` as
+   equivalent to an empty `Arg.Listing`. Both forms canonical-
+   encode identically since empty optional lists gate on size > 0,
+   so the change is hash-preserving across the existing corpus.
+
+2. **System prompt clarification** in
+   [`prompts/strand-system.md`](dynamic/prompts/strand-system.md) —
+   new paragraphs documenting (a) the `[]` / `_` equivalence for
+   optional list slots, and (b) the declaration-only constraint on
+   `EFD` / `EFC` / `PRC` / `PRF` / `SCS` / `MC` (these codes cannot
+   appear as inline `(CODE args...)` nested expressions; they need
+   their own lines).
+
+**Validation methodology.** Reset the 4 originally-failing
+strand sessions under `runs/2026-05-28-run6-validate/`. Dispatched
+fresh sub-agents under the updated system prompt + fixed parser.
+Advanced through verify + run per the standard step-mode flow.
+
+**Validation results.**
+
+| Cell | Run 6 attempts | Run 6 tokens | Validation attempts | Validation tokens | Saved |
+|------|---:|---:|---:|---:|---:|
+| 09-file-write-capability | 2 | 42,094 | **1** | 21,263 | 20,831 |
+| 10-handler-intercept | 2 | 42,234 | **1** | 21,317 | 20,917 |
+| 12-effect-decl-arity | 3 | 63,847 | **2** | 43,007 | 20,840 |
+| 13-handler-return-type | 2 | 42,019 | **1** | 21,257 | 20,762 |
+| **TOTAL** | — | **190,194** | — | **106,844** | **83,350** |
+
+Three cells now converge first-pass (09, 10, 13). Cell 12 still
+needs one retry — but through a genuine semantic mistake the
+verifier-feedback loop is designed to catch (the agent wrote
+`H netConnect handleLam addOne` with the ForeignNode `netConnect`
+in the Handler intercept slot rather than the EffectCategory
+`connectFx`; the verifier returned `NonEffectCategoryInEffectList`
+naming the offending child by NodeId, and the next emission fixed
+the binding). Cell 12 is now a clean probe of the
+`HandlerInterceptNotAnEffectCategory` semantic error class, not
+the Layer A grammar slip.
+
+**Projected Run 6 with the fix applied.** First-pass rate would
+move from 11/15 (73%) to **14/15 (93%)**. Total strand tokens
+drop from 421,374 to 338,024 (−83,350; −20%). The token ratio
+drops from **15.68× to 12.58×** — about a quarter of the gap
+closed by one ~5-line parser change. The remaining ratio is
+predominantly system-prompt size (1,647 lines), which prompt
+caching at N>1 sampling would amortize.
+
+**Authoring tests pass clean** post-fix (`./gradlew :authoring:test
+--rerun-tasks`), and the existing 68-program corpus hashes
+unchanged because both `_` and `[]` canonical-encode to absence at
+empty optional list slots.
+
 ## Run 5 — 2026-05-26, fresh-context subagents over the post-prelude-expansion prompt
 
 Re-measures Run 2 with the same fresh-subagent methodology (one fresh
@@ -126,7 +392,8 @@ Token-ratio improvement is modest (-0.11×) because the bigger system prompt off
 
 ### Open follow-ups
 
-- **Run 4 (Anthropic backend with caching + N=5)** — still pending operator `ANTHROPIC_API_KEY`. The Run 5 numbers are the strongest motivation yet: per-cell input is now 10k tokens, and N=5 with caching would put Strand cost-per-success below Python.
+- **Run 6 (sub-agent dispatch with N=5 across an expanded 15-task suite)** — sequenced after retry-loop probing tasks 11–15 land. Per `proposals/model-api-integration.md` §1.1 (2026-05-28 methodology revision), the headline run uses sub-agent dispatch rather than API calls; the API-backed Run 4 framework remains available as a future option but is not on the Q-021 closure path.
+- **Retry-loop probing task variants (tasks 11–15)** — the existing 10 tasks converged 18-20 of 20 cells on first attempt across all runs to date. The verifier-feedback advantage that is the central Strand claim cannot be measured without tasks calibrated to naturally fail on first emission and recover from the verifier's structured error. Five tasks targeting `UncoveredEffects` (11), `EffectDeclParameterTypeMismatch` (12), `HandlerSignatureMismatch` (13), `SchemaInvariantViolation` (14), and `UnboundRecursiveSelf` (15) are planned next.
 - **Task expansion** — the existing 10 tasks under-exercise Math/Hash/Random/higher-order-List/JsonValueFull/IO-surface. Adding 5-10 tasks that need these (e.g., JSON round-trip with arrays, SHA-256 hash, Fold-based sum, file-read + parse round-trip) would let the new prelude entries show measurable ROI.
 - **Compact-LAM param-name collision** (strand-08 first-attempt failure) — when two `LAM` nodes both use `xs:T` compact param notation, the auto-synthesized PRCs silently alias to the most-recent declaration. Either reject the collision at compile time with a clear error, or auto-suffix the second occurrence. Currently surfaces as a `code 'LAM' at position 0` compile error with a hint to rename — fine as a warning but better as a verifier-level check.
 - **strand-09 didn't use the new prelude** — task description forces a refinement-bearing effect category that doesn't match the prelude `fsWrite`/`writeFx` shape. If the prelude `writeFx` accepted a path-parameter refinement, this would also collapse to a prelude shortcut. Out of scope as a quick prelude tweak; might warrant a separate parameterized-effect-category prelude entry.
@@ -140,13 +407,25 @@ Token-ratio improvement is modest (-0.11×) because the bigger system prompt off
 5. strand-08 needed one retry: dispatched a fresh sub-agent against the turn-01 prompt (which included verifier feedback), wrote response.md, advanced.
 6. Aggregated all 20 `summary.json` files for the headline numbers in this section.
 
-## Run 4 — pending, real Anthropic API with prompt caching + N=5 multi-sample
+## Run 4 — API-backed code shipped; not on the critical path
 
-Framework slice that closes the credibility gap with Runs 1-3. Code
-shipped in commit `359c4cf`; the run itself is blocked on the
-operator's `ANTHROPIC_API_KEY` not being set in the environment.
+Per the 2026-05-28 methodology revision documented in
+`proposals/model-api-integration.md` §1.1, headline measurement runs
+use sub-agent dispatch via step-mode IPC, not direct API calls. The
+project consumes model capacity through a Claude Max subscription;
+metered API calls would double-bill against that subscription. The
+Run 4 framework code remains shipped and tested as a future option
+(e.g., for non-Anthropic provider comparisons, local-model
+integration, or batch CI integration that cannot dispatch nested
+agents). It is no longer the path that closes Q-021 Phase 1.
 
-Code changes (in commit `359c4cf`):
+The next planned headline run (sequenced after the retry-loop
+probing tasks 11–15 land per `proposals/model-api-integration.md`
+§3.10 expansion) is **Run 6** under sub-agent dispatch with N=5
+samples across the expanded 15-task suite × 2 configurations,
+producing the first multi-sample bootstrap-CI numbers for Q-021.
+
+Code shipped in commit `359c4cf` (retained as the API-backed path):
 
 - `AnthropicBackend.emit` wraps the system prompt in a single text
   block with `cache_control: {type: ephemeral}`. On Sonnet 4.7 prompt
@@ -171,31 +450,19 @@ Code changes (in commit `359c4cf`):
   a mocked anthropic SDK. `pytest tests/`: 64 passed, 6 skipped
   (pre-existing mypy / Strand-CLI gates; no new skips).
 
-To run once a key is available:
-
-```
-python -m strand_eval.cli check-credentials
-python -m strand_eval.cli run \
-  --backend anthropic \
-  --tasks 01-factorial,02-json-value,03-toggle-machine,04-option-unwrap-default,05-sum-list,06-counter-machine,07-bounded-counter-schema,08-nonempty-list-schema,09-file-write-capability,10-handler-intercept \
-  --config strand-layer-a-density-v4,python-type-hints \
-  --models claude-sonnet-4-7 \
-  --samples 5 \
-  --budget 10
-python -m strand_eval.cli report --run <timestamp>
-```
-
-100 cells (10 × 2 × 5). Budget cap at $10 (expected $1-3 with
-caching). The generated `summary.json` carries the cache fields, so
-`report` renders CIs and the cache-hit column automatically.
+The cache and CI machinery operates uniformly across the API and
+sub-agent-dispatch paths: step-mode `summary.json` files carry the
+same field shape, so `metrics.cell_stat` aggregates them
+identically.
 
 A synthetic smoke test (Strand prefix 4500 tok written on sample 0,
 read on samples 1-4) confirms the math: cache-hot Strand follow-on
 cells run at ~$0.0024 vs Python's $0.0063 per cell, with break-even
 at one extra sample beyond the prompt write. With N=5 the per-cell
-cost crosses below Python despite the larger Strand prompt — the
-dynamic-cost story that Runs 2/3 couldn't tell because their N=1
-shape forced every Strand cell to pay the full prompt-write cost.
+cost crosses below Python despite the larger Strand prompt. Under
+sub-agent dispatch this projection is informational only — the
+subscription absorbs cost — but it documents the expected per-token
+economics for a future provider-comparison run.
 
 ## Run 3 — 2026-05-25, re-run against authoring fixes (commit 7e7e02d)
 

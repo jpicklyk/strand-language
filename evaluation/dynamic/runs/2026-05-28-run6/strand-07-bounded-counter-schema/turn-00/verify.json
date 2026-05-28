@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "error_prose": null,
+  "error_json": null,
+  "canonical_dag_json": "{\"version\":1,\"root\":\"app\",\"nodes\":{\"isPosLambda\":{\"type\":\"Lambda\",\"parameters\":[\"x\"],\"body\":\"__expr0\"},\"posInv\":{\"type\":\"Invariant\",\"invariantName\":\"positive\",\"targetSchema\":\"posInt\",\"body\":\"isPosLambda\"},\"posInt\":{\"type\":\"Schema\",\"schemaName\":\"PositiveInt\",\"valueType\":\"intT\",\"invariants\":[\"posInv\"]},\"identityLam\":{\"type\":\"Lambda\",\"parameters\":[\"n\"],\"body\":\"__var1\"},\"app\":{\"type\":\"Application\",\"function\":\"identityLam\",\"arguments\":[\"__lit1\"]},\"x\":{\"type\":\"ParameterDecl\",\"name\":\"x\",\"paramType\":\"intT\"},\"__var0\":{\"type\":\"VarRef\",\"binder\":\"x\"},\"__lit0\":{\"type\":\"IntLit\",\"value\":0},\"__expr0\":{\"type\":\"Application\",\"function\":\"gt\",\"arguments\":[\"__var0\",\"__lit0\"]},\"n\":{\"type\":\"ParameterDecl\",\"name\":\"n\",\"paramType\":\"posInt\"},\"__var1\":{\"type\":\"VarRef\",\"binder\":\"n\"},\"__lit1\":{\"type\":\"IntLit\",\"value\":5},\"intT\":{\"type\":\"PrimitiveType\",\"kind\":\"Int\"},\"boolT\":{\"type\":\"PrimitiveType\",\"kind\":\"Bool\"},\"gtT\":{\"type\":\"FunctionType\",\"result\":\"boolT\",\"parameters\":[\"intT\",\"intT\"]},\"gt\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Int.Gt\",\"foreignType\":\"gtT\"}}}"
+}

@@ -41,5 +41,7 @@ evaluation/dynamic/runs/*/
 !evaluation/dynamic/runs/2026-05-26-run5-biased-orchestrator/
 !evaluation/dynamic/runs/2026-05-25-run3-postfix/
 !evaluation/dynamic/runs/2026-05-25-subagent-sweep/
+!evaluation/dynamic/runs/2026-05-28-run6/
+!evaluation/dynamic/runs/2026-05-28-run6-validate/
 !evaluation/dynamic/runs/strand-*/
 !evaluation/dynamic/runs/python-*/

@@ -1,0 +1,10 @@
+check: pure-value
+description: |
+  Helper LAM calls Time.Now (intercepted by a Handler returning 0),
+  adds 1, then the main program adds 10. Final value 11. Probes
+  `UncoveredEffects` when the LAM's effects list is missing.
+value:
+  type: int
+  representation:
+    python: "11"
+    strand: "IntV(v=11)"

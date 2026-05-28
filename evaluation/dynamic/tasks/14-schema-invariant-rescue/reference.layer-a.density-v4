@@ -1,0 +1,10 @@
+# Task 14 — PositiveInt Schema applied to 1 (the smallest x>0). Probes
+# SchemaInvariantViolation when the agent emits 0 by reading "smallest
+# integer" too literally — the boundary is exclusive.
+# Uses the implicit prelude for intT and gt.
+@v=1 root=schemaClaim
+predLam LAM [x:intT] (APP gt [x 0])
+positiveInvariant INV "x_positive" positiveInt predLam
+positiveInt SCH "PositiveInt" intT [positiveInvariant]
+identity LAM [p:positiveInt] p
+schemaClaim APP identity [1]

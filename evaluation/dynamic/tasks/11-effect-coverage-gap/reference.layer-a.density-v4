@@ -1,0 +1,13 @@
+# Task 11 — Helper LAM calls Filesystem.Write (stubbed to 0). Probes
+# UncoveredEffects when the LAM omits [writeFx] from its effects list.
+# Uses explicit declarations for writeFx, writeT, write (mirrors task 09).
+@v=1 root=app
+writeFx EFC "Filesystem.Write" [stringT]
+writeT FNT [stringT] intT [writeFx]
+write FN "strand-builtin:Filesystem.Write" writeT [writeFx]
+path STR "/tmp/strand-eval.log"
+writeDecl EFD writeFx [path]
+helperBody APP add [(APP write [path] [] [writeDecl]) 1]
+appendLog LAM [] helperBody [writeFx]
+callHelper APP appendLog []
+app APP add [callHelper 10]

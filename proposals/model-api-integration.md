@@ -2,7 +2,7 @@
 
 **Document:** `proposals/model-api-integration.md`
 **Status:** Draft
-**Date:** 2026-05-25
+**Date:** 2026-05-25 (initial); 2026-05-28 (methodology revision: sub-agent dispatch primary)
 **Concerns:** [`00-motivation.md`](../00-motivation.md), [`research-plan.md`](../research-plan.md), [`evaluation/README.md`](../evaluation/README.md), [`proposals/implemented/llm-authoring-layer.md`](implemented/llm-authoring-layer.md), [`proposals/implemented/layer-a-density.md`](implemented/layer-a-density.md), [Q-020](../open-questions.md#Q-020), [Q-021](../open-questions.md#Q-021), [Q-034](../open-questions.md#Q-034)
 **Scope:** Medium-large for the initial slice; subsequent shipping units expand baselines, task suite, and metric coverage
 
@@ -21,6 +21,20 @@ The second is the comparison with conventional baselines on a uniform basis. Q-0
 The framework that answers these questions has three operational requirements: it must drive a real model API (the first integration is Anthropic's Claude API, since that is the model running Claude Code and the project's primary agent surface); it must run the agent's emit → verify → retry loop with structured feedback; and it must support multiple output-language baselines so the conventional-vs-Strand comparison is on equal footing. The framework must also be usable without API credentials — most operators will not have an Anthropic API key, and CI must not burn API budget on every test run.
 
 Resolution of the dynamic-cost half of Q-021 and Q-034 requires this framework. The current `evaluation/measure.sh` framework is purely static and is unchanged by this proposal; the new framework lives alongside it.
+
+## 1.1 Methodology decision: sub-agent dispatch is primary
+
+The project consumes model capacity through a Claude Max subscription, not through metered API access. Every per-call charge against `ANTHROPIC_API_KEY` would double-bill against capacity the subscription already provides. The evaluation framework therefore treats **sub-agent dispatch via file-IPC step mode** as the primary measurement methodology and the direct Anthropic API backend as an optional secondary path.
+
+The step-mode mechanism (CLI subcommand `strand-eval step`) writes a per-turn `prompt.md` to the session directory, waits for the agent to write `response.md`, and then verifies, advances, or finalizes. The agent is dispatched as a fresh sub-agent of the orchestrating Claude Code session — typically via the Agent tool with the `claude` subtype, constrained to a single `Read` of the prompt and a single `Write` of the response, structurally equivalent to a one-shot completion against a fresh model context. This design has been validated across Runs 1–5 documented in `evaluation/dynamic-results.md` and is the methodology against which subsequent measurements are sequenced.
+
+Three consequences follow:
+
+- **No `ANTHROPIC_API_KEY` requirement for headline runs.** The API-backed emission path (`AnthropicBackend`) remains in the code base as a correct and useful future option (e.g., for local-model integration via the same emission-backend interface, or for batch CI runs that cannot dispatch nested agents), but it is not on the critical path for closing Q-021.
+- **Per-token cost projections apply only to the API-backed mode.** The cost analysis in §6 and the budget-confirmation flow in §3.8 describe the API path. Sub-agent dispatch absorbs cost into the subscription; the framework's `--budget` flag is a guard for the API mode and is inert in step mode.
+- **Statistical aggregation requires N sub-agent invocations per cell rather than N API calls per cell.** Bootstrap confidence intervals, multi-sample geomean reporting, and cache-hit-rate columns in `metrics.py` are agnostic to which mechanism produced the samples; the recorded `summary.json` carries the same shape either way.
+
+Sections §3.7 (mocking), §3.8 (cost and credentials), and §6 (cost analysis) describe the API-backed path; the equivalent sub-agent-dispatch story is summarized in §3.7a below.
 
 ## 2. Prior art
 
@@ -208,7 +222,23 @@ Recommendation: **all three mechanisms, with CI running in `--mock` mode against
 
 Fixture freshness is a real concern: recorded fixtures embed the model's behavior at the time of recording, and model behavior drifts between releases. The framework records the model version in each fixture and reports stale fixtures (where the requested model has been deprecated or replaced) as warnings. A periodic re-recording pass — say, monthly or per-major-model-release — keeps fixtures meaningful. This pass is operator work, not framework automation.
 
-### 3.8 Cost and credential management
+### 3.7a Sub-agent dispatch (primary methodology)
+
+The production methodology for measurement runs is step-mode IPC against a sub-agent of the orchestrating session, not direct API calls. The flow per cell:
+
+1. `strand-eval step --init --session <dir> --task <id> --config <name> --max-retries 5` writes `<dir>/session.json` and `<dir>/turn-00/prompt.md`. The prompt is the assembled (system, user) pair the framework would otherwise send to the API.
+2. The orchestrating session dispatches a sub-agent via the Agent tool (`claude` subtype) with a brief constraining it to one `Read` of the prompt and one `Write` of `response.md`. The sub-agent has no shared conversational state with the orchestrator — equivalent to a fresh model context for that emission.
+3. `strand-eval step --session <dir>` reads the response, runs verify + run (or schema-validation), advances to the next turn on failure, or finalizes `summary.json` on success or budget exhaustion.
+
+The step mode is implemented in `strand_eval/step.py` and exposed via `cli.py cmd_step`. Per-cell `summary.json` records the same fields the API path would record (input/output tokens, success, converged_at_attempt, per-attempt verify results), with the token counts derived from the prompt and response text rather than an API usage response. Token estimation uses `bytes/4` as a tokenizer-agnostic proxy in step mode; the gap between this proxy and a real tokenizer count is small (within ~5%) for English + Layer A but is documented as a measurement caveat.
+
+Statistical aggregation across N samples requires N independent sub-agent dispatches per (task, config) cell. For N=5 across the 10-task × 2-config initial sweep this is 100 sub-agent invocations, dispatched in parallel batches. The orchestrating session aggregates per-cell `summary.json` files into the headline run report. The framework's existing bootstrap CI machinery applies unchanged.
+
+Multi-sample runs via sub-agent dispatch are the planned mechanism for advancing Q-021 Phase 1 beyond the existing N=1 measurements documented in `evaluation/dynamic-results.md`.
+
+### 3.8 Cost and credential management (API-backed mode only)
+
+The cost story below applies to the optional API-backed mode. Under the primary sub-agent dispatch methodology (§3.7a), measurement cost is absorbed by the Claude Max subscription and the `--budget` flag is inert. The framework retains the cost-projection machinery so that future API-backed measurements (e.g., on local models, alternative providers, or batch CI integration) inherit the same budget discipline.
 
 A representative cost projection (Anthropic Claude Sonnet 4 pricing as of writing: ~$3/Mtok input, ~$15/Mtok output):
 
@@ -511,7 +541,9 @@ The Python adapter parses CLI output as it currently exists. The CLI does not ne
 
 The framework handles the `strand` binary path via configuration (a `strand_eval` config file pointing at `impl-kotlin/cli/build/install/cli/bin/cli` or the system-installed binary), defaulting to the build output path when run from the project root. A `strand-eval check-strand-cli` subcommand confirms the binary is callable.
 
-## 6. Cost analysis
+## 6. Cost analysis (API-backed mode only)
+
+The cost story below applies to the optional API-backed mode. Under sub-agent dispatch (§3.7a), per-cell cost is absorbed by the Claude Max subscription; the framework reports token totals for comparability but does not bill against a budget. The projections below are retained to document the framework's behavior when run against the API and to inform future provider-comparison experiments.
 
 The per-(task, config, sample) cost is dominated by the input-token bill: the Strand system prompt is ~5,000 tokens, multiplied by the number of retries (~3 average), giving ~15,000 input tokens per task. At Sonnet pricing (~$3/Mtok input, ~$15/Mtok output):
 
@@ -545,12 +577,13 @@ This evaluation criterion is itself a research question: what counts as "appropr
 
 **Deferred intentionally:**
 
+- **API-backed measurement runs.** The `AnthropicBackend` is implemented and tested, but headline measurement runs use sub-agent dispatch (§3.7a) for the credential and cost reasons documented in §1.1. API-backed runs are appropriate when (a) a non-Anthropic provider needs to be compared, (b) a local model needs to be measured, or (c) CI cannot dispatch nested agents — none of which are blocking Q-021 closure.
 - **Grammar-constrained decoding via the Anthropic API.** Anthropic does not publicly expose GBNF-grammar-constrained generation. The framework supports the configuration slot (`strand-layer-a-density-v4-grammar`) and will measure it as soon as a local-model backend (llama.cpp / vLLM) is integrated. The initial slice measures raw text generation only.
 - **Tool-call assembly (Q-034 §3.6).** The Anthropic tool-use API maps naturally onto a "construct the graph incrementally" interface, but the prompt engineering and per-call cost accounting are substantively different from raw text generation. Deferred to a follow-up shipping unit; the configuration slot is scaffolded.
 - **The four non-Strand baselines beyond Python.** Kotlin, Rust, TypeScript-strict, SimPy/ShortCoder each need a `Language` adapter, a system prompt template, and toolchain setup. Each is a clean follow-up addition with no framework changes; sequenced by integration cost.
 - **Local-model backends.** llama.cpp / vLLM / Ollama integration would let operators run the framework without API costs and would unlock the grammar-constrained-decoding configuration. The `EmissionBackend` abstraction is designed for this; the actual integration is one new file in `backends/`.
 - **A "verifier daemon" CLI mode.** A long-running `strand` process serving repeated verify calls over stdin/stdout would eliminate the JVM-startup-per-call cost. Useful when the framework grows to thousands of tasks, but unnecessary at the 10-task initial slice; the JVM cost is small relative to the API cost.
-- **Stochastic baseline calibration.** Each run uses a fixed seed where supported, but real model output is stochastic. The framework's per-cell sample count is 5 by default; bootstrap confidence intervals across samples are reported. A future "deeper sampling" mode for headline reporting (N=50) would tighten the CIs at the cost of API spend.
+- **Stochastic baseline calibration.** Each run uses a fixed seed where supported, but real model output is stochastic. The framework's per-cell sample count is 5 by default; bootstrap confidence intervals across samples are reported. A future "deeper sampling" mode for headline reporting (N=50) would tighten the CIs at the cost of additional sub-agent invocations.
 - **Effect-declaration-accuracy and capability-minimization metrics.** Q-021 names these among its seven metrics. They require runtime introspection of what effects a Strand program actually exercises (the framework already has this via the runtime's `EffectInstance` recording) and a comparison against what the program declared. The initial slice records the data but does not compute the metric; computation lands in a follow-up.
 
 **Could also (alternatives flagged):**

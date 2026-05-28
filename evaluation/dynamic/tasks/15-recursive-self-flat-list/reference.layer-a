@@ -1,0 +1,69 @@
+# Layer A form: length of a recursive linked list. Cons(7, Cons(8,
+# Nil)) -> 2. Probes UnboundRecursiveSelf via the inner/outer PRD
+# routing for recursive value construction.
+@v=1 root=main
+intT PRM Int
+
+# Recursive type: μ. Cons({head: Int, tail: <self>}) | Nil.
+# The "inner" product uses RecursiveSelf for tail; the "outer"
+# product (used at value-construction sites) uses the recursive
+# type itself.
+headFieldInner PRF "head" intT
+tailFieldInner PRF "tail" recSelf
+consProductInner PRD [headFieldInner tailFieldInner]
+
+consCase SCS "Cons" consProductInner
+nilCase SCS "Nil" _
+listBody SUM [consCase nilCase]
+recSelf RS
+listT RT listBody
+
+headFieldOuter PRF "head" intT
+tailFieldOuter PRF "tail" listT
+consProductOuter PRD [headFieldOuter tailFieldOuter]
+
+# add: (Int, Int) -> Int.
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+
+# length: List -> Int via Fixpoint. The Lambda's first parameter is
+# the recursive call slot; the second is the list argument.
+lengthFnT FNT [listT] intT
+recurse PRC "recurse" lengthFnT
+xs PRC "xs" listT
+xsRef VAR xs
+
+# Cons arm: bind the product payload, extract tail, recurse, add 1.
+varP PVR consProductOuter "p"
+patCons PCN listT "Cons" varP
+pRef VAR varP
+tExtract PFG pRef "tail"
+recRef VAR recurse
+recCall APP recRef [tExtract]
+one ILT 1
+consBody APP add [one recCall]
+caseCons MC patCons consBody
+
+# Nil arm: return 0.
+zero ILT 0
+patNil PCN listT "Nil" _
+caseNil MC patNil zero
+
+matchBody MAT xsRef [caseCons caseNil]
+bodyLam LAM [recurse xs] matchBody
+lengthFn FIX lengthFnT bodyLam
+
+# Construct Cons(7, Cons(8, Nil)).
+nilVal SV listT "Nil" _
+eight ILT 8
+h8 PFV "head" eight
+t8 PFV "tail" nilVal
+p8 PV consProductOuter [h8 t8]
+node8 SV listT "Cons" p8
+seven ILT 7
+h7 PFV "head" seven
+t7 PFV "tail" node8
+p7 PV consProductOuter [h7 t7]
+list78 SV listT "Cons" p7
+
+main APP lengthFn [list78]

@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "error_prose": null,
+  "error_json": null,
+  "canonical_dag_json": "{\"version\":1,\"root\":\"result\",\"nodes\":{\"writeFx\":{\"type\":\"EffectCategory\",\"categoryName\":\"Filesystem.Write\",\"parameters\":[\"stringT\"]},\"writeT\":{\"type\":\"FunctionType\",\"parameters\":[\"stringT\"],\"result\":\"intT\",\"effects\":[\"writeFx\"]},\"fsWriteStub\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Filesystem.Write\",\"foreignType\":\"writeT\",\"effects\":[\"writeFx\"]},\"path\":{\"type\":\"StringLit\",\"value\":\"/tmp/strand-eval.log\"},\"writeDecl\":{\"type\":\"EffectDecl\",\"effectType\":\"writeFx\",\"parameters\":[\"path\"]},\"writeResult\":{\"type\":\"Application\",\"function\":\"fsWriteStub\",\"arguments\":[\"path\"],\"typeArguments\":[],\"effectInstances\":[\"writeDecl\"]},\"result\":{\"type\":\"Application\",\"function\":\"add\",\"arguments\":[\"writeResult\",\"__lit0\"]},\"__lit0\":{\"type\":\"IntLit\",\"value\":1},\"intT\":{\"type\":\"PrimitiveType\",\"kind\":\"Int\"},\"stringT\":{\"type\":\"PrimitiveType\",\"kind\":\"String\"},\"addT\":{\"type\":\"FunctionType\",\"result\":\"intT\",\"parameters\":[\"intT\",\"intT\"]},\"add\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Int.Add\",\"foreignType\":\"addT\"}}}"
+}

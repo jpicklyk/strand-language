@@ -1,0 +1,14 @@
+{
+  "task_id": "12-effect-decl-arity",
+  "config": "strand-layer-a-density-v4",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": true,
+  "status": "converged",
+  "converged_at_attempt": 1,
+  "total_attempts": 2,
+  "total_input_tokens": 42774,
+  "total_output_tokens": 233,
+  "total_cost_usd": 0.131817,
+  "timestamp": 1779988722
+}

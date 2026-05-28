@@ -1,0 +1,34 @@
+# Layer A form: Net.Connect with multi-parameter Network.Connect
+# effect category. The Handler intercepts the call and returns 42 so
+# the program is deterministic without a real network call. Probes
+# EffectDecl arity/type discipline.
+@v=1 root=outer
+intT PRM Int
+strT PRM String
+
+# Multi-parameter effect category (host: String, port: Int).
+connectFx EFC "Network.Connect" [strT intT]
+
+# Net.Connect builtin: (String, Int) -> Int, declares Network.Connect.
+connectT FNT [strT intT] intT [connectFx]
+connect FN "strand-builtin:Net.Connect" connectT [connectFx]
+
+# Int.Add builtin: (Int, Int) -> Int, pure.
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+
+# Invoke connect at the host/port; EffectDecl positionally
+# instantiates Network.Connect with the same two literals.
+host STR "localhost"
+port ILT 8080
+connectDecl EFD connectFx [host port]
+callConnect APP connect [host port] [] [connectDecl]
+one ILT 1
+addOne APP add [callConnect one]
+
+# Handler intercept signature must match (host: String, port: Int) -> Int.
+hostParam PRC "host" strT
+portParam PRC "port" intT
+fortyTwo ILT 42
+handleLam LAM [hostParam portParam] fortyTwo
+outer H connectFx handleLam addOne

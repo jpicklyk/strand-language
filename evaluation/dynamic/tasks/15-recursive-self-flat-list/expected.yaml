@@ -1,0 +1,10 @@
+check: pure-value
+description: |
+  Length of a recursive linked list `Cons(7, Cons(8, Nil))`. Final
+  value 2. Probes `UnboundRecursiveSelf` when the agent routes the
+  inner-PRD-with-`RS` form to a top-level SumValue payload position.
+value:
+  type: int
+  representation:
+    python: "2"
+    strand: "IntV(v=2)"

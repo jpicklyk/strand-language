@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "NonEffectCategoryInEffectList at #10: at=#10, offendingChild=#4, actualCategory=ForeignNode",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "NonEffectCategoryInEffectList",
+        "at": "10",
+        "detail": "at=#10, offendingChild=#4, actualCategory=ForeignNode"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

@@ -1162,6 +1162,19 @@ object DagJsonEmitter {
                 return JsonPrimitive(v)
             }
             LayerAGrammar.ArgKind.LIST_REF -> {
+                // Slice (v4 follow-up): `_` at a LIST_REF slot means "no
+                // elements" — equivalent to `[]`. Agents naturally reach
+                // for `_` (the documented null-reference placeholder) when
+                // skipping an optional middle list slot to reach a later
+                // one (e.g., `APP fn args _ [efd]` for "no typeArguments,
+                // explicit effectInstances"). Accepted here as syntactic
+                // sugar for `APP fn args [] [efd]`; both forms canonical-
+                // encode identically since empty list slots gate on size
+                // > 0. Run 6 measurement (2026-05-28) observed this as
+                // the dominant first-attempt Layer A authoring slip.
+                if (arg == Arg.Null) {
+                    return JsonArray(emptyList())
+                }
                 val list = (arg as? Arg.Listing)?.items ?: run {
                     shapeMismatch(line, code, position, "[ref ref ...] list", arg, errors)
                     return null

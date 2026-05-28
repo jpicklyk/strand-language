@@ -45,6 +45,32 @@ Strings are double-quoted with `\"`, `\\`, `\n`, `\t` escapes.
 Integers: `42`, `-3`, `0`. Floats must contain a dot: `3.14`, `-0.5`, `1.0`.
 Booleans: `true` or `false`. Null / absent reference: `_` (single underscore).
 
+**Optional list slots.** When a code has an optional `[refs]` slot you
+do not need to supply, you have two equivalent choices: omit the slot
+entirely (any trailing optional slots also drop), or write `[]` for an
+empty list. To skip an optional middle slot while supplying a later
+one, use either `[]` or `_` — both are accepted and produce identical
+canonical output. Example: `APP fn [arg] [] [efd]` and
+`APP fn [arg] _ [efd]` are equivalent (no `typeArguments`, explicit
+`effectInstances`). The canonical form omits empty optional lists from
+the JSON entirely.
+
+**EffectDecl is a declaration, not a value.** Write `EFD` nodes as
+standalone lines and reference them by author id; do not inline an
+`(EFD ...)` as a nested expression inside an `effectInstances` list.
+Correct:
+
+    myDecl EFD writeFx [path]
+    call APP write [path] [] [myDecl]
+
+Incorrect:
+
+    call APP write [path] [] [(EFD writeFx [path])]    -- EFD is not value-producing
+
+Same rule applies to other declaration-only codes (`EFC`, `PRC`, `PRF`,
+`SCS`, `MC`): they need standalone lines, not inline `(CODE args...)`
+synthesis.
+
 Comments: any line whose first non-whitespace character is `#`.
 
 ## Codes

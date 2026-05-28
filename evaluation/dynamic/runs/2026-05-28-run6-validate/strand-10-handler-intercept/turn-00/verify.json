@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "error_prose": null,
+  "error_json": null,
+  "canonical_dag_json": "{\"version\":1,\"root\":\"outerHandler\",\"nodes\":{\"nowDecl\":{\"type\":\"EffectDecl\",\"effectType\":\"nowFx\",\"parameters\":[]},\"bodyCall\":{\"type\":\"Application\",\"function\":\"now\",\"arguments\":[],\"typeArguments\":[],\"effectInstances\":[\"nowDecl\"]},\"innerHandleLam\":{\"type\":\"Lambda\",\"parameters\":[],\"body\":\"__lit0\"},\"innerHandler\":{\"type\":\"Handler\",\"intercept\":\"nowFx\",\"handle\":\"innerHandleLam\",\"body\":\"bodyCall\"},\"outerHandleLam\":{\"type\":\"Lambda\",\"parameters\":[],\"body\":\"__lit1\"},\"outerHandler\":{\"type\":\"Handler\",\"intercept\":\"nowFx\",\"handle\":\"outerHandleLam\",\"body\":\"innerHandler\"},\"__lit0\":{\"type\":\"IntLit\",\"value\":2},\"__lit1\":{\"type\":\"IntLit\",\"value\":1},\"intT\":{\"type\":\"PrimitiveType\",\"kind\":\"Int\"},\"nowT\":{\"type\":\"FunctionType\",\"result\":\"intT\",\"parameters\":[]},\"now\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Time.Now\",\"foreignType\":\"nowT\",\"effects\":[\"nowFx\"]},\"nowFx\":{\"type\":\"EffectCategory\",\"categoryName\":\"Time.Now\"}}}"
+}

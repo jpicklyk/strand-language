@@ -1,0 +1,33 @@
+# Task 15 — Length of recursive list Cons(7, Cons(8, Nil)). Probes
+# UnboundRecursiveSelf when the inner-PRD-with-RS form is routed to
+# a top-level SumValue payload position.
+# Uses the implicit prelude for intT, add.
+@v=1 root=main
+headFieldInner PRF "head" intT
+tailFieldInner PRF "tail" recSelf
+consProductInner PRD [headFieldInner tailFieldInner]
+consCase SCS "Cons" consProductInner
+nilCase SCS "Nil" _
+listBody SUM [consCase nilCase]
+recSelf RS
+listT RT listBody
+headFieldOuter PRF "head" intT
+tailFieldOuter PRF "tail" listT
+consProductOuter PRD [headFieldOuter tailFieldOuter]
+lengthFnT FNT [listT] intT
+varP PVR consProductOuter "p"
+patCons PCN listT "Cons" varP
+pRef VAR varP
+tExtract PFG pRef "tail"
+lenOfTail APP recurse [tExtract]
+consBody APP add [1 lenOfTail]
+caseCons MC patCons consBody
+patNil PCN listT "Nil" _
+caseNil MC patNil 0
+matchBody MAT xs [caseCons caseNil]
+bodyLam LAM [recurse:lengthFnT xs:listT] matchBody
+lengthFn FIX lengthFnT bodyLam
+nilVal SV listT "Nil" _
+node8 SV listT "Cons" (PV consProductOuter [head= 8 tail= nilVal])
+list78 SV listT "Cons" (PV consProductOuter [head= 7 tail= node8])
+main APP lengthFn [list78]

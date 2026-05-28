@@ -1,0 +1,26 @@
+# Layer A form: PositiveInt Schema applied to the literal 1 (the
+# smallest x > 0). Probes SchemaInvariantViolation when the agent
+# emits 0 by reading "smallest integer" too literally.
+@v=1 root=schemaClaim
+intT PRM Int
+boolT PRM Bool
+
+# Pure predicate (x: Int) -> Bool returning x > 0.
+gtT FNT [intT intT] boolT
+gt FN "strand-builtin:Int.Gt" gtT
+xParam PRC "x" intT
+zero ILT 0
+predBody APP gt [xParam zero]
+predLam LAM [xParam] predBody
+
+# Schema and its invariant.
+positiveInvariant INV "x_positive" positiveInt predLam
+positiveInt SCH "PositiveInt" intT [positiveInvariant]
+
+# Identity lambda whose parameter type is the Schema.
+pParam PRC "p" positiveInt
+identity LAM [pParam] pParam
+
+# Apply identity to the literal 1.
+one ILT 1
+schemaClaim APP identity [one]

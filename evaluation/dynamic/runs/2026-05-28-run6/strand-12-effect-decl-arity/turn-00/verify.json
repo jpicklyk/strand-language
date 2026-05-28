@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "line 8: code 'APP' at position 2 expected [ref ref ...] list but got null '_'",
+  "error_json": {
+    "phase": "compile",
+    "errors": [
+      {
+        "phase": "compile",
+        "line": 8,
+        "error_class": "LayerACompileError",
+        "detail": "code 'APP' at position 2 expected [ref ref ...] list but got null '_'"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}
