@@ -15,9 +15,10 @@ import org.strand.core.StoredNode
 /**
  * Q-043 step 3a — federation primitive tests.
  *
- * Exercises [NodeResolver] in isolation: chain composition, integrity check,
- * caching. Cross-store verifier behavior is in `CrossStoreVerifierTest`
- * (verifier module) once the Verifier-side threading lands.
+ * Exercises [NodeResolver] in isolation: chain composition, root-level
+ * integrity check, caching. Per-node integrity (via the canonical
+ * re-hash of each translated node) is covered by federation tests in
+ * the verifier module once the translation pass lands.
  */
 class NodeResolverTest {
 
@@ -28,51 +29,59 @@ class NodeResolverTest {
     }
 
     @Test
-    fun `LocalHashStoreResolver returns nodes admitted to its store`() {
-        val node = Node.IntLit(42)
-        val hash = hashOf(node)
-        val store = HashStore().also { it.put(hash, node) }
-
-        val resolver = LocalHashStoreResolver(store)
-        assertSame(node, resolver.resolve(hash))
+    fun `LocalHashStoreResolver returns a SubgraphFetch rooted at the requested hash`() {
+        val (store, nodeIdToHash) = singleNodeFinalized(Node.IntLit(42))
+        val resolver = LocalHashStoreResolver(store, nodeIdToHash)
+        val hash = nodeIdToHash.values.first()
+        val fetch = resolver.resolve(hash)
+        assertNotNull(fetch)
+        assertEquals(hash, fetch!!.rootHash)
+        assertEquals(1, fetch.nodes.size, "Leaf node fetch contains just the root")
+        assertEquals(Node.IntLit(42), fetch.nodes[hash])
     }
 
     @Test
     fun `LocalHashStoreResolver returns null for unknown hash`() {
-        val resolver = LocalHashStoreResolver(HashStore())
-        val hash = hashOf(Node.IntLit(42))
-        assertNull(resolver.resolve(hash))
+        val (store, nodeIdToHash) = singleNodeFinalized(Node.IntLit(42))
+        val resolver = LocalHashStoreResolver(store, nodeIdToHash)
+        val unknown = Hash(byteArrayOf(0x1e.toByte()) + ByteArray(32) { 0xab.toByte() })
+        assertNull(resolver.resolve(unknown))
     }
 
     @Test
     fun `ChainedResolver returns first hit and short-circuits`() {
-        val node = Node.IntLit(7)
-        val hash = hashOf(node)
+        val (firstStore, firstMap) = singleNodeFinalized(Node.IntLit(7))
+        val hash = firstMap.values.first()
 
-        val firstStore = HashStore().also { it.put(hash, node) }
         val secondCallCount = intArrayOf(0)
         val second = object : NodeResolver {
-            override fun resolve(hash: Hash): Node? {
+            override fun resolve(hash: Hash): SubgraphFetch? {
                 secondCallCount[0]++
                 return null
             }
         }
 
-        val chain = ChainedResolver(listOf(LocalHashStoreResolver(firstStore), second))
-        assertSame(node, chain.resolve(hash))
+        val chain = ChainedResolver(listOf(LocalHashStoreResolver(firstStore, firstMap), second))
+        val fetch = chain.resolve(hash)
+        assertNotNull(fetch)
+        assertEquals(hash, fetch!!.rootHash)
         assertEquals(0, secondCallCount[0], "Second resolver must not be consulted after first hit")
     }
 
     @Test
     fun `ChainedResolver falls through to second resolver on first miss`() {
-        val node = Node.StringLit("library entry")
-        val hash = hashOf(node)
+        val (emptyStore, emptyMap) = emptyFinalized()
+        val (secondStore, secondMap) = singleNodeFinalized(Node.StringLit("library entry"))
+        val hash = secondMap.values.first()
 
-        val firstStore = HashStore()  // empty
-        val secondStore = HashStore().also { it.put(hash, node) }
-        val chain = ChainedResolver(listOf(LocalHashStoreResolver(firstStore), LocalHashStoreResolver(secondStore)))
-
-        assertSame(node, chain.resolve(hash))
+        val chain = ChainedResolver(listOf(
+            LocalHashStoreResolver(emptyStore, emptyMap),
+            LocalHashStoreResolver(secondStore, secondMap),
+        ))
+        val fetch = chain.resolve(hash)
+        assertNotNull(fetch)
+        assertEquals(hash, fetch!!.rootHash)
+        assertEquals(Node.StringLit("library entry"), fetch.nodes[hash])
     }
 
     @Test
@@ -83,44 +92,51 @@ class NodeResolverTest {
     }
 
     @Test
-    fun `ChainedResolver detects integrity violation`() {
-        // A bad resolver returns the wrong node for a requested hash.
-        // The chain's integrity check recomputes the hash of the returned
-        // node and rejects the mismatch as NodeResolverIntegrityViolation.
-        val realNode = Node.IntLit(100)
-        val realHash = hashOf(realNode)
-        val wrongNode = Node.IntLit(999)
+    fun `ChainedResolver detects root-hash integrity violation`() {
+        // A bad resolver returns a SubgraphFetch with a rootHash that
+        // does not match the requested hash. The chain rejects it as
+        // NodeResolverIntegrityViolation.
+        val requestedHash = hashOf(Node.IntLit(100))
+        val wrongHash = hashOf(Node.IntLit(999))
 
         val badResolver = object : NodeResolver {
-            override fun resolve(hash: Hash): Node? = wrongNode
+            override fun resolve(hash: Hash): SubgraphFetch? =
+                SubgraphFetch(
+                    rootHash = wrongHash,
+                    nodes = mapOf(wrongHash to Node.IntLit(999)),
+                    nodeIdToHash = emptyMap(),
+                )
         }
         val chain = ChainedResolver(listOf(badResolver))
 
         val ex = assertThrows(NodeResolverIntegrityViolation::class.java) {
-            chain.resolve(realHash)
+            chain.resolve(requestedHash)
         }
-        assertEquals(realHash, ex.expected)
-        assertEquals(hashOf(wrongNode), ex.actual)
+        assertEquals(requestedHash, ex.expected)
+        assertEquals(wrongHash, ex.actual)
     }
 
     @Test
     fun `CachingResolver caches first-fetch results`() {
-        val node = Node.IntLit(11)
-        val hash = hashOf(node)
+        val (store, nodeIdToHash) = singleNodeFinalized(Node.IntLit(11))
+        val hash = nodeIdToHash.values.first()
         val callCount = intArrayOf(0)
         val delegate = object : NodeResolver {
-            override fun resolve(hash: Hash): Node? {
+            override fun resolve(hash: Hash): SubgraphFetch? {
                 callCount[0]++
-                return node
+                return LocalHashStoreResolver(store, nodeIdToHash).resolve(hash)
             }
         }
         val caching = CachingResolver(delegate)
 
         // Three identical lookups
-        assertSame(node, caching.resolve(hash))
-        assertSame(node, caching.resolve(hash))
-        assertSame(node, caching.resolve(hash))
-
+        val first = caching.resolve(hash)
+        val second = caching.resolve(hash)
+        val third = caching.resolve(hash)
+        assertNotNull(first)
+        // Caching short-circuits before the second lookup
+        assertSame(first, second, "Cache returns the same SubgraphFetch instance on second lookup")
+        assertSame(first, third, "Cache returns the same SubgraphFetch instance on third lookup")
         assertEquals(1, callCount[0], "Underlying resolver must be called exactly once across three lookups")
     }
 
@@ -128,7 +144,7 @@ class NodeResolverTest {
     fun `CachingResolver returns null without caching when delegate misses`() {
         val callCount = intArrayOf(0)
         val delegate = object : NodeResolver {
-            override fun resolve(hash: Hash): Node? {
+            override fun resolve(hash: Hash): SubgraphFetch? {
                 callCount[0]++
                 return null
             }
@@ -142,28 +158,48 @@ class NodeResolverTest {
     }
 
     @Test
-    fun `ChainedResolver with single LocalHashStoreResolver behaves identically to bare LocalHashStoreResolver`() {
-        val node = Node.BoolLit(true)
-        val hash = hashOf(node)
-        val store = HashStore().also { it.put(hash, node) }
+    fun `LocalHashStoreResolver walks past root nodes to gather multi-node subgraphs`() {
+        // A multi-node subgraph that does NOT involve bound nodes
+        // (ParameterDecl / TypeParameter / RecursiveSelf): a ProductType
+        // referencing two PrimitiveType fields. Each node has a
+        // standalone hash, so all of them appear in nodeIdToHash and
+        // the resolver returns them all.
+        //
+        // ParameterDecl and other bound nodes are intentionally excluded
+        // from nodeIdToHash by Hasher.walk; carrying them through a
+        // SubgraphFetch and across stores requires handling them inline
+        // as part of their parent's canonical encoding rather than as
+        // standalone hash-addressable entries. The cross-store
+        // re-ingest of subgraphs containing bound nodes is part of the
+        // verifier-threading session's translation work — see the
+        // `Node.translateNodeIds` follow-up in proposal § 4.5 step 3.
+        val raw = RawNodeStore()
+        val intType = raw.add(StoredNode.Canonical(Node.PrimitiveType(org.strand.core.Primitive.Int)))
+        val stringType = raw.add(StoredNode.Canonical(Node.PrimitiveType(org.strand.core.Primitive.String)))
+        val field0 = raw.add(StoredNode.Canonical(Node.ProductTypeField(fieldName = "id", fieldType = intType)))
+        val field1 = raw.add(StoredNode.Canonical(Node.ProductTypeField(fieldName = "name", fieldType = stringType)))
+        val productType = raw.add(StoredNode.Canonical(Node.ProductType(fields = listOf(field0, field1))))
 
-        val bare = LocalHashStoreResolver(store)
-        val chained = ChainedResolver(listOf(LocalHashStoreResolver(store)))
+        val finalized = Hasher(raw).finalize(productType)
+        val hashStore = HashStore()
+        for ((id, h) in finalized.nodeIdToHash) {
+            hashStore.put(h, finalized.store.get(id))
+        }
+        val resolver = LocalHashStoreResolver(hashStore, finalized.nodeIdToHash)
 
-        assertEquals(bare.resolve(hash), chained.resolve(hash))
-    }
-
-    @Test
-    fun `LocalHashStoreResolver respects HashStore deduplication`() {
-        val node = Node.IntLit(42)
-        val hash = hashOf(node)
-        val store = HashStore()
-        assertEquals(true, store.put(hash, node), "First put admits the node")
-        assertEquals(false, store.put(hash, node), "Duplicate put is a no-op")
-
-        val resolver = LocalHashStoreResolver(store)
-        assertSame(node, resolver.resolve(hash))
-        assertEquals(1, store.size, "Deduplication is invisible to the resolver — one entry remains")
+        val rootHash = finalized.nodeIdToHash[productType]!!
+        val fetch = resolver.resolve(rootHash)
+        assertNotNull(fetch)
+        assertEquals(rootHash, fetch!!.rootHash)
+        // ProductType + 2 ProductTypeField + 2 PrimitiveType = 5 nodes
+        // (one PrimitiveType per distinct primitive; if both fields used
+        // the same primitive it would dedup).
+        assert(fetch.nodes.size == 5) {
+            "ProductType subgraph must include the root plus 2 ProductTypeField + 2 PrimitiveType; got ${fetch.nodes.size}"
+        }
+        assert(fetch.nodeIdToHash.containsKey(productType)) { "Foreign NodeId for the ProductType must be in nodeIdToHash" }
+        assert(fetch.nodeIdToHash.containsKey(field0)) { "Foreign NodeId for field0 must be in nodeIdToHash" }
+        assert(fetch.nodeIdToHash.containsKey(intType)) { "Foreign NodeId for intType must be in nodeIdToHash" }
     }
 
     private fun hashOf(node: Node): Hash {
@@ -171,4 +207,18 @@ class NodeResolverTest {
         val id = store.add(StoredNode.Canonical(node))
         return Hasher(store).hashRoot(id)
     }
+
+    private fun singleNodeFinalized(node: Node): Pair<HashStore, Map<org.strand.core.NodeId, Hash>> {
+        val raw = RawNodeStore()
+        val id = raw.add(StoredNode.Canonical(node))
+        val finalized = Hasher(raw).finalize(id)
+        val store = HashStore()
+        for ((nid, h) in finalized.nodeIdToHash) {
+            store.put(h, finalized.store.get(nid))
+        }
+        return store to finalized.nodeIdToHash
+    }
+
+    private fun emptyFinalized(): Pair<HashStore, Map<org.strand.core.NodeId, Hash>> =
+        HashStore() to emptyMap()
 }

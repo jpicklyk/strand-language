@@ -32,7 +32,9 @@ The recurring pattern across these systems is a *content-addressed bundle primit
 
 **Two coordinated mechanisms.**
 
-**Mechanism A: Federation by a `Resolver` interface, composed in a chain.** The verifier and interpreter no longer carry a single `hashToNodeId` map; they accept a `NodeResolver` that, given a Hash, returns the canonical Node. The simplest resolver is `LocalHashStoreResolver` over a single `HashStore`. A `ChainedResolver` tries each resolver in order, returning the first hit. A `FileSystemResolver` reads canonical node bytes from a directory keyed by hash. A `CachingResolver` wraps another resolver and admits fetched nodes to a local HashStore. The interface is small enough that future network-backed resolvers, signed-binding resolvers, or capability-gated resolvers slot in without changing the verifier or interpreter.
+**Mechanism A: Federation by a `Resolver` interface, composed in a chain.** The verifier and interpreter no longer carry a single `hashToNodeId` map; they accept a `NodeResolver` that, given a Hash, returns a self-contained `SubgraphFetch` — the requested root node plus every transitively-referenced internal node (stopping at NodeRef boundaries), plus the foreign store's `nodeIdToHash` mapping for those nodes. The local `FederatedProgram` admits the fetched subgraph by translating each Node's internal `NodeId` references from the foreign-store ID space to local IDs (via the foreign `nodeIdToHash` plus the local `hashToNodeId`). The simplest resolver is `LocalHashStoreResolver` over a single `HashStore` plus its `nodeIdToHash`. A `ChainedResolver` tries each delegate in order, returning the first hit. A `FileSystemResolver` reads canonical-bytes-plus-metadata snapshots from a directory keyed by hash; each on-disk file is itself a self-contained subgraph. A `CachingResolver` caches fetched subgraphs. The interface is small enough that future network-backed resolvers, signed-binding resolvers, or capability-gated resolvers slot in without changing the verifier or interpreter.
+
+**Why `SubgraphFetch` and not single Node.** A Strand `Node` in the in-memory ADT carries internal `NodeId` references for non-NodeRef edges (Lambda.body, Application.arguments, ProductValue.fields, and so on). Those NodeIds are meaningful only in the store they were assigned in. Returning a single Node from the resolver leaves its internal references pointing into a foreign-store ID space the local verifier cannot resolve — silent corruption at best, dangling-reference errors at worst. The fix is to fetch the whole self-contained subgraph (everything reachable from the root that is not itself a NodeRef-boundary), carry the foreign `nodeIdToHash` mapping along, and translate each admitted Node's internal NodeIds into the local ID space at admission time. The translation is mechanical (every Node variant has a known list of NodeId fields) and the foreign-to-local mapping is built once per fetch.
 
 **Mechanism B: N-046 ModuleManifest as a content-addressed grouping primitive.** A new node category bundles a list of exports — each export is a triple of `(target: Hash, displayName: String, declaredEffects: List<EffectCategory>)`. The manifest's hash binds its export set; two manifests with structurally identical exports hash identically. The verifier admits a manifest by checking that each export's `declaredEffects` exactly matches the closure of the targeted node. Consumers reference exports by the export's target hash directly (the manifest is not an indirection point); the manifest serves as a certified declaration and the natural unit for signing, distribution, and discovery.
 
@@ -51,56 +53,99 @@ The recurring pattern across these systems is a *content-addressed bundle primit
 ```kotlin
 // New file: hashing/src/main/kotlin/org/strand/hashing/NodeResolver.kt
 interface NodeResolver {
-    /** Returns the canonical Node for [hash], or null if not held. */
-    fun resolve(hash: Hash): Node?
+    /**
+     * Returns a self-contained [SubgraphFetch] rooted at [hash], or null
+     * if the resolver does not hold the hash.
+     */
+    fun resolve(hash: Hash): SubgraphFetch?
 }
+
+data class SubgraphFetch(
+    /** The hash that was requested; equals the hash of the root node. */
+    val rootHash: Hash,
+    /**
+     * Every node reachable from the root that is not itself a NodeRef
+     * boundary — including the root. Keyed by canonical hash so the
+     * receiver can build a foreign-to-local NodeId mapping by looking up
+     * each entry in the local [hashToNodeId] (or by admitting and
+     * extending the local maps on first encounter).
+     */
+    val nodes: Map<Hash, Node>,
+    /**
+     * The foreign store's NodeId → Hash mapping for the contained
+     * [nodes]. Used by the receiver to translate the foreign NodeId
+     * references inside each admitted node into the local ID space.
+     */
+    val nodeIdToHash: Map<NodeId, Hash>,
+)
 ```
 
-The interface is intentionally tiny. A `Node?` return is sufficient: the verifier needs the node to type-check, the interpreter needs the node to evaluate, and that is all. The resolver does not return a NodeId because NodeIds are per-store and meaningful only to the verifier's caller.
+The resolver returns a whole subgraph because a Strand `Node`'s in-memory representation carries internal NodeIds (Lambda.body, Application.arguments, and so on) that are only meaningful in the store they came from. Returning a single Node would leave those references pointing into foreign-store ID space. The `nodeIdToHash` map lets the receiver translate every foreign NodeId reference to its canonical hash, then look up (or freshly admit) the local NodeId for that hash. The translation is mechanical — every Node variant has a closed set of NodeId-typed fields.
+
+The subgraph stops at NodeRef boundaries: a NodeRef inside the fetched subgraph stays a NodeRef (with its target hash), and the receiver resolves it lazily on demand. This keeps each fetch bounded — a library that NodeRefs another library does not transitively pull every transitive dependency at first fetch.
 
 ### 4.2 Composing resolvers
 
 ```kotlin
 class ChainedResolver(private val resolvers: List<NodeResolver>) : NodeResolver {
-    override fun resolve(hash: Hash): Node? {
+    override fun resolve(hash: Hash): SubgraphFetch? {
         for (r in resolvers) {
-            r.resolve(hash)?.let { return verifyHash(hash, it) }
+            r.resolve(hash)?.let { return verifyIntegrity(hash, it) }
         }
         return null
     }
-    private fun verifyHash(expected: Hash, node: Node): Node {
-        val actual = Hash(CanonicalEncoder.singleNode(node))
-        if (actual != expected) throw NodeResolverIntegrityViolation(expected, actual)
-        return node
+    private fun verifyIntegrity(expected: Hash, fetch: SubgraphFetch): SubgraphFetch {
+        // The fetch's rootHash is the resolver's claim; check it against
+        // the requested hash. Per-node hash verification across the whole
+        // subgraph happens at admission time via the existing canonical
+        // encoder — every admitted Node is re-hashed and confirmed to
+        // match its declared hash before its internal references are
+        // translated.
+        if (fetch.rootHash != expected) {
+            throw NodeResolverIntegrityViolation(expected, fetch.rootHash)
+        }
+        return fetch
     }
 }
 
-class LocalHashStoreResolver(private val store: HashStore) : NodeResolver {
-    override fun resolve(hash: Hash): Node? = store.get(hash)
+class LocalHashStoreResolver(
+    private val store: HashStore,
+    private val nodeIdToHash: Map<NodeId, Hash>,
+) : NodeResolver {
+    override fun resolve(hash: Hash): SubgraphFetch? {
+        val rootNode = store.get(hash) ?: return null
+        // Walk from the root, gathering every reachable internal node
+        // (stopping at NodeRef boundaries). Build the matching
+        // nodeIdToHash subset by intersecting the walk with the
+        // pre-finalize map.
+        val reachable = walkSubgraph(rootNode, store, nodeIdToHash)
+        return SubgraphFetch(rootHash = hash, nodes = reachable.nodes,
+                             nodeIdToHash = reachable.nodeIdToHash)
+    }
 }
 
 class FileSystemResolver(private val rootDir: Path) : NodeResolver {
-    override fun resolve(hash: Hash): Node? {
+    override fun resolve(hash: Hash): SubgraphFetch? {
         val file = rootDir.resolve(hash.toBase32())
         if (!file.exists()) return null
-        return JsonIngest.singleNodeFromCanonical(file.readBytes())
+        return SubgraphFetchSerialization.fromBytes(file.readBytes())
     }
 }
 
 class CachingResolver(
     private val delegate: NodeResolver,
-    private val cache: HashStore = HashStore(),
+    private val cache: MutableMap<Hash, SubgraphFetch> = mutableMapOf(),
 ) : NodeResolver {
-    override fun resolve(hash: Hash): Node? {
-        cache.get(hash)?.let { return it }
-        val node = delegate.resolve(hash) ?: return null
-        cache.put(hash, node)
-        return node
+    override fun resolve(hash: Hash): SubgraphFetch? {
+        cache[hash]?.let { return it }
+        val fetch = delegate.resolve(hash) ?: return null
+        cache[hash] = fetch
+        return fetch
     }
 }
 ```
 
-The chain composes by ordinary list iteration. The integrity check in `ChainedResolver` covers every fetch including local-store returns, so there is one check site rather than per-resolver trust assertions.
+The chain composes by ordinary list iteration. The integrity check in `ChainedResolver` confirms the resolver-claimed `rootHash` matches the requested hash; per-node hashes are confirmed at admission time as the receiver re-runs the canonical encoder over each admitted node.
 
 ### 4.3 N-046 ModuleManifest node category
 
@@ -144,17 +189,34 @@ The canonical encoding is field-by-field deterministic. Two manifests with the s
 
 ```kotlin
 data class FederatedProgram(
-    val store: NodeStore,
+    val store: NodeStore,                              // mutable: extended on fetch
     val root: NodeId,
-    val nodeIdToHash: Map<NodeId, Hash>,
-    val hashToNodeId: Map<Hash, NodeId>,
+    val nodeIdToHash: MutableMap<NodeId, Hash>,        // extended on fetch
+    val hashToNodeId: MutableMap<Hash, NodeId>,        // extended on fetch
     val resolver: NodeResolver,
-)
+) {
+    fun fetchAndAdmit(hash: Hash): NodeId?
+}
 ```
 
-`resolver` is consulted only when a NodeRef's target hash is not in `hashToNodeId`. When the resolver returns a node, it is admitted to the local store (assigned a fresh NodeId) and `hashToNodeId` is extended. From the verifier's and interpreter's perspectives, every NodeRef target eventually has a local NodeId; the difference is whether that NodeId was assigned at finalize time or at fetch time.
+`resolver` is consulted only when a NodeRef's target hash is not in `hashToNodeId`. The admission protocol:
+
+1. `resolver.resolve(hash)` returns a `SubgraphFetch?`. Null means "not held by any resolver in the chain"; the caller raises `NodeRefTargetUnresolvable`.
+2. The `SubgraphFetch` contains every internal node reachable from the requested root (stopping at NodeRef boundaries), keyed by canonical hash, plus the foreign store's `nodeIdToHash` mapping for those nodes.
+3. The receiver builds a **foreign → local NodeId** translation map:
+   - For each foreign `nodeIdToHash` entry `(fId → h)`:
+     - If `hashToNodeId[h]` is already present, the foreign-to-local mapping is `fId → hashToNodeId[h]` (the node is shared with a previously-admitted subgraph or with the local program).
+     - Otherwise, admit `nodes[h]` to the local store under a fresh local NodeId `lId`, extend `nodeIdToHash[lId] = h` and `hashToNodeId[h] = lId`, then record `fId → lId`.
+4. Once every fetched node has a local NodeId, walk each admitted Node and **translate its internal NodeId references** from the foreign ID space to the local one using `Node.translateNodeIds(foreignToLocal)`. The translation rewrites every `NodeId`-typed field in the Node ADT and is mechanical (every Node variant has a closed list of NodeId-typed fields).
+5. The local store's entry for each admitted node is overwritten with the translated version. After translation, the verifier can walk the admitted subgraph using only local NodeIds.
+
+`Node.translateNodeIds(fn: (NodeId) -> NodeId): Node` is a new extension defined exhaustively over the Node sealed hierarchy in `:core`. NodeRef itself is unchanged by translation (its target is a Hash, not a NodeId).
 
 A `FinalizedProgram` is upgraded to a `FederatedProgram` by `program.federated(resolver)` returning a wrapper that lazily admits fetched nodes. Programs that never call out to non-local hashes behave identically to today.
+
+### 4.5b Re-hashing as the per-node integrity check
+
+After translation, each admitted node's canonical hash is recomputed and compared to its declared hash from `SubgraphFetch.nodeIdToHash` (now mapped to local NodeIds). A mismatch indicates either (a) the resolver lied about which Node corresponds to which Hash, or (b) the translation reshape was lossy. Either case raises `NodeResolverIntegrityViolation` with the mismatching pair. The check covers every fetched node, not just the root, providing per-subgraph integrity rather than only root-level integrity.
 
 ### 4.6 The `NameRegistry`
 
@@ -189,7 +251,7 @@ Two stores plus a manifest. `lib-list.json` defines two Lambdas, `lengthFn: (Lis
 
 `app.json` is authored against the library. It contains a NodeRef whose target is the `lengthFn` hash plus an Application that calls it on a literal list. Note: `app.json` references the export directly by its hash, not via the manifest. The manifest is informational, not load-bearing.
 
-`strand registry resolve stdlib/list` returns `H_manifest`. `strand run app.json --peer-store lib-list.json` runs the application. The resolver chain is `ChainedResolver(LocalHashStoreResolver(app_store), LocalHashStoreResolver(lib_store))`. The verifier walks the application, sees a NodeRef to `lengthFn`'s hash, calls `resolver.resolve(...)`, the library store returns the Lambda, the integrity check passes, the verifier admits and type-checks the Lambda. The application runs to completion.
+`strand registry resolve stdlib/list` returns `H_manifest`. `strand run app.json --peer-store lib-list.json` runs the application. The resolver chain is `ChainedResolver(LocalHashStoreResolver(app_store, app_nodeIdToHash), LocalHashStoreResolver(lib_store, lib_nodeIdToHash))`. The verifier walks the application, sees a NodeRef to `lengthFn`'s hash, calls `resolver.resolve(...)`. The library resolver walks its store from the `lengthFn` Lambda, collecting the Lambda plus its ParameterDecl plus its body subgraph (everything reachable that is not a NodeRef target), and returns a `SubgraphFetch` containing all those nodes plus their library-store NodeId-to-Hash mapping. The chain confirms the root hash matches. The `FederatedProgram.fetchAndAdmit` builds a foreign-to-local NodeId map by admitting each fetched node under a fresh local NodeId, then re-walks each admitted node and translates its internal NodeId references via `Node.translateNodeIds`. After translation every admitted Node uses local NodeIds; the verifier proceeds to type-check the Lambda. The application runs to completion.
 
 A separate program could verify the manifest's claims without running anything: `strand verify-manifest lib-list.json`. The verifier checks that for each export, `closureOf(target)` equals `declaredEffects`. This is the certification step that makes downstream consumers trust the manifest's effect declaration without re-walking each export.
 
@@ -342,7 +404,8 @@ New subcommands:
 
 | File | Change | Size |
 |------|--------|------|
-| `impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/NodeResolver.kt` | New file — `NodeResolver` interface plus `LocalHashStoreResolver`, `ChainedResolver`, `FileSystemResolver`, `CachingResolver`, `NoOpResolver`, `NodeResolverIntegrityViolation` exception | Medium |
+| `impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/NodeResolver.kt` | New file — `NodeResolver` interface returning `SubgraphFetch`, plus `LocalHashStoreResolver`, `ChainedResolver`, `FileSystemResolver`, `CachingResolver`, `NoOpResolver`, `NodeResolverIntegrityViolation` exception, `SubgraphFetch` data class, subgraph-walking helper | Medium |
+| `impl-kotlin/core/src/main/kotlin/org/strand/core/NodeTranslate.kt` | New file — `Node.translateNodeIds(fn: (NodeId) -> NodeId): Node` extension defined exhaustively over the Node sealed hierarchy. Mechanical case-per-variant; rewrites every `NodeId`-typed field. NodeRef is unchanged (target is a Hash). Used by `FederatedProgram.fetchAndAdmit` to re-base foreign NodeIds into the local store after admission | Medium |
 | `impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/NameRegistry.kt` | New file — `NameRegistry` data class + JSON load/save | Small |
 | `impl-kotlin/core/src/main/kotlin/org/strand/core/Node.kt` | Add `Node.ModuleManifest(exports: List<ManifestExport>, description: NodeId?, manifestSignature: ByteArray?)`; add `ManifestExport(target: Hash, declaredEffects: List<NodeId>, displayName: String)` data class | Medium |
 | `impl-kotlin/hashing/src/main/kotlin/org/strand/hashing/CategoryTag.kt` | Add `ModuleManifest = 46` | Small |

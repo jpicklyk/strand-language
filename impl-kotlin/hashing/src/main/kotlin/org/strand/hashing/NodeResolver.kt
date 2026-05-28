@@ -2,43 +2,87 @@ package org.strand.hashing
 
 import org.strand.core.Hash
 import org.strand.core.Node
+import org.strand.core.NodeId
+import org.strand.core.RawNodeStore
+import org.strand.core.StoredNode
+import org.strand.core.childNodeIds
 
 /**
  * Layer 2 step 3 — cross-store federation entry point.
  *
- * Given a [Hash], returns the canonical [Node] the hash binds, or `null` if
- * the resolver does not hold that node. The verifier and interpreter consult
- * a resolver whenever a [Node.NodeRef] target's hash is not in the local
- * `hashToNodeId` reverse map.
+ * Given a [Hash], returns a self-contained [SubgraphFetch] rooted at that
+ * hash, or `null` if the resolver does not hold the hash. The verifier and
+ * interpreter consult a resolver whenever a [Node.NodeRef] target's hash
+ * is not in the local `hashToNodeId` reverse map.
  *
- * The interface is intentionally minimal. A `Node?` return is sufficient:
- * the verifier needs the node to type-check, the interpreter needs the node
- * to evaluate. The resolver does not return a [org.strand.core.NodeId]
- * because NodeIds are per-store and meaningful only to the verifier's
- * caller — admitted-to-local-store NodeIds are assigned by the caller after
- * the fetch.
- *
- * **Integrity** — the canonical hash binds the content. A resolver that
- * returns a node whose canonical hash does not equal the requested hash has
- * a bug or has been tampered with; downstream callers (typically the
- * [ChainedResolver] integrity-check wrapper) detect this and surface it as
- * [NodeResolverIntegrityViolation].
+ * **Why subgraphs and not single nodes** — a Strand [Node] in the
+ * in-memory ADT carries internal [NodeId] references for non-NodeRef
+ * edges (Lambda.body, Application.arguments, ProductValue.fields, and so
+ * on). Those NodeIds are meaningful only in the store they were assigned
+ * in. Returning a single Node would leave its internal references
+ * pointing into a foreign-store ID space the local verifier cannot
+ * resolve. The [SubgraphFetch] interface returns the whole self-contained
+ * subgraph (everything reachable from the root that is not itself a
+ * NodeRef boundary), plus the foreign store's `nodeIdToHash` mapping, so
+ * the receiver can translate every foreign NodeId reference to its
+ * canonical hash and then to a local NodeId at admission time.
  *
  * Concrete resolvers in this module:
- * - [NoOpResolver] — always returns null; the default for single-store programs.
- * - [LocalHashStoreResolver] — wraps a [HashStore] and returns nodes by hash.
- * - [ChainedResolver] — tries each delegate in order; performs integrity check.
- * - [CachingResolver] — wraps another resolver and admits fetched nodes to a
- *   per-session cache.
+ * - [NoOpResolver] — always returns null; the default for single-store
+ *   programs.
+ * - [LocalHashStoreResolver] — wraps a [HashStore] + `nodeIdToHash` map
+ *   and returns subgraphs by walking from the requested root.
+ * - [ChainedResolver] — tries each delegate in order; performs root-hash
+ *   integrity check.
+ * - [CachingResolver] — wraps another resolver and caches fetched
+ *   subgraphs in a per-session map.
  *
  * Networked resolvers (HTTP, IPFS, S3), signed-binding resolvers, and
  * capability-gated resolvers are downstream extensions of this interface
  * and are explicitly deferred per the Q-043 proposal.
  */
 interface NodeResolver {
-    /** Returns the canonical [Node] for [hash], or `null` if not held. */
-    fun resolve(hash: Hash): Node?
+    /** Returns a self-contained [SubgraphFetch] rooted at [hash], or `null` if not held. */
+    fun resolve(hash: Hash): SubgraphFetch?
 }
+
+/**
+ * A self-contained subgraph fetched through a [NodeResolver].
+ *
+ * Contains the requested root node plus every transitively-referenced
+ * internal node, stopping at NodeRef boundaries (a NodeRef inside the
+ * subgraph stays a NodeRef and is resolved lazily on demand). The
+ * [nodeIdToHash] map carries the foreign store's NodeId→Hash mapping for
+ * the contained nodes, used by the receiver ([FederatedProgram.fetchAndAdmit])
+ * to translate every Node's internal NodeId references into the local
+ * ID space.
+ *
+ * Per the Q-043 proposal § 4.5 admission protocol:
+ *
+ * 1. The receiver builds a foreign-to-local NodeId map by admitting each
+ *    fetched node (or finding an existing local mapping for its hash).
+ * 2. After admission, each admitted Node is re-walked via
+ *    `Node.translateNodeIds(foreignToLocal)` to rewrite its internal
+ *    NodeId references into local IDs.
+ * 3. The canonical hash of each translated Node is recomputed and
+ *    compared to its declared hash; mismatch raises
+ *    [NodeResolverIntegrityViolation].
+ */
+data class SubgraphFetch(
+    /** The hash that was requested; must equal the hash of the root node. */
+    val rootHash: Hash,
+    /**
+     * Every node reachable from the root that is not itself a NodeRef
+     * boundary — including the root. Keyed by canonical hash.
+     */
+    val nodes: Map<Hash, Node>,
+    /**
+     * The foreign store's NodeId → Hash mapping for the contained
+     * [nodes]. Used by the receiver to translate the foreign NodeId
+     * references inside each admitted node into the local ID space.
+     */
+    val nodeIdToHash: Map<NodeId, Hash>,
+)
 
 /**
  * The default resolver for single-store programs. Always returns `null`,
@@ -49,17 +93,58 @@ interface NodeResolver {
  * every NodeRef target hash is in the local `hashToNodeId` map.
  */
 object NoOpResolver : NodeResolver {
-    override fun resolve(hash: Hash): Node? = null
+    override fun resolve(hash: Hash): SubgraphFetch? = null
 }
 
 /**
- * Wraps a [HashStore] as a [NodeResolver]. The store is admitted by hash,
- * so the integrity property is structural: a returned node's canonical
- * hash is its admission key. Cross-resolver integrity (when this resolver
- * is one link in a [ChainedResolver]) is enforced at the chain level.
+ * Wraps a [HashStore] + its `nodeIdToHash` map as a [NodeResolver].
+ * Walks the store from the requested root, gathering every internal node
+ * reachable through non-NodeRef edges, and returns them in a
+ * [SubgraphFetch].
+ *
+ * The store and the `nodeIdToHash` map must agree — every entry in the
+ * map must point at a node that exists in the store, and every node in
+ * the store reachable from the root must have an entry in the map. The
+ * map is produced by [Hasher.finalize] (it is the same `nodeIdToHash`
+ * field on [FinalizedProgram]); pre-finalization stores are not
+ * federated targets.
  */
-class LocalHashStoreResolver(private val store: HashStore) : NodeResolver {
-    override fun resolve(hash: Hash): Node? = store.get(hash)
+class LocalHashStoreResolver(
+    private val store: HashStore,
+    private val nodeIdToHash: Map<NodeId, Hash>,
+) : NodeResolver {
+    override fun resolve(hash: Hash): SubgraphFetch? {
+        if (store.get(hash) == null) return null
+        // Reverse map: Hash → NodeId. Built from nodeIdToHash so we can
+        // walk children using local NodeIds.
+        val hashToNodeId = nodeIdToHash.entries.associate { (id, h) -> h to id }
+        val rootNodeId = hashToNodeId[hash] ?: return null
+
+        val walked = mutableMapOf<Hash, Node>()
+        val walkedIds = mutableMapOf<NodeId, Hash>()
+        walkSubgraph(rootNodeId, store, nodeIdToHash, hashToNodeId, walked, walkedIds)
+        return SubgraphFetch(rootHash = hash, nodes = walked, nodeIdToHash = walkedIds)
+    }
+
+    private fun walkSubgraph(
+        startId: NodeId,
+        store: HashStore,
+        nodeIdToHash: Map<NodeId, Hash>,
+        hashToNodeId: Map<Hash, NodeId>,
+        outNodes: MutableMap<Hash, Node>,
+        outIds: MutableMap<NodeId, Hash>,
+    ) {
+        if (outIds.containsKey(startId)) return
+        val hash = nodeIdToHash[startId] ?: return
+        val node = store.get(hash) ?: return
+        outNodes[hash] = node
+        outIds[startId] = hash
+        // Recurse through every NodeId-typed field in `node`. NodeRef
+        // targets are NOT followed — they are subgraph boundaries.
+        for (childId in node.childNodeIds()) {
+            walkSubgraph(childId, store, nodeIdToHash, hashToNodeId, outNodes, outIds)
+        }
+    }
 }
 
 /**
@@ -68,65 +153,34 @@ class LocalHashStoreResolver(private val store: HashStore) : NodeResolver {
  * caller-controlled — typically the local store first, then peer stores in
  * priority order.
  *
- * **Integrity check** — when a delegate returns a non-null node, the
- * canonical hash of that node is recomputed and compared against the
- * requested hash. A mismatch throws [NodeResolverIntegrityViolation] —
- * a hard failure that halts the session, since the resolver is delivering
- * content that does not match what was asked for.
+ * **Integrity check** — confirms the resolver-claimed `rootHash` matches
+ * the requested hash. Per-node hashes are confirmed at admission time as
+ * the receiver re-runs the canonical encoder over each admitted node and
+ * compares to the declared `nodeIdToHash` mapping (see
+ * [FederatedProgram.fetchAndAdmit]).
  *
- * The check covers every fetch (including local-store hits) so there is
- * one check site rather than per-resolver trust assertions. For
- * [LocalHashStoreResolver] the check is in practice a no-op (the store
- * admits by hash) but the cost is negligible and the uniformity is worth
- * it.
- *
- * **Pre-step-3b note** — until the canonical encoder exposes a single-node
- * hash function, the integrity check is structural rather than
- * cryptographic. The implementation hashes the returned node by wrapping
- * it in a temporary [RawNodeStore] / [Hasher] pair; for simple primitives
- * this is identical to the production hash. Once [Node.ModuleManifest]
- * ships in step 3b the test surface covers cross-resolver mismatch
- * scenarios end-to-end.
+ * The root-level check covers every fetch (including local-store hits) so
+ * there is one check site rather than per-resolver trust assertions.
  */
 class ChainedResolver(private val resolvers: List<NodeResolver>) : NodeResolver {
-    override fun resolve(hash: Hash): Node? {
+    override fun resolve(hash: Hash): SubgraphFetch? {
         for (r in resolvers) {
-            val node = r.resolve(hash) ?: continue
-            // Integrity check — recompute the canonical hash of the
-            // returned node and compare. For a LocalHashStoreResolver
-            // hit the check is structural (HashStore admits by hash);
-            // for FileSystemResolver and future networked resolvers it
-            // is load-bearing.
-            verifyIntegrity(hash, node)
-            return node
+            val fetch = r.resolve(hash) ?: continue
+            // Root-level integrity check
+            if (fetch.rootHash != hash) {
+                throw NodeResolverIntegrityViolation(expected = hash, actual = fetch.rootHash)
+            }
+            return fetch
         }
         return null
-    }
-
-    private fun verifyIntegrity(expected: Hash, node: Node) {
-        // The simplest portable integrity check: round-trip the node
-        // through a single-entry RawNodeStore and Hasher.hashRoot. This
-        // matches what the canonical encoder produces for a top-level
-        // (root-context) node — exactly the context used for storing
-        // and retrieving a hash-keyed node.
-        //
-        // NodeRef targets are inherently closed (verifier rule
-        // NodeRefTargetMustBeClosed), so the empty binder stack used by
-        // hashRoot is correct.
-        val tempStore = org.strand.core.RawNodeStore()
-        val id = tempStore.add(org.strand.core.StoredNode.Canonical(node))
-        val actual = Hasher(tempStore).hashRoot(id)
-        if (actual != expected) {
-            throw NodeResolverIntegrityViolation(expected = expected, actual = actual)
-        }
     }
 }
 
 /**
- * Wraps another resolver with a per-session [HashStore] cache. Fetched
- * nodes are admitted to the cache; subsequent lookups for the same hash
- * short-circuit. The cache is a strict performance optimisation — semantics
- * are identical with or without caching.
+ * Wraps another resolver with a per-session subgraph cache. Fetched
+ * subgraphs are stored under their root hash; subsequent lookups for the
+ * same hash short-circuit. The cache is a strict performance optimisation
+ * — semantics are identical with or without caching.
  *
  * The cache is **per-session**: each [CachingResolver] instance owns its
  * cache. Persistent on-disk caching is explicitly deferred per the
@@ -134,26 +188,25 @@ class ChainedResolver(private val resolvers: List<NodeResolver>) : NodeResolver 
  */
 class CachingResolver(
     private val delegate: NodeResolver,
-    private val cache: HashStore = HashStore(),
+    private val cache: MutableMap<Hash, SubgraphFetch> = mutableMapOf(),
 ) : NodeResolver {
-    override fun resolve(hash: Hash): Node? {
-        cache.get(hash)?.let { return it }
-        val node = delegate.resolve(hash) ?: return null
-        cache.put(hash, node)
-        return node
+    override fun resolve(hash: Hash): SubgraphFetch? {
+        cache[hash]?.let { return it }
+        val fetch = delegate.resolve(hash) ?: return null
+        cache[hash] = fetch
+        return fetch
     }
 }
 
 /**
- * Thrown when a [NodeResolver] returns a node whose canonical hash does
- * not equal the requested hash. The session halts; the exception carries
- * the expected and actual hashes so the offending resolver can be
- * identified from logs.
+ * Thrown when a [NodeResolver] returns a subgraph whose root canonical
+ * hash does not equal the requested hash. The session halts; the
+ * exception carries the expected and actual hashes so the offending
+ * resolver can be identified from logs.
  *
  * This is a **runtime exception** rather than a verifier diagnostic
  * because the failure is not in the program — it is in the supplied
- * federation chain. A graph that produces this exception is well-formed;
- * its dependencies were sourced from an untrustworthy resolver.
+ * federation chain.
  */
 class NodeResolverIntegrityViolation(
     val expected: Hash,
