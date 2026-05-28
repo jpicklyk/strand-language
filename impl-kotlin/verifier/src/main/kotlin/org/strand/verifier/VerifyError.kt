@@ -148,6 +148,47 @@ sealed class VerifyError {
         val openReferences: List<NodeId>
     ) : VerifyError()
 
+    // ----- Layer 2 step 3: federation (Q-043) -----
+
+    /**
+     * A [Node.NodeRef]'s target hash is not in the local `hashToNodeId`
+     * map AND the federation resolver did not return a node for it. This
+     * is the Q-043 generalisation of [NodeRefTargetNotFound] for the
+     * federated path: when a [org.strand.hashing.FederatedProgram] is
+     * supplied with a non-[org.strand.hashing.NoOpResolver] resolver, a
+     * NodeRef whose target is unknown both locally and through the
+     * resolver chain raises this variant. Single-store programs (or
+     * federated programs with [org.strand.hashing.NoOpResolver]) continue
+     * to raise [NodeRefTargetNotFound] — the existing diagnostic is
+     * preserved for callers that never enter the federated path.
+     */
+    data class NodeRefTargetUnresolvable(
+        override val at: NodeId,
+        val targetHash: Hash
+    ) : VerifyError()
+
+    /**
+     * A [Node.NodeRef]'s target was fetched through the resolver chain
+     * but its admitted subgraph failed verification. The inner error
+     * identifies the specific well-formedness rule that rejected the
+     * fetched node — typically a [DanglingReference], [CategoryMismatch],
+     * or a type-checking failure that would have surfaced for an
+     * equivalent local node.
+     *
+     * The contained [target] is the locally-assigned [NodeId] the
+     * resolver-admitted subgraph received in the local [NodeStore]; the
+     * verifier records it so call sites can correlate which fetched
+     * dependency failed. [innerErrorCategory] is the category name of the
+     * inner [VerifyError] for diagnostic ergonomics — the full inner
+     * error list is surfaced separately through [VerifyResult.Failed].
+     */
+    data class NodeRefTargetVerificationFailed(
+        override val at: NodeId,
+        val target: NodeId,
+        val targetHash: Hash,
+        val innerErrorCategory: String,
+    ) : VerifyError()
+
     // ----- Layer 3: effects and capabilities -----
 
     /**
