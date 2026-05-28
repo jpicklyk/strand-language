@@ -114,6 +114,29 @@ sealed class Value {
     data class MapV(val entries: kotlinx.collections.immutable.PersistentMap<Value, Value>) : Value()
 
     /**
+     * An opaque persistent set value (stdlib expansion round 5).
+     * Backed by [kotlinx.collections.immutable.PersistentSet] — O(log n)
+     * Add/Remove/Has, path-copy persistence.
+     *
+     * **Surface-type pattern.** Same as [MapV]: agents declare Set
+     * values using `bytesT` as the placeholder surface type. The
+     * runtime checks the actual `Value.SetV` at dispatch; passing a
+     * non-Set value of type Bytes throws at the call site, not at
+     * verify time. A first-class parametric Set type is a future
+     * node-algebra extension.
+     *
+     * Equality is by content (PersistentSet's equals walks the
+     * structure). Two Sets with the same elements compare equal
+     * regardless of insertion order.
+     *
+     * SetV values never enter the canonical store — they're
+     * runtime values like Closure / FixpointFn / Resource / MapV.
+     * Persist a Set across runs via Set.ToList + reconstruct via
+     * Set.FromList.
+     */
+    data class SetV(val entries: kotlinx.collections.immutable.PersistentSet<Value>) : Value()
+
+    /**
      * A first-class tool declaration (N-044). Produced when the
      * interpreter evaluates a [Node.ToolDef] (typically reached via a
      * NodeRef inside a `tools` list at an LLM.Generate call site).

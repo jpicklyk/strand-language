@@ -2,55 +2,13 @@
 
 **Document:** `proposals/stdlib-future-builtins.md`
 **Status:** Tracking catalog. Persists across rounds and is updated as gaps close or new ones surface.
-**Last revised:** 2026-05-27 (Round 4 shipped — Float arithmetic + comparisons, Bool.Eq/Bytes.Eq, polymorphic List structure ops + Int-specialized reducers, Path.*, DateTime.*, Markdown.Stringify. ~39 new builtin entries; section deleted from this catalog.)
+**Last revised:** 2026-05-27 (Round 5 shipped — String formatting (Format / PadLeft / PadRight / Repeat / Lines / Chars / CharAt), opaque persistent Set (11 ops + Set.Fold higher-order), Map.Map / Map.Merge / Map.Filter higher-order extensions, Csv.Parse / Csv.Stringify / Tsv.Parse / Tsv.Stringify, Url.Parse / Url.QueryEncode / Url.QueryDecode, and Compress.Gzip / Compress.Gunzip. ~30 new builtin entries plus a new `Value.SetV` runtime variant. Sections deleted from this catalog; Zstd / Unzstd moved to "Deferred to specific milestones" pending zstd-jni dep approval.)
 
 ## Purpose
 
-Catalogues builtin capabilities that are absent from the current registry (~150 builtins across 19 namespaces after stdlib expansion rounds 1–4). Each entry is grouped by readiness: candidate for a future round, open design question requiring a dedicated proposal before any builtin lands, or deferred to a specific milestone. Strand-distinctive agent-native capabilities — `LLM.*`, vectors and embeddings, agent-state primitives, model routing — are tracked separately as a research proposal because they may shape stdlib and node-algebra requirements before the rest of this catalog ships.
+Catalogues builtin capabilities that are absent from the current registry (~180 builtins across 22 namespaces after stdlib expansion rounds 1–5). Each entry is grouped by readiness: open design question requiring a dedicated proposal before any builtin lands, or deferred to a specific milestone. Strand-distinctive agent-native capabilities — `LLM.*`, vectors and embeddings, agent-state primitives, model routing — are tracked separately as a research proposal because they may shape stdlib and node-algebra requirements before the rest of this catalog ships.
 
 This document is not a draft proposal in the strict sense used elsewhere in `proposals/`. It is a living menu that persists as rounds are shipped. When a slice graduates from this catalog to execution, the corresponding entries are deleted in the same commit that lands the builtins.
-
-## Round 5+ candidates
-
-Ready to ship under the same `strand-add-builtin` pattern. Grouped so the next round can pick coherent slices.
-
-### String formatting
-
-- `String.Format` (template + args → String)
-- `String.PadLeft`, `String.PadRight`, `String.Repeat`
-- `String.Lines` (String → List<String>)
-- `String.Chars` (String → List<String> of single-char strings)
-- `String.CharAt` (String, Int → Option<String>)
-
-### Set operations
-
-Opaque persistent Set parallel to round-3's Map.
-
-- `Set.Empty`, `Set.Add`, `Set.Remove`, `Set.Has`, `Set.Size`
-- `Set.Union`, `Set.Intersect`, `Set.Difference`
-- `Set.ToList`, `Set.FromList`
-- `Set.Fold`
-
-### Map extensions
-
-- `Map.Map` (transform values)
-- `Map.Merge` (conflict-resolution callback)
-- `Map.Filter`
-
-### Tabular parsing
-
-- `Csv.Parse`, `Csv.Stringify`
-- `Tsv.Parse`, `Tsv.Stringify`
-
-### Url operations
-
-- `Url.Parse` (String → Option<{scheme, host, port, path, query, fragment}>)
-- `Url.QueryEncode`, `Url.QueryDecode`
-
-### Compression
-
-- `Compress.Gzip`, `Compress.Gunzip` (Bytes ↔ Bytes)
-- `Compress.Zstd`, `Compress.Unzstd`
 
 ## Open design items
 
@@ -90,6 +48,7 @@ These wait on architectural work that is not stdlib-shaped.
 | `Time.Schedule` (E-012) | Same; could ride with a DateTime round if scope expands |
 | HTML5 / SVG blessed libraries | Nested-μ blocker; the spliced-variants pattern from corpus 66 (JsonValueFull) is the likely unblock |
 | PDF blessed library | Binary-format engineering pass; separate from stdlib expansion |
+| `Compress.Zstd` / `Compress.Unzstd` | Adding the `com.github.luben:zstd-jni` build dependency (~1.5 MB native lib). Gzip via `java.util.zip` shipped in Round 5; Zstd needs explicit dep approval first |
 
 ## Agent-native and Strand-distinctive capabilities
 

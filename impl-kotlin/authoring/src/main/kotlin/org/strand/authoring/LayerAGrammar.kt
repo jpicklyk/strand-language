@@ -1851,6 +1851,71 @@ object LayerAGrammar {
             stringFields = mapOf("target" to "strand-builtin:DateTime.AddSeconds"),
             refFields = mapOf("foreignType" to "dtAddSecondsT"),
         ),
+
+        // ===== Stdlib expansion round 5 (2026-05-27) =====
+        // Five preludable entries across three families: String.PadLeft/
+        // PadRight/Repeat (Group A monomorphic subset), Url.QueryEncode
+        // (Group E monomorphic), Compress.Gzip (Group F monomorphic).
+        // The other Round 5 builtins are polymorphic / Option-returning /
+        // agent-typed and stay explicit at the use site per the
+        // documented exceptions in impl-kotlin/CLAUDE.md.
+
+        // String padding + repeat. All (String, Int, String) -> String
+        // or (String, Int) -> String.
+        "padLeftT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "padRightT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "strRepeatT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "padLeft" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.PadLeft"),
+            refFields = mapOf("foreignType" to "padLeftT"),
+        ),
+        "padRight" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.PadRight"),
+            refFields = mapOf("foreignType" to "padRightT"),
+        ),
+        "strRepeat" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Repeat"),
+            refFields = mapOf("foreignType" to "strRepeatT"),
+        ),
+
+        // Url.QueryEncode is (String) -> String.
+        "urlEncodeT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "urlEncode" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Url.QueryEncode"),
+            refFields = mapOf("foreignType" to "urlEncodeT"),
+        ),
+
+        // Compress.Gzip is (Bytes) -> Bytes (matches the Hash.* shape).
+        "gzipT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "gzip" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Compress.Gzip"),
+            refFields = mapOf("foreignType" to "gzipT"),
+        ),
     )
 
     /**

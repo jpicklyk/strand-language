@@ -273,7 +273,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (110):
+FunctionType signatures (115):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -341,8 +341,12 @@ FunctionType signatures (110):
     dtFormatIsoT                    — (Int) -> String  (millis -> ISO 8601 UTC)
     dtYearT dtMonthT dtDayT dtHourT dtMinuteT dtSecondT  — (Int) -> Int  (UTC component extraction)
     dtAddDaysT dtAddHoursT dtAddMinutesT dtAddSecondsT   — (Int, Int) -> Int  (millis + n -> new millis)
+    padLeftT padRightT              — (String, Int, String) -> String  (round-5; pad on left/right)
+    strRepeatT                      — (String, Int) -> String  (round-5; repeat n times)
+    urlEncodeT                      — (String) -> String  (round-5; application/x-www-form-urlencoded)
+    gzipT                           — (Bytes) -> Bytes  (round-5; gzip compress)
 
-Foreign-node builtins (122):
+Foreign-node builtins (127):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
@@ -386,6 +390,10 @@ Foreign-node builtins (122):
     dtFormatIso                                 — DateTime.FormatIso (Int millis -> ISO 8601 UTC String). Pure.
     dtYear dtMonth dtDay dtHour dtMinute dtSecond  — DateTime UTC component extractors (Int millis -> Int). Pure.
     dtAddDays dtAddHours dtAddMinutes dtAddSeconds  — DateTime arithmetic (Int millis + Int n -> Int millis). Calendar-aware. Pure.
+    padLeft padRight                            — String.PadLeft / String.PadRight (round-5; pure; pad must be non-empty)
+    strRepeat                                   — String.Repeat (round-5; n must be non-negative)
+    urlEncode                                   — Url.QueryEncode (round-5; application/x-www-form-urlencoded — spaces become +)
+    gzip                                        — Compress.Gzip (round-5; pure; produces gzip-formatted Bytes)
 
 Effect categories (20):
 
@@ -422,18 +430,27 @@ or taking List<Int>),
 `Fs.List` (returns List<String>), `Process.Spawn` (takes List<String>),
 `Process.EnvVar` / `String.ParseInt` / `String.ParseFloat` /
 `Bytes.ParseUtf8` / `Bytes.ParseHex` / `Bytes.ParseBase64` /
-`DateTime.ParseIso` (all Option-returning),
-`String.Split` / `String.Join` (polymorphic List<String>),
+`DateTime.ParseIso` / `String.CharAt` / `Url.QueryDecode` /
+`Compress.Gunzip` (all Option-returning),
+`String.Split` / `String.Join` / `String.Format` / `String.Lines` /
+`String.Chars` (polymorphic List<String>),
+`Url.Parse` (Option<{scheme, host, port, path, query, fragment}>),
+`Csv.Parse` / `Csv.Stringify` / `Tsv.Parse` / `Tsv.Stringify`
+(take or return List<List<String>>),
 `Json.Parse` / `Json.Stringify` (typed against a specific JsonValue schema
 — corpus 54 flat or corpus 66 JsonValueFull), `Markdown.Parse` /
 `Markdown.Stringify` (typed against the corpus 61 MarkdownDocument schema),
 `Regex.Match` (Option<String>) /
 `Regex.FindAll` (List<String>) / `Regex.Split` (List<String>),
 `Map.Empty` / `Map.Get` / `Map.Put` / `Map.Remove` / `Map.Has` / `Map.Size` /
-`Map.Keys` / `Map.Values` / `Map.Entries` / `Map.Fold` (opaque-handle Map<K,V>
-— see the Map.* block below for the surface-type pattern). When using
-these, declare the FN with the appropriate target string and an FNT for the
-concrete type at this call site.
+`Map.Keys` / `Map.Values` / `Map.Entries` / `Map.Fold` / `Map.Map` /
+`Map.Merge` / `Map.Filter` (opaque-handle Map<K,V> — see the Map.* block
+below for the surface-type pattern),
+`Set.Empty` / `Set.Add` / `Set.Remove` / `Set.Has` / `Set.Size` /
+`Set.Union` / `Set.Intersect` / `Set.Difference` / `Set.ToList` /
+`Set.FromList` / `Set.Fold` (opaque-handle Set<T>, mirror Map.* surface
+pattern). When using these, declare the FN with the appropriate target
+string and an FNT for the concrete type at this call site.
 
 ### HTTP server (`Http.Listen` / `Http.Accept` / `Http.Respond` / `Http.ServerClose`)
 
@@ -1131,6 +1148,124 @@ whose payload is a bare StringV (the shape `Markdown.Parse`
 currently produces) is treated as the text directly, so
 `Markdown.Parse → Markdown.Stringify` round-trips a single
 paragraph verbatim.
+
+## Stdlib expansion round 5
+
+Six families on top of Round 4: String formatting helpers, opaque
+persistent Set parallel to Map, three higher-order Map extensions,
+CSV / TSV tabular parsing, URL parsing + query-string codec, and
+Gzip compression. Five preludable shortcuts (`padLeft`, `padRight`,
+`strRepeat`, `urlEncode`, `gzip`); the rest follow the documented
+polymorphic / Option-returning / agent-typed exceptions.
+
+### String formatting (`String.*` round-5 additions)
+
+All pure.
+
+    strand-builtin:String.Format(template: String, args: List<String>) -> String
+        -- Positional placeholders {0}, {1}, etc. Out-of-range or
+        -- non-numeric placeholders left verbatim. Same index may be
+        -- used multiple times.
+    strand-builtin:String.PadLeft(s: String, n: Int, pad: String) -> String
+        -- Pads on the left with `pad` (must be non-empty) until length
+        -- >= n. If s is already >= n chars, returns s unchanged.
+    strand-builtin:String.PadRight(s: String, n: Int, pad: String) -> String
+    strand-builtin:String.Repeat(s: String, n: Int) -> String
+        -- n must be non-negative; n=0 yields "".
+    strand-builtin:String.Lines(s: String) -> List<String>
+        -- Splits on \n. A trailing newline produces a trailing empty
+        -- entry. CRLF: the \r stays on the preceding line.
+    strand-builtin:String.Chars(s: String) -> List<String>
+        -- One single-char String per UTF-16 code unit.
+    strand-builtin:String.CharAt(s: String, i: Int) -> Option<String>
+        -- None for negative or out-of-range index.
+
+Prelude shortcuts (monomorphic only): `padLeft`, `padRight`, `strRepeat`.
+The others are polymorphic-list / Option-returning.
+
+### Set operations (`Set.*` opaque persistent set)
+
+Opaque persistent Set backed by `kotlinx.collections.immutable.PersistentSet`.
+Surface-type pattern matches Map.*: agents declare Set values with
+`bytesT` as the placeholder; the runtime checks `Value.SetV` at
+dispatch. NOT in the prelude.
+
+    strand-builtin:Set.Empty() -> Set<T>
+    strand-builtin:Set.Add(set, val) -> Set<T>           -- idempotent
+    strand-builtin:Set.Remove(set, val) -> Set<T>        -- no-op if absent
+    strand-builtin:Set.Has(set, val) -> Bool
+    strand-builtin:Set.Size(set) -> Int
+    strand-builtin:Set.Union(a, b) -> Set<T>
+    strand-builtin:Set.Intersect(a, b) -> Set<T>
+    strand-builtin:Set.Difference(a, b) -> Set<T>        -- elements of a not in b
+    strand-builtin:Set.ToList(set) -> List<T>            -- insertion order
+    strand-builtin:Set.FromList(list) -> Set<T>          -- duplicates collapse
+    strand-builtin:Set.Fold(set, init, fn) -> acc        -- fn: (acc, elem) -> acc
+
+Two Sets with the same elements compare equal regardless of insertion
+order (PersistentSet equals walks the structure). Sets never enter
+the canonical store — persist via Set.ToList + Set.FromList.
+
+### Map extensions (`Map.Map` / `Map.Merge` / `Map.Filter`)
+
+Higher-order extensions to Round 3's Map.*. Same surface-type
+caveat (bytesT placeholder).
+
+    strand-builtin:Map.Map(map, fn: V -> W) -> Map<K, W>
+        -- Transforms each value; keys + insertion order preserved.
+    strand-builtin:Map.Merge(a, b, conflict: (V, V) -> V) -> Map<K, V>
+        -- Keys in only a or only b carry through; keys in both invoke
+        -- `conflict(a_value, b_value)`. Result order: a's keys first,
+        -- then b's new keys.
+    strand-builtin:Map.Filter(map, fn: (K, V) -> Bool) -> Map<K, V>
+        -- Keep entries where fn returns true; order preserved.
+
+### CSV / TSV (`Csv.*` / `Tsv.*`)
+
+Tabular parsing and stringification. Csv.* implements RFC 4180
+basic rules (comma cells, double-quote quoting, `""` as escaped
+quote, CRLF + LF row separators). Tsv.* is simpler — tab cells,
+no quoting (tabs and newlines inside cells are unsupported by the
+TSV convention).
+
+    strand-builtin:Csv.Parse(s: String) -> List<List<String>>
+    strand-builtin:Csv.Stringify(rows: List<List<String>>) -> String
+        -- Quotes any cell containing , " \r or \n; doubles embedded
+        -- quotes per RFC 4180. Rows joined by CRLF.
+    strand-builtin:Tsv.Parse(s: String) -> List<List<String>>
+    strand-builtin:Tsv.Stringify(rows: List<List<String>>) -> String
+
+NOT in the prelude — return shape is List<List<String>>.
+
+### URL (`Url.*`)
+
+URL parsing + application/x-www-form-urlencoded codec.
+
+    strand-builtin:Url.Parse(s: String)
+        -> Option<{scheme: String, host: String, port: Int,
+                   path: String, query: String, fragment: String}>
+        -- None if the URL has no scheme or fails URI syntax. `port`
+        -- is the explicit port or -1 if absent. host/path/query/
+        -- fragment default to empty string when omitted.
+    strand-builtin:Url.QueryEncode(s: String) -> String
+        -- Spaces become +; reserved chars become %XX.
+    strand-builtin:Url.QueryDecode(s: String) -> Option<String>
+        -- None on malformed percent-encoding.
+
+Preludable: `urlEncode`. `Url.Parse` and `Url.QueryDecode` are
+Option-returning / product-returning.
+
+### Compression (`Compress.*`)
+
+JDK-native gzip via `java.util.zip.GZIPOutputStream` and
+`GZIPInputStream`. Zstd / Unzstd are deferred — would require
+adding `com.github.luben:zstd-jni` as a build dependency.
+
+    strand-builtin:Compress.Gzip(b: Bytes) -> Bytes
+    strand-builtin:Compress.Gunzip(b: Bytes) -> Option<Bytes>
+        -- None on malformed gzip (truncated header / CRC mismatch / etc.)
+
+Preludable: `gzip`. `Gunzip` is Option-returning.
 
 ## Vector stores (`Pinecone.*`, `Chroma.*`)
 
