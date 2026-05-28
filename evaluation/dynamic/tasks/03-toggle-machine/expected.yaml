@@ -8,7 +8,9 @@ events:
   - {tag: unit}
 final_state:
   python: "True"
+  kotlin: "true"
   strand: "BoolV(v=true)"
 outputs:
   python: "[]"
+  kotlin: "[]"
   strand: "[]"

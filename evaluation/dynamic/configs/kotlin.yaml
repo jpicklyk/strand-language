@@ -1,0 +1,10 @@
+language: kotlin
+system_prompt_path: prompts/kotlin-system.md
+feedback_format: both
+max_retries: 5
+description: |
+  Kotlin baseline (Q-021 named baseline). Compiles with kotlinc and runs
+  with java -jar. The Kotlin compiler is the static checker — type system,
+  null safety, sealed-class exhaustiveness. Resolves kotlinc via
+  STRAND_EVAL_KOTLINC, PATH, or common install locations (IntelliJ /
+  Android Studio bundled plugin, SDKMAN, Homebrew, Chocolatey).

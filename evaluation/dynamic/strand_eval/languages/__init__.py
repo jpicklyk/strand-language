@@ -116,3 +116,4 @@ __all__ = [
 # Language, register_language` at its top.
 from strand_eval.languages import python as _python_adapter  # noqa: F401
 from strand_eval.languages import strand as _strand_adapter  # noqa: F401
+from strand_eval.languages import kotlin as _kotlin_adapter  # noqa: F401
