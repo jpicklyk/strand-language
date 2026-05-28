@@ -1550,6 +1550,372 @@ object LayerAGrammar {
             refFields = mapOf("foreignType" to "chromaGetT"),
             refListFields = mapOf("effects" to listOf("vectorReadFx")),
         ),
+
+        // ===== Stdlib expansion round 4 (2026-05-27) =====
+        // Float arithmetic + comparisons. Mirrors the existing Int.*
+        // surface (addT/subT/eqIntT/ltT/etc.) with an "f" prefix on
+        // the reserved name to distinguish Float-typed callsites from
+        // the existing Int-typed ones (Strand has no numeric coercion).
+
+        "fAddT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "fSubT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "fMulT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "fDivT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "fNegT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT")),
+            refFields = mapOf("result" to "floatT"),
+        ),
+        "fEqT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "fLtT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "fLeT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "fGtT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "fGeT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("floatT", "floatT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "fAdd" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Add"),
+            refFields = mapOf("foreignType" to "fAddT"),
+        ),
+        "fSub" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Sub"),
+            refFields = mapOf("foreignType" to "fSubT"),
+        ),
+        "fMul" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Mul"),
+            refFields = mapOf("foreignType" to "fMulT"),
+        ),
+        "fDiv" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Div"),
+            refFields = mapOf("foreignType" to "fDivT"),
+        ),
+        "fNeg" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Neg"),
+            refFields = mapOf("foreignType" to "fNegT"),
+        ),
+        "fEq" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Eq"),
+            refFields = mapOf("foreignType" to "fEqT"),
+        ),
+        "fLt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Lt"),
+            refFields = mapOf("foreignType" to "fLtT"),
+        ),
+        "fLe" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Le"),
+            refFields = mapOf("foreignType" to "fLeT"),
+        ),
+        "fGt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Gt"),
+            refFields = mapOf("foreignType" to "fGtT"),
+        ),
+        "fGe" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Float.Ge"),
+            refFields = mapOf("foreignType" to "fGeT"),
+        ),
+
+        // Missing equality variants — Bool.Eq and Bytes.Eq mirror the
+        // existing eqInt/eqStr pattern. Pure.
+        "eqBoolT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("boolT", "boolT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "eqBytesT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT", "bytesT")),
+            refFields = mapOf("result" to "boolT"),
+        ),
+        "eqBool" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bool.Eq"),
+            refFields = mapOf("foreignType" to "eqBoolT"),
+        ),
+        "eqBytes" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Bytes.Eq"),
+            refFields = mapOf("foreignType" to "eqBytesT"),
+        ),
+
+        // Path.* — pure path-string manipulation. No effect category.
+        // pathJoinT is (String, String) -> String; the unary builtins
+        // (Basename/Dirname/Extension/Normalize) all share the
+        // (String) -> String shape but keep distinct FNT names per
+        // the addT/subT precedent.
+        "pathJoinT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "pathBaseT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "pathDirT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "pathExtT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "pathNormT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "pathJoin" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Path.Join"),
+            refFields = mapOf("foreignType" to "pathJoinT"),
+        ),
+        "pathBase" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Path.Basename"),
+            refFields = mapOf("foreignType" to "pathBaseT"),
+        ),
+        "pathDir" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Path.Dirname"),
+            refFields = mapOf("foreignType" to "pathDirT"),
+        ),
+        "pathExt" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Path.Extension"),
+            refFields = mapOf("foreignType" to "pathExtT"),
+        ),
+        "pathNorm" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Path.Normalize"),
+            refFields = mapOf("foreignType" to "pathNormT"),
+        ),
+
+        // DateTime.* — all pure (operate on Int millis the caller
+        // provides). Monomorphic. DateTime.ParseIso is excluded
+        // because it returns Option<Int> (documented exception in
+        // impl-kotlin/CLAUDE.md § "When adding a new builtin").
+        "dtFormatIsoT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "dtYearT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtMonthT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtDayT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtHourT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtMinuteT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtSecondT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtAddDaysT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtAddHoursT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtAddMinutesT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtAddSecondsT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT", "intT")),
+            refFields = mapOf("result" to "intT"),
+        ),
+        "dtFormatIso" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.FormatIso"),
+            refFields = mapOf("foreignType" to "dtFormatIsoT"),
+        ),
+        "dtYear" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.Year"),
+            refFields = mapOf("foreignType" to "dtYearT"),
+        ),
+        "dtMonth" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.Month"),
+            refFields = mapOf("foreignType" to "dtMonthT"),
+        ),
+        "dtDay" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.Day"),
+            refFields = mapOf("foreignType" to "dtDayT"),
+        ),
+        "dtHour" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.Hour"),
+            refFields = mapOf("foreignType" to "dtHourT"),
+        ),
+        "dtMinute" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.Minute"),
+            refFields = mapOf("foreignType" to "dtMinuteT"),
+        ),
+        "dtSecond" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.Second"),
+            refFields = mapOf("foreignType" to "dtSecondT"),
+        ),
+        "dtAddDays" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.AddDays"),
+            refFields = mapOf("foreignType" to "dtAddDaysT"),
+        ),
+        "dtAddHours" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.AddHours"),
+            refFields = mapOf("foreignType" to "dtAddHoursT"),
+        ),
+        "dtAddMinutes" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.AddMinutes"),
+            refFields = mapOf("foreignType" to "dtAddMinutesT"),
+        ),
+        "dtAddSeconds" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:DateTime.AddSeconds"),
+            refFields = mapOf("foreignType" to "dtAddSecondsT"),
+        ),
+
+        // ===== Stdlib expansion round 5 (2026-05-27) =====
+        // Five preludable entries across three families: String.PadLeft/
+        // PadRight/Repeat (Group A monomorphic subset), Url.QueryEncode
+        // (Group E monomorphic), Compress.Gzip (Group F monomorphic).
+        // The other Round 5 builtins are polymorphic / Option-returning /
+        // agent-typed and stay explicit at the use site per the
+        // documented exceptions in impl-kotlin/CLAUDE.md.
+
+        // String padding + repeat. All (String, Int, String) -> String
+        // or (String, Int) -> String.
+        "padLeftT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "padRightT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT", "stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "strRepeatT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT", "intT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "padLeft" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.PadLeft"),
+            refFields = mapOf("foreignType" to "padLeftT"),
+        ),
+        "padRight" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.PadRight"),
+            refFields = mapOf("foreignType" to "padRightT"),
+        ),
+        "strRepeat" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:String.Repeat"),
+            refFields = mapOf("foreignType" to "strRepeatT"),
+        ),
+
+        // Url.QueryEncode is (String) -> String.
+        "urlEncodeT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("stringT")),
+            refFields = mapOf("result" to "stringT"),
+        ),
+        "urlEncode" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Url.QueryEncode"),
+            refFields = mapOf("foreignType" to "urlEncodeT"),
+        ),
+
+        // Compress.Gzip is (Bytes) -> Bytes (matches the Hash.* shape).
+        "gzipT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("bytesT")),
+            refFields = mapOf("result" to "bytesT"),
+        ),
+        "gzip" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:Compress.Gzip"),
+            refFields = mapOf("foreignType" to "gzipT"),
+        ),
     )
 
     /**
