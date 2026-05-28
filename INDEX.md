@@ -227,6 +227,7 @@ Inventory specified in [`design/node-algebra.md`](design/node-algebra.md). Curre
 | N-043 | Handler | Effects and capabilities |
 | N-044 | ToolDef | Agent-native capabilities |
 | N-045 | ResponseSchemaSpec | Agent-native capabilities |
+| N-046 | ModuleManifest | Composition and distribution |
 
 New node categories receive higher numbers; existing numbers are not reused.
 
@@ -279,7 +280,7 @@ E-035 and E-036 are reserved for Q-037 (`LLM.Generate`, `LLM.Embed`); E-037 and 
 
 ### Open questions (Q-NNN)
 
-Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-042 are currently assigned.
+Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-043 are currently assigned.
 
 ## Cross-reference graph {#cross-references}
 
