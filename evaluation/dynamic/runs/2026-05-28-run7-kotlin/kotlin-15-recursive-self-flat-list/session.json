@@ -1,0 +1,65 @@
+{
+  "session_dir": "D:\\Projects\\strand-language\\evaluation\\dynamic\\runs\\2026-05-28-run7-kotlin\\kotlin-15-recursive-self-flat-list",
+  "task_id": "15-recursive-self-flat-list",
+  "config_name": "kotlin",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "language_name": "kotlin",
+  "system_prompt": "# Kotlin reference\n\nYou are emitting Kotlin programs targeting JVM bytecode. Programs are compiled\nwith `kotlinc -include-runtime -d program.jar program.kt` and executed with\n`java -jar program.jar`. The Kotlin compiler is the static checker \u2014 it\nenforces the type system, immutability rules, exhaustiveness on sealed-class\nmatches, and null safety. Compile-time failures surface as structured\ndiagnostics in the form `program.kt:LINE:COL: error: <message>`.\n\n## Output conventions\n\n- Provide a complete program with a `fun main()` entry point.\n- The program prints its final value to stdout. The eval framework compares\n  stdout (whitespace-stripped) to the task's expected output.\n- Use idiomatic Kotlin: `data class` for records, `sealed class` (or `sealed\n  interface`) for sum types, `init { require(...) }` for invariant\n  enforcement, `when` for pattern matching.\n- The Kotlin version targeted is 1.9.x or later; assume a recent stdlib.\n- Do not depend on third-party libraries \u2014 the compile command uses\n  `-include-runtime` and the Kotlin stdlib only.\n\n## Output format\n\nPlace the program inside a fenced `kotlin` code block:\n\n```\n```kotlin\nfun main() {\n    // your program\n    println(/* result */)\n}\n```\n```\n\nNo commentary outside the fence is needed.\n\n## What counts as a \"schema\" in Kotlin\n\nTasks that ask for a Schema/Invariant pattern map naturally to a Kotlin\n`data class` with an `init` block enforcing the constraint:\n\n```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n```\n\nThe compile-time gate (mypy-equivalent) is the type system; the runtime gate\n(SchemaInvariantViolation-equivalent) is the `require` call in `init`.\n\n## What counts as a \"state machine\" in Kotlin\n\nTasks that ask for a state machine driving over an event list map to a small\nclass with `var` state and a `step(event): Output` method, plus a `main()`\nthat folds a fixed event list through it and prints the final state:\n\n```kotlin\nclass Toggle {\n    var state: Boolean = false\n    fun step(event: Unit) { state = !state }\n}\n\nfun main() {\n    val m = Toggle()\n    repeat(3) { m.step(Unit) }\n    println(m.state)\n}\n```\n\n## What counts as \"effects\" in Kotlin\n\nKotlin has no first-class effect system, so effect-heavy tasks translate\nloosely. For tasks that exercise Strand's effect-coverage rule (a Lambda\nwhose body uses Filesystem.Write must declare the effect), the Kotlin\nparallel is a regular function call \u2014 the framework treats compile-time\nacceptance as the \"effect check\" since Kotlin can't express the constraint\nthe verifier checks. Just make the program compile and produce the expected\noutput.\n\nFor tasks that exercise an effect handler (intercept/replace pattern), use a\nplain function call with a stubbed implementation that returns the expected\nvalue:\n\n```kotlin\nfun now(): Int = 42  // stubs Time.Now\nfun main() { println(now() + 1) }  // produces 43\n```\n\n## Error recovery\n\nIf your program fails to compile, you receive feedback shaped like:\n\n```\nkotlinc reported the following errors:\n  line N, col M: error: <message>\n```\n\nUse the line/col to locate the failing token. Kotlin error messages are\nusually precise \u2014 \"unresolved reference: foo\" means foo isn't declared in\nscope; \"type mismatch: required Int, found String\" means a type conversion\nis missing.\n",
+  "task_prompt": "# Task 15 \u2014 Length of a recursive linked list\n\nDefine a recursive linked-list type `List = \u03bc. Cons(head: Int, tail:\nList) | Nil`. Write a recursive function `length: List -> Int` that\nreturns `0` for `Nil` and `1 + length(tail)` for `Cons`. Apply it to\nthe list `Cons(7, Cons(8, Nil))`. The final value is `2`.\n\nThe reference implementation must:\n- Declare the recursive list type using `RecursiveType` (`RT`) wrapping\n  a `SumType` with `Cons(head: Int, tail: <RecursiveSelf>)` and `Nil`\n  cases.\n- Declare `length` via `Fixpoint` over a `() -> Int`-shaped recursive\n  call slot. The body Lambda's first parameter is the recursive call;\n  remaining parameters are the user-facing arguments.\n- Match the list scrutinee using `Match` with two `MatchCase`s \u2014 a\n  `ConstructorPattern` for `Cons` with a `VariablePattern` payload\n  binder and a `ConstructorPattern` for `Nil`.\n- The `Cons` body extracts no payload field; it just returns `1 +\n  length(tail)`. The `Nil` body returns `0`.\n- Construct the two-element list `Cons(7, Cons(8, Nil))` using\n  `SumValue` + `ProductValue`.\n\nThis task exercises: `RecursiveType` declaration, `RecursiveSelf`\npositioning, `Fixpoint` recursive function definition, constructor\npattern with payload binder, `ProductFieldGet` through the matched\nbinder (to reach `tail` for the recursive call), and value\nconstruction of a sum-of-product recursive shape. The probe target\nis `UnboundRecursiveSelf` \u2014 a structurally common authoring slip\nwhen the agent routes the inner-PRD-with-`RS` form to a top-level\nSumValue payload. The verifier's `UnboundRecursiveSelf` error hint\n(structured English with a corpus pointer) is the rescue path.\n\nThe Python parallel uses a frozen dataclass `Cons` and a sentinel\n`Nil` plus a recursive `length` function with `match`/`case`.\n",
+  "feedback_format": "both",
+  "max_retries": 5,
+  "expected": {
+    "check": "pure-value",
+    "description": "Length of a recursive linked list `Cons(7, Cons(8, Nil))`. Final\nvalue 2. Probes `UnboundRecursiveSelf` when the agent routes the\ninner-PRD-with-`RS` form to a top-level SumValue payload position.\n",
+    "value": {
+      "type": "int",
+      "representation": {
+        "python": "2",
+        "strand": "IntV(v=2)"
+      }
+    }
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "# Kotlin reference\n\nYou are emitting Kotlin programs targeting JVM bytecode. Programs are compiled\nwith `kotlinc -include-runtime -d program.jar program.kt` and executed with\n`java -jar program.jar`. The Kotlin compiler is the static checker \u2014 it\nenforces the type system, immutability rules, exhaustiveness on sealed-class\nmatches, and null safety. Compile-time failures surface as structured\ndiagnostics in the form `program.kt:LINE:COL: error: <message>`.\n\n## Output conventions\n\n- Provide a complete program with a `fun main()` entry point.\n- The program prints its final value to stdout. The eval framework compares\n  stdout (whitespace-stripped) to the task's expected output.\n- Use idiomatic Kotlin: `data class` for records, `sealed class` (or `sealed\n  interface`) for sum types, `init { require(...) }` for invariant\n  enforcement, `when` for pattern matching.\n- The Kotlin version targeted is 1.9.x or later; assume a recent stdlib.\n- Do not depend on third-party libraries \u2014 the compile command uses\n  `-include-runtime` and the Kotlin stdlib only.\n\n## Output format\n\nPlace the program inside a fenced `kotlin` code block:\n\n```\n```kotlin\nfun main() {\n    // your program\n    println(/* result */)\n}\n```\n```\n\nNo commentary outside the fence is needed.\n\n## What counts as a \"schema\" in Kotlin\n\nTasks that ask for a Schema/Invariant pattern map naturally to a Kotlin\n`data class` with an `init` block enforcing the constraint:\n\n```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n```\n\nThe compile-time gate (mypy-equivalent) is the type system; the runtime gate\n(SchemaInvariantViolation-equivalent) is the `require` call in `init`.\n\n## What counts as a \"state machine\" in Kotlin\n\nTasks that ask for a state machine driving over an event list map to a small\nclass with `var` state and a `step(event): Output` method, plus a `main()`\nthat folds a fixed event list through it and prints the final state:\n\n```kotlin\nclass Toggle {\n    var state: Boolean = false\n    fun step(event: Unit) { state = !state }\n}\n\nfun main() {\n    val m = Toggle()\n    repeat(3) { m.step(Unit) }\n    println(m.state)\n}\n```\n\n## What counts as \"effects\" in Kotlin\n\nKotlin has no first-class effect system, so effect-heavy tasks translate\nloosely. For tasks that exercise Strand's effect-coverage rule (a Lambda\nwhose body uses Filesystem.Write must declare the effect), the Kotlin\nparallel is a regular function call \u2014 the framework treats compile-time\nacceptance as the \"effect check\" since Kotlin can't express the constraint\nthe verifier checks. Just make the program compile and produce the expected\noutput.\n\nFor tasks that exercise an effect handler (intercept/replace pattern), use a\nplain function call with a stubbed implementation that returns the expected\nvalue:\n\n```kotlin\nfun now(): Int = 42  // stubs Time.Now\nfun main() { println(now() + 1) }  // produces 43\n```\n\n## Error recovery\n\nIf your program fails to compile, you receive feedback shaped like:\n\n```\nkotlinc reported the following errors:\n  line N, col M: error: <message>\n```\n\nUse the line/col to locate the failing token. Kotlin error messages are\nusually precise \u2014 \"unresolved reference: foo\" means foo isn't declared in\nscope; \"type mismatch: required Int, found String\" means a type conversion\nis missing.\n"
+    },
+    {
+      "role": "user",
+      "content": "# Task 15 \u2014 Length of a recursive linked list\n\nDefine a recursive linked-list type `List = \u03bc. Cons(head: Int, tail:\nList) | Nil`. Write a recursive function `length: List -> Int` that\nreturns `0` for `Nil` and `1 + length(tail)` for `Cons`. Apply it to\nthe list `Cons(7, Cons(8, Nil))`. The final value is `2`.\n\nThe reference implementation must:\n- Declare the recursive list type using `RecursiveType` (`RT`) wrapping\n  a `SumType` with `Cons(head: Int, tail: <RecursiveSelf>)` and `Nil`\n  cases.\n- Declare `length` via `Fixpoint` over a `() -> Int`-shaped recursive\n  call slot. The body Lambda's first parameter is the recursive call;\n  remaining parameters are the user-facing arguments.\n- Match the list scrutinee using `Match` with two `MatchCase`s \u2014 a\n  `ConstructorPattern` for `Cons` with a `VariablePattern` payload\n  binder and a `ConstructorPattern` for `Nil`.\n- The `Cons` body extracts no payload field; it just returns `1 +\n  length(tail)`. The `Nil` body returns `0`.\n- Construct the two-element list `Cons(7, Cons(8, Nil))` using\n  `SumValue` + `ProductValue`.\n\nThis task exercises: `RecursiveType` declaration, `RecursiveSelf`\npositioning, `Fixpoint` recursive function definition, constructor\npattern with payload binder, `ProductFieldGet` through the matched\nbinder (to reach `tail` for the recursive call), and value\nconstruction of a sum-of-product recursive shape. The probe target\nis `UnboundRecursiveSelf` \u2014 a structurally common authoring slip\nwhen the agent routes the inner-PRD-with-`RS` form to a top-level\nSumValue payload. The verifier's `UnboundRecursiveSelf` error hint\n(structured English with a corpus pointer) is the rescue path.\n\nThe Python parallel uses a frozen dataclass `Cons` and a sentinel\n`Nil` plus a recursive `length` function with `match`/`case`.\n"
+    },
+    {
+      "role": "assistant",
+      "content": "```kotlin\nsealed class IntList\ndata class Cons(val head: Int, val tail: IntList) : IntList()\nobject Nil : IntList()\n\nfun length(list: IntList): Int = when (list) {\n    is Nil -> 0\n    is Cons -> 1 + length(list.tail)\n}\n\nfun main() {\n    val list = Cons(7, Cons(8, Nil))\n    println(length(list))\n}\n```\n"
+    }
+  ],
+  "attempt": 0,
+  "emissions": [
+    {
+      "content": "```kotlin\nsealed class IntList\ndata class Cons(val head: Int, val tail: IntList) : IntList()\nobject Nil : IntList()\n\nfun length(list: IntList): Int = when (list) {\n    is Nil -> 0\n    is Cons -> 1 + length(list.tail)\n}\n\nfun main() {\n    val list = Cons(7, Cons(8, Nil))\n    println(length(list))\n}\n```\n",
+      "input_tokens": 1286,
+      "output_tokens": 76,
+      "model": "claude-sonnet-4-7",
+      "latency_ms": 0,
+      "finish_reason": "end_turn"
+    }
+  ],
+  "verify_results": [
+    {
+      "ok": true,
+      "error_prose": null,
+      "error_json": null,
+      "canonical_dag_json": null
+    }
+  ],
+  "run_result": {
+    "ok": true,
+    "error": null,
+    "actual_output": "2",
+    "expected_output": "2"
+  },
+  "success": true,
+  "converged_at_attempt": 0,
+  "status": "converged"
+}

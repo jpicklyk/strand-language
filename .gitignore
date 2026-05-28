@@ -45,5 +45,6 @@ evaluation/dynamic/runs/*/
 !evaluation/dynamic/runs/2026-05-28-run6-validate/
 !evaluation/dynamic/runs/2026-05-28-skill-eval/
 !evaluation/dynamic/runs/2026-05-28-skill-eval-iter2/
+!evaluation/dynamic/runs/2026-05-28-run7-kotlin/
 !evaluation/dynamic/runs/strand-*/
 !evaluation/dynamic/runs/python-*/

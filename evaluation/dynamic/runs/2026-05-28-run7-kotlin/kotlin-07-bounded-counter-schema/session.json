@@ -1,0 +1,58 @@
+{
+  "session_dir": "D:\\Projects\\strand-language\\evaluation\\dynamic\\runs\\2026-05-28-run7-kotlin\\kotlin-07-bounded-counter-schema",
+  "task_id": "07-bounded-counter-schema",
+  "config_name": "kotlin",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "language_name": "kotlin",
+  "system_prompt": "# Kotlin reference\n\nYou are emitting Kotlin programs targeting JVM bytecode. Programs are compiled\nwith `kotlinc -include-runtime -d program.jar program.kt` and executed with\n`java -jar program.jar`. The Kotlin compiler is the static checker \u2014 it\nenforces the type system, immutability rules, exhaustiveness on sealed-class\nmatches, and null safety. Compile-time failures surface as structured\ndiagnostics in the form `program.kt:LINE:COL: error: <message>`.\n\n## Output conventions\n\n- Provide a complete program with a `fun main()` entry point.\n- The program prints its final value to stdout. The eval framework compares\n  stdout (whitespace-stripped) to the task's expected output.\n- Use idiomatic Kotlin: `data class` for records, `sealed class` (or `sealed\n  interface`) for sum types, `init { require(...) }` for invariant\n  enforcement, `when` for pattern matching.\n- The Kotlin version targeted is 1.9.x or later; assume a recent stdlib.\n- Do not depend on third-party libraries \u2014 the compile command uses\n  `-include-runtime` and the Kotlin stdlib only.\n\n## Output format\n\nPlace the program inside a fenced `kotlin` code block:\n\n```\n```kotlin\nfun main() {\n    // your program\n    println(/* result */)\n}\n```\n```\n\nNo commentary outside the fence is needed.\n\n## What counts as a \"schema\" in Kotlin\n\nTasks that ask for a Schema/Invariant pattern map naturally to a Kotlin\n`data class` with an `init` block enforcing the constraint:\n\n```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n```\n\nThe compile-time gate (mypy-equivalent) is the type system; the runtime gate\n(SchemaInvariantViolation-equivalent) is the `require` call in `init`.\n\n## What counts as a \"state machine\" in Kotlin\n\nTasks that ask for a state machine driving over an event list map to a small\nclass with `var` state and a `step(event): Output` method, plus a `main()`\nthat folds a fixed event list through it and prints the final state:\n\n```kotlin\nclass Toggle {\n    var state: Boolean = false\n    fun step(event: Unit) { state = !state }\n}\n\nfun main() {\n    val m = Toggle()\n    repeat(3) { m.step(Unit) }\n    println(m.state)\n}\n```\n\n## What counts as \"effects\" in Kotlin\n\nKotlin has no first-class effect system, so effect-heavy tasks translate\nloosely. For tasks that exercise Strand's effect-coverage rule (a Lambda\nwhose body uses Filesystem.Write must declare the effect), the Kotlin\nparallel is a regular function call \u2014 the framework treats compile-time\nacceptance as the \"effect check\" since Kotlin can't express the constraint\nthe verifier checks. Just make the program compile and produce the expected\noutput.\n\nFor tasks that exercise an effect handler (intercept/replace pattern), use a\nplain function call with a stubbed implementation that returns the expected\nvalue:\n\n```kotlin\nfun now(): Int = 42  // stubs Time.Now\nfun main() { println(now() + 1) }  // produces 43\n```\n\n## Error recovery\n\nIf your program fails to compile, you receive feedback shaped like:\n\n```\nkotlinc reported the following errors:\n  line N, col M: error: <message>\n```\n\nUse the line/col to locate the failing token. Kotlin error messages are\nusually precise \u2014 \"unresolved reference: foo\" means foo isn't declared in\nscope; \"type mismatch: required Int, found String\" means a type conversion\nis missing.\n",
+  "task_prompt": "# Task 07 \u2014 Bounded counter (Schema + Invariant on Int)\n\nDefine a Schema named `PositiveInt` over the `Int` value type whose\ninvariant is `x > 0`. Construct a value of this Schema (any positive\ninteger literal will do; the reference uses 5).\n\nThe reference implementation must:\n- Declare an `Invariant` whose body is a pure lambda\n  `(x: Int) -> Bool` returning `x > 0`.\n- Declare a `Schema` named `PositiveInt` whose `valueType` is `Int`\n  and whose `invariants` list contains the above invariant.\n- Construct a `PositiveInt`-typed value by flowing an Int literal\n  (e.g., 5) through an identity lambda whose parameter type is the\n  Schema. The lambda body is the parameter reference.\n\nThis task exercises: Schema declaration, Invariant on a primitive\ntype, schema-typed value flow (Int \u2192 SchemaType<Int> at value-flow\nsites), pure-expression invariant body checked statically at verify\ntime. Maps to corpus program 50.\n\nThe Python reference uses `@dataclass(frozen=True)` with a\n`__post_init__` invariant check that raises `ValueError` on\nviolation. Python lacks a static schema mechanism; the success check\nfor the Python baseline is that mypy --strict accepts the\nconstruction and that the program runs without raising.\n",
+  "feedback_format": "both",
+  "max_retries": 5,
+  "expected": {
+    "check": "schema-validation",
+    "description": "Declare a PositiveInt Schema (Int with x > 0 invariant) and apply it\nto the value 5. The Strand verifier statically rejects programs with\ninvariant-violating literal values; mypy --strict accepts the\nparallel Python construction (Python's \"schema\" is its type system).\n"
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "# Kotlin reference\n\nYou are emitting Kotlin programs targeting JVM bytecode. Programs are compiled\nwith `kotlinc -include-runtime -d program.jar program.kt` and executed with\n`java -jar program.jar`. The Kotlin compiler is the static checker \u2014 it\nenforces the type system, immutability rules, exhaustiveness on sealed-class\nmatches, and null safety. Compile-time failures surface as structured\ndiagnostics in the form `program.kt:LINE:COL: error: <message>`.\n\n## Output conventions\n\n- Provide a complete program with a `fun main()` entry point.\n- The program prints its final value to stdout. The eval framework compares\n  stdout (whitespace-stripped) to the task's expected output.\n- Use idiomatic Kotlin: `data class` for records, `sealed class` (or `sealed\n  interface`) for sum types, `init { require(...) }` for invariant\n  enforcement, `when` for pattern matching.\n- The Kotlin version targeted is 1.9.x or later; assume a recent stdlib.\n- Do not depend on third-party libraries \u2014 the compile command uses\n  `-include-runtime` and the Kotlin stdlib only.\n\n## Output format\n\nPlace the program inside a fenced `kotlin` code block:\n\n```\n```kotlin\nfun main() {\n    // your program\n    println(/* result */)\n}\n```\n```\n\nNo commentary outside the fence is needed.\n\n## What counts as a \"schema\" in Kotlin\n\nTasks that ask for a Schema/Invariant pattern map naturally to a Kotlin\n`data class` with an `init` block enforcing the constraint:\n\n```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n```\n\nThe compile-time gate (mypy-equivalent) is the type system; the runtime gate\n(SchemaInvariantViolation-equivalent) is the `require` call in `init`.\n\n## What counts as a \"state machine\" in Kotlin\n\nTasks that ask for a state machine driving over an event list map to a small\nclass with `var` state and a `step(event): Output` method, plus a `main()`\nthat folds a fixed event list through it and prints the final state:\n\n```kotlin\nclass Toggle {\n    var state: Boolean = false\n    fun step(event: Unit) { state = !state }\n}\n\nfun main() {\n    val m = Toggle()\n    repeat(3) { m.step(Unit) }\n    println(m.state)\n}\n```\n\n## What counts as \"effects\" in Kotlin\n\nKotlin has no first-class effect system, so effect-heavy tasks translate\nloosely. For tasks that exercise Strand's effect-coverage rule (a Lambda\nwhose body uses Filesystem.Write must declare the effect), the Kotlin\nparallel is a regular function call \u2014 the framework treats compile-time\nacceptance as the \"effect check\" since Kotlin can't express the constraint\nthe verifier checks. Just make the program compile and produce the expected\noutput.\n\nFor tasks that exercise an effect handler (intercept/replace pattern), use a\nplain function call with a stubbed implementation that returns the expected\nvalue:\n\n```kotlin\nfun now(): Int = 42  // stubs Time.Now\nfun main() { println(now() + 1) }  // produces 43\n```\n\n## Error recovery\n\nIf your program fails to compile, you receive feedback shaped like:\n\n```\nkotlinc reported the following errors:\n  line N, col M: error: <message>\n```\n\nUse the line/col to locate the failing token. Kotlin error messages are\nusually precise \u2014 \"unresolved reference: foo\" means foo isn't declared in\nscope; \"type mismatch: required Int, found String\" means a type conversion\nis missing.\n"
+    },
+    {
+      "role": "user",
+      "content": "# Task 07 \u2014 Bounded counter (Schema + Invariant on Int)\n\nDefine a Schema named `PositiveInt` over the `Int` value type whose\ninvariant is `x > 0`. Construct a value of this Schema (any positive\ninteger literal will do; the reference uses 5).\n\nThe reference implementation must:\n- Declare an `Invariant` whose body is a pure lambda\n  `(x: Int) -> Bool` returning `x > 0`.\n- Declare a `Schema` named `PositiveInt` whose `valueType` is `Int`\n  and whose `invariants` list contains the above invariant.\n- Construct a `PositiveInt`-typed value by flowing an Int literal\n  (e.g., 5) through an identity lambda whose parameter type is the\n  Schema. The lambda body is the parameter reference.\n\nThis task exercises: Schema declaration, Invariant on a primitive\ntype, schema-typed value flow (Int \u2192 SchemaType<Int> at value-flow\nsites), pure-expression invariant body checked statically at verify\ntime. Maps to corpus program 50.\n\nThe Python reference uses `@dataclass(frozen=True)` with a\n`__post_init__` invariant check that raises `ValueError` on\nviolation. Python lacks a static schema mechanism; the success check\nfor the Python baseline is that mypy --strict accepts the\nconstruction and that the program runs without raising.\n"
+    },
+    {
+      "role": "assistant",
+      "content": "```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n\nfun main() {\n    val identity: (PositiveInt) -> PositiveInt = { x -> x }\n    val result = identity(PositiveInt(5))\n    println(result.value)\n}\n```\n"
+    }
+  ],
+  "attempt": 0,
+  "emissions": [
+    {
+      "content": "```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n\nfun main() {\n    val identity: (PositiveInt) -> PositiveInt = { x -> x }\n    val result = identity(PositiveInt(5))\n    println(result.value)\n}\n```\n",
+      "input_tokens": 1143,
+      "output_tokens": 71,
+      "model": "claude-sonnet-4-7",
+      "latency_ms": 0,
+      "finish_reason": "end_turn"
+    }
+  ],
+  "verify_results": [
+    {
+      "ok": true,
+      "error_prose": null,
+      "error_json": null,
+      "canonical_dag_json": null
+    }
+  ],
+  "run_result": {
+    "ok": true,
+    "error": null,
+    "actual_output": null,
+    "expected_output": null
+  },
+  "success": true,
+  "converged_at_attempt": 0,
+  "status": "converged"
+}

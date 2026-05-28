@@ -1,0 +1,14 @@
+{
+  "task_id": "08-nonempty-list-schema",
+  "config": "kotlin",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": true,
+  "status": "converged",
+  "converged_at_attempt": 0,
+  "total_attempts": 1,
+  "total_input_tokens": 1154,
+  "total_output_tokens": 209,
+  "total_cost_usd": 0.006597,
+  "timestamp": 1779995048
+}

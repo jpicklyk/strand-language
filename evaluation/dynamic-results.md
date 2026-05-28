@@ -30,6 +30,145 @@ the expected output, so the relevant Python error is whatever the
 agent would face when the first emission fails for the equivalent
 reason (type error, runtime exception, value mismatch).
 
+## Run 7 — 2026-05-28, Kotlin baseline added (three-way comparison)
+
+First end-to-end Kotlin sweep against the 15-task suite using the
+Kotlin language adapter shipped 2026-05-28. Methodology mirrors Run 6:
+sub-agent dispatch under step-mode IPC, one Read + one Write per
+sub-agent, fresh context per cell. Artifacts under
+`evaluation/dynamic/runs/2026-05-28-run7-kotlin/`.
+
+Reuses the Strand and Python numbers from Run 6 (same suite, same
+methodology) for the three-way comparison.
+
+Run metadata:
+- Date: 2026-05-28
+- Model: claude-sonnet-4-7 (via Agent tool sub-agents, `claude` subtype)
+- Backend: step-mode (file-IPC) with per-cell fresh sub-agent dispatch
+- Samples per task: 1
+- Tasks: 15 (all 15-task suite)
+- Baseline added: Kotlin (compiled with `kotlinc 2.3.10`, run with `java -jar`)
+- Existing baselines (from Run 6): Strand Layer A density v4, Python+type-hints
+- Max retries per cell: 5
+- Convergence: **15/15 Kotlin cells (100%)** — every cell converged first try
+
+### Per-task totals (input + output tokens)
+
+| Task | Strand | Python | Kotlin | K/P | S/K |
+|------|------:|------:|------:|------:|------:|
+| 01-factorial | 20,828 | 1,556 | **1,060** | 0.68× | 19.65× |
+| 02-json-value | 20,901 | 1,633 | **1,121** | 0.69× | 18.64× |
+| 03-toggle-machine | 20,944 | 1,671 | **1,199** | 0.72× | 17.47× |
+| 04-option-unwrap-default | 20,888 | 1,679 | **1,167** | 0.70× | 17.90× |
+| 05-sum-list | 21,079 | 1,680 | **1,157** | 0.69× | 18.22× |
+| 06-counter-machine | 21,057 | 1,861 | **1,330** | 0.71× | 15.83× |
+| 07-bounded-counter-schema | 20,951 | 1,741 | **1,214** | 0.70× | 17.26× |
+| 08-nonempty-list-schema | 21,179 | 1,842 | **1,363** | 0.74× | 15.54× |
+| 09-file-write-capability | 42,094 | 1,743 | **1,302** | 0.75× | 32.33× |
+| 10-handler-intercept | 42,234 | 1,944 | **1,443** | 0.74× | 29.27× |
+| 11-effect-coverage-gap | 21,074 | 1,799 | **1,289** | 0.72× | 16.35× |
+| 12-effect-decl-arity | 63,847 | 1,992 | **1,327** | 0.67× | 48.11× |
+| 13-handler-return-type | 42,019 | 2,017 | **1,211** | 0.60× | 34.70× |
+| 14-schema-invariant-rescue | 21,008 | 1,834 | **1,273** | 0.69× | 16.50× |
+| 15-recursive-self-flat-list | 21,271 | 1,881 | **1,362** | 0.72× | 15.62× |
+| **TOTAL** | **421,374** | **26,873** | **18,818** | **0.70×** | **22.39×** |
+
+### Headline three-way comparison
+
+| Metric | Strand Layer A density v4 | Python+type-hints | Kotlin |
+|---|---:|---:|---:|
+| First-pass verification rate | 11/15 (73%) | 15/15 (100%) | **15/15 (100%)** |
+| Convergence rate (≤5 attempts) | 15/15 (100%) | 15/15 (100%) | 15/15 (100%) |
+| Total tokens (in+out) | 421,374 | 26,873 | **18,818** |
+| Tokens-per-successful-task | 28,092 | 1,792 | **1,255** |
+| **Ratio vs Python** | 15.68× | 1.00× | **0.70×** |
+| **Ratio vs Kotlin** | 22.39× | 1.43× | 1.00× |
+
+### The key surprise: Kotlin beats Python on tokens
+
+Kotlin uses **30% fewer tokens than Python** per successful task. Two
+compounding factors:
+
+- **System prompt size.** Kotlin's prompt is 101 lines / 3.4 KB; Python's
+  is 128 lines / 5.4 KB; Strand's is 1,673 lines / 86 KB. The model
+  already knows both Python and Kotlin from training, so neither needs
+  a grammar primer — just style conventions. Kotlin's prompt is leaner
+  because Kotlin's standard idioms (data class, sealed class, `init {
+  require() }`) cover Schema / sum-type / state-machine shapes natively
+  without further elaboration.
+- **Emission density.** Kotlin's per-emission output is consistently
+  smaller than Python's on the same task (sealed-class hierarchies are
+  more compact than Python's dataclass-Union pattern; `when` is more
+  compact than match/case; `init { require() }` is one line versus
+  three for a Python __post_init__).
+
+This reframes the Strand competitive landscape. Strand vs Python is
+15.68×; Strand vs the *best* conventional baseline in this suite is
+**22.39×** — Kotlin is the tougher opponent.
+
+### Implications for Strand's central claim
+
+The dynamic-cost hypothesis — that the verifier-feedback retry loop
+and per-emission density combine to produce *fewer total tokens than
+the best conventional baseline* — is now measurably 22× off against
+Kotlin. The path back to parity needs to compound multiple wins:
+
+1. **APP `_` parser fix** (already shipped per Run 6 validation):
+   421,374 → 338,024 strand tokens → **17.95× vs Kotlin** (still ~18×).
+2. **Skill-mediated dispatch** (per the strand-author skill eval):
+   0.60× of full-prompt Strand → ~202,800 tokens → **10.77× vs Kotlin**.
+3. **Prompt caching with N≥2 sampling** (framework shipped, untested):
+   ~5× per-sample input cost reduction on cached cells → potentially
+   close to parity at N=5+.
+4. **Fine-tuning** (Phase 4): drops the teaching prompt to ~zero,
+   exposes the static density advantage (~0.81× vs Python from
+   layer-a-density measurement). At fine-tune saturation, Strand would
+   be competitive with Kotlin per-emission.
+
+Without compounding multiple wins, Strand cannot beat Kotlin on this
+suite. The skill-mediated path alone gets it within ~10× — still
+far from parity. Caching is the next path with significant headroom.
+
+### Cell-by-cell observations
+
+- **Schema-validation tasks (07, 08, 14)** show the cleanest Kotlin
+  win: data class with `init { require() }` is the canonical pattern,
+  one-line invariant enforcement. Strand's Schema/Invariant has more
+  ceremony.
+- **Effect-shaped tasks (09, 10, 11, 12, 13)** have the largest
+  Strand/Kotlin ratios — the Strand cells doing extra retries because
+  of the `APP _` slip OR the explicit EffectCategory + EffectDecl
+  declarations are tokens Kotlin doesn't pay (its parallels are stub
+  functions).
+- **Task 12 (effect-decl-arity)** is the worst cell for Strand at
+  48.11× Kotlin — the 3-attempt convergence (per Run 6) burns ~3×
+  the tokens. After the parser fix this drops to ~2-attempt (~24×).
+- **State machines (03, 06)** are surprisingly close: Strand's SM/ESE/
+  ESO machinery costs roughly the same per emission as Kotlin's `class
+  X { var state ... }`. The ratio (15-17×) is dominated by prompt size
+  rather than per-program structure.
+- **Recursive types (05, 08, 15)** Strand pays a real but bounded
+  premium — sealed-class hierarchies in Kotlin are extremely compact
+  vs Strand's inner-PRD/outer-PRD distinction (helped by auto-Outer-PRD
+  synthesis but still chunkier than Kotlin's `sealed class X { ... }`).
+
+### How this run was produced
+
+1. Built the Kotlin adapter (commit 8d52210) — adapter, system prompt,
+   config, 15 reference Kotlin solutions, all verified end-to-end.
+2. `mkdir runs/2026-05-28-run7-kotlin/` and init 15 sessions via
+   `python -m strand_eval.cli step --session <dir> --init --task
+   <task> --config kotlin --model claude-sonnet-4-7 --max-retries 5
+   --feedback-format both`.
+3. Dispatched 15 sub-agents in one parallel batch via the Claude Code
+   Agent tool (`claude` subtype). Each constrained to one `Read` of the
+   prompt and one `Write` of `response.md`.
+4. Set `STRAND_EVAL_KOTLINC` to the IntelliJ IDEA Community bundled
+   `kotlinc.bat` (Kotlin 2.3.10), then ran `strand-eval step --session
+   <dir>` per cell to verify (kotlinc compile) and run (java -jar).
+5. All 15 cells converged on first attempt. Per-cell summary.json files
+   under `runs/2026-05-28-run7-kotlin/kotlin-<task>/summary.json`.
+
 ## Run 6 — 2026-05-28, expanded 15-task suite with retry-loop probes
 
 First measurement against the 15-task suite (tasks 11–15 added

@@ -1,0 +1,14 @@
+{
+  "task_id": "02-json-value",
+  "config": "kotlin",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": true,
+  "status": "converged",
+  "converged_at_attempt": 0,
+  "total_attempts": 1,
+  "total_input_tokens": 1039,
+  "total_output_tokens": 82,
+  "total_cost_usd": 0.004347,
+  "timestamp": 1779995025
+}

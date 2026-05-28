@@ -1,0 +1,58 @@
+{
+  "session_dir": "D:\\Projects\\strand-language\\evaluation\\dynamic\\runs\\2026-05-28-run7-kotlin\\kotlin-02-json-value",
+  "task_id": "02-json-value",
+  "config_name": "kotlin",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "language_name": "kotlin",
+  "system_prompt": "# Kotlin reference\n\nYou are emitting Kotlin programs targeting JVM bytecode. Programs are compiled\nwith `kotlinc -include-runtime -d program.jar program.kt` and executed with\n`java -jar program.jar`. The Kotlin compiler is the static checker \u2014 it\nenforces the type system, immutability rules, exhaustiveness on sealed-class\nmatches, and null safety. Compile-time failures surface as structured\ndiagnostics in the form `program.kt:LINE:COL: error: <message>`.\n\n## Output conventions\n\n- Provide a complete program with a `fun main()` entry point.\n- The program prints its final value to stdout. The eval framework compares\n  stdout (whitespace-stripped) to the task's expected output.\n- Use idiomatic Kotlin: `data class` for records, `sealed class` (or `sealed\n  interface`) for sum types, `init { require(...) }` for invariant\n  enforcement, `when` for pattern matching.\n- The Kotlin version targeted is 1.9.x or later; assume a recent stdlib.\n- Do not depend on third-party libraries \u2014 the compile command uses\n  `-include-runtime` and the Kotlin stdlib only.\n\n## Output format\n\nPlace the program inside a fenced `kotlin` code block:\n\n```\n```kotlin\nfun main() {\n    // your program\n    println(/* result */)\n}\n```\n```\n\nNo commentary outside the fence is needed.\n\n## What counts as a \"schema\" in Kotlin\n\nTasks that ask for a Schema/Invariant pattern map naturally to a Kotlin\n`data class` with an `init` block enforcing the constraint:\n\n```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n```\n\nThe compile-time gate (mypy-equivalent) is the type system; the runtime gate\n(SchemaInvariantViolation-equivalent) is the `require` call in `init`.\n\n## What counts as a \"state machine\" in Kotlin\n\nTasks that ask for a state machine driving over an event list map to a small\nclass with `var` state and a `step(event): Output` method, plus a `main()`\nthat folds a fixed event list through it and prints the final state:\n\n```kotlin\nclass Toggle {\n    var state: Boolean = false\n    fun step(event: Unit) { state = !state }\n}\n\nfun main() {\n    val m = Toggle()\n    repeat(3) { m.step(Unit) }\n    println(m.state)\n}\n```\n\n## What counts as \"effects\" in Kotlin\n\nKotlin has no first-class effect system, so effect-heavy tasks translate\nloosely. For tasks that exercise Strand's effect-coverage rule (a Lambda\nwhose body uses Filesystem.Write must declare the effect), the Kotlin\nparallel is a regular function call \u2014 the framework treats compile-time\nacceptance as the \"effect check\" since Kotlin can't express the constraint\nthe verifier checks. Just make the program compile and produce the expected\noutput.\n\nFor tasks that exercise an effect handler (intercept/replace pattern), use a\nplain function call with a stubbed implementation that returns the expected\nvalue:\n\n```kotlin\nfun now(): Int = 42  // stubs Time.Now\nfun main() { println(now() + 1) }  // produces 43\n```\n\n## Error recovery\n\nIf your program fails to compile, you receive feedback shaped like:\n\n```\nkotlinc reported the following errors:\n  line N, col M: error: <message>\n```\n\nUse the line/col to locate the failing token. Kotlin error messages are\nusually precise \u2014 \"unresolved reference: foo\" means foo isn't declared in\nscope; \"type mismatch: required Int, found String\" means a type conversion\nis missing.\n",
+  "task_prompt": "# Task 02 \u2014 JSON value\n\nConstruct a typed JSON value: `JsonNumber(42)`.\n\nThe reference implementation must:\n- Define a `JsonValue` sum type with at least four cases:\n  `JsonNull`, `JsonBool(Bool)`, `JsonNumber(Int)`, `JsonString(String)`.\n- Construct the value `JsonNumber(42)`.\n- Wrap the value in a schema named `JsonValue` (or equivalent typed\n  alias) so downstream consumers receive a tagged constructor, not a\n  raw integer.\n\nThis task exercises: sum-type declaration, constructor invocation,\nschema declaration without invariants (the type IS the contract), the\nschema-typed value-flow path. Maps to corpus program 54.\n\nThe Python reference uses `dataclasses` to define a sum-like\ndiscriminated union. (Python doesn't have native sum types; the\ndataclass-+-Union encoding is the idiomatic equivalent.)\n",
+  "feedback_format": "both",
+  "max_retries": 5,
+  "expected": {
+    "check": "schema-validation",
+    "description": "Construct a JsonValue sum-typed value JsonNumber(42). Acceptance is\nmeasured by static checker (mypy --strict for Python, the Strand\nverifier for Strand). The runtime is not consulted beyond confirming\nthe program executes when run.\n"
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "# Kotlin reference\n\nYou are emitting Kotlin programs targeting JVM bytecode. Programs are compiled\nwith `kotlinc -include-runtime -d program.jar program.kt` and executed with\n`java -jar program.jar`. The Kotlin compiler is the static checker \u2014 it\nenforces the type system, immutability rules, exhaustiveness on sealed-class\nmatches, and null safety. Compile-time failures surface as structured\ndiagnostics in the form `program.kt:LINE:COL: error: <message>`.\n\n## Output conventions\n\n- Provide a complete program with a `fun main()` entry point.\n- The program prints its final value to stdout. The eval framework compares\n  stdout (whitespace-stripped) to the task's expected output.\n- Use idiomatic Kotlin: `data class` for records, `sealed class` (or `sealed\n  interface`) for sum types, `init { require(...) }` for invariant\n  enforcement, `when` for pattern matching.\n- The Kotlin version targeted is 1.9.x or later; assume a recent stdlib.\n- Do not depend on third-party libraries \u2014 the compile command uses\n  `-include-runtime` and the Kotlin stdlib only.\n\n## Output format\n\nPlace the program inside a fenced `kotlin` code block:\n\n```\n```kotlin\nfun main() {\n    // your program\n    println(/* result */)\n}\n```\n```\n\nNo commentary outside the fence is needed.\n\n## What counts as a \"schema\" in Kotlin\n\nTasks that ask for a Schema/Invariant pattern map naturally to a Kotlin\n`data class` with an `init` block enforcing the constraint:\n\n```kotlin\ndata class PositiveInt(val value: Int) {\n    init { require(value > 0) { \"PositiveInt requires value > 0, got $value\" } }\n}\n```\n\nThe compile-time gate (mypy-equivalent) is the type system; the runtime gate\n(SchemaInvariantViolation-equivalent) is the `require` call in `init`.\n\n## What counts as a \"state machine\" in Kotlin\n\nTasks that ask for a state machine driving over an event list map to a small\nclass with `var` state and a `step(event): Output` method, plus a `main()`\nthat folds a fixed event list through it and prints the final state:\n\n```kotlin\nclass Toggle {\n    var state: Boolean = false\n    fun step(event: Unit) { state = !state }\n}\n\nfun main() {\n    val m = Toggle()\n    repeat(3) { m.step(Unit) }\n    println(m.state)\n}\n```\n\n## What counts as \"effects\" in Kotlin\n\nKotlin has no first-class effect system, so effect-heavy tasks translate\nloosely. For tasks that exercise Strand's effect-coverage rule (a Lambda\nwhose body uses Filesystem.Write must declare the effect), the Kotlin\nparallel is a regular function call \u2014 the framework treats compile-time\nacceptance as the \"effect check\" since Kotlin can't express the constraint\nthe verifier checks. Just make the program compile and produce the expected\noutput.\n\nFor tasks that exercise an effect handler (intercept/replace pattern), use a\nplain function call with a stubbed implementation that returns the expected\nvalue:\n\n```kotlin\nfun now(): Int = 42  // stubs Time.Now\nfun main() { println(now() + 1) }  // produces 43\n```\n\n## Error recovery\n\nIf your program fails to compile, you receive feedback shaped like:\n\n```\nkotlinc reported the following errors:\n  line N, col M: error: <message>\n```\n\nUse the line/col to locate the failing token. Kotlin error messages are\nusually precise \u2014 \"unresolved reference: foo\" means foo isn't declared in\nscope; \"type mismatch: required Int, found String\" means a type conversion\nis missing.\n"
+    },
+    {
+      "role": "user",
+      "content": "# Task 02 \u2014 JSON value\n\nConstruct a typed JSON value: `JsonNumber(42)`.\n\nThe reference implementation must:\n- Define a `JsonValue` sum type with at least four cases:\n  `JsonNull`, `JsonBool(Bool)`, `JsonNumber(Int)`, `JsonString(String)`.\n- Construct the value `JsonNumber(42)`.\n- Wrap the value in a schema named `JsonValue` (or equivalent typed\n  alias) so downstream consumers receive a tagged constructor, not a\n  raw integer.\n\nThis task exercises: sum-type declaration, constructor invocation,\nschema declaration without invariants (the type IS the contract), the\nschema-typed value-flow path. Maps to corpus program 54.\n\nThe Python reference uses `dataclasses` to define a sum-like\ndiscriminated union. (Python doesn't have native sum types; the\ndataclass-+-Union encoding is the idiomatic equivalent.)\n"
+    },
+    {
+      "role": "assistant",
+      "content": "```kotlin\nsealed class JsonValue {\n    object JsonNull : JsonValue()\n    data class JsonBool(val value: Boolean) : JsonValue()\n    data class JsonNumber(val value: Int) : JsonValue()\n    data class JsonString(val value: String) : JsonValue()\n}\n\nfun main() {\n    val v: JsonValue = JsonValue.JsonNumber(42)\n    println(v)\n}\n```\n"
+    }
+  ],
+  "attempt": 0,
+  "emissions": [
+    {
+      "content": "```kotlin\nsealed class JsonValue {\n    object JsonNull : JsonValue()\n    data class JsonBool(val value: Boolean) : JsonValue()\n    data class JsonNumber(val value: Int) : JsonValue()\n    data class JsonString(val value: String) : JsonValue()\n}\n\nfun main() {\n    val v: JsonValue = JsonValue.JsonNumber(42)\n    println(v)\n}\n```\n",
+      "input_tokens": 1039,
+      "output_tokens": 82,
+      "model": "claude-sonnet-4-7",
+      "latency_ms": 0,
+      "finish_reason": "end_turn"
+    }
+  ],
+  "verify_results": [
+    {
+      "ok": true,
+      "error_prose": null,
+      "error_json": null,
+      "canonical_dag_json": null
+    }
+  ],
+  "run_result": {
+    "ok": true,
+    "error": null,
+    "actual_output": null,
+    "expected_output": null
+  },
+  "success": true,
+  "converged_at_attempt": 0,
+  "status": "converged"
+}

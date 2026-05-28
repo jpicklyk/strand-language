@@ -1,0 +1,14 @@
+{
+  "task_id": "15-recursive-self-flat-list",
+  "config": "kotlin",
+  "model": "claude-sonnet-4-7",
+  "sample_index": 0,
+  "success": true,
+  "status": "converged",
+  "converged_at_attempt": 0,
+  "total_attempts": 1,
+  "total_input_tokens": 1286,
+  "total_output_tokens": 76,
+  "total_cost_usd": 0.004998,
+  "timestamp": 1779995077
+}
