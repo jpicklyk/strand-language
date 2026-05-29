@@ -9,6 +9,7 @@ import org.strand.core.Primitive
 import org.strand.core.RawNodeStore
 import org.strand.core.StoredNode
 import org.strand.hashing.FederatedProgram
+import org.strand.hashing.FinalizedProgram
 import org.strand.hashing.Hasher
 import org.strand.hashing.LocalProgramResolver
 
@@ -25,13 +26,13 @@ import org.strand.hashing.LocalProgramResolver
  */
 class CrossStoreInterpreterTest {
 
-    private fun identityLambdaPeer(): FederatedProgram {
+    private fun identityLambdaPeer(): FinalizedProgram {
         val raw = RawNodeStore()
         val intT = raw.add(StoredNode.Canonical(Node.PrimitiveType(Primitive.Int)))
         val param = raw.add(StoredNode.Canonical(Node.ParameterDecl(name = "x", paramType = intT)))
         val body = raw.add(StoredNode.Canonical(Node.VarRef(binder = param)))
         val lam = raw.add(StoredNode.Canonical(Node.Lambda(parameters = listOf(param), body = body)))
-        return Hasher(raw).finalize(lam).federated()
+        return Hasher(raw).finalize(lam)
     }
 
     @Test

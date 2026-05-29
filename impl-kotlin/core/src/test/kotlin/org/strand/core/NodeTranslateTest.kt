@@ -106,9 +106,13 @@ class NodeTranslateTest {
 
     @Test
     fun `RecursiveSelf and literals have no NodeId fields`() {
-        assertSame(Node.RecursiveSelf(depth = 2), Node.RecursiveSelf(depth = 2).translateNodeIds(shift).let { it })
-        assertEquals(2, (Node.RecursiveSelf(depth = 2).translateNodeIds(shift) as Node.RecursiveSelf).depth)
-        assertEquals(42L, (Node.IntLit(42).translateNodeIds(shift) as Node.IntLit).value)
+        // No NodeId fields -> translateNodeIds returns the same instance.
+        val rs = Node.RecursiveSelf(depth = 2)
+        assertSame(rs, rs.translateNodeIds(shift), "RecursiveSelf has no NodeId fields; returned unchanged")
+        assertEquals(2, (rs.translateNodeIds(shift) as Node.RecursiveSelf).depth)
+        val lit = Node.IntLit(42)
+        assertSame(lit, lit.translateNodeIds(shift), "literals have no NodeId fields; returned unchanged")
+        assertEquals(42L, (lit.translateNodeIds(shift) as Node.IntLit).value)
     }
 
     @Test
