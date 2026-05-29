@@ -1,8 +1,10 @@
 package org.strand.hashing
 
 import org.strand.core.Hash
+import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
+import org.strand.core.translateNodeIds
 
 /**
  * Layer 2 step 3 — the federation-aware extension of [FinalizedProgram].
@@ -63,35 +65,84 @@ data class FederatedProgram(
      *    from the foreign `nodeIdToHash`; mismatch raises
      *    [NodeResolverIntegrityViolation].
      *
-     * **Implementation status (step 3a foundation, 2026-05-28):** Steps
-     * 1 (resolver fetch) and partial 2 (admission without translation)
-     * are implementable with the primitives here. **Steps 3 and 4 —
-     * the translation pass and per-node integrity check — require
-     * `Node.translateNodeIds` to be implemented in `:core` and the
-     * canonical encoder to be exposed as a single-node hash function.
-     * Both are queued for the verifier-threading session that follows
-     * this foundation.**
+     * **Integrity (Q-043 § 4.5b, refined).** Rather than re-hashing every
+     * admitted node, the implementation recomputes the canonical hash of the
+     * admitted local *root* and requires it to equal the requested hash. By
+     * the Merkle property the root hash binds the entire reachable subgraph,
+     * so a single root re-hash detects any unfaithful admission — including a
+     * mis-rebased binder (which would shift a de Bruijn position and change
+     * the hash). A mismatch raises [NodeResolverIntegrityViolation]. This is
+     * what makes the protocol trust-minimizing: the resolver need not be
+     * trusted because the hash binds the content.
      *
-     * For now, this method throws [NotImplementedError] when invoked for
-     * a non-local hash. Single-store callers (the local hash hits the
-     * `hashToNodeId` map) return the existing NodeId without consulting
-     * the resolver — that path is fully implemented.
+     * **Bound nodes.** [Node.ParameterDecl] / [Node.TypeParameter] /
+     * [Node.RecursiveSelf] have no standalone hash, so they are absent from
+     * [SubgraphFetch.nodeIdToHash] and are never deduped — they are admitted
+     * fresh as part of their parent's re-base. Reference cycles (Schema↔
+     * Invariant; a VarRef to an enclosing binder) are handled by reserving the
+     * local NodeId with an untranslated placeholder *before* recursing, so a
+     * cyclic reference resolves to the reserved id; the placeholder is then
+     * overwritten with the re-based node.
      */
     fun fetchAndAdmit(hash: Hash): NodeId? {
         hashToNodeId[hash]?.let { return it }
-        // Resolver fetch — works today.
         val fetch = resolver.resolve(hash) ?: return null
-        // The remainder is the translation + per-node integrity check
-        // that requires Node.translateNodeIds. Surface this as a clear
-        // diagnostic until that work lands.
-        throw NotImplementedError(
-            "Cross-store admission requires Node.translateNodeIds to translate " +
-                "foreign NodeId references into the local ID space (Q-043 § 4.5 step 3). " +
-                "Resolver returned a subgraph of ${fetch.nodes.size} nodes rooted at " +
-                "$hash — admitting it without translation would corrupt internal " +
-                "NodeId references. Translation pass scheduled for the verifier-" +
-                "threading commit."
-        )
+        val localRoot = admit(fetch.rootId, fetch, HashMap())
+        // Trust-minimizing content integrity check: the admitted local root
+        // must canonically hash to the requested hash (Merkle: the root hash
+        // binds the whole subgraph).
+        val recomputed = Hasher(store).hashRoot(localRoot)
+        if (recomputed != hash) {
+            throw NodeResolverIntegrityViolation(expected = hash, actual = recomputed)
+        }
+        return localRoot
+    }
+
+    /**
+     * Admit one fetched node (by foreign NodeId) into the local store, returning
+     * its local NodeId. Post-order over the node's references via
+     * [Node.translateNodeIds]:
+     *  - already admitted → return the memoized local id ([foreignToLocal]);
+     *  - hashable and already local (same hash in [hashToNodeId]) → dedup, reuse
+     *    the existing local id and skip its subtree (content-addressing
+     *    guarantees the subtree is already present);
+     *  - otherwise reserve a fresh local id with an untranslated placeholder
+     *    (so reference cycles resolve to it), re-base the node's references via
+     *    `translateNodeIds { admit(it) }`, overwrite the placeholder, and — for
+     *    hashable nodes — register the hash↔id mapping.
+     */
+    private fun admit(
+        foreignId: NodeId,
+        fetch: SubgraphFetch,
+        foreignToLocal: MutableMap<NodeId, NodeId>,
+    ): NodeId {
+        foreignToLocal[foreignId]?.let { return it }
+        val node = fetch.nodes[foreignId]
+            ?: error(
+                "Incomplete SubgraphFetch from resolver: foreign NodeId $foreignId is " +
+                    "referenced but not contained in the fetched subgraph."
+            )
+        val h = fetch.nodeIdToHash[foreignId] // null for bound nodes
+        if (h != null) {
+            hashToNodeId[h]?.let { existing ->
+                foreignToLocal[foreignId] = existing
+                return existing
+            }
+        }
+        // Reserve a local id (placeholder = untranslated node) and memoize
+        // BEFORE recursing, so any cyclic reference back to this node resolves
+        // to the reserved id rather than recursing forever.
+        val localId = store.add(node)
+        foreignToLocal[foreignId] = localId
+        val translated: Node = node.translateNodeIds { childForeignId ->
+            admit(childForeignId, fetch, foreignToLocal)
+        }
+        store.set(localId, translated)
+        if (h != null) {
+            nodeIdToHash[localId] = h
+            hashToNodeId[h] = localId
+        }
+        return localId
     }
 }
 

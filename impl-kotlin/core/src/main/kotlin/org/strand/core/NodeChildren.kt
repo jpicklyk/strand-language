@@ -6,10 +6,13 @@ package org.strand.core
  * no [NodeId] children — its `target` is a [Hash] and represents a
  * boundary to another subgraph.
  *
- * Used by [org.strand.hashing.LocalHashStoreResolver] (Q-043 step 3a)
- * to walk a self-contained subgraph from a requested root, and is also
- * the basis for the symmetric [translateNodeIds] rewrite the
- * federation admission protocol uses to re-base foreign NodeIds.
+ * Enumerates a node's outgoing NodeId edges *excluding* binder declarations
+ * (ForallType / TypeAbstraction typeParameters, TypeParameter.bound) and the
+ * metadata edges (EffectProjection.category, Invariant.targetSchema) that
+ * would induce a walk cycle. The Q-043 federation walk and admission re-base
+ * instead use [translateNodeIds], the full-coverage structural dual that
+ * rewrites *every* NodeId field; childNodeIds is retained as a lighter
+ * enumeration helper over the non-binder reference set.
  *
  * The order is the natural left-to-right declaration order of each
  * Node's fields; the caller may treat it as a stable traversal sequence
