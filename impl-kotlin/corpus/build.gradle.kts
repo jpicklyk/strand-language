@@ -16,6 +16,9 @@ dependencies {
     testImplementation(project(":authoring"))
     testImplementation(project(":bytecode"))
     testImplementation(project(":vm"))
+    // Q-043: CliFederationTest drives the real `strand` CLI entry point on happy
+    // paths. :cli does not depend on :corpus, so this test-only edge is acyclic.
+    testImplementation(project(":cli"))
     // For AsyncCorpusTest's runTest virtual-time dispatcher (Layer 6 step 2).
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
