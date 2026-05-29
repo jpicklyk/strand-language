@@ -120,6 +120,32 @@ class FederatedProgramTest {
     }
 
     @Test
+    fun `fetchAndAdmit does not alias a fetched VarRef to a same-shaped local one`() {
+        // The app is the identity Lambda (y: Int) -> y, so its store already
+        // holds a VarRef to a first parameter. The peer's inc = (x: Int) -> x + 1
+        // also contains a VarRef to its first parameter. finalize hashes a bare
+        // VarRef through the unbound de-Bruijn sentinel, so both VarRefs share a
+        // per-node hash. Interior hash-dedup would alias inc's body VarRef to the
+        // app's parameter, shifting a de-Bruijn position and corrupting the
+        // re-base; admitting interior nodes fresh keeps the binding faithful, so
+        // the admitted Lambda binds its OWN parameter and re-hashes to the
+        // requested hash.
+        val peer = incProgram()
+        val incHash = peer.nodeIdToHash.getValue(peer.root)
+        val app = lambdaIdentityProgram().federated(LocalProgramResolver(peer))
+
+        val localInc = app.fetchAndAdmit(incHash) ?: error("expected inc to be admitted")
+        val lam = app.store.get(localInc) as Node.Lambda
+        val body = app.store.get(lam.body) as Node.Application
+        // body = Add(VarRef(x), 1); arguments[0] is the body's VarRef.
+        val varRef = app.store.get(body.arguments[0]) as Node.VarRef
+        assertEquals(lam.parameters[0], varRef.binder,
+            "the admitted body VarRef must bind inc's own parameter, not a same-shaped local one")
+        assertEquals(incHash, Hasher(app.store).hashRoot(localInc),
+            "the faithfully re-based Lambda re-hashes to the requested hash")
+    }
+
+    @Test
     fun `fetchAndAdmit raises an integrity violation when the fetched content does not hash to the requested hash`() {
         // A resolver claims rootHash = hash(IntLit(1)) but returns IntLit(999).
         // The ChainedResolver claim-check would pass (the rootHash field equals
@@ -148,6 +174,20 @@ class FederatedProgramTest {
         val raw = RawNodeStore()
         val id = raw.add(StoredNode.Canonical(node))
         return Hasher(raw).finalize(id)
+    }
+
+    /** Build `inc = (x: Int) -> x + 1` as a finalized peer program. */
+    private fun incProgram(): FinalizedProgram {
+        val raw = RawNodeStore()
+        val intT = raw.add(StoredNode.Canonical(Node.PrimitiveType(Primitive.Int)))
+        val addT = raw.add(StoredNode.Canonical(Node.FunctionType(parameters = listOf(intT, intT), result = intT)))
+        val addFn = raw.add(StoredNode.Canonical(Node.ForeignNode(target = "strand-builtin:Int.Add", foreignType = addT)))
+        val x = raw.add(StoredNode.Canonical(Node.ParameterDecl(name = "x", paramType = intT)))
+        val xRef = raw.add(StoredNode.Canonical(Node.VarRef(binder = x)))
+        val one = raw.add(StoredNode.Canonical(Node.IntLit(1)))
+        val addApp = raw.add(StoredNode.Canonical(Node.Application(function = addFn, arguments = listOf(xRef, one))))
+        val inc = raw.add(StoredNode.Canonical(Node.Lambda(parameters = listOf(x), body = addApp)))
+        return Hasher(raw).finalize(inc)
     }
 
     /** Build the identity Lambda `(x: Int) -> x` as a finalized peer program. */

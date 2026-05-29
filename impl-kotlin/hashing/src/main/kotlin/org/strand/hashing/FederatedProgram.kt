@@ -50,20 +50,19 @@ data class FederatedProgram(
      * 1. The resolver returns a [SubgraphFetch] containing every internal
      *    node reachable from the requested root (stopping at NodeRef
      *    boundaries), plus the foreign store's `nodeIdToHash` mapping.
-     * 2. Build a `foreign → local` NodeId map by:
-     *    - For each foreign `(fId → h)` entry: if `hashToNodeId[h]`
-     *      exists, the mapping is `fId → hashToNodeId[h]`; otherwise
-     *      admit `nodes[h]` to the local store under a fresh `lId`,
-     *      extend `nodeIdToHash[lId] = h` and `hashToNodeId[h] = lId`,
-     *      and record `fId → lId`.
-     * 3. Re-walk each admitted Node and **translate** its internal
-     *    NodeId references from foreign IDs to local IDs via
-     *    `Node.translateNodeIds(foreignToLocal)`. The translation
-     *    rewrites every NodeId-typed field exhaustively across the
-     *    Node sealed hierarchy.
-     * 4. Re-hash each translated node and compare to its declared hash
-     *    from the foreign `nodeIdToHash`; mismatch raises
-     *    [NodeResolverIntegrityViolation].
+     * 2. Walk the subgraph post-order from the root. Each fetched node is
+     *    admitted to the local store under a fresh local NodeId, with its
+     *    internal NodeId references **translated** from foreign IDs to local
+     *    IDs via `Node.translateNodeIds`. The translation rewrites every
+     *    NodeId-typed field exhaustively across the Node sealed hierarchy;
+     *    within-fetch DAG sharing and reference cycles are resolved by a
+     *    foreign→local memo seeded before recursion (see [admit]).
+     * 3. Hashable nodes register their `hash → localId` mapping (without
+     *    clobbering a pre-existing one). Interior nodes are *not* deduped
+     *    against the local store by hash — see [admit] for why that is unsafe
+     *    for context-dependent (open) nodes. Cross-target sharing happens at
+     *    whole-target granularity through this method's leading
+     *    `hashToNodeId[hash]` memo.
      *
      * **Integrity (Q-043 § 4.5b, refined).** Rather than re-hashing every
      * admitted node, the implementation recomputes the canonical hash of the
@@ -75,14 +74,15 @@ data class FederatedProgram(
      * what makes the protocol trust-minimizing: the resolver need not be
      * trusted because the hash binds the content.
      *
-     * **Bound nodes.** [Node.ParameterDecl] / [Node.TypeParameter] /
-     * [Node.RecursiveSelf] have no standalone hash, so they are absent from
-     * [SubgraphFetch.nodeIdToHash] and are never deduped — they are admitted
-     * fresh as part of their parent's re-base. Reference cycles (Schema↔
-     * Invariant; a VarRef to an enclosing binder) are handled by reserving the
-     * local NodeId with an untranslated placeholder *before* recursing, so a
-     * cyclic reference resolves to the reserved id; the placeholder is then
-     * overwritten with the re-based node.
+     * **Fresh admission.** Every fetched node — bound nodes
+     * ([Node.ParameterDecl] / [Node.TypeParameter] / [Node.RecursiveSelf], which
+     * have no standalone hash) and hashable nodes alike — is admitted fresh as
+     * part of its parent's re-base, so every binder reference stays faithful to
+     * the fetched subgraph. Reference cycles (Schema↔Invariant; a VarRef to an
+     * enclosing binder) are handled by reserving the local NodeId with an
+     * untranslated placeholder *before* recursing, so a cyclic reference
+     * resolves to the reserved id; the placeholder is then overwritten with the
+     * re-based node.
      */
     fun fetchAndAdmit(hash: Hash): NodeId? {
         hashToNodeId[hash]?.let { return it }
@@ -102,14 +102,33 @@ data class FederatedProgram(
      * Admit one fetched node (by foreign NodeId) into the local store, returning
      * its local NodeId. Post-order over the node's references via
      * [Node.translateNodeIds]:
-     *  - already admitted → return the memoized local id ([foreignToLocal]);
-     *  - hashable and already local (same hash in [hashToNodeId]) → dedup, reuse
-     *    the existing local id and skip its subtree (content-addressing
-     *    guarantees the subtree is already present);
+     *  - already admitted in *this* fetch → return the memoized local id
+     *    ([foreignToLocal]); this is what preserves the fetched subgraph's own
+     *    DAG sharing (a node referenced from two places re-bases to one local id)
+     *    and terminates reference cycles;
      *  - otherwise reserve a fresh local id with an untranslated placeholder
-     *    (so reference cycles resolve to it), re-base the node's references via
-     *    `translateNodeIds { admit(it) }`, overwrite the placeholder, and — for
-     *    hashable nodes — register the hash↔id mapping.
+     *    (so a cyclic reference back to this node resolves to the reserved id),
+     *    re-base the node's references via `translateNodeIds { admit(it) }`,
+     *    overwrite the placeholder, and — for hashable nodes — register the
+     *    hash↔id mapping (without clobbering a pre-existing mapping).
+     *
+     * **Why no interior hash-dedup against the local store.** It is tempting to
+     * reuse an existing local node when a fetched interior node carries the same
+     * hash (`hashToNodeId[h]`). That is *unsafe* for context-dependent (open)
+     * nodes. `Hasher.finalize` assigns every node a standalone per-node hash, but
+     * for a node carrying a free binder reference — a bare [Node.VarRef], a
+     * [Node.RecursiveSelf], a [Node.TypeParameter] reference — the canonical
+     * encoder emits an unbound de-Bruijn sentinel, so *every* such node hashes
+     * identically regardless of which binder it actually points at. A `VarRef`
+     * to a Lambda's first parameter therefore collides with any other first-
+     * parameter `VarRef` anywhere in the local store. Deduping on that collision
+     * aliases the fetched node's binder reference to an unrelated local binder,
+     * shifting a de-Bruijn position and corrupting the re-base — which the root
+     * re-hash in [fetchAndAdmit] then (correctly) rejects as an integrity
+     * violation. Admitting interior nodes fresh keeps every binder reference
+     * faithful; cross-target sharing still happens at whole-target granularity
+     * through [fetchAndAdmit]'s leading `hashToNodeId[hash]` memo (so a library
+     * export referenced from two NodeRefs is fetched and verified once).
      */
     private fun admit(
         foreignId: NodeId,
@@ -123,12 +142,6 @@ data class FederatedProgram(
                     "referenced but not contained in the fetched subgraph."
             )
         val h = fetch.nodeIdToHash[foreignId] // null for bound nodes
-        if (h != null) {
-            hashToNodeId[h]?.let { existing ->
-                foreignToLocal[foreignId] = existing
-                return existing
-            }
-        }
         // Reserve a local id (placeholder = untranslated node) and memoize
         // BEFORE recursing, so any cyclic reference back to this node resolves
         // to the reserved id rather than recursing forever.
@@ -140,7 +153,10 @@ data class FederatedProgram(
         store.set(localId, translated)
         if (h != null) {
             nodeIdToHash[localId] = h
-            hashToNodeId[h] = localId
+            // putIfAbsent: never clobber a pre-existing local mapping for this
+            // hash (e.g. the app's own copy of a shared closed node). Whole-
+            // target resolution stays anchored to whatever was registered first.
+            hashToNodeId.putIfAbsent(h, localId)
         }
         return localId
     }
