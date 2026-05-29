@@ -439,6 +439,15 @@ class Interpreter(
                     ))
                 }
 
+                is Node.ModuleManifest ->
+                    // N-046 is a passive declaration with no runtime evaluation
+                    // semantics (proposal § 6). It is not an expression and no
+                    // Application targets it; reaching it here means a manifest
+                    // was a program root handed to `eval` (e.g. `strand run` on a
+                    // published library). Its value is Unit. Value.UnitV is the
+                    // shared singleton, so no allocV bump (matching UnitLit).
+                    Value.UnitV
+
             // Type, effect-declaration, MatchCase, Pattern, and
             // ProductFieldValue nodes are not standalone expressions. The
             // verifier should have caught this; we report it here

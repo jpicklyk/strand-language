@@ -1,7 +1,7 @@
 # Cross-Store Federation and Hash-Pinned Composition
 
 **Document:** `proposals/cross-store-federation.md`
-**Status:** Draft proposal
+**Status:** Partially implemented — N-046 ModuleManifest (step 3b) landed in the Kotlin/JVM reference implementation on 2026-05-28; the federation runtime (step 3a) remains the active draft. See § 10 Implementation status.
 **Date:** 2026-05-28
 **Concerns:** [`decisions/ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) (amended 2026-05-28 to clarify that content-addressed grouping primitives are compatible with the no-import-system stance), [`design/node-algebra.md`](../design/node-algebra.md) § N-019 NodeRef, [`design/distribution-model.md`](../design/distribution-model.md), [Q-006](../open-questions.md#Q-006), [Q-014](../open-questions.md#Q-014), [Q-016](../open-questions.md#Q-016), [Q-024](../open-questions.md#Q-024), [Q-043](../open-questions.md#Q-043)
 **Scope:** Medium-Large
@@ -464,6 +464,22 @@ Steps 1-4 are pure federation (could ship independently as "Layer 2 step 3a"); s
 - Cross-store garbage collection.
 - Async resolver interface.
 - Hierarchical manifest enforcement.
+
+## 10 Implementation status
+
+**Step 3b — N-046 ModuleManifest — implemented 2026-05-28 (Kotlin/JVM reference implementation).** The node category ships end-to-end: `Node.ModuleManifest(exports: List<ManifestExport>, manifestSignature: ByteArray?)` with `ManifestExport(target: Hash, declaredEffects: List<NodeId>, displayName: String)` in `:core`; a `StoredNode.RawModuleManifest` / `RawManifestExport` raw intermediate that JSON ingest produces and `Hasher.finalize` rewrites to the canonical hash-carrying form (the same raw→canonical bridge `NodeRef` uses, generalized to a node embedding several hash targets); CategoryTag 46 and a dual raw/canonical canonical encoder whose two paths are byte-identical by construction (export list positional, each export's declaredEffects a lex-sorted multi-hash set, displayName + signature excluded); the verifier admission rule certifying each export's effect surface against `declaredEffects`; passive interpreter and SchemaChecker handling (`Value.UnitV`). Corpus 79 (effectful export matching declaration, accepted) and 80 (under-declaration, rejected) plus `ModuleManifestEncodingTest`, `ModuleManifestVerifierTest`, and `CorpusManifestTest` cover the encoding properties and the accept / under-declare / over-declare / unresolvable-target / non-root-certification paths.
+
+Three deviations from the proposal text worth recording:
+
+1. **"Closure of the target" is implemented as "effect surface."** § 5.4 says the verifier checks `declaredEffects` against `closureOf(export.target)`. In Strand's closure model a bare Lambda has an *empty* closure — constructing a closure value exercises no effects; effects release at call sites (`inferApplication` adds the callee's `FunctionType.effects` to the call's closure). Taken literally, § 5.4 would force every function export to declare `[]`, making the feature useless for the common case and contradicting test scenario 12 (an effectful-Lambda export). The implementation therefore certifies the export's *effect surface*: for a function-typed export (Fun, or a Forall over a Fun) the function's declared effect row, for any other export its construction closure. This is the quantity a consumer incurs by *using* the export, which is what the proposal's § 4.8 ("bundle-level effect declarations") intends.
+
+2. **The `description → Provenance` metadata edge is not modelled.** Provenance (N-031) is not yet a node category in the reference implementation; the codebase already omits Provenance metadata edges on `ForeignNode` (the `binding` edge) and `Schema` (the `libraryBinding` edge). `ModuleManifest` follows that precedent — `manifestSignature: ByteArray?` (the Q-006 signing surface) is retained as the metadata field; `description` is dropped until Provenance lands.
+
+3. **Layer A grammar codes MFT / MEX are deferred.** `ManifestExport` is an inline sub-object list (a target plus a nested declaredEffects list plus a display name); the Layer A grammar maps one line to one dag-json node with ref/string/list-of-ref fields and has no facility for emitting inline object arrays. This is the same shape the codebase already defers for Q-039 `effectProjections` ("Layer A has no compact code for the inline projection object; non-prelude nodes emit canonical dag-json directly"). Manifests are low-frequency tooling/distribution artifacts; corpus 79/80 are authored as canonical dag-json. A future authoring-layer extension (an inline-sub-object-list ArgKind) can add MFT / MEX when an agent-emission workload needs them.
+
+Note that `ManifestExportTargetUnresolvable` is, in a single-store program, unreachable through JSON ingest — every export target author-id resolves to an in-document node that `finalize` hashes into `hashToNodeId`. The diagnostic exists for the federated path (a manifest referencing an export held in a peer store) and is exercised by a programmatically-constructed dangling reference in `ModuleManifestVerifierTest`.
+
+**Step 3a — federation runtime — pending.** The foundation primitives `NodeResolver`, `SubgraphFetch`, `ChainedResolver` / `LocalHashStoreResolver` / `CachingResolver` / `NoOpResolver`, `FederatedProgram`, and `NameRegistry` are in place in `:hashing` with unit coverage, but `FederatedProgram.fetchAndAdmit` throws `NotImplementedError` on cross-store paths. The blocker identified during step-3b work is bound-node re-basing: `Hasher.finalize` excludes `ParameterDecl` / `TypeParameter` / `RecursiveSelf` from `nodeIdToHash` (they have no standalone hash — the canonical encoder *throws* on a standalone `ParameterDecl`), and the landed `LocalHashStoreResolver.walkSubgraph` skips any NodeId absent from `nodeIdToHash`. A fetched `Lambda`'s `SubgraphFetch` is therefore missing its parameters, so `Node.translateNodeIds` cannot re-base them via the hash-keyed foreign→local map. The `SubgraphFetch` model (keyed by `Hash`) needs a companion mechanism for carrying and re-basing bound nodes — most likely re-walking each parent's canonical structure to assign fresh local NodeIds to its bound children positionally — before step 3a can land without silent NodeId corruption. This is the next slice.
 
 ## References
 

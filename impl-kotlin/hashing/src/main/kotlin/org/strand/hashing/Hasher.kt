@@ -3,6 +3,7 @@ package org.strand.hashing
 import io.github.rctcwyvrn.blake3.Blake3
 import org.strand.core.Hash
 import org.strand.core.HashFunction
+import org.strand.core.ManifestExport
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
@@ -100,6 +101,28 @@ class Hasher(private val rawStore: RawNodeStore) {
                         )
                     Node.NodeRef(target = targetHash)
                 }
+                is StoredNode.RawModuleManifest -> {
+                    // N-046: resolve each export's in-document target NodeId to
+                    // its content hash, admitting the canonical Node.ModuleManifest.
+                    // Same raw→canonical bridge as RawNodeRef, one hash per export.
+                    val canonicalExports = stored.exports.map { rawExport ->
+                        val targetHash = nodeIdToHash[rawExport.target]
+                            ?: error(
+                                "RawModuleManifest at $id has export target ${rawExport.target}, " +
+                                    "which was not hashed (unreachable from root $rootId). Every " +
+                                    "manifest export target must be reachable from the program root."
+                            )
+                        ManifestExport(
+                            target = targetHash,
+                            declaredEffects = rawExport.declaredEffects,
+                            displayName = rawExport.displayName,
+                        )
+                    }
+                    Node.ModuleManifest(
+                        exports = canonicalExports,
+                        manifestSignature = stored.manifestSignature,
+                    )
+                }
             }
             val assigned = canonicalStore.add(canonical)
             check(assigned == id) {
@@ -135,6 +158,17 @@ class Hasher(private val rawStore: RawNodeStore) {
                 // target to populate its hash entry too.
                 out[id] = Hash(encoder.hash(id, stack))
                 walk(stored.targetId, stack, out)
+            }
+            is StoredNode.RawModuleManifest -> {
+                // Hash the manifest itself, then recurse into each export's
+                // target (a NodeRef-style boundary, but an in-store node whose
+                // hash finalize needs to resolve the target NodeId → Hash) and
+                // each declaredEffect EffectCategory (referenced by hash).
+                out[id] = Hash(encoder.hash(id, stack))
+                for (export in stored.exports) {
+                    walk(export.target, stack, out)
+                    export.declaredEffects.forEach { walk(it, stack, out) }
+                }
             }
             is StoredNode.Canonical -> {
                 val node = stored.node
@@ -209,6 +243,16 @@ class Hasher(private val rawStore: RawNodeStore) {
                 "Canonical Node.NodeRef encountered in raw store at $id; " +
                     "JsonIngest must produce StoredNode.RawNodeRef for NodeRef entries."
             )
+
+            is Node.ModuleManifest -> {
+                // Reached only via the Hasher(canonicalStore) re-hash path; the
+                // raw-finalize path handles RawModuleManifest in `walk`. Export
+                // targets are Hash boundaries (not walked, like NodeRef.target);
+                // declaredEffects are EffectCategory NodeIds needing hash entries.
+                node.exports.forEach { export ->
+                    export.declaredEffects.forEach { walk(it, stack, out) }
+                }
+            }
 
             is Node.ForeignNode -> {
                 walk(node.foreignType, stack, out)

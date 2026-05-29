@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "root": "lib",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "strT":   { "type": "PrimitiveType", "kind": "String" },
+    "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+
+    "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                 "parameters": ["strT"] },
+
+    "writeT":  { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT" },
+    "writeFn": { "type": "ForeignNode", "target": "strand-builtin:Fs.Write",
+                 "foreignType": "writeT", "effects": ["writeFx"],
+                 "effectProjections": [
+                   { "category": "writeFx", "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                 ] },
+
+    "idParam": { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+    "idBody":  { "type": "VarRef", "binder": "idParam" },
+    "idFn":    { "type": "Lambda", "parameters": ["idParam"], "body": "idBody" },
+
+    "wPath":    { "type": "ParameterDecl", "name": "path", "paramType": "strT" },
+    "wData":    { "type": "ParameterDecl", "name": "data", "paramType": "bytesT" },
+    "wVarPath": { "type": "VarRef", "binder": "wPath" },
+    "wVarData": { "type": "VarRef", "binder": "wData" },
+    "wBody":    { "type": "Application", "function": "writeFn",
+                  "arguments": ["wVarPath", "wVarData"] },
+    "writer":   { "type": "Lambda", "parameters": ["wPath", "wData"], "body": "wBody",
+                  "effects": ["writeFx"] },
+
+    "lib": { "type": "ModuleManifest",
+             "exports": [
+               { "target": "idFn",   "declaredEffects": [],          "displayName": "Int.identity" },
+               { "target": "writer", "declaredEffects": ["writeFx"], "displayName": "Fs.writeFile" }
+             ] }
+  }
+}

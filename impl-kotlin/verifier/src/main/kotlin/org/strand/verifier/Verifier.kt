@@ -62,6 +62,12 @@ class Verifier(
         } catch (_: VerifyAbort) {
             return VerifyResult.Failed(state.errors)
         }
+        // N-046 (Q-043): certify every ModuleManifest admitted to the store.
+        // Each export's declaredEffects must exactly equal its target's effect
+        // closure. Runs whether or not a manifest is reachable from `root` — a
+        // published library's root may be the manifest itself, or a manifest
+        // may sit alongside the program it documents.
+        state.checkManifests()
         if (state.errors.isNotEmpty()) return VerifyResult.Failed(state.errors)
         return VerifyResult.Ok(rootType, state.nodeTypes.toMap())
     }
@@ -142,6 +148,80 @@ class Verifier(
 
         fun closureOf(id: NodeId): Set<NodeId> =
             nodeClosures[id] ?: emptySet()
+
+        /**
+         * N-046 (Q-043) admission: certify every [Node.ModuleManifest] in the
+         * store. The pass scans the whole store rather than walking from the
+         * root, so a manifest is certified whether or not it is reachable as
+         * an expression (a published library's root may itself be the
+         * manifest, or a manifest may sit alongside the program it documents).
+         */
+        fun checkManifests() {
+            for ((id, node) in store.entries()) {
+                if (node is Node.ModuleManifest) checkManifest(id, node)
+            }
+        }
+
+        /**
+         * Certify one manifest: for every export, resolve its `target` hash to
+         * a local NodeId via [hashToNodeId] (absent → [VerifyError.ManifestExportTargetUnresolvable]),
+         * infer the target under an empty scope to populate its effect closure
+         * (export targets are closed published nodes, like NodeRef targets),
+         * and require the export's `declaredEffects` set to *exactly* equal
+         * that closure (mismatch → [VerifyError.ManifestExportEffectMismatch]).
+         * Inferring an ill-formed target records its own errors; the export's
+         * effect comparison is then skipped.
+         */
+        private fun checkManifest(manifestId: NodeId, node: Node.ModuleManifest) {
+            node.exports.forEachIndexed { index, export ->
+                val targetId = hashToNodeId[export.target]
+                if (targetId == null) {
+                    report(VerifyError.ManifestExportTargetUnresolvable(
+                        at = manifestId, exportIndex = index, target = export.target,
+                    ))
+                } else {
+                    val surface: Set<NodeId>? = try {
+                        val targetType = infer(targetId, scope = emptyMap(), typeParams = emptySet())
+                        exportEffectSurface(targetId, targetType)
+                    } catch (_: VerifyAbort) {
+                        null // target ill-formed; its errors are already recorded
+                    }
+                    if (surface != null && surface != export.declaredEffects.toSet()) {
+                        report(VerifyError.ManifestExportEffectMismatch(
+                            at = manifestId,
+                            exportIndex = index,
+                            target = export.target,
+                            declared = export.declaredEffects.toSet(),
+                            actual = surface,
+                        ))
+                    }
+                }
+            }
+        }
+
+        /**
+         * The effect surface a consumer incurs by *using* a manifest export.
+         *
+         * For a function-typed export (the common case) this is the function's
+         * declared effect row — releasing those effects is exactly what calling
+         * the export does. A bare Lambda has an empty *closure* (constructing a
+         * closure value is pure; effects release at call sites, see
+         * [inferApplication]), so `closureOf` would wrongly report no effects
+         * for an effectful function. For a non-function (value) export, the
+         * surface is the node's construction closure.
+         *
+         * This clarifies proposal § 5.4's "closure of the target": for function
+         * exports the meaningful quantity is the function's effect row, not the
+         * always-empty closure of the Lambda value. Polymorphic functions
+         * (a Forall over a Fun) use the inner Fun's effect row.
+         */
+        private fun exportEffectSurface(targetId: NodeId, targetType: TypeExpr): Set<NodeId> =
+            when (targetType) {
+                is TypeExpr.Fun -> targetType.effects
+                is TypeExpr.Forall ->
+                    (targetType.body as? TypeExpr.Fun)?.effects ?: closureOf(targetId)
+                else -> closureOf(targetId)
+            }
 
         /**
          * After verifying a NodeRef's target subgraph under an empty scope,
@@ -248,6 +328,19 @@ class Verifier(
                 is Node.Handler -> inferHandler(id, node, scope, typeParams)
                 is Node.ToolDef -> inferToolDef(id, node, scope, typeParams)
                 is Node.ResponseSchemaSpec -> inferResponseSchemaSpec(id, node, typeParams)
+                is Node.ModuleManifest -> {
+                    // N-046 is a passive declaration, not a value-producing
+                    // expression. When it is the program root (or is otherwise
+                    // reached via infer) it types as Unit and carries no
+                    // effects of its own — the export's declared effects
+                    // describe the exported nodes, not the manifest's own
+                    // evaluation. The per-export effect-closure certification
+                    // runs in the store-wide manifest admission pass
+                    // (checkManifests), so every manifest in the store is
+                    // certified whether or not it is reachable from the root.
+                    recordClosure(id, emptySet())
+                    TypeExpr.Prim(Primitive.Unit)
+                }
 
                 is Node.StateMachine -> inferStateMachine(id, node, scope, typeParams)
                 is Node.Transition -> {
@@ -1399,7 +1492,8 @@ class Verifier(
                     is Node.RecursiveType, is Node.RecursiveSelf,
                     is Node.StateMachine, is Node.EventStream, is Node.Transition,
                     is Node.Schema, is Node.Invariant, is Node.ToolDef,
-                    is Node.ResponseSchemaSpec -> Unit
+                    is Node.ResponseSchemaSpec,
+                    is Node.ModuleManifest -> Unit
                 }
             }
             visit(bodyId)

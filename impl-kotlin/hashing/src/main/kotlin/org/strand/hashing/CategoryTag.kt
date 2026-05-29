@@ -108,5 +108,8 @@ value class CategoryTag(val value: Int) {
         // Agent-native capabilities (N-044, N-045)
         val ToolDef = CategoryTag(44)
         val ResponseSchemaSpec = CategoryTag(45)
+
+        // Composition and distribution (N-046)
+        val ModuleManifest = CategoryTag(46)
     }
 }

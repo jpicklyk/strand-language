@@ -67,6 +67,12 @@ fun Node.childNodeIds(): List<NodeId> = when (this) {
     // ----- Layer 2 step 2: NodeRef — BOUNDARY -----
     is Node.NodeRef -> emptyList()  // target is a Hash, not a NodeId; subgraph stops here
 
+    // ----- Composition and distribution (N-046) -----
+    // Each export's `target` is a Hash boundary (resolved lazily, like
+    // NodeRef.target) and is NOT a NodeId child. Each export's declaredEffects
+    // are EffectCategory NodeId edges, reachable through this manifest.
+    is Node.ModuleManifest -> exports.flatMap { it.declaredEffects }
+
     // ----- Layer 3: effects and capabilities -----
     is Node.EffectCategory -> parameters
     is Node.EffectDecl -> buildList { add(effectType); addAll(parameters) }
