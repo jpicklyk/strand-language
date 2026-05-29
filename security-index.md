@@ -2,7 +2,7 @@
 
 **Document:** `security-index.md`
 **Status:** Living document; updated as security questions are opened, advanced, or resolved
-**Last revised:** 2026-05-26 (initial creation following implementation security audit)
+**Last revised:** 2026-05-29 (Q-044 containment measurement added to the security-questions cross-cut and the threat-model coverage matrix; three Incoming-reference paths corrected to `proposals/implemented/` after the Q-039/Q-040/Q-042 proposals moved on resolution). Created 2026-05-26 following the implementation security audit.
 
 ## Purpose
 
@@ -57,6 +57,7 @@ A security audit of the Kotlin reference implementation surfaced four implementa
 |-------|-------|------------|
 | [Q-030](open-questions.md#Q-030) | Effect handler algebra | Resolved — N-043 Handler with no-continuation semantics, closure-subtraction rule, innermost-wins dispatch. |
 | [Q-031](open-questions.md#Q-031) | Refinement-lattice capability matching | Resolved — `CapabilitySet` keyed by EffectCategory NodeId; per-slot `CapabilityArgument.Wildcard | Concrete(Value)`. |
+| [Q-044](open-questions.md#Q-044) | Containment measurement for the structural-safety claim | Resolved at the measurement level — [`evaluation/containment-results.md`](evaluation/containment-results.md) defines the harm bound `closure(g) ∩ C ∩ B ∩ P`, argues soundness with the corpus 70–75 and unit-test witnesses, and scores six harm classes (the four audit findings plus undeclared-effect and ungranted-capability) by stop point against a stock-Python baseline grounded in executed probes. Agent intent-visibility study deferred as a follow-up. |
 
 ## Implementation audit findings (2026-05-26)
 
@@ -133,11 +134,12 @@ How current implementation coverage maps onto the [`security-model.md`](design/s
 
 **Incoming:**
 - [`INDEX.md`](INDEX.md) — references this index from the document tree and the 2026-05-26 revision notes
-- [`proposals/foreign-effect-projections.md`](proposals/foreign-effect-projections.md) — Q-039 proposal cites § Finding 1 as the audit motivation
-- [`proposals/interpreter-resource-limits.md`](proposals/interpreter-resource-limits.md) — Q-040 proposal cites § Finding 2 as the audit motivation
+- [`proposals/implemented/foreign-effect-projections.md`](proposals/implemented/foreign-effect-projections.md) — Q-039 proposal cites § Finding 1 as the audit motivation
+- [`proposals/implemented/interpreter-resource-limits.md`](proposals/implemented/interpreter-resource-limits.md) — Q-040 proposal cites § Finding 2 as the audit motivation
 - [`proposals/implemented/io-builtin-sandboxing.md`](proposals/implemented/io-builtin-sandboxing.md) — Q-041 proposal cites § Finding 3 as the audit motivation
-- [`proposals/credential-isolation.md`](proposals/credential-isolation.md) — Q-042 proposal cites § Finding 4 as the audit motivation
+- [`proposals/implemented/credential-isolation.md`](proposals/implemented/credential-isolation.md) — Q-042 proposal cites § Finding 4 as the audit motivation
 - [`open-questions.md`](open-questions.md) — Q-039, Q-040, Q-041, Q-042 entries cite this index
+- [`evaluation/containment-results.md`](evaluation/containment-results.md) — Q-044 containment measurement scores the four findings by stop point against a conventional baseline
 - [`impl-kotlin/CLAUDE.md`](impl-kotlin/CLAUDE.md) — Known gaps section references this index from the "With proposals" subsection
 
-All four audit-surfaced findings are now resolved (Q-039 / Q-040 / Q-041 / Q-042 all landed 2026-05-27); this index is the cross-cut and stays as the historical record.
+All four audit-surfaced findings are now resolved (Q-039 / Q-040 / Q-041 / Q-042 all landed 2026-05-27); this index is the cross-cut and stays as the historical record. The Q-044 containment measurement ([`evaluation/containment-results.md`](evaluation/containment-results.md)) ties these findings together: it scores each as a harm class by where the harm is stopped (verify-time, runtime, or not at all) and contrasts the result with a conventional baseline that contains none of them by default.

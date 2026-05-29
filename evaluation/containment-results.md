@@ -104,3 +104,4 @@ The Strand-side witnesses are the corpus programs and unit tests named in the ma
 - [`02-core-thesis.md`](../02-core-thesis.md)
 - [`open-questions.md`](../open-questions.md)
 - [`INDEX.md`](../INDEX.md)
+- [`security-index.md`](../security-index.md)
