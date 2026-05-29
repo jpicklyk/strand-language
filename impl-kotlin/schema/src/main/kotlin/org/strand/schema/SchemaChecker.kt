@@ -72,9 +72,20 @@ class SchemaChecker(
      * [EvaluationLimits.DEFAULTS].
      */
     private val limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
+    /**
+     * Q-043 step 3a cross-store resolution callback, consulted when a NodeRef
+     * target hash is not in [hashToNodeId]. In a federated run the caller wires
+     * it to `FederatedProgram::fetchAndAdmit`, so a Schema-typed value (or an
+     * invariant body) that reaches across a store boundary fetches and re-bases
+     * the target into the shared [store] before static evaluation. It is also
+     * threaded into the internal [interpreter] used to run invariant bodies.
+     * Default null: single-store behaviour is preserved (a NodeRef whose target
+     * is not local makes the value non-static, surfacing as a deferred check).
+     */
+    private val resolveTarget: ((Hash) -> NodeId?)? = null,
 ) {
 
-    private val interpreter = Interpreter(store, hashToNodeId)
+    private val interpreter = Interpreter(store, hashToNodeId, resolveTarget = resolveTarget)
 
     /**
      * Run the check. Returns a [SchemaCheckResult] with the list of
@@ -189,7 +200,9 @@ class SchemaChecker(
             // reverse map and recurse under an empty scope (the target
             // cannot refer to any binder in our scope).
             is Node.NodeRef -> {
-                val targetId = hashToNodeId[node.target] ?: return null
+                val targetId = hashToNodeId[node.target]
+                    ?: resolveTarget?.invoke(node.target)
+                    ?: return null
                 tryEvaluateStaticallyInScope(targetId, scope = emptyMap())
             }
 

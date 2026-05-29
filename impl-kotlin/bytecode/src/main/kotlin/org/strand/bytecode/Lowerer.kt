@@ -43,6 +43,20 @@ import org.strand.core.NodeStore
 class Lowerer(
     private val store: NodeStore,
     private val hashToNodeId: Map<Hash, NodeId> = emptyMap(),
+    /**
+     * Q-043 step 3a cross-store resolution callback, consulted when a NodeRef
+     * target hash is not in [hashToNodeId]. Lowering precedes execution, so a
+     * cross-store target must be fetched and admitted into the shared [store]
+     * *before* it can be lowered into its own sub-chunk. In a federated run the
+     * caller wires this to `FederatedProgram::fetchAndAdmit`, which fetches the
+     * target subgraph from a peer store, re-bases it into the shared [store],
+     * extends the shared [hashToNodeId], and returns its local NodeId — which
+     * the Lowerer then walks like any other local node. Default null: a NodeRef
+     * miss is the original hard error (single-store behaviour preserved). A
+     * federated caller must pass the same mutable [store] / [hashToNodeId] the
+     * callback extends so the admitted target is visible to [lowerSubChunk].
+     */
+    private val resolveTarget: ((Hash) -> NodeId?)? = null,
 ) {
     private val chunks = mutableListOf<MutableChunk>()
 
@@ -138,8 +152,12 @@ class Lowerer(
             // as its own sub-chunk and we emit LOAD_HASH with that chunk's
             // index.
             is Node.NodeRef -> {
+                // hashToNodeId resolves local targets; resolveTarget (when wired)
+                // fetches + admits a cross-store target into `store` first, so the
+                // subsequent lowerSubChunk walk sees it as an ordinary local node.
                 val targetId = hashToNodeId[node.target]
-                    ?: error("Lowerer: NodeRef target hash ${node.target} not in hashToNodeId map")
+                    ?: resolveTarget?.invoke(node.target)
+                    ?: error("Lowerer: NodeRef target hash ${node.target} not in hashToNodeId map (and no resolver held it)")
                 // Lazy: lower target into a new chunk. We use LOAD_HASH
                 // with the sub-chunk index; at runtime the VM allocates a
                 // closure around it (zero captures since closed).

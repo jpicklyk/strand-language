@@ -86,6 +86,14 @@ internal class RuntimeContext(
      * the limit policy uniformly across the group.
      */
     val limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
+    /**
+     * Q-043 step 3a cross-store resolution callback, threaded into each
+     * per-actor [Interpreter] so a transition function that references a
+     * cross-store node (via a `targetHash` NodeRef) fetches and re-bases it
+     * into the shared [store] on first use. Default null preserves the
+     * single-store actor behaviour.
+     */
+    val resolveTarget: ((Hash) -> NodeId?)? = null,
 ) {
     private val instancesMap = ConcurrentHashMap<InstanceId, MachineInstance>()
     private val actorJobsMap = ConcurrentHashMap<InstanceId, Job>()
@@ -106,7 +114,7 @@ internal class RuntimeContext(
         // Each actor gets its own Interpreter so the foreign dispatcher is
         // bound to THIS group's runtime context (Spawn from inside the
         // transition spawns into this group, not some other one).
-        val perActorInterpreter = Interpreter(store, hashToNodeId, foreignDispatcher)
+        val perActorInterpreter = Interpreter(store, hashToNodeId, foreignDispatcher, resolveTarget)
         // Q-040: build under the group's limits so eval-time caps apply
         // from instance construction through every per-event call.
         val transitionFnValue = perActorInterpreter.eval(node.transitionFn, capabilities, limits)

@@ -59,7 +59,21 @@ import org.strand.interpreter.Value
 class StateMachineRuntime(
     private val store: NodeStore,
     private val hashToNodeId: Map<Hash, NodeId> = emptyMap(),
-    private val interpreter: Interpreter = Interpreter(store, hashToNodeId),
+    /**
+     * Q-043 step 3a cross-store resolution callback, consulted whenever a
+     * NodeRef target hash is not in [hashToNodeId]. In a federated run the
+     * caller wires it to `FederatedProgram::fetchAndAdmit`, which fetches the
+     * target subgraph from a peer store, re-bases it into the shared [store],
+     * extends the shared [hashToNodeId], and returns its local NodeId. The
+     * callback is threaded into the default [interpreter] (used by the sync
+     * `runMachine` / `resume` fold) and into the per-actor interpreters the
+     * async `runGroup` path constructs via [RuntimeContext]. Default null:
+     * single-store behaviour is preserved bit-for-bit. A federated caller must
+     * pass the same mutable [store] / [hashToNodeId] the callback extends so
+     * admitted nodes are visible here.
+     */
+    private val resolveTarget: ((Hash) -> NodeId?)? = null,
+    private val interpreter: Interpreter = Interpreter(store, hashToNodeId, resolveTarget = resolveTarget),
 ) {
 
     /**
@@ -245,6 +259,7 @@ class StateMachineRuntime(
             recordInputs = group.recordInputs,
             dispatcherFactory = group.dispatcherFactory,
             limits = limits,
+            resolveTarget = resolveTarget,
         )
 
         // Pass 2: spawn one initial actor per declared machine. Each
