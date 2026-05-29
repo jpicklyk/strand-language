@@ -2,7 +2,7 @@
 
 **Document:** `02-core-thesis.md`
 **Status:** Stable
-**Last revised:** Initial draft
+**Last revised:** 2026-05-29
 
 ## Summary
 
@@ -86,12 +86,23 @@ The claims are individually defensible but produce the most distinctive properti
 
 **State machines as graph fixpoints requires (1) + (3) + (4).** Transition functions are graph nodes (1) with explicit effect declarations (3) and stable identities (4) that allow long-running machines to reference their transition logic by hash. The detailed design appears in [`design/state-machines.md`](design/state-machines.md).
 
+## Outcome claims and evaluation priority {#outcome-priority}
+
+The five design claims above are predicted to produce five outcome advantages for AI-generated code, enumerated in [`00-motivation.md`](00-motivation.md): higher first-pass correctness, lower inference cost per task, stronger security guarantees, native distribution, and cleaner confidential-computing integration. These outcomes are not weighted equally as evaluation targets. The ordering below reflects which advantages derive most directly from the design claims and which are most distinctive relative to the conventional languages used for AI generation.
+
+**Lead claims: structural safety and first-pass correctness.** The most distinctive advantages are those a conventional language cannot reproduce after the fact. Static effect verification and capability-mediated execution (Claims 3 and 5) make the maximum harm of a generated subgraph computable and bounded before it executes; structural verification at every operation (Claims 1 and 3) is the basis for first-pass correctness. A program an agent generates and a runtime executes without human review is contained by construction, rather than by a sandbox imposed around opaque code after generation. No conventional language used for AI generation provides a sound equivalent: effect tracking and capability confinement are absent or opt-in, and post-hoc static analysis of generated text cannot recover the guarantees soundly. These are the outcomes against which Strand is primarily evaluated.
+
+**Constraint, not lead claim: inference cost.** Lower token cost per task is the least distinctive of the predicted advantages. The Q-021 measurement ([`evaluation/dynamic-results.md`](evaluation/dynamic-results.md)) establishes why. A token-cost comparison against conventional languages is confounded by model familiarity: a model carries extensive pretraining exposure to those languages and none to Strand, so the comparison measures prior exposure as much as representational density, and the observed gap is dominated by the cost of teaching the language in context. Even where the teaching cost is amortized toward zero, the per-emission density advantage over the densest conventional baselines is marginal. Inference cost is therefore treated as a constraint to be bounded — kept within a practical multiple through prompt caching and skill-mediated emission — not as a headline result.
+
+**Long-horizon claims: distribution and confidential computing.** Native distribution and confidential-computing integration follow from the integrated claims (see [§integration](#integration)) but depend on runtime and hardware work scheduled for later milestones. They remain predicted advantages under test, not present results.
+
 ## What this thesis does not claim {#non-claims}
 
 To avoid overstatement, several things are explicitly not claimed:
 
 - **Strand is not claimed to be human-friendly.** It is claimed to be amenable to AI generation and to provide analysis tooling for human inspection. Direct human authorship is not a goal.
 - **Strand is not claimed to be performant in absolute terms.** Initial implementations will prioritize correctness and analyzability over runtime performance. Performance work is deferred to a later phase.
+- **Low inference cost is not claimed as a lead advantage.** Token cost per task is treated as a constraint to be bounded rather than a headline result; see [§outcome-priority](#outcome-priority). The distinctive claims are structural safety and first-pass correctness.
 - **Strand is not claimed to be a replacement for existing languages.** It is a research vehicle for testing the hypothesis stated in [`00-motivation.md`](00-motivation.md). Its production viability depends on empirical results.
 - **The thesis is not claimed to be proven.** It is the design hypothesis under test. The research plan in [`research-plan.md`](research-plan.md) describes the experiments that would establish or refute it.
 
@@ -109,6 +120,7 @@ To avoid overstatement, several things are explicitly not claimed:
 - [`design/security-model.md`](design/security-model.md) — security properties and threats
 - [`design/state-machines.md`](design/state-machines.md) — long-running computation
 - [`research-plan.md`](research-plan.md) — evaluation methodology
+- [`evaluation/dynamic-results.md`](evaluation/dynamic-results.md) — dynamic-cost measurement underlying the inference-cost re-weighting (Q-021)
 
 **Incoming references:**
 - [`README.md`](README.md)
