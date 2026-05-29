@@ -25,6 +25,19 @@ class NodeStore {
 
     fun getOrNull(id: NodeId): Node? = nodes.getOrNull(id.value)
 
+    /**
+     * Replace the node already stored at [id]. Used by the Layer 2 step 3
+     * federation admission protocol, which reserves a local NodeId with an
+     * untranslated placeholder (so reference cycles — Schema↔Invariant, a
+     * VarRef to an enclosing binder — can resolve to it during the recursive
+     * re-base) and then overwrites it with the NodeId-translated node. The id
+     * must already exist (a prior [add]); this never extends the store.
+     */
+    fun set(id: NodeId, node: Node) {
+        require(id.value in nodes.indices) { "Cannot set unknown node id: $id" }
+        nodes[id.value] = node
+    }
+
     fun contains(id: NodeId): Boolean = id.value in nodes.indices
 
     val size: Int get() = nodes.size

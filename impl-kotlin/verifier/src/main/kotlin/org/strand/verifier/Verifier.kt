@@ -44,10 +44,24 @@ import org.strand.core.ProjectionSource
  * NodeRefs may pass an empty map; if a NodeRef is encountered with a hash
  * the map doesn't cover, the verifier reports
  * [VerifyError.NodeRefTargetNotFound].
+ *
+ * **Cross-store federation (Q-043 step 3a).** [resolveTarget] is an optional
+ * callback consulted whenever a NodeRef target hash is not in [hashToNodeId].
+ * In a federated run the caller wires it to `FederatedProgram::fetchAndAdmit`,
+ * which fetches the target subgraph from a peer store, re-bases it into the
+ * shared [store], extends the shared [hashToNodeId], and returns the local
+ * NodeId — so the verifier then verifies the admitted subgraph by ordinary
+ * `infer`. When [resolveTarget] is null (the default; every single-store call
+ * site) a NodeRef miss reports [VerifyError.NodeRefTargetNotFound] exactly as
+ * before; when it is present but returns null (the target is held by no peer)
+ * the miss reports [VerifyError.NodeRefTargetUnresolvable]. For [store] and
+ * [hashToNodeId] to observe the admitted nodes, a federated caller must pass
+ * the same mutable [FederatedProgram] instances the callback extends.
  */
 class Verifier(
     private val store: NodeStore,
     private val hashToNodeId: Map<Hash, NodeId> = emptyMap(),
+    private val resolveTarget: ((Hash) -> NodeId?)? = null,
 ) {
 
     fun verify(root: NodeId): VerifyResult {
@@ -62,6 +76,12 @@ class Verifier(
         } catch (_: VerifyAbort) {
             return VerifyResult.Failed(state.errors)
         }
+        // N-046 (Q-043): certify every ModuleManifest admitted to the store.
+        // Each export's declaredEffects must exactly equal its target's effect
+        // closure. Runs whether or not a manifest is reachable from `root` — a
+        // published library's root may be the manifest itself, or a manifest
+        // may sit alongside the program it documents.
+        state.checkManifests()
         if (state.errors.isNotEmpty()) return VerifyResult.Failed(state.errors)
         return VerifyResult.Ok(rootType, state.nodeTypes.toMap())
     }
@@ -144,6 +164,91 @@ class Verifier(
             nodeClosures[id] ?: emptySet()
 
         /**
+         * Resolve a NodeRef / type-ref target [hash] to a local NodeId. Hits
+         * [hashToNodeId] first; on a miss consults the federation
+         * [resolveTarget] callback, which (when wired) fetches and admits the
+         * target subgraph into the shared store and returns its local NodeId.
+         * Returns null only when the hash is held neither locally nor by any
+         * peer resolver.
+         */
+        fun resolveRefTarget(hash: Hash): NodeId? =
+            hashToNodeId[hash] ?: resolveTarget?.invoke(hash)
+
+        /**
+         * N-046 (Q-043) admission: certify every [Node.ModuleManifest] in the
+         * store. The pass scans the whole store rather than walking from the
+         * root, so a manifest is certified whether or not it is reachable as
+         * an expression (a published library's root may itself be the
+         * manifest, or a manifest may sit alongside the program it documents).
+         */
+        fun checkManifests() {
+            for ((id, node) in store.entries()) {
+                if (node is Node.ModuleManifest) checkManifest(id, node)
+            }
+        }
+
+        /**
+         * Certify one manifest: for every export, resolve its `target` hash to
+         * a local NodeId via [hashToNodeId] (absent → [VerifyError.ManifestExportTargetUnresolvable]),
+         * infer the target under an empty scope to populate its effect closure
+         * (export targets are closed published nodes, like NodeRef targets),
+         * and require the export's `declaredEffects` set to *exactly* equal
+         * that closure (mismatch → [VerifyError.ManifestExportEffectMismatch]).
+         * Inferring an ill-formed target records its own errors; the export's
+         * effect comparison is then skipped.
+         */
+        private fun checkManifest(manifestId: NodeId, node: Node.ModuleManifest) {
+            node.exports.forEachIndexed { index, export ->
+                val targetId = hashToNodeId[export.target]
+                if (targetId == null) {
+                    report(VerifyError.ManifestExportTargetUnresolvable(
+                        at = manifestId, exportIndex = index, target = export.target,
+                    ))
+                } else {
+                    val surface: Set<NodeId>? = try {
+                        val targetType = infer(targetId, scope = emptyMap(), typeParams = emptySet())
+                        exportEffectSurface(targetId, targetType)
+                    } catch (_: VerifyAbort) {
+                        null // target ill-formed; its errors are already recorded
+                    }
+                    if (surface != null && surface != export.declaredEffects.toSet()) {
+                        report(VerifyError.ManifestExportEffectMismatch(
+                            at = manifestId,
+                            exportIndex = index,
+                            target = export.target,
+                            declared = export.declaredEffects.toSet(),
+                            actual = surface,
+                        ))
+                    }
+                }
+            }
+        }
+
+        /**
+         * The effect surface a consumer incurs by *using* a manifest export.
+         *
+         * For a function-typed export (the common case) this is the function's
+         * declared effect row — releasing those effects is exactly what calling
+         * the export does. A bare Lambda has an empty *closure* (constructing a
+         * closure value is pure; effects release at call sites, see
+         * [inferApplication]), so `closureOf` would wrongly report no effects
+         * for an effectful function. For a non-function (value) export, the
+         * surface is the node's construction closure.
+         *
+         * This clarifies proposal § 5.4's "closure of the target": for function
+         * exports the meaningful quantity is the function's effect row, not the
+         * always-empty closure of the Lambda value. Polymorphic functions
+         * (a Forall over a Fun) use the inner Fun's effect row.
+         */
+        private fun exportEffectSurface(targetId: NodeId, targetType: TypeExpr): Set<NodeId> =
+            when (targetType) {
+                is TypeExpr.Fun -> targetType.effects
+                is TypeExpr.Forall ->
+                    (targetType.body as? TypeExpr.Fun)?.effects ?: closureOf(targetId)
+                else -> closureOf(targetId)
+            }
+
+        /**
          * After verifying a NodeRef's target subgraph under an empty scope,
          * fold any [VerifyError.UnboundVariable] / [VerifyError.UnboundTypeParameter]
          * errors raised between [errorsBefore] and now into a single
@@ -223,9 +328,12 @@ class Verifier(
                     // resulting UnboundVariable / UnboundTypeParameter
                     // errors are folded into a single
                     // NodeRefTargetMustBeClosed report.
-                    val targetId = hashToNodeId[node.target]
+                    val targetId = resolveRefTarget(node.target)
                         ?: reportFatal(
-                            VerifyError.NodeRefTargetNotFound(at = id, targetHash = node.target)
+                            if (resolveTarget != null)
+                                VerifyError.NodeRefTargetUnresolvable(at = id, targetHash = node.target)
+                            else
+                                VerifyError.NodeRefTargetNotFound(at = id, targetHash = node.target)
                         )
                     val errorsBefore = errors.size
                     val targetType = try {
@@ -248,6 +356,19 @@ class Verifier(
                 is Node.Handler -> inferHandler(id, node, scope, typeParams)
                 is Node.ToolDef -> inferToolDef(id, node, scope, typeParams)
                 is Node.ResponseSchemaSpec -> inferResponseSchemaSpec(id, node, typeParams)
+                is Node.ModuleManifest -> {
+                    // N-046 is a passive declaration, not a value-producing
+                    // expression. When it is the program root (or is otherwise
+                    // reached via infer) it types as Unit and carries no
+                    // effects of its own — the export's declared effects
+                    // describe the exported nodes, not the manifest's own
+                    // evaluation. The per-export effect-closure certification
+                    // runs in the store-wide manifest admission pass
+                    // (checkManifests), so every manifest in the store is
+                    // certified whether or not it is reachable from the root.
+                    recordClosure(id, emptySet())
+                    TypeExpr.Prim(Primitive.Unit)
+                }
 
                 is Node.StateMachine -> inferStateMachine(id, node, scope, typeParams)
                 is Node.Transition -> {
@@ -1342,7 +1463,7 @@ class Verifier(
                     is Node.TypeAbstraction -> visit(node.body)
                     is Node.CapabilityScope -> visit(node.body)
                     is Node.NodeRef -> {
-                        val targetId = hashToNodeId[node.target] ?: return
+                        val targetId = resolveRefTarget(node.target) ?: return
                         visit(targetId)
                     }
                     is Node.Match -> {
@@ -1399,7 +1520,8 @@ class Verifier(
                     is Node.RecursiveType, is Node.RecursiveSelf,
                     is Node.StateMachine, is Node.EventStream, is Node.Transition,
                     is Node.Schema, is Node.Invariant, is Node.ToolDef,
-                    is Node.ResponseSchemaSpec -> Unit
+                    is Node.ResponseSchemaSpec,
+                    is Node.ModuleManifest -> Unit
                 }
             }
             visit(bodyId)
@@ -2298,7 +2420,7 @@ class Verifier(
                     is Node.ForeignNode ->
                         return if (node.effectProjections.isNotEmpty()) node else null
                     is Node.NodeRef -> {
-                        val targetId = hashToNodeId[node.target] ?: return null
+                        val targetId = resolveRefTarget(node.target) ?: return null
                         current = targetId
                     }
                     is Node.VarRef -> {
@@ -2571,9 +2693,12 @@ class Verifier(
                     TypeExpr.Forall(node.typeParameters, body)
                 }
                 is Node.NodeRef -> {
-                    val targetId = hashToNodeId[node.target]
+                    val targetId = resolveRefTarget(node.target)
                         ?: reportFatal(
-                            VerifyError.NodeRefTargetNotFound(at = typeId, targetHash = node.target)
+                            if (resolveTarget != null)
+                                VerifyError.NodeRefTargetUnresolvable(at = typeId, targetHash = node.target)
+                            else
+                                VerifyError.NodeRefTargetNotFound(at = typeId, targetHash = node.target)
                         )
                     resolveType(targetId, typeParams)
                 }

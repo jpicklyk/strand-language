@@ -3,7 +3,7 @@
 **Document:** `decisions/ADR-003-content-addressing.md`
 **Status:** Accepted
 **Date:** 2026-05-23
-**Last revised:** 2026-05-23 (Alternatives considered: separated full-semantic-equivalence rejection from alpha-equivalence-of-bound-variables, which is in fact adopted per `design/node-algebra.md` § Hash construction)
+**Last revised:** 2026-05-28 (Clarifying amendment to the Consequences section: the "no import system" stance is specifically about name-based identity, import-path resolution, visibility annotations, and version constraints — it does not rule out content-addressed grouping primitives such as the N-046 ModuleManifest node introduced by Q-043. The amendment sharpens the conclusion to match what the argument actually supports.) 2026-05-23 (Alternatives considered: separated full-semantic-equivalence rejection from alpha-equivalence-of-bound-variables, which is in fact adopted per `design/node-algebra.md` § Hash construction)
 **Supersedes:** none
 **Superseded by:** none
 
@@ -51,7 +51,9 @@ Equality is identity. Two nodes have the same hash if and only if their structur
 
 Distributed identity is global. A node with hash H is the same node on every machine. The runtime needs only to fetch nodes by hash from any machine that holds them, with no name resolution, import resolution, or version negotiation. The fetched node is self-verifying: the receiver computes the hash and confirms it matches the requested hash.
 
-There is no import system. A reference is a hash, not a path. Visibility, module boundaries, version constraints, and dependency conflict resolution are not part of the language. Nodes can reference any node whose hash they hold, subject to capability constraints at execution time (see [ADR-004](ADR-004-effects-as-edges.md)).
+There is no import system. A reference is a hash, not a path. Name-based identity, import-path resolution, visibility annotations, and version constraints are not part of the language. Nodes can reference any node whose hash they hold, subject to capability constraints at execution time (see [ADR-004](ADR-004-effects-as-edges.md)).
+
+What this conclusion specifically rejects is identifying code by *mutable name* and resolving references through a *path-based lookup system*. It does not rule out content-addressed grouping primitives — nodes whose role is to bundle a set of exported hashes plus aggregate metadata (display names as metadata, aggregate effect declarations, optional signing surface). Such a primitive remains content-addressed (its hash binds its export set), does not introduce names as identity (display strings are metadata, excluded from the canonical encoding), does not introduce import-path resolution (consumers still reference exports by hash), does not introduce visibility (every reachable node remains callable by any code that holds its hash), and does not introduce version constraints (a different export set is a different manifest hash). The N-046 ModuleManifest node introduced by [Q-043](../open-questions.md#Q-043) is exactly this kind of primitive — a positive grouping of exports identified by hash, not a name-based namespace. Its compatibility with this ADR is by design, not by exception.
 
 Versioning is reframed. There is no notion of "version 2.0 of function f," because a modified function is a different node with a different hash. Tools that need version-like semantics (e.g., "the latest sanctioned implementation of an interface") maintain a mutable registry that maps a name or interface identifier to a current hash; the registry is metadata over the immutable graph, not part of the graph itself. The migration story for the language itself ([Q-024](../open-questions.md#Q-024)) is bounded by this property: old graphs remain valid because their hashes still resolve; new graphs may use new node types but coexist.
 

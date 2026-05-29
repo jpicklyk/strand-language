@@ -213,6 +213,16 @@ class CorpusTest {
         // convention shared with ToolDef / Resource / MapV).
         Case("/corpus/69-response-schema-spec.json", null,
             "verify-only; ResponseSchemaSpec wrapper around a Schema describing {answer: String} — the symmetric counterpart to corpus 67's ToolDef demonstrator. The wrapper carries the schema reference into a value position the LLM.Generate builtin's responseSchema field accepts; the verifier statically projects the schema's valueType to JSON Schema at admission."),
+        // N-046 ModuleManifest (Q-043 step 3b). The root is a manifest
+        // exporting a pure Int.identity Lambda (declaredEffects []) and an
+        // effectful Fs.writeFile Lambda (declaredEffects [Filesystem.Write]).
+        // The verifier certifies each export's declared effects exactly equal
+        // its effect surface (the function's declared effect row, not the
+        // always-empty Lambda closure). A manifest is a passive declaration:
+        // it evaluates to Unit, so the run check exercises the interpreter's
+        // passive-node path under empty capabilities.
+        Case("/corpus/79-module-manifest-with-effects.json", Value.UnitV,
+            "N-046 (Q-043 step 3b) accept case. A ModuleManifest root bundles a pure Int.identity export (declaredEffects []) and an effectful Fs.writeFile export (declaredEffects [Filesystem.Write]). Each export's declaredEffects exactly equals its effect surface, so the manifest is admitted; it evaluates to Unit."),
     )
 
     /**

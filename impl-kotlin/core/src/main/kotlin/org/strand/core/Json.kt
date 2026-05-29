@@ -64,7 +64,19 @@ import kotlinx.serialization.json.longOrNull
  *   VarRef           { "type": "VarRef", "binder": <id> }
  *
  * References:
- *   NodeRef       { "type": "NodeRef", "target": <id> }
+ *   NodeRef       { "type": "NodeRef", "target": <id> }            (local ref)
+ *              or { "type": "NodeRef", "targetHash": "<hex>" }     (cross-store ref, Q-043)
+ *
+ *   A NodeRef declares exactly one of `target` (an author id naming a node in
+ *   this document) or `targetHash` (the content hash of a node held in a peer
+ *   store, resolved through the federation resolver at verify/run time).
+ *
+ * Composition and distribution (N-046):
+ *   ModuleManifest { "type": "ModuleManifest",
+ *                    "exports": [ { "target": <id>,
+ *                                   "declaredEffects": [<EffectCategory id>, ...]?,
+ *                                   "displayName": <string> }, ... ],
+ *                    "manifestSignature": <hex string>?  }
  *
  * Agent-native capabilities:
  *   ToolDef             { "type": "ToolDef", "name": <string>, "description": <string>,
@@ -232,16 +244,92 @@ object JsonIngest {
         val type = obj["type"]?.jsonPrimitive?.contentOrNull
             ?: throw IngestError.Malformed("Node '$name' is missing 'type'")
         // NodeRef is the one node category whose canonical form carries a
-        // Hash rather than a NodeId; during ingest we don't yet have hashes,
-        // so we record it as a StoredNode.RawNodeRef carrying the target's
-        // in-document NodeId. Hasher.finalize replaces it with a canonical
-        // Node.NodeRef once hashes are computed.
+        // Hash rather than a NodeId. Two ingest forms:
+        //   - Local ref: { "target": "<author-id>" } — the target is a node in
+        //     this document, recorded as a StoredNode.RawNodeRef carrying its
+        //     in-document NodeId; Hasher.finalize resolves it to a hash.
+        //   - Cross-store ref (Q-043 step 3a): { "targetHash": "<hex>" } — the
+        //     target is held in a peer store, so its content hash is given
+        //     directly. Materialized as a canonical Node.NodeRef immediately;
+        //     finalize keeps it as-is, and the verifier/interpreter resolve the
+        //     hash through the federation resolver at use time.
+        // Exactly one of `target` / `targetHash` must be present.
         if (type == "NodeRef") {
             val ctx = "node '$name'"
+            val targetHashHex = obj["targetHash"]?.jsonPrimitive?.contentOrNull
+            if (targetHashHex != null) {
+                if (obj["target"] != null) {
+                    throw IngestError.Malformed(
+                        "NodeRef in $ctx must declare exactly one of 'target' (local author id) " +
+                            "or 'targetHash' (cross-store content hash), not both"
+                    )
+                }
+                return StoredNode.Canonical(Node.NodeRef(target = Hash(hexDecode(targetHashHex, "$ctx.targetHash"))))
+            }
             val targetId = obj.requireRef("target", ctx, resolve)
             return StoredNode.RawNodeRef(targetId)
         }
+        // ModuleManifest (N-046) likewise carries content hashes — one per
+        // export target — that ingest cannot yet compute, so it is recorded as
+        // a raw entry whose export targets are in-document NodeIds. Hasher.
+        // finalize resolves each to a hash and admits the canonical node.
+        if (type == "ModuleManifest") {
+            return buildRawModuleManifest(name, obj, resolve)
+        }
         return StoredNode.Canonical(buildNode(name, obj, resolve))
+    }
+
+    /**
+     * Build the pre-finalization [StoredNode.RawModuleManifest] for an N-046
+     * ModuleManifest. Each export's `target` is recorded as an in-document
+     * NodeId (resolved to a content hash by `Hasher.finalize`); `declaredEffects`
+     * are EffectCategory NodeIds carried through unchanged; `displayName` and
+     * the optional hex-encoded `manifestSignature` are metadata.
+     *
+     * JSON schema:
+     * ```
+     * { "type": "ModuleManifest",
+     *   "exports": [
+     *     { "target": <id>, "declaredEffects": [<id>, ...]?, "displayName": <string> },
+     *     ...
+     *   ],
+     *   "manifestSignature": <hex string>?  }
+     * ```
+     */
+    private fun buildRawModuleManifest(
+        name: String,
+        obj: JsonObject,
+        resolve: (String, String) -> NodeId,
+    ): StoredNode.RawModuleManifest {
+        val ctx = "node '$name'"
+        val exportsArr = obj["exports"]?.jsonArray
+            ?: throw IngestError.Malformed("Missing or non-array 'exports' in $ctx")
+        if (exportsArr.isEmpty()) {
+            throw IngestError.Malformed(
+                "ModuleManifest in $ctx must declare at least one export"
+            )
+        }
+        val exports = exportsArr.mapIndexed { i, e ->
+            val expObj = (e as? JsonObject)
+                ?: throw IngestError.Malformed("Element $i of 'exports' in $ctx must be an object")
+            val expCtx = "$ctx.exports[$i]"
+            RawManifestExport(
+                target = expObj.requireRef("target", expCtx, resolve),
+                declaredEffects = expObj.optionalRefList("declaredEffects", expCtx, resolve),
+                displayName = expObj.requireString("displayName", expCtx),
+            )
+        }
+        val sigElement = obj["manifestSignature"]
+        val signature = if (sigElement == null ||
+            (sigElement is JsonPrimitive && sigElement.contentOrNull == null)
+        ) {
+            null
+        } else {
+            val hex = sigElement.jsonPrimitive.contentOrNull
+                ?: throw IngestError.Malformed("'manifestSignature' in $ctx must be a hex string")
+            hexDecode(hex, "$ctx.manifestSignature")
+        }
+        return StoredNode.RawModuleManifest(exports = exports, manifestSignature = signature)
     }
 
     private fun buildNode(
@@ -449,7 +537,7 @@ object JsonIngest {
             )
 
             else -> throw IngestError.Malformed(
-                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-045)"
+                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-046)"
             )
         }
     }

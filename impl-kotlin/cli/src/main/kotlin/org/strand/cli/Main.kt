@@ -17,8 +17,12 @@ import org.strand.core.IngestError
 import org.strand.core.JsonIngest
 import org.strand.core.Node
 import org.strand.core.NodeId
+import org.strand.hashing.ChainedResolver
+import org.strand.hashing.FederatedProgram
 import org.strand.hashing.FinalizedProgram
 import org.strand.hashing.Hasher
+import org.strand.hashing.LocalProgramResolver
+import org.strand.hashing.federated
 import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.EscapePolicy
@@ -150,6 +154,54 @@ private fun parseLimits(flags: List<String>): Triple<EvaluationLimits, SandboxPo
 }
 
 /**
+ * Q-043 step 3a: pull `--peer-store <path>` occurrences (repeatable) out of the
+ * flag list, returning the peer-store paths in command-line order plus the
+ * residual flags (for [parseLimits]). Each `--peer-store` consumes the
+ * following token as its path argument.
+ */
+private fun extractPeerStores(flags: List<String>): Pair<List<String>, List<String>> {
+    val peers = mutableListOf<String>()
+    val rest = mutableListOf<String>()
+    var i = 0
+    while (i < flags.size) {
+        if (flags[i] == "--peer-store") {
+            peers += flags.getOrNull(i + 1) ?: error("--peer-store requires a path argument")
+            i += 2
+        } else {
+            rest += flags[i]
+            i++
+        }
+    }
+    return peers to rest
+}
+
+/**
+ * Q-043 step 3a: wrap [app] as a [FederatedProgram] whose resolver chains a
+ * [LocalProgramResolver] over each `--peer-store` program (in command-line
+ * order), or return null when no peer stores were supplied (the single-store
+ * path, preserved bit-for-bit). Peer programs are finalized but not separately
+ * verified — a fetched subgraph is verified on admission, and the post-admission
+ * re-hash rejects any corrupted fetch.
+ */
+private fun federateWithPeers(
+    app: FinalizedProgram,
+    peerPaths: List<String>,
+    limits: EvaluationLimits,
+): FederatedProgram? {
+    if (peerPaths.isEmpty()) return null
+    val peerResolvers = peerPaths.map { peerPath ->
+        val peerFinal = try {
+            loadFinalized(File(peerPath).readText(), limits)
+        } catch (e: IngestError) {
+            System.err.println("peer store ingest failed ($peerPath): ${e.message}")
+            exitProcess(1)
+        }
+        LocalProgramResolver(peerFinal)
+    }
+    return app.federated(ChainedResolver(peerResolvers))
+}
+
+/**
  * Parse, finalize, and return the canonical [FinalizedProgram] alongside
  * the ingest result. The ingest is preserved (rather than just the
  * finalized form) so commands that need the author-id-to-NodeId map
@@ -247,7 +299,8 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         exitProcess(2)
     }
     val path = args[1]
-    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(2))
+    val (peerPaths, afterPeers) = extractPeerStores(args.drop(2))
+    val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
     val grantAll = "--grant-all" in remaining
     val unknown = remaining - setOf("--grant-all")
     if (unknown.isNotEmpty()) {
@@ -262,8 +315,22 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         System.err.println("ingest failed: ${e.message}")
         exitProcess(1)
     }
-    val verifier = Verifier(finalized.store, finalized.hashToNodeId)
-    when (val result = verifier.verify(finalized.root)) {
+    // Q-043: with --peer-store programs, federate so cross-store NodeRefs
+    // resolve through the peer chain (fetched + re-based into the shared
+    // store); without, stay single-store (no resolver callback, behaviour
+    // preserved bit-for-bit). `store` / `hashToNodeId` / `root` and the
+    // `resolveCb` are taken from the FederatedProgram when present.
+    val app = federateWithPeers(finalized, peerPaths, limits)
+    val store = app?.store ?: finalized.store
+    val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
+    val root = app?.root ?: finalized.root
+    val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
+    // SchemaChecker / grant-all view: when federated, the mutable maps carry
+    // any nodes admitted during verification.
+    val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
+
+    val verifier = Verifier(store, hashToNodeId, resolveCb)
+    when (val result = verifier.verify(root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed:")
             for (e in result.errors) System.err.println("  $e")
@@ -275,7 +342,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // evaluate any pure-expression invariants on statically-known
             // values. Violations halt; deferred diagnostics are surfaced
             // (informational, per the proposal's default disposition).
-            if (!runSchemaCheck(finalized, result, limits)) exitProcess(1)
+            if (!runSchemaCheck(schemaProgram, result, limits)) exitProcess(1)
             if (command == "run") {
                 // Q-041: install the sandbox policy on the Builtins
                 // singleton before eval. The library default is
@@ -284,9 +351,9 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                 val priorSandbox = Builtins.sandboxPolicy
                 Builtins.sandboxPolicy = sandboxPolicy
                 try {
-                    val interp = Interpreter(finalized.store, finalized.hashToNodeId)
-                    val caps = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY
-                    val value = interp.eval(finalized.root, caps, limits)
+                    val interp = Interpreter(store, hashToNodeId, resolveTarget = resolveCb)
+                    val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
+                    val value = interp.eval(root, caps, limits)
                     println("value: $value")
                 } catch (e: InterpretException) {
                     System.err.println("interpretation failed: ${e.error}")
@@ -666,14 +733,18 @@ private fun runTranslate(args: Array<String>) {
 
 private fun usage() {
     System.err.println("usage:")
-    System.err.println("  strand verify    <file.json>")
-    System.err.println("  strand run       <file.json> [--grant-all] [<limits>...]")
+    System.err.println("  strand verify    <file.json> [--peer-store <lib.json>]...")
+    System.err.println("  strand run       <file.json> [--peer-store <lib.json>]... [--grant-all] [<limits>...]")
     System.err.println("  strand machine   <file.json> --events <events.json> [--grant-all] [<limits>...]")
     System.err.println("  strand group     <file.json> --events <events.json> [--grant-all] [--metrics] [<limits>...]")
     System.err.println("  strand author    <file.layer-a> [--emit-json]")
     System.err.println("  strand translate <file.json>  → emit Layer A reverse projection (Q-036)")
     System.err.println("  strand grammar                → emit Layer B constraint grammar (GBNF)")
     System.err.println()
+    System.err.println("  --peer-store <file.json>: (Q-043, repeatable) add a peer store to the federation")
+    System.err.println("               resolver chain. A NodeRef with a `targetHash` not held locally is")
+    System.err.println("               fetched from the first peer that holds it, re-based into the local")
+    System.err.println("               store, verified, and (for `run`) evaluated. Order is priority order.")
     System.err.println("  --grant-all: auto-grant wildcard capabilities for every EffectCategory")
     System.err.println("               in the verified store (demo / dev-mode convenience; not for")
     System.err.println("               production use).")

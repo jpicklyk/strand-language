@@ -231,7 +231,9 @@ class SchemaChecker(
             is Node.ResponseSchemaSpec,
             is Node.StateMachine,
             is Node.EventStream,
-            is Node.Transition -> null
+            is Node.Transition,
+            // N-046 ModuleManifest is a passive declaration, not a value.
+            is Node.ModuleManifest -> null
         }
     }
 

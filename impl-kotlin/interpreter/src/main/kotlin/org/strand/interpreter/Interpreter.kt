@@ -89,6 +89,18 @@ class Interpreter(
      * keep the pre-slice-3.2 behavior unchanged.
      */
     private val foreignDispatcher: ForeignDispatcher? = null,
+    /**
+     * Q-043 step 3a cross-store resolution callback, consulted when a NodeRef
+     * target hash is not in [hashToNodeId]. In a federated run the caller wires
+     * it to `FederatedProgram::fetchAndAdmit`, which fetches the target subgraph
+     * from a peer store, re-bases it into the shared [store], extends the shared
+     * [hashToNodeId], and returns its local NodeId; evaluation then proceeds
+     * into the admitted node. Default null: single-store behavior is preserved
+     * (a NodeRef miss is an [InterpretError.NodeRefTargetNotInStore]). A
+     * federated caller must pass the same mutable [store] / [hashToNodeId] the
+     * callback extends so admitted nodes are visible here.
+     */
+    private val resolveTarget: ((Hash) -> NodeId?)? = null,
 ) {
 
     /** Top-level evaluation under an empty capability context (pure-only). */
@@ -380,6 +392,7 @@ class Interpreter(
                     // rule guarantees the target subgraph references no outer
                     // binders, so the surrounding env is intentionally dropped.
                     val targetId = hashToNodeId[node.target]
+                        ?: resolveTarget?.invoke(node.target)
                         ?: throw InterpretException(
                             InterpretError.NodeRefTargetNotInStore(at = id, targetHash = node.target)
                         )
@@ -438,6 +451,15 @@ class Interpreter(
                         schemaId = node.schema,
                     ))
                 }
+
+                is Node.ModuleManifest ->
+                    // N-046 is a passive declaration with no runtime evaluation
+                    // semantics (proposal § 6). It is not an expression and no
+                    // Application targets it; reaching it here means a manifest
+                    // was a program root handed to `eval` (e.g. `strand run` on a
+                    // published library). Its value is Unit. Value.UnitV is the
+                    // shared singleton, so no allocV bump (matching UnitLit).
+                    Value.UnitV
 
             // Type, effect-declaration, MatchCase, Pattern, and
             // ProductFieldValue nodes are not standalone expressions. The

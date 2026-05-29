@@ -65,6 +65,11 @@ class CorpusHashingTest {
         "/corpus/38-handler-nested-innermost-wins.json",
         "/corpus/39-handler-itself-performs-effect.json",
         "/corpus/40-handler-fires-through-fixpoint.json",
+        // N-046 ModuleManifest (Q-043 step 3b) — exercises the
+        // RawModuleManifest → canonical Node.ModuleManifest finalize bridge
+        // and the dual raw/canonical encoder paths end-to-end. Verifies Ok
+        // (its exports' declared effects match their surfaces).
+        "/corpus/79-module-manifest-with-effects.json",
     )
 
     @TestFactory

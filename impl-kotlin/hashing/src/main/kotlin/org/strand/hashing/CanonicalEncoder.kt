@@ -160,6 +160,7 @@ internal class CanonicalEncoder(
     private fun encodeDispatch(id: NodeId, stored: StoredNode, stack: BinderStack): ByteArray =
         when (stored) {
             is StoredNode.RawNodeRef -> encodeRawNodeRef(stored.targetId, stack)
+            is StoredNode.RawModuleManifest -> encodeRawModuleManifest(stored, stack)
             is StoredNode.Canonical -> encodeCanonicalNode(id, stored.node, stack)
         }
 
@@ -244,6 +245,8 @@ internal class CanonicalEncoder(
 
         is Node.ToolDef -> encodeToolDef(node, stack)
         is Node.ResponseSchemaSpec -> encodeResponseSchemaSpec(node, stack)
+
+        is Node.ModuleManifest -> encodeModuleManifest(node, stack)
     }
 
     // ----- Type-position encodings -----
@@ -926,6 +929,67 @@ internal class CanonicalEncoder(
         // identically.
         return encodeWithTag(CategoryTag.ResponseSchemaSpec, listOf(
             CanonicalCbor.encodeBytes(hash(node.schema, stack)),
+        ))
+    }
+
+    // ----- Composition and distribution (N-046) -----
+
+    /**
+     * Encode a canonical [Node.ModuleManifest] (post-finalize: export targets
+     * are [org.strand.core.Hash] values). [tag=46, [export-entry, ...]].
+     *
+     * The export list is positional (matching ProductType.fields — author-
+     * significant order is preserved). `displayName` and `manifestSignature`
+     * are metadata and are NOT encoded.
+     */
+    private fun encodeModuleManifest(node: Node.ModuleManifest, stack: BinderStack): ByteArray {
+        val exportEntries = node.exports.map { export ->
+            encodeManifestExportEntry(export.target.bytes, export.declaredEffects, stack)
+        }
+        return encodeWithTag(CategoryTag.ModuleManifest, listOf(
+            CanonicalCbor.encodeArray(exportEntries),
+        ))
+    }
+
+    /**
+     * Encode the pre-finalize [StoredNode.RawModuleManifest] (export targets
+     * are in-document [NodeId]s). Produces bytes byte-identical to
+     * [encodeModuleManifest] for the same manifest after finalize: the raw
+     * path supplies `hash(targetNodeId)`, the canonical path supplies the
+     * resolved `target.bytes`, and `Hasher.finalize` guarantees these are
+     * equal (it sets `export.target = nodeIdToHash[rawExport.target]`, the
+     * same hash this encoder computes). This is the same raw/canonical byte-
+     * identity that [encodeRawNodeRef] / [encodeNodeRef] maintain for NodeRef.
+     */
+    private fun encodeRawModuleManifest(stored: StoredNode.RawModuleManifest, stack: BinderStack): ByteArray {
+        val exportEntries = stored.exports.map { export ->
+            encodeManifestExportEntry(hash(export.target, stack), export.declaredEffects, stack)
+        }
+        return encodeWithTag(CategoryTag.ModuleManifest, listOf(
+            CanonicalCbor.encodeArray(exportEntries),
+        ))
+    }
+
+    /**
+     * Encode one manifest export as a CBOR array
+     * `[target-hash-bytes, sorted-declaredEffect-hash-array]`. Shared by the
+     * raw and canonical encode paths so they emit byte-identical output. The
+     * effect hashes are lex-sorted (set semantics — declaration order does
+     * not affect identity, matching FunctionType.effects). `displayName` is
+     * metadata and is NOT encoded.
+     */
+    private fun encodeManifestExportEntry(
+        targetHashBytes: ByteArray,
+        declaredEffects: List<NodeId>,
+        stack: BinderStack,
+    ): ByteArray {
+        val effectHashes = declaredEffects
+            .map { hash(it, stack) }
+            .sortedWith(byteArrayLexicographicComparator)
+            .map { CanonicalCbor.encodeBytes(it) }
+        return CanonicalCbor.encodeArray(listOf(
+            CanonicalCbor.encodeBytes(targetHashBytes),
+            CanonicalCbor.encodeArray(effectHashes),
         ))
     }
 

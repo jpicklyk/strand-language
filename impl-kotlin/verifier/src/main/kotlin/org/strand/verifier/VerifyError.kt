@@ -148,6 +148,84 @@ sealed class VerifyError {
         val openReferences: List<NodeId>
     ) : VerifyError()
 
+    // ----- Layer 2 step 3: federation (Q-043) -----
+
+    /**
+     * A [Node.NodeRef]'s target hash is not in the local `hashToNodeId`
+     * map AND the federation resolver did not return a node for it. This
+     * is the Q-043 generalisation of [NodeRefTargetNotFound] for the
+     * federated path: when a [org.strand.hashing.FederatedProgram] is
+     * supplied with a non-[org.strand.hashing.NoOpResolver] resolver, a
+     * NodeRef whose target is unknown both locally and through the
+     * resolver chain raises this variant. Single-store programs (or
+     * federated programs with [org.strand.hashing.NoOpResolver]) continue
+     * to raise [NodeRefTargetNotFound] — the existing diagnostic is
+     * preserved for callers that never enter the federated path.
+     */
+    data class NodeRefTargetUnresolvable(
+        override val at: NodeId,
+        val targetHash: Hash
+    ) : VerifyError()
+
+    /**
+     * A [Node.NodeRef]'s target was fetched through the resolver chain
+     * but its admitted subgraph failed verification. The inner error
+     * identifies the specific well-formedness rule that rejected the
+     * fetched node — typically a [DanglingReference], [CategoryMismatch],
+     * or a type-checking failure that would have surfaced for an
+     * equivalent local node.
+     *
+     * The contained [target] is the locally-assigned [NodeId] the
+     * resolver-admitted subgraph received in the local [NodeStore]; the
+     * verifier records it so call sites can correlate which fetched
+     * dependency failed. [innerErrorCategory] is the category name of the
+     * inner [VerifyError] for diagnostic ergonomics — the full inner
+     * error list is surfaced separately through [VerifyResult.Failed].
+     */
+    data class NodeRefTargetVerificationFailed(
+        override val at: NodeId,
+        val target: NodeId,
+        val targetHash: Hash,
+        val innerErrorCategory: String,
+    ) : VerifyError()
+
+    // ----- Layer 2 step 3b: module manifests (N-046, Q-043) -----
+
+    /**
+     * An [Node.ModuleManifest] export's `declaredEffects` set does not exactly
+     * equal the effect closure of its target node. The verifier requires
+     * *exact equality*: under-declaration is rejected for safety (callers must
+     * not believe an export is purer than it is) and over-declaration is
+     * rejected for precision (callers must not refuse an export unnecessarily).
+     * An author wanting a more conservative interface should export a wrapping
+     * Lambda whose body has the desired closure.
+     *
+     * [exportIndex] is the position in the manifest's `exports` list; [target]
+     * is the export's content hash; [declared] is the export's declared effect
+     * set; [actual] is the computed closure of the target node. Both effect
+     * sets are EffectCategory NodeIds local to the verified store.
+     */
+    data class ManifestExportEffectMismatch(
+        override val at: NodeId,
+        val exportIndex: Int,
+        val target: Hash,
+        val declared: Set<NodeId>,
+        val actual: Set<NodeId>,
+    ) : VerifyError()
+
+    /**
+     * An [Node.ModuleManifest] export's `target` hash is not resolvable: it is
+     * absent from the local `hashToNodeId` map (and, once federation lands,
+     * from the resolver chain). Structurally analogous to
+     * [NodeRefTargetUnresolvable] but specific to manifest exports for
+     * diagnostic clarity. [exportIndex] is the position in the `exports` list.
+     */
+    data class ManifestExportTargetUnresolvable(
+        override val at: NodeId,
+        val exportIndex: Int,
+        val target: Hash,
+    ) : VerifyError()
+
     // ----- Layer 3: effects and capabilities -----
 
     /**
@@ -961,4 +1039,5 @@ internal fun categoryName(node: Node?): String = when (node) {
     is Node.Invariant -> "Invariant"
     is Node.ToolDef -> "ToolDef"
     is Node.ResponseSchemaSpec -> "ResponseSchemaSpec"
+    is Node.ModuleManifest -> "ModuleManifest"
 }

@@ -465,6 +465,72 @@ sealed class Node {
         val effectProjections: List<EffectProjection> = emptyList()
     ) : Node()
 
+    // ----- Composition and distribution (N-046) -----
+
+    /**
+     * N-046. A content-addressed grouping primitive that bundles a set of
+     * exported hashes with aggregate effect declarations (Q-043,
+     * `proposals/cross-store-federation.md` § 4.3).
+     *
+     * Each [ManifestExport] in [exports] binds an exported node's content
+     * [ManifestExport.target] hash (NodeRef-style — a lazy boundary, not an
+     * internal NodeId edge) to the set of effects the manifest declares for
+     * it. The verifier certifies, for every export, that
+     * [ManifestExport.declaredEffects] *exactly* equals the targeted node's
+     * effect closure: under-declaration is rejected for safety, over-
+     * declaration for precision (both surface as
+     * `VerifyError.ManifestExportEffectMismatch`).
+     *
+     * ModuleManifest is a passive declaration: it has no runtime evaluation
+     * semantics (it is not an expression; no Application targets it; it
+     * evaluates to `Value.UnitV` if ever reached). Its role is exhausted at
+     * verifier time (per-export effect-closure certification) and at tooling
+     * time (signing via [manifestSignature], distribution, name-registry
+     * discovery). Consumers reference exports by the export's target hash
+     * directly via an N-019 [NodeRef]; the manifest is informational, not an
+     * indirection point.
+     *
+     * Canonical encoding (CategoryTag 46): [exports] is positionally ordered
+     * (matching ProductType.fields — author-significant order); each export's
+     * [ManifestExport.declaredEffects] is a lex-sorted multi-hash list
+     * (matching FunctionType.effects — set semantics). [ManifestExport.displayName]
+     * and [manifestSignature] are metadata, excluded from the canonical
+     * encoding — two manifests with identical `(target, declaredEffects)`
+     * pairs hash identically regardless of display strings or signature.
+     *
+     * The `description → Provenance` metadata edge from the node-algebra
+     * inventory is not modelled here, matching the existing precedent for
+     * unimplemented Provenance edges on [ForeignNode] and [Schema].
+     *
+     * During JSON ingest, ModuleManifest slots are populated as
+     * [StoredNode.RawModuleManifest] carrying each export's in-document
+     * target [NodeId]; the hashing module's `finalize` step resolves those
+     * NodeIds to hashes and admits the canonical [ModuleManifest] to the
+     * [NodeStore] — the same raw→canonical bridge [NodeRef] uses.
+     */
+    data class ModuleManifest(
+        val exports: List<ManifestExport>,
+        /** Metadata, hash-excluded — the Q-006 signing surface (deferred). */
+        val manifestSignature: ByteArray? = null,
+    ) : Node() {
+        // ByteArray needs content-based value semantics (matches BytesLit).
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is ModuleManifest) return false
+            if (exports != other.exports) return false
+            val sig = manifestSignature
+            val otherSig = other.manifestSignature
+            return when {
+                sig == null -> otherSig == null
+                otherSig == null -> false
+                else -> sig.contentEquals(otherSig)
+            }
+        }
+
+        override fun hashCode(): Int =
+            31 * exports.hashCode() + (manifestSignature?.contentHashCode() ?: 0)
+    }
+
     // ----- Control flow (N-023..N-026) -----
 
     /**
@@ -850,6 +916,27 @@ sealed class ProjectionSource {
      */
     data class LiteralNode(val target: NodeId) : ProjectionSource()
 }
+
+/**
+ * One export of an N-046 [Node.ModuleManifest] (Q-043,
+ * `proposals/cross-store-federation.md` § 4.3).
+ *
+ *  * [target] — the content hash of the exported node. NodeRef-style: a lazy
+ *    boundary identical to the hash a [Node.NodeRef] to the same node would
+ *    carry. During JSON ingest the target is an in-document NodeId carried on
+ *    [RawManifestExport.target]; `Hasher.finalize` resolves it to this [Hash].
+ *  * [declaredEffects] — the EffectCategory nodes the verifier certifies
+ *    *exactly* equal the targeted node's effect closure. Set semantics:
+ *    encoded as a lex-sorted multi-hash list, so declaration order does not
+ *    affect the manifest hash.
+ *  * [displayName] — metadata, excluded from the canonical encoding (matches
+ *    the ParameterDecl.name / Let.name precedent).
+ */
+data class ManifestExport(
+    val target: Hash,
+    val declaredEffects: List<NodeId>,   // each an EffectCategory
+    val displayName: String,             // metadata, hash-excluded
+)
 
 /**
  * Fan-out mode for an [Node.EventStream] (Layer 6 step 3 slice 3.6).
