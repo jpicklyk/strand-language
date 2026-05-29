@@ -13,15 +13,18 @@ import org.strand.authoring.AuthoringException
 import org.strand.authoring.ConstraintGrammar
 import org.strand.core.ErrorVerbosity
 import org.strand.core.EvaluationLimits
+import org.strand.core.Hash
 import org.strand.core.IngestError
 import org.strand.core.JsonIngest
 import org.strand.core.Node
 import org.strand.core.NodeId
+import org.strand.hashing.CachingResolver
 import org.strand.hashing.ChainedResolver
 import org.strand.hashing.FederatedProgram
 import org.strand.hashing.FinalizedProgram
 import org.strand.hashing.Hasher
 import org.strand.hashing.LocalProgramResolver
+import org.strand.hashing.NameRegistry
 import org.strand.hashing.federated
 import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
@@ -182,11 +185,19 @@ private fun extractPeerStores(flags: List<String>): Pair<List<String>, List<Stri
  * path, preserved bit-for-bit). Peer programs are finalized but not separately
  * verified — a fetched subgraph is verified on admission, and the post-admission
  * re-hash rejects any corrupted fetch.
+ *
+ * Unless [noCache] is set, the chain is wrapped in a [CachingResolver] so a hash
+ * fetched more than once in a session hits the underlying peers only once
+ * (semantics are identical with or without caching). The integrity check (the
+ * per-target Merkle root re-hash in `fetchAndAdmit`) is always on regardless of
+ * any flag — see the `--strict-integrity` handling at the call sites, which is
+ * an explicit-declaration no-op per the proposal § 6.
  */
 private fun federateWithPeers(
     app: FinalizedProgram,
     peerPaths: List<String>,
     limits: EvaluationLimits,
+    noCache: Boolean,
 ): FederatedProgram? {
     if (peerPaths.isEmpty()) return null
     val peerResolvers = peerPaths.map { peerPath ->
@@ -198,7 +209,25 @@ private fun federateWithPeers(
         }
         LocalProgramResolver(peerFinal)
     }
-    return app.federated(ChainedResolver(peerResolvers))
+    val chained = ChainedResolver(peerResolvers)
+    val resolver = if (noCache) chained else CachingResolver(chained)
+    return app.federated(resolver)
+}
+
+/**
+ * Q-043 § 6: `--no-cache` and `--strict-integrity` only mean something when a
+ * federation chain exists. `--strict-integrity` is purely an explicit-
+ * declaration flag — the per-target Merkle root re-hash in `fetchAndAdmit` is
+ * unconditional, so federated runs are integrity-checked whether or not it is
+ * passed. Warn when either flag is supplied with no `--peer-store` so a typo'd
+ * scripted invocation does not silently do nothing.
+ */
+private fun reportFederationFlags(peerPaths: List<String>, noCache: Boolean, strictIntegrity: Boolean) {
+    if (peerPaths.isEmpty() && (noCache || strictIntegrity)) {
+        System.err.println(
+            "note: --no-cache / --strict-integrity have no effect without --peer-store"
+        )
+    }
 }
 
 /**
@@ -269,6 +298,7 @@ fun main(args: Array<String>) {
         "group" -> runGroup(args)
         "author" -> runAuthor(args)
         "translate" -> runTranslate(args)
+        "registry" -> runRegistry(args)
         "grammar" -> runGrammar(args)
         else -> {
             usage()
@@ -302,12 +332,15 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
     val (peerPaths, afterPeers) = extractPeerStores(args.drop(2))
     val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
     val grantAll = "--grant-all" in remaining
-    val unknown = remaining - setOf("--grant-all")
+    val noCache = "--no-cache" in remaining
+    val strictIntegrity = "--strict-integrity" in remaining
+    val unknown = remaining - setOf("--grant-all", "--no-cache", "--strict-integrity")
     if (unknown.isNotEmpty()) {
         System.err.println("unknown flags: ${unknown.joinToString(", ")}")
         usage()
         exitProcess(2)
     }
+    reportFederationFlags(peerPaths, noCache, strictIntegrity)
     val text = File(path).readText()
     val finalized = try {
         loadFinalized(text, limits)
@@ -320,7 +353,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
     // store); without, stay single-store (no resolver callback, behaviour
     // preserved bit-for-bit). `store` / `hashToNodeId` / `root` and the
     // `resolveCb` are taken from the FederatedProgram when present.
-    val app = federateWithPeers(finalized, peerPaths, limits)
+    val app = federateWithPeers(finalized, peerPaths, limits, noCache)
     val store = app?.store ?: finalized.store
     val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
     val root = app?.root ?: finalized.root
@@ -342,7 +375,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // evaluate any pure-expression invariants on statically-known
             // values. Violations halt; deferred diagnostics are surfaced
             // (informational, per the proposal's default disposition).
-            if (!runSchemaCheck(schemaProgram, result, limits)) exitProcess(1)
+            if (!runSchemaCheck(schemaProgram, result, limits, resolveCb)) exitProcess(1)
             if (command == "run") {
                 // Q-041: install the sandbox policy on the Builtins
                 // singleton before eval. The library default is
@@ -377,11 +410,13 @@ private fun runSchemaCheck(
     finalized: FinalizedProgram,
     verifyResult: VerifyResult.Ok,
     limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
+    resolveTarget: ((Hash) -> NodeId?)? = null,
 ): Boolean {
     val schemaResult = SchemaChecker(
         finalized.store,
         finalized.hashToNodeId,
         verifyResult,
+        resolveTarget = resolveTarget,
         limits = limits,
     ).check()
     for (deferred in schemaResult.deferred) {
@@ -402,14 +437,18 @@ private fun runMachine(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(4))
+    val (peerPaths, afterPeers) = extractPeerStores(args.drop(4))
+    val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
     val grantAll = "--grant-all" in remaining
-    val unknown = remaining - setOf("--grant-all")
+    val noCache = "--no-cache" in remaining
+    val strictIntegrity = "--strict-integrity" in remaining
+    val unknown = remaining - setOf("--grant-all", "--no-cache", "--strict-integrity")
     if (unknown.isNotEmpty()) {
         System.err.println("unknown flags: ${unknown.joinToString(", ")}")
         usage()
         exitProcess(2)
     }
+    reportFederationFlags(peerPaths, noCache, strictIntegrity)
 
     val programText = File(programPath).readText()
     val finalized = try {
@@ -418,8 +457,18 @@ private fun runMachine(args: Array<String>) {
         System.err.println("ingest failed: ${e.message}")
         exitProcess(1)
     }
-    val verifier = Verifier(finalized.store, finalized.hashToNodeId)
-    when (val result = verifier.verify(finalized.root)) {
+    // Q-043: federate over --peer-store programs (single-store when none),
+    // threading the resolver into the verifier, SchemaChecker, and runtime so a
+    // transition function may reference a cross-store helper by targetHash.
+    val app = federateWithPeers(finalized, peerPaths, limits, noCache)
+    val store = app?.store ?: finalized.store
+    val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
+    val root = app?.root ?: finalized.root
+    val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
+    val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
+
+    val verifier = Verifier(store, hashToNodeId, resolveCb)
+    when (val result = verifier.verify(root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed:")
             for (e in result.errors) System.err.println("  $e")
@@ -429,16 +478,16 @@ private fun runMachine(args: Array<String>) {
             // Layer 7 step 1: SchemaChecker also runs for `strand machine`,
             // matching `verify` / `run` semantics so a malformed Schema-bearing
             // value halts before any state-machine evaluation occurs.
-            if (!runSchemaCheck(finalized, result, limits)) exitProcess(1)
+            if (!runSchemaCheck(schemaProgram, result, limits, resolveCb)) exitProcess(1)
             val eventsText = File(eventsPath).readText()
             val events = EventCodec.parseEventList(eventsText)
-            val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
+            val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
             // Q-041: install sandbox policy for the duration of the run.
             val priorSandbox = Builtins.sandboxPolicy
             Builtins.sandboxPolicy = sandboxPolicy
             try {
-                val caps = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY
-                val trace = runtime.runMachine(finalized.root, events, caps, limits)
+                val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
+                val trace = runtime.runMachine(root, events, caps, limits)
                 printTrace(trace)
             } catch (e: InterpretException) {
                 System.err.println("machine evaluation failed: ${e.error}")
@@ -490,15 +539,19 @@ private fun runGroup(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val (limits, sandboxPolicy, remaining) = parseLimits(args.drop(4))
+    val (peerPaths, afterPeers) = extractPeerStores(args.drop(4))
+    val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
     val grantAll = "--grant-all" in remaining
     val emitMetrics = "--metrics" in remaining
-    val unknown = remaining - setOf("--grant-all", "--metrics")
+    val noCache = "--no-cache" in remaining
+    val strictIntegrity = "--strict-integrity" in remaining
+    val unknown = remaining - setOf("--grant-all", "--metrics", "--no-cache", "--strict-integrity")
     if (unknown.isNotEmpty()) {
         System.err.println("unknown flags: ${unknown.joinToString(", ")}")
         usage()
         exitProcess(2)
     }
+    reportFederationFlags(peerPaths, noCache, strictIntegrity)
 
     val programText = File(programPath).readText()
     val (ingest, finalized) = try {
@@ -507,20 +560,30 @@ private fun runGroup(args: Array<String>) {
         System.err.println("ingest failed: ${e.message}")
         exitProcess(1)
     }
-    val verifier = Verifier(finalized.store, finalized.hashToNodeId)
-    val verifyResult = verifier.verify(finalized.root)
+    // Q-043: federate over --peer-store programs (single-store when none),
+    // threading the resolver through the verifier, SchemaChecker, MachineGroup,
+    // and runtime so a machine may reference a cross-store helper by targetHash.
+    val app = federateWithPeers(finalized, peerPaths, limits, noCache)
+    val store = app?.store ?: finalized.store
+    val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
+    val root = app?.root ?: finalized.root
+    val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
+    val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
+
+    val verifier = Verifier(store, hashToNodeId, resolveCb)
+    val verifyResult = verifier.verify(root)
     if (verifyResult is VerifyResult.Failed) {
         System.err.println("verification failed:")
         for (e in verifyResult.errors) System.err.println("  $e")
         exitProcess(1)
     }
-    if (!runSchemaCheck(finalized, verifyResult as VerifyResult.Ok)) exitProcess(1)
+    if (!runSchemaCheck(schemaProgram, verifyResult as VerifyResult.Ok, limits, resolveCb)) exitProcess(1)
 
     // Collect every StateMachine NodeId from the canonical store. The
     // group includes ALL reachable StateMachines, regardless of whether
     // they appear at the root or are buried inside a Let chain (the
     // multi-machine corpus 48 pattern).
-    val machineIds: List<NodeId> = finalized.store.entries()
+    val machineIds: List<NodeId> = store.entries()
         .filter { it.second is Node.StateMachine }
         .map { it.first }
     if (machineIds.isEmpty()) {
@@ -547,10 +610,10 @@ private fun runGroup(args: Array<String>) {
     }
 
     val group = MachineGroup(
-        store = finalized.store,
-        hashToNodeId = finalized.hashToNodeId,
+        store = store,
+        hashToNodeId = hashToNodeId,
         machines = machineIds,
-        capabilities = if (grantAll) grantAllCapabilities(finalized) else CapabilitySet.EMPTY,
+        capabilities = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY,
         recordInputs = false,  // CLI runs are not replay-determinism tests
     )
 
@@ -563,7 +626,7 @@ private fun runGroup(args: Array<String>) {
     Builtins.sandboxPolicy = sandboxPolicy
     try {
         runBlocking {
-            val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
+            val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
             val handle = runtime.runGroup(group, this, limits)
 
             // Send routed events on their designated input streams, then
@@ -731,20 +794,141 @@ private fun runTranslate(args: Array<String>) {
     print(layerAText)
 }
 
+private const val DEFAULT_REGISTRY_FILE = "strand-registry.json"
+
+/**
+ * Q-043 § 4.6 off-graph name-registry tooling. `strand registry` reads and
+ * writes a flat name→hash JSON file (default [DEFAULT_REGISTRY_FILE], overridden
+ * with `--registry <file>`). The registry is *not* part of any canonical graph —
+ * it is a pure tooling affordance for discovering published hashes by a human
+ * name, exactly the role [NameRegistry] documents. Subcommands:
+ *
+ *   strand registry resolve <name> [--registry <file>]    print the bound hash (exit 1 if unknown)
+ *   strand registry put <name> <hash> [--registry <file>] add/update an entry, rewrite the file
+ *   strand registry list [--registry <file>]              list every name → hash, sorted
+ */
+private fun runRegistry(args: Array<String>) {
+    if (args.size < 2) {
+        usage()
+        exitProcess(2)
+    }
+    val (registryPath, rest) = extractRegistryPath(args.drop(2))
+    val file = File(registryPath ?: DEFAULT_REGISTRY_FILE)
+    when (val sub = args[1]) {
+        "resolve" -> {
+            if (rest.size != 1) {
+                System.err.println("usage: strand registry resolve <name> [--registry <file>]")
+                exitProcess(2)
+            }
+            val registry = loadRegistry(file, requireExists = true)
+            val hash = registry.resolve(rest[0])
+            if (hash == null) {
+                System.err.println("registry: no entry for '${rest[0]}' in ${file.path}")
+                exitProcess(1)
+            }
+            println(hash)
+        }
+        "put" -> {
+            if (rest.size != 2) {
+                System.err.println("usage: strand registry put <name> <hash> [--registry <file>]")
+                exitProcess(2)
+            }
+            val (name, hashHex) = rest
+            val hash = try {
+                Hash.fromHex(hashHex)
+            } catch (e: IllegalArgumentException) {
+                System.err.println("registry: invalid hash '$hashHex': ${e.message}")
+                exitProcess(2)
+            }
+            val updated = loadRegistry(file, requireExists = false).put(name, hash)
+            file.writeText(NameRegistry.toJson(updated))
+            println("registry: $name -> $hash  (${file.path})")
+        }
+        "list" -> {
+            if (rest.isNotEmpty()) {
+                System.err.println("usage: strand registry list [--registry <file>]")
+                exitProcess(2)
+            }
+            val registry = loadRegistry(file, requireExists = true)
+            if (registry.entries.isEmpty()) {
+                println("(registry ${file.path} is empty)")
+            } else {
+                for (name in registry.names()) println("$name  ${registry.resolve(name)}")
+            }
+        }
+        else -> {
+            System.err.println("unknown registry subcommand: '$sub'")
+            usage()
+            exitProcess(2)
+        }
+    }
+}
+
+/**
+ * Pull a single `--registry <file>` out of [flags], returning the path (or null
+ * for the default) plus the residual positional arguments.
+ */
+private fun extractRegistryPath(flags: List<String>): Pair<String?, List<String>> {
+    var path: String? = null
+    val rest = mutableListOf<String>()
+    var i = 0
+    while (i < flags.size) {
+        if (flags[i] == "--registry") {
+            path = flags.getOrNull(i + 1) ?: run {
+                System.err.println("--registry requires a path argument")
+                exitProcess(2)
+            }
+            i += 2
+        } else {
+            rest += flags[i]
+            i++
+        }
+    }
+    return path to rest
+}
+
+/**
+ * Load a [NameRegistry] from [file]. When [requireExists] is false (the `put`
+ * path) a missing file yields [NameRegistry.EMPTY] so the first `put` creates
+ * the file; otherwise a missing or malformed file is a hard error.
+ */
+private fun loadRegistry(file: File, requireExists: Boolean): NameRegistry {
+    if (!file.exists()) {
+        if (requireExists) {
+            System.err.println("registry: file not found: ${file.path}")
+            exitProcess(1)
+        }
+        return NameRegistry.EMPTY
+    }
+    return try {
+        NameRegistry.fromJson(file.readText())
+    } catch (e: IllegalArgumentException) {
+        System.err.println("registry: malformed registry ${file.path}: ${e.message}")
+        exitProcess(1)
+    }
+}
+
 private fun usage() {
     System.err.println("usage:")
-    System.err.println("  strand verify    <file.json> [--peer-store <lib.json>]...")
-    System.err.println("  strand run       <file.json> [--peer-store <lib.json>]... [--grant-all] [<limits>...]")
-    System.err.println("  strand machine   <file.json> --events <events.json> [--grant-all] [<limits>...]")
-    System.err.println("  strand group     <file.json> --events <events.json> [--grant-all] [--metrics] [<limits>...]")
+    System.err.println("  strand verify    <file.json> [--peer-store <lib.json>]... [<federation>...]")
+    System.err.println("  strand run       <file.json> [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
+    System.err.println("  strand machine   <file.json> --events <events.json> [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
+    System.err.println("  strand group     <file.json> --events <events.json> [--peer-store <lib.json>]... [--grant-all] [--metrics] [<federation>...] [<limits>...]")
     System.err.println("  strand author    <file.layer-a> [--emit-json]")
     System.err.println("  strand translate <file.json>  → emit Layer A reverse projection (Q-036)")
+    System.err.println("  strand registry  resolve <name> | put <name> <hash> | list  [--registry <file>]")
     System.err.println("  strand grammar                → emit Layer B constraint grammar (GBNF)")
     System.err.println()
-    System.err.println("  --peer-store <file.json>: (Q-043, repeatable) add a peer store to the federation")
-    System.err.println("               resolver chain. A NodeRef with a `targetHash` not held locally is")
-    System.err.println("               fetched from the first peer that holds it, re-based into the local")
-    System.err.println("               store, verified, and (for `run`) evaluated. Order is priority order.")
+    System.err.println("  Q-043 federation (verify / run / machine / group):")
+    System.err.println("  --peer-store <file.json>: (repeatable) add a peer store to the federation resolver")
+    System.err.println("               chain. A NodeRef with a `targetHash` not held locally is fetched from")
+    System.err.println("               the first peer that holds it, re-based into the local store, verified,")
+    System.err.println("               and (for run / machine / group) evaluated. Order is priority order.")
+    System.err.println("  --no-cache:  do not wrap the resolver chain in a CachingResolver (default caches")
+    System.err.println("               fetched subgraphs for the session; semantics are identical either way).")
+    System.err.println("  --strict-integrity: explicit-declaration flag only — the per-target Merkle root")
+    System.err.println("               re-hash that rejects a lying resolver is always on for federated runs.")
+    System.err.println("  --registry <file>: name registry for `strand registry` (default $DEFAULT_REGISTRY_FILE).")
     System.err.println("  --grant-all: auto-grant wildcard capabilities for every EffectCategory")
     System.err.println("               in the verified store (demo / dev-mode convenience; not for")
     System.err.println("               production use).")

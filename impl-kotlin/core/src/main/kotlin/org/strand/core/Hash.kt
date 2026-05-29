@@ -46,6 +46,25 @@ class Hash(val bytes: ByteArray) {
     /** Lowercase hex of the full multi-hash (prefix + digest). */
     override fun toString(): String =
         bytes.joinToString("") { "%02x".format(it) }
+
+    companion object {
+        /**
+         * Parse the lowercase-hex multi-hash produced by [toString] back into a
+         * [Hash]. Validates even length and hex digits here; the prefix and
+         * digest-length checks are enforced by the [Hash] constructor. The
+         * inverse of [toString], so `Hash.fromHex(h.toString()) == h`.
+         */
+        fun fromHex(hex: String): Hash {
+            require(hex.length % 2 == 0) { "hash hex must have even length: '$hex'" }
+            val bytes = ByteArray(hex.length / 2) { i ->
+                val hi = Character.digit(hex[i * 2], 16)
+                val lo = Character.digit(hex[i * 2 + 1], 16)
+                require(hi >= 0 && lo >= 0) { "invalid hex character in hash '$hex'" }
+                ((hi shl 4) or lo).toByte()
+            }
+            return Hash(bytes)
+        }
+    }
 }
 
 /**
