@@ -44,10 +44,24 @@ import org.strand.core.ProjectionSource
  * NodeRefs may pass an empty map; if a NodeRef is encountered with a hash
  * the map doesn't cover, the verifier reports
  * [VerifyError.NodeRefTargetNotFound].
+ *
+ * **Cross-store federation (Q-043 step 3a).** [resolveTarget] is an optional
+ * callback consulted whenever a NodeRef target hash is not in [hashToNodeId].
+ * In a federated run the caller wires it to `FederatedProgram::fetchAndAdmit`,
+ * which fetches the target subgraph from a peer store, re-bases it into the
+ * shared [store], extends the shared [hashToNodeId], and returns the local
+ * NodeId — so the verifier then verifies the admitted subgraph by ordinary
+ * `infer`. When [resolveTarget] is null (the default; every single-store call
+ * site) a NodeRef miss reports [VerifyError.NodeRefTargetNotFound] exactly as
+ * before; when it is present but returns null (the target is held by no peer)
+ * the miss reports [VerifyError.NodeRefTargetUnresolvable]. For [store] and
+ * [hashToNodeId] to observe the admitted nodes, a federated caller must pass
+ * the same mutable [FederatedProgram] instances the callback extends.
  */
 class Verifier(
     private val store: NodeStore,
     private val hashToNodeId: Map<Hash, NodeId> = emptyMap(),
+    private val resolveTarget: ((Hash) -> NodeId?)? = null,
 ) {
 
     fun verify(root: NodeId): VerifyResult {
@@ -148,6 +162,17 @@ class Verifier(
 
         fun closureOf(id: NodeId): Set<NodeId> =
             nodeClosures[id] ?: emptySet()
+
+        /**
+         * Resolve a NodeRef / type-ref target [hash] to a local NodeId. Hits
+         * [hashToNodeId] first; on a miss consults the federation
+         * [resolveTarget] callback, which (when wired) fetches and admits the
+         * target subgraph into the shared store and returns its local NodeId.
+         * Returns null only when the hash is held neither locally nor by any
+         * peer resolver.
+         */
+        fun resolveRefTarget(hash: Hash): NodeId? =
+            hashToNodeId[hash] ?: resolveTarget?.invoke(hash)
 
         /**
          * N-046 (Q-043) admission: certify every [Node.ModuleManifest] in the
@@ -303,9 +328,12 @@ class Verifier(
                     // resulting UnboundVariable / UnboundTypeParameter
                     // errors are folded into a single
                     // NodeRefTargetMustBeClosed report.
-                    val targetId = hashToNodeId[node.target]
+                    val targetId = resolveRefTarget(node.target)
                         ?: reportFatal(
-                            VerifyError.NodeRefTargetNotFound(at = id, targetHash = node.target)
+                            if (resolveTarget != null)
+                                VerifyError.NodeRefTargetUnresolvable(at = id, targetHash = node.target)
+                            else
+                                VerifyError.NodeRefTargetNotFound(at = id, targetHash = node.target)
                         )
                     val errorsBefore = errors.size
                     val targetType = try {
@@ -1435,7 +1463,7 @@ class Verifier(
                     is Node.TypeAbstraction -> visit(node.body)
                     is Node.CapabilityScope -> visit(node.body)
                     is Node.NodeRef -> {
-                        val targetId = hashToNodeId[node.target] ?: return
+                        val targetId = resolveRefTarget(node.target) ?: return
                         visit(targetId)
                     }
                     is Node.Match -> {
@@ -2392,7 +2420,7 @@ class Verifier(
                     is Node.ForeignNode ->
                         return if (node.effectProjections.isNotEmpty()) node else null
                     is Node.NodeRef -> {
-                        val targetId = hashToNodeId[node.target] ?: return null
+                        val targetId = resolveRefTarget(node.target) ?: return null
                         current = targetId
                     }
                     is Node.VarRef -> {
@@ -2665,9 +2693,12 @@ class Verifier(
                     TypeExpr.Forall(node.typeParameters, body)
                 }
                 is Node.NodeRef -> {
-                    val targetId = hashToNodeId[node.target]
+                    val targetId = resolveRefTarget(node.target)
                         ?: reportFatal(
-                            VerifyError.NodeRefTargetNotFound(at = typeId, targetHash = node.target)
+                            if (resolveTarget != null)
+                                VerifyError.NodeRefTargetUnresolvable(at = typeId, targetHash = node.target)
+                            else
+                                VerifyError.NodeRefTargetNotFound(at = typeId, targetHash = node.target)
                         )
                     resolveType(targetId, typeParams)
                 }
