@@ -239,10 +239,14 @@ class Hasher(private val rawStore: RawNodeStore) {
             }
             is Node.VarRef -> Unit  // binder is referenced positionally, not walked
 
-            is Node.NodeRef -> error(
-                "Canonical Node.NodeRef encountered in raw store at $id; " +
-                    "JsonIngest must produce StoredNode.RawNodeRef for NodeRef entries."
-            )
+            is Node.NodeRef -> Unit
+            // A canonical Node.NodeRef in the raw store is a cross-store
+            // reference (Q-043 `targetHash` ingest form): its target is an
+            // external content hash, so it is a subgraph boundary with no
+            // in-store child to walk. The NodeRef itself is hashed by the
+            // enclosing `walk` (encodeNodeRef emits the target hash bytes).
+            // Local NodeRefs are produced as StoredNode.RawNodeRef and handled
+            // in `walk`'s when(stored) branch, never reaching here.
 
             is Node.ModuleManifest -> {
                 // Reached only via the Hasher(canonicalStore) re-hash path; the

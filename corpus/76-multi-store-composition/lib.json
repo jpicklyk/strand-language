@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "root": "inc",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "addT":   { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":  { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "x":      { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+    "xRef":   { "type": "VarRef", "binder": "x" },
+    "one":    { "type": "IntLit", "value": 1 },
+    "addApp": { "type": "Application", "function": "addFn", "arguments": ["xRef", "one"] },
+    "inc":    { "type": "Lambda", "parameters": ["x"], "body": "addApp" }
+  }
+}
