@@ -154,3 +154,4 @@ These limits are not failures of the design; they are the boundary between what 
 - [`distribution-model.md`](distribution-model.md)
 - [`research-plan.md`](../research-plan.md)
 - [`rendering-and-views.md`](rendering-and-views.md) — trust model extended to invariant checkers
+- [`evaluation/containment-results.md`](../evaluation/containment-results.md) — Q-044 containment measurement operationalizing this threat model
