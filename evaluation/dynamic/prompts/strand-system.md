@@ -299,7 +299,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (115):
+FunctionType signatures (116):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -329,6 +329,7 @@ FunctionType signatures (115):
     netSendT                        — (Int, Bytes) -> Int
     netRecvT                        — (Int, Int) -> Bytes
     netCloseT                       — (Int) -> Unit
+    llmStreamCloseT                 — (Int) -> Unit  (Q-045 streaming-LLM handle release)
     httpReqT                        — (String, String, Bytes) -> httpRespT
     httpRespT                       — ProductType {status: Int, body: Bytes}
     procWaitT                       — (Int) -> Int
@@ -372,7 +373,7 @@ FunctionType signatures (115):
     urlEncodeT                      — (String) -> String  (round-5; application/x-www-form-urlencoded)
     gzipT                           — (Bytes) -> Bytes  (round-5; gzip compress)
 
-Foreign-node builtins (127):
+Foreign-node builtins (128):
 
     add sub mul div mod neg         — Int arithmetic (mod is JVM `%`, sign-of-dividend)
     eqInt lt le gt ge               — Int comparisons returning Bool
@@ -390,6 +391,7 @@ Foreign-node builtins (127):
     hexOf                           — Bytes.FormatHex (lowercase output)
     fsRead fsWrite fsAppend fsExists fsDelete   — Fs.* filesystem (effectful; readFx for Read/Exists, writeFx for Write/Append/Delete). Q-039: each pins its effect's `path` refinement parameter to ArgRef(0) — the verifier and runtime synthesize the capability-check value from the function's first argument.
     netConnect netSend netRecv netClose         — Net.* sockets (effectful; netConnect→connectFx, netSend→netSendFx, netRecv→netRecvFx, netClose has no effect — closing the dual of opening). Q-039: netConnect pins connectFx's (host, port) refinement parameters to ArgRef(0) and ArgRef(1).
+    llmStreamClose                              — LLM.Stream.Close → Unit (Q-045; no effect — releases a streaming-LLM handle). The streaming open and the Option<Bytes>-returning drains stay out of the prelude — see "Streaming I/O" and "NOT in the prelude" below.
     httpReq                                     — Http.RequestFromUrl → {status: Int, body: Bytes} (effectful; declares connectFx, netSendFx, netRecvFx). Q-041 legacy single-URL wrapper; the new seven-arg Http.Request signature stays out of the prelude (its response shape includes a recursive header list that the implicit prelude can't express). Construct the seven-arg form via explicit FNT + FRN at the use site.
     procWait                                    — Process.Wait → exit code Int (effectful; declares procWaitFx)
     sleep                                       — Time.Sleep (effectful; declares sleepFx)
@@ -475,8 +477,14 @@ below for the surface-type pattern),
 `Set.Empty` / `Set.Add` / `Set.Remove` / `Set.Has` / `Set.Size` /
 `Set.Union` / `Set.Intersect` / `Set.Difference` / `Set.ToList` /
 `Set.FromList` / `Set.Fold` (opaque-handle Set<T>, mirror Map.* surface
-pattern). When using these, declare the FN with the appropriate target
-string and an FNT for the concrete type at this call site.
+pattern),
+`Anthropic.Messages.CreateStream` / `OpenAI.Chat.CompletionsStream` /
+`Gemini.GenerateContentStream` (Q-045 streaming open — typed against the
+agent-chosen `GenerateRequest` shape, like the blocking `*.Create`
+variants) and `LLM.Stream.Receive` / `Net.Stream.Receive` (Q-045 drains,
+return `Option<Bytes>`). When using these, declare the FN with the
+appropriate target string and an FNT for the concrete type at this call
+site. `LLM.Stream.Close` *is* in the prelude as `llmStreamClose`.
 
 ### HTTP server (`Http.Listen` / `Http.Accept` / `Http.Respond` / `Http.ServerClose`)
 
@@ -788,6 +796,64 @@ headers). Use the seven-arg form for new code so capability-check
 values bind to actual function arguments; use `Http.RequestFromUrl`
 when you have a URL string already in hand and don't care about
 fine-grained projection.
+
+### Streaming I/O (`*.CreateStream` / `*.Stream.Receive` / `*.Stream.Close`)
+
+Q-045. For consuming a result incrementally — acting on the first tokens of
+an LLM response before the last arrives, or reading a socket as an
+open-ended chunk sequence — use the uniform streaming-handle contract. Three
+operations per streaming namespace:
+
+1. **Open.** A streaming-source builtin opens the transport and returns a
+   handle (`Int`) immediately, before the body arrives. It declares the
+   *semantic* effect.
+2. **Receive.** `*.Stream.Receive(handle: Int, maxBytes: Int) -> Option<Bytes>`
+   performs one blocking read: `Some(chunk)` per chunk, `None` at
+   end-of-stream. It declares E-004 `Network.Receive` (the transport-level
+   read). EOF is `None`, distinct from a `Some(empty Bytes)` short read.
+3. **Close.** `*.Stream.Close(handle: Int) -> Unit` releases the handle.
+   Idempotent (a second close, or close of an unknown id, is a no-op).
+
+LLM streaming generation:
+
+    strand-builtin:Anthropic.Messages.CreateStream(req: GenerateRequest) -> Int
+    strand-builtin:OpenAI.Chat.CompletionsStream(req: GenerateRequest)   -> Int
+    strand-builtin:Gemini.GenerateContentStream(req: GenerateRequest)    -> Int
+        -- each declares E-035 LLM.Generate{provider, model}, like the
+        -- blocking *.Create variants. Returns an llm_stream handle.
+    strand-builtin:LLM.Stream.Receive(handle: Int, maxBytes: Int) -> Option<Bytes>
+        -- declares E-004 Network.Receive; one blocking read of raw bytes.
+    strand-builtin:LLM.Stream.Close(handle: Int) -> Unit   (prelude: llmStreamClose)
+
+Socket streaming reuses the existing socket handle; `Net.Close` is its close:
+
+    strand-builtin:Net.Stream.Receive(handle: Int, maxBytes: Int) -> Option<Bytes>
+        -- identical to Net.Receive except EOF is None, not empty Bytes.
+        -- Prefer this over Net.Receive for new code.
+
+A streaming-LLM program declares **both** E-035 `LLM.Generate{...}` (from
+the open) and E-004 `Network.Receive` (from the drain) — an intentional,
+honest split, and the capability context must grant both. A `Fixpoint`
+drain loop contributes E-004 to the effect closure exactly once regardless
+of chunk count (the closure is a static set). The drain *must* declare
+E-004 — it is not a no-effect read; otherwise the effect closure would be an
+unsound bound on network I/O.
+
+Chunks are raw `Bytes` (one or more unparsed SSE `data:` frames). SSE
+decoding is done in Strand over the raw bytes, or by accumulating all
+chunks then parsing once — there is no built-in SSE/JSON decoder in this
+slice. Backpressure is implicit: call Receive only when ready for more. The
+per-read blocking ceiling is host policy (`--stream-receive-timeout-ms`),
+never a builtin argument; a stalled read surfaces `IoFailure` with kind
+`llm-stream-timeout` / `network-stream-timeout`. Drains are not replayable
+(chunks are not recorded). Typical drain in Layer A (explicit FNT + FRN,
+since the open and receive are not in the prelude):
+
+    optBytesT SUM [someCase noneCase]   -- Option<Bytes>
+    streamRecvT FNT [intT intT] optBytesT [netRecvFx]
+    streamRecv FN "strand-builtin:LLM.Stream.Receive" streamRecvT [netRecvFx]
+    -- FIX over (Int, Bytes) -> Bytes, Match Some(chunk)→recurse, None→acc;
+    -- close with llmStreamClose at the end. See corpus 81.
 
 ### I/O sandbox (`SandboxPolicy`)
 

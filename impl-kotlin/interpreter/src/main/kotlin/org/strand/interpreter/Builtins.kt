@@ -213,6 +213,22 @@ object Builtins {
     var toolLoopLimit: Int = 10
 
     /**
+     * Q-045: per-read timeout (milliseconds) installed as the underlying
+     * socket's `SO_TIMEOUT` at `Net.Connect` open and as the HTTP read
+     * timeout at `*.CreateStream` open. Bounds a single blocking
+     * streaming receive that the [org.strand.core.EvaluationLimits]
+     * wall-clock sampler cannot see (a native `read` advances no
+     * interpreter step). Host policy, never a builtin argument. The CLI
+     * installs `EvaluationLimits.streamReceiveTimeoutMillis` here before
+     * evaluation and restores the prior value afterward, mirroring the
+     * [sandboxPolicy] save/restore pattern; the library default matches
+     * `EvaluationLimits.DEFAULTS`. A value outside the positive `Int`
+     * range maps to the JVM's "no timeout" (`0`) at the socket layer.
+     */
+    @Volatile
+    var streamReceiveTimeoutMillis: Long = org.strand.core.EvaluationLimits.DEFAULTS.streamReceiveTimeoutMillis
+
+    /**
      * The verifier's `nodeTypes` map for the currently-executing
      * program. Set by the interpreter at program startup so the
      * tool-dispatch path can resolve a [Value.ToolDefV.parameterSchemaId]
@@ -593,7 +609,14 @@ object Builtins {
             val resolvedAddr = NetSandbox.checkConnect(sandboxPolicy.net, host, port.toInt(), nameResolver)
             try {
                 val socket = java.net.Socket(resolvedAddr, port.toInt())
-                ResourceTable.register("socket", socket)
+                // Q-045: install the host-policy per-read ceiling as the
+                // socket's SO_TIMEOUT so a stalled blocking receive
+                // (Net.Receive / Net.Stream.Receive) cannot block past it.
+                // A timeout outside the positive Int range maps to 0 —
+                // the JVM's "no timeout".
+                val timeout = streamReceiveTimeoutMillis
+                socket.soTimeout = if (timeout in 1..Int.MAX_VALUE.toLong()) timeout.toInt() else 0
+                ResourceTable.register(ResourceTable.KIND_SOCKET, socket)
             } catch (e: java.io.IOException) {
                 throw IoFailure("network-connect", "$host:$port: ${e.message}")
             } catch (e: SecurityException) {
@@ -653,6 +676,109 @@ object Builtins {
             val obj = ResourceTable.remove(handle)
             if (obj is java.net.Socket) {
                 try { obj.close() } catch (_: java.io.IOException) { /* ignore — already closed */ }
+            }
+            Value.UnitV
+        },
+
+        // Q-045 streaming socket receive. Identical to Net.Receive except
+        // end-of-stream is Option's None rather than empty Bytes —
+        // distinguishable from a legitimate zero-length read. Declares
+        // E-004 Network.Receive at the use site, exactly as Net.Receive
+        // does. The legacy Net.Receive is retained unchanged for hash
+        // stability; new programs are steered here via the system-prompt
+        // docs. Net.Close serves as the stream's close.
+        "strand-builtin:Net.Stream.Receive" to Fn { args ->
+            // (handle: SocketHandle, maxBytes: Int) -> Option<Bytes>
+            require(args.size == 2) {
+                "Net.Stream.Receive expects 2 args (handle: SocketHandle, maxBytes: Int), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("network-stream-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+                ?: throw IoFailure("network-stream-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
+            require(maxBytes >= 0) { "Net.Stream.Receive maxBytes must be non-negative, got $maxBytes" }
+            val socket = ResourceTable.get(handle, ResourceTable.KIND_SOCKET) as java.net.Socket
+            try {
+                val buf = ByteArray(maxBytes)
+                val n = socket.getInputStream().read(buf)
+                if (n < 0) Value.SumV("None", null)
+                else Value.SumV("Some", Value.BytesV(buf.copyOf(n)))
+            } catch (e: java.net.SocketTimeoutException) {
+                throw IoFailure("network-stream-timeout", "socket #${handle.id}: blocking read exceeded the host stream-receive timeout")
+            } catch (e: java.io.IOException) {
+                throw IoFailure("network-stream-receive", "socket #${handle.id}: ${e.message}")
+            }
+        },
+
+        // Q-045 streaming LLM generation. Each per-provider *.CreateStream
+        // opens the SSE response and returns an llm_stream handle
+        // immediately (before the body arrives); the agent drains it via
+        // LLM.Stream.Receive and releases it via LLM.Stream.Close. These
+        // are first-order (no tool loop in this slice — tool use over a
+        // stream needs SSE decoding first, deferred per proposal § 8).
+        // CreateStream declares E-035 LLM.Generate{provider, model} at the
+        // use site, exactly as the blocking *.Create variants do; the
+        // drain (LLM.Stream.Receive) declares the transport effect E-004
+        // Network.Receive. Both surface in the program's effect closure.
+        "strand-builtin:Anthropic.Messages.CreateStream" to Fn { args ->
+            require(args.size == 1) {
+                "Anthropic.Messages.CreateStream expects 1 arg (GenerateRequest), got ${args.size}"
+            }
+            openLlmStream(args[0] as Value.ProductV, "anthropic", AnthropicProvider::generateStreamOpen)
+        },
+        "strand-builtin:OpenAI.Chat.CompletionsStream" to Fn { args ->
+            require(args.size == 1) {
+                "OpenAI.Chat.CompletionsStream expects 1 arg (GenerateRequest), got ${args.size}"
+            }
+            openLlmStream(args[0] as Value.ProductV, "openai", OpenAIProvider::generateStreamOpen)
+        },
+        "strand-builtin:Gemini.GenerateContentStream" to Fn { args ->
+            require(args.size == 1) {
+                "Gemini.GenerateContentStream expects 1 arg (GenerateRequest), got ${args.size}"
+            }
+            openLlmStream(args[0] as Value.ProductV, "gemini", GeminiProvider::generateStreamOpen)
+        },
+
+        "strand-builtin:LLM.Stream.Receive" to Fn { args ->
+            // (handle: Int, maxBytes: Int) -> Option<Bytes>
+            require(args.size == 2) {
+                "LLM.Stream.Receive expects 2 args (handle: Int, maxBytes: Int), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("llm-stream-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+                ?: throw IoFailure("llm-stream-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
+            require(maxBytes >= 0) { "LLM.Stream.Receive maxBytes must be non-negative, got $maxBytes" }
+            val holder = ResourceTable.get(handle, ResourceTable.KIND_LLM_STREAM) as LlmStreamHolder
+            try {
+                val chunk = holder.stream.read(maxBytes)
+                if (chunk == null) Value.SumV("None", null)
+                else Value.SumV("Some", Value.BytesV(chunk))
+            } catch (e: java.net.SocketTimeoutException) {
+                throw IoFailure(
+                    "llm-stream-timeout",
+                    "stream #${handle.id} (${holder.provider}/${holder.model}): " +
+                        "blocking read exceeded the host stream-receive timeout",
+                )
+            } catch (e: java.io.IOException) {
+                throw IoFailure(
+                    "llm-stream-receive",
+                    "stream #${handle.id} (${holder.provider}/${holder.model}): ${e.message}",
+                )
+            }
+        },
+
+        "strand-builtin:LLM.Stream.Close" to Fn { args ->
+            // (handle: Int) -> Unit. Idempotent: a second close, or close
+            // of an unknown id, is a no-op.
+            require(args.size == 1) {
+                "LLM.Stream.Close expects 1 arg (handle: Int), got ${args.size}"
+            }
+            val handle = args[0] as? Value.Resource
+                ?: throw IoFailure("llm-stream-close", "expected Resource handle, got ${args[0]::class.simpleName}")
+            val obj = ResourceTable.remove(handle)
+            if (obj is LlmStreamHolder) {
+                try { obj.stream.close() } catch (_: java.io.IOException) { /* ignore — already closed */ }
             }
             Value.UnitV
         },
@@ -3996,6 +4122,30 @@ object Builtins {
             "usage" to usageToStrand(lastUsage),
             "finalMessages" to messagesToStrand(workingMessages),
         ))
+    }
+
+    /**
+     * Q-045: open a streaming LLM completion. Parses the Strand
+     * GenerateRequest ProductV (reusing [parseGenerateRequest]), calls
+     * the provider's stateless `generateStreamOpen` to issue the
+     * streaming request and open the SSE response, then registers the
+     * live stream under [ResourceTable.KIND_LLM_STREAM] and returns the
+     * handle. The capability check (E-035) and sandbox net check run in
+     * [Interpreter.applyForeign] before this body executes; the open is
+     * the single point at which they happen — subsequent
+     * `LLM.Stream.Receive` drains carry only the transport effect E-004.
+     */
+    private fun openLlmStream(
+        requestProduct: Value.ProductV,
+        provider: String,
+        open: (GenerateRequest, LlmHttpClient, CredentialProvider) -> LlmHttpClient.LlmStream,
+    ): Value {
+        val req = parseGenerateRequest(requestProduct)
+        val stream = open(req, llmHttpClient, credentialProvider)
+        return ResourceTable.register(
+            ResourceTable.KIND_LLM_STREAM,
+            LlmStreamHolder(provider, req.model, stream),
+        )
     }
 
     /**

@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "root": "drainedLet",
+  "nodes": {
+    "intT":    { "type": "PrimitiveType", "kind": "Int" },
+    "strT":    { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":  { "type": "PrimitiveType", "kind": "Bytes" },
+    "unitT":   { "type": "PrimitiveType", "kind": "Unit" },
+
+    "someCase":  { "type": "SumTypeCase", "name": "Some", "caseType": "bytesT" },
+    "noneCase":  { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optBytesT": { "type": "SumType", "cases": ["someCase", "noneCase"] },
+
+    "llmGenFx":  { "type": "EffectCategory", "categoryName": "LLM.Generate", "parameters": ["strT", "strT"] },
+    "netRecvFx": { "type": "EffectCategory", "categoryName": "Network.Receive" },
+
+    "providerLit": { "type": "StringLit", "value": "anthropic" },
+    "modelLit":    { "type": "StringLit", "value": "claude-opus-4-8" },
+    "genDecl":     { "type": "EffectDecl", "effectType": "llmGenFx", "parameters": ["providerLit", "modelLit"] },
+    "recvDecl":    { "type": "EffectDecl", "effectType": "netRecvFx", "parameters": [] },
+
+    "createStreamT": { "type": "FunctionType", "parameters": ["bytesT"], "result": "intT", "effects": ["llmGenFx"] },
+    "createStream":  { "type": "ForeignNode", "target": "strand-builtin:Anthropic.Messages.CreateStream",
+                        "foreignType": "createStreamT", "effects": ["llmGenFx"] },
+
+    "streamRecvT":   { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "optBytesT", "effects": ["netRecvFx"] },
+    "streamRecv":    { "type": "ForeignNode", "target": "strand-builtin:LLM.Stream.Receive",
+                        "foreignType": "streamRecvT", "effects": ["netRecvFx"] },
+
+    "concatT":  { "type": "FunctionType", "parameters": ["bytesT", "bytesT"], "result": "bytesT" },
+    "concat":   { "type": "ForeignNode", "target": "strand-builtin:Bytes.Concat", "foreignType": "concatT" },
+
+    "closeT":   { "type": "FunctionType", "parameters": ["intT"], "result": "unitT" },
+    "close":    { "type": "ForeignNode", "target": "strand-builtin:LLM.Stream.Close", "foreignType": "closeT" },
+
+    "drainType": { "type": "FunctionType", "parameters": ["intT", "bytesT"], "result": "bytesT", "effects": ["netRecvFx"] },
+    "recurse":   { "type": "ParameterDecl", "name": "recurse", "paramType": "drainType" },
+    "h":         { "type": "ParameterDecl", "name": "h", "paramType": "intT" },
+    "acc":       { "type": "ParameterDecl", "name": "acc", "paramType": "bytesT" },
+    "hRef":      { "type": "VarRef", "binder": "h" },
+    "accRef":    { "type": "VarRef", "binder": "acc" },
+    "recRef":    { "type": "VarRef", "binder": "recurse" },
+
+    "maxBytesLit": { "type": "IntLit", "value": 4096 },
+    "recvCall":    { "type": "Application", "function": "streamRecv", "arguments": ["hRef", "maxBytesLit"],
+                      "effectInstances": ["recvDecl"] },
+
+    "varChunk":  { "type": "Pattern", "kind": "variable", "patternType": "bytesT", "name": "chunk" },
+    "patSome":   { "type": "Pattern", "kind": "constructor", "patternType": "optBytesT", "caseName": "Some", "payloadPattern": "varChunk" },
+    "chunkRef":  { "type": "VarRef", "binder": "varChunk" },
+    "newAcc":    { "type": "Application", "function": "concat", "arguments": ["accRef", "chunkRef"] },
+    "recCall":   { "type": "Application", "function": "recRef", "arguments": ["hRef", "newAcc"],
+                    "effectInstances": ["recvDecl"] },
+    "caseSome":  { "type": "MatchCase", "pattern": "patSome", "body": "recCall" },
+
+    "patNone":   { "type": "Pattern", "kind": "constructor", "patternType": "optBytesT", "caseName": "None" },
+    "caseNone":  { "type": "MatchCase", "pattern": "patNone", "body": "accRef" },
+
+    "drainMatch": { "type": "Match", "scrutinee": "recvCall", "cases": ["caseSome", "caseNone"] },
+    "drainLam":   { "type": "Lambda", "parameters": ["recurse", "h", "acc"], "body": "drainMatch", "effects": ["netRecvFx"] },
+    "drainFn":    { "type": "Fixpoint", "recursionType": "drainType", "body": "drainLam" },
+
+    "reqLit":    { "type": "BytesLit", "value": "" },
+    "openCall":  { "type": "Application", "function": "createStream", "arguments": ["reqLit"],
+                    "effectInstances": ["genDecl"] },
+    "emptyBytes": { "type": "BytesLit", "value": "" },
+    "drainCall": { "type": "Application", "function": "drainFn", "arguments": ["openCall", "emptyBytes"],
+                    "effectInstances": ["recvDecl"] },
+    "closeCall": { "type": "Application", "function": "close", "arguments": ["openCall"] },
+
+    "drainedRef": { "type": "VarRef", "binder": "drainedLet" },
+    "closeLet":   { "type": "Let", "name": "_closed", "value": "closeCall", "body": "drainedRef" },
+    "drainedLet": { "type": "Let", "name": "drained", "value": "drainCall", "body": "closeLet" }
+  }
+}

@@ -847,6 +847,18 @@ object LayerAGrammar {
             refListFields = mapOf("parameters" to listOf("intT")),
             refFields = mapOf("result" to "unitT"),
         ),
+        // Q-045: LLM.Stream.Close — (handle: Int) -> Unit. The streaming
+        // open (*.CreateStream) and the Option<Bytes>-returning drains
+        // (LLM.Stream.Receive / Net.Stream.Receive) stay out of the
+        // prelude — the former is typed against the agent-chosen
+        // GenerateRequest shape, the latter return Option<T> which the
+        // prelude cannot yet express. Close alone is monomorphic, so it
+        // earns a prelude entry, mirroring netClose.
+        "llmStreamCloseT" to ReservedNodeSpec(
+            jsonType = "FunctionType",
+            refListFields = mapOf("parameters" to listOf("intT")),
+            refFields = mapOf("result" to "unitT"),
+        ),
 
         // Http.Request returns a fixed ProductType {status: Int, body: Bytes}.
         // Encoding the product type in the prelude requires three
@@ -1070,6 +1082,14 @@ object LayerAGrammar {
             jsonType = "ForeignNode",
             stringFields = mapOf("target" to "strand-builtin:Net.Close"),
             refFields = mapOf("foreignType" to "netCloseT"),
+        ),
+        // Q-045: release a streaming LLM handle. No declared effect
+        // (closing is the dual of opening). The open and drain stay out
+        // of the prelude (see llmStreamCloseT above).
+        "llmStreamClose" to ReservedNodeSpec(
+            jsonType = "ForeignNode",
+            stringFields = mapOf("target" to "strand-builtin:LLM.Stream.Close"),
+            refFields = mapOf("foreignType" to "llmStreamCloseT"),
         ),
         // Q-041: the prelude `httpReq` entry now points at the legacy
         // Http.RequestFromUrl wrapper (single-URL signature, preserved

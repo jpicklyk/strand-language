@@ -46,34 +46,7 @@ object AnthropicProvider {
 
         // Build the request body. Anthropic's Messages API expects
         // `messages` plus optional `system`/`tools`/`max_tokens`/etc.
-        val body = buildJsonObject {
-            put("model", JsonPrimitive(req.model))
-            put("max_tokens", JsonPrimitive(req.maxTokens ?: 1024))
-            if (req.system != null) put("system", JsonPrimitive(req.system))
-            put("messages", buildJsonArray {
-                for (m in req.messages) add(LlmJson.anthropicMessage(m))
-            })
-            if (req.temperature != null) put("temperature", JsonPrimitive(req.temperature))
-            if (req.tools.isNotEmpty()) {
-                put("tools", buildJsonArray {
-                    for (t in req.tools) add(buildJsonObject {
-                        put("name", JsonPrimitive(t.name))
-                        put("description", JsonPrimitive(t.description))
-                        put("input_schema", t.parameterSchema)
-                    })
-                })
-            }
-            // responseSchema is Anthropic's "tool-as-response-shape"
-            // pattern; for the first slice we pass it through as
-            // `providerExtras` if the agent supplies it that way.
-            if (req.providerExtras != null) {
-                // Merge providerExtras into the top-level object.
-                val extras = req.providerExtras
-                if (extras is kotlinx.serialization.json.JsonObject) {
-                    for ((k, v) in extras) put(k, v)
-                }
-            }
-        }
+        val body = buildBody(req, stream = false)
 
         // Q-042: single auditable `.reveal()` call site for the Anthropic
         // provider. The revealed value is consumed by the HTTP header
@@ -105,6 +78,78 @@ object AnthropicProvider {
             usage = parsed.usage,
             finalMessages = req.messages,  // builtin layer rewrites this when tool loop runs
         )
+    }
+
+    /**
+     * Build the Anthropic Messages API request body. Shared by [generate]
+     * (`stream = false`) and [generateStreamOpen] (`stream = true`); the
+     * only difference is the top-level `stream` flag, which switches the
+     * response to the SSE `text/event-stream` framing.
+     */
+    private fun buildBody(req: GenerateRequest, stream: Boolean) = buildJsonObject {
+        put("model", JsonPrimitive(req.model))
+        put("max_tokens", JsonPrimitive(req.maxTokens ?: 1024))
+        if (req.system != null) put("system", JsonPrimitive(req.system))
+        put("messages", buildJsonArray {
+            for (m in req.messages) add(LlmJson.anthropicMessage(m))
+        })
+        if (req.temperature != null) put("temperature", JsonPrimitive(req.temperature))
+        if (req.tools.isNotEmpty()) {
+            put("tools", buildJsonArray {
+                for (t in req.tools) add(buildJsonObject {
+                    put("name", JsonPrimitive(t.name))
+                    put("description", JsonPrimitive(t.description))
+                    put("input_schema", t.parameterSchema)
+                })
+            })
+        }
+        // responseSchema is Anthropic's "tool-as-response-shape"
+        // pattern; for the first slice we pass it through as
+        // `providerExtras` if the agent supplies it that way.
+        if (req.providerExtras != null) {
+            // Merge providerExtras into the top-level object.
+            val extras = req.providerExtras
+            if (extras is kotlinx.serialization.json.JsonObject) {
+                for ((k, v) in extras) put(k, v)
+            }
+        }
+        if (stream) put("stream", JsonPrimitive(true))
+    }
+
+    /**
+     * Q-045: open a streaming Messages completion. Issues the same
+     * request as [generate] with `stream: true`, opens the SSE response,
+     * and returns the live [LlmHttpClient.LlmStream] the
+     * `Anthropic.Messages.CreateStream` builtin registers under
+     * [ResourceTable.KIND_LLM_STREAM]. Credentials and the (already
+     * sandbox-checked at the builtin layer) endpoint match [generate]
+     * exactly; the body framing is the only difference. Stateless — no
+     * SSE decoding happens here; chunks are raw bytes.
+     */
+    fun generateStreamOpen(
+        req: GenerateRequest,
+        client: LlmHttpClient = DefaultLlmHttpClient,
+        credentials: CredentialProvider = Builtins.credentialProvider,
+    ): LlmHttpClient.LlmStream {
+        val credential = credentials.apiKey("anthropic")
+            ?: throw IoFailure(
+                "anthropic-credentials-missing",
+                "no API key configured for provider 'anthropic' (env: ANTHROPIC_API_KEY)",
+            )
+        val body = buildBody(req, stream = true)
+        // Q-042: single auditable `.reveal()` call site for the Anthropic
+        // streaming open, symmetric with [generate]'s header builder.
+        val headers = listOf(
+            "x-api-key" to credential.reveal(),
+            "anthropic-version" to API_VERSION,
+            "content-type" to "application/json",
+            "accept" to "text/event-stream",
+        )
+        return try {
+            client.openStream(MESSAGES_URL, headers, body.toString().toByteArray(Charsets.UTF_8))
+        } catch (e: java.io.IOException) {
+            throw IoFailure("anthropic-http", "messages-stream: ${e.message}")
+        }
     }
 
     /**

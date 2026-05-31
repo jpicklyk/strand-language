@@ -102,6 +102,10 @@ private fun parseLimits(flags: List<String>): Triple<EvaluationLimits, SandboxPo
                 val n = v(flag).toLongOrNull() ?: error("--wall-clock-ms requires a Long")
                 limits = limits.copy(wallClockBudgetMillis = n)
             }
+            "--stream-receive-timeout-ms" -> {
+                val n = v(flag).toLongOrNull() ?: error("--stream-receive-timeout-ms requires a Long")
+                limits = limits.copy(streamReceiveTimeoutMillis = n)
+            }
             "--max-json-depth" -> {
                 val n = v(flag).toIntOrNull() ?: error("--max-json-depth requires an Int")
                 limits = limits.copy(maxJsonDepth = n)
@@ -383,6 +387,10 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                 // whatever the flags request).
                 val priorSandbox = Builtins.sandboxPolicy
                 Builtins.sandboxPolicy = sandboxPolicy
+                // Q-045: install the per-read stream-receive timeout (host
+                // policy) for the duration of the run, restored afterward.
+                val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
+                Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
                 try {
                     val interp = Interpreter(store, hashToNodeId, resolveTarget = resolveCb)
                     val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
@@ -393,6 +401,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                     exitProcess(1)
                 } finally {
                     Builtins.sandboxPolicy = priorSandbox
+                    Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
                 }
             }
         }
@@ -485,6 +494,9 @@ private fun runMachine(args: Array<String>) {
             // Q-041: install sandbox policy for the duration of the run.
             val priorSandbox = Builtins.sandboxPolicy
             Builtins.sandboxPolicy = sandboxPolicy
+            // Q-045: install the per-read stream-receive timeout.
+            val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
+            Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
             try {
                 val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
                 val trace = runtime.runMachine(root, events, caps, limits)
@@ -494,6 +506,7 @@ private fun runMachine(args: Array<String>) {
                 exitProcess(1)
             } finally {
                 Builtins.sandboxPolicy = priorSandbox
+                Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
             }
         }
     }
@@ -624,6 +637,9 @@ private fun runGroup(args: Array<String>) {
     // Q-041: install sandbox policy for the duration of the group run.
     val priorSandbox = Builtins.sandboxPolicy
     Builtins.sandboxPolicy = sandboxPolicy
+    // Q-045: install the per-read stream-receive timeout.
+    val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
+    Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
     try {
         runBlocking {
             val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
@@ -657,6 +673,7 @@ private fun runGroup(args: Array<String>) {
         exitProcess(1)
     } finally {
         Builtins.sandboxPolicy = priorSandbox
+        Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
     }
 }
 
@@ -941,6 +958,7 @@ private fun usage() {
     System.err.println("    --max-stack-depth <Int>      max recursion depth (default 4096)")
     System.err.println("    --max-allocated-values <Long> total Value allocations (default 1_000_000)")
     System.err.println("    --wall-clock-ms <Long>       wall-clock budget (default 30_000)")
+    System.err.println("    --stream-receive-timeout-ms <Long> per-read streaming-receive ceiling (Q-045, default 30_000)")
     System.err.println("    --max-json-depth <Int>       ingest JSON nesting cap (default 512)")
     System.err.println("    --max-node-count <Int>       ingest node-count cap (default 100_000)")
     System.err.println("    --max-ingest-bytes <Long>    ingest byte-size cap (default 67_108_864)")

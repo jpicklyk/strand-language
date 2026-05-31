@@ -32,6 +32,18 @@ package org.strand.core
  *  - [wallClockSampleEvery]: how often (in steps) to sample the wall clock.
  *    Default 1024 keeps the per-step overhead of `System.nanoTime()`
  *    amortized below the dispatch noise floor.
+ *  - [streamReceiveTimeoutMillis] (Q-045): per-read ceiling for a
+ *    blocking streaming receive. Installed as the underlying socket's
+ *    `SO_TIMEOUT` (and the LLM stream's HTTP read timeout) at open
+ *    time, so a single native `read` that never returns — which
+ *    advances no interpreter step and so escapes the
+ *    [wallClockBudgetMillis] sampler — is still bounded by the OS.
+ *    Default aligned with [wallClockBudgetMillis]. Like every other
+ *    field here it is host policy, never a builtin argument: an
+ *    adversarial graph cannot raise its own per-read ceiling. A value
+ *    outside the positive `Int` range (notably [PERMISSIVE]'s
+ *    `Long.MAX_VALUE`) maps to the JVM's "no timeout" (`0`) at the
+ *    socket layer.
  *  - [maxJsonDepth]: JSON ingest brace-nesting limit. Checked by a linear
  *    pre-scan before `kotlinx.serialization.json.Json.parseToJsonElement`
  *    sees the input. Reaching this cap raises
@@ -54,6 +66,7 @@ data class EvaluationLimits(
     val maxAllocatedValues: Long = 1_000_000L,
     val wallClockBudgetMillis: Long = 30_000L,
     val wallClockSampleEvery: Int = 1024,
+    val streamReceiveTimeoutMillis: Long = 30_000L,
     val maxJsonDepth: Int = 512,
     val maxNodeCount: Int = 100_000,
     val maxIngestBytes: Long = 64L * 1024L * 1024L,
@@ -86,6 +99,7 @@ data class EvaluationLimits(
             maxAllocatedValues = Long.MAX_VALUE,
             wallClockBudgetMillis = Long.MAX_VALUE,
             wallClockSampleEvery = Int.MAX_VALUE,
+            streamReceiveTimeoutMillis = Long.MAX_VALUE,
             maxJsonDepth = Int.MAX_VALUE,
             maxNodeCount = Int.MAX_VALUE,
             maxIngestBytes = Long.MAX_VALUE,

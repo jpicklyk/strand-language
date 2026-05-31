@@ -54,6 +54,12 @@ object ResourceTable {
      * opt-in vector-store handles. Same opt-in pattern as conversation
      * handles. Listed here so the kind registry is in one place; the
      * vector-store-specific builtins live in the Q-038 implementation.
+     *
+     * `KIND_LLM_STREAM` (Q-045) backs the streaming LLM generate handles
+     * minted by the per-provider `*.CreateStream` builtins and drained
+     * one chunk at a time by `LLM.Stream.Receive`. The underlying object
+     * is an [LlmStreamHolder] wrapping the open HTTP response's chunk
+     * source plus provider/model metadata for error context.
      */
     const val KIND_SOCKET: String = "socket"
     const val KIND_PROCESS: String = "process"
@@ -61,6 +67,7 @@ object ResourceTable {
     const val KIND_HTTP_PENDING: String = "http-pending"
     const val KIND_LLM_CONVERSATION: String = "llm_conversation"
     const val KIND_VECTOR_STORE: String = "vector_store"
+    const val KIND_LLM_STREAM: String = "llm_stream"
 
     private val table = ConcurrentHashMap<Long, Holder>()
     private val nextId = AtomicLong(1)
@@ -112,6 +119,21 @@ object ResourceTable {
         nextId.set(1)
     }
 }
+
+/**
+ * Q-045: the underlying object registered under [ResourceTable.KIND_LLM_STREAM].
+ * Wraps the open streaming response ([stream]) drained one chunk at a
+ * time by `LLM.Stream.Receive`, plus [provider] / [model] metadata used
+ * only to enrich the detail string of any [IoFailure] raised on a
+ * mid-stream transport error. The holder owns no decoding state — chunks
+ * are raw bytes (SSE framing is decoded in Strand or a deferred `Sse.*`
+ * layer per the proposal § 8).
+ */
+class LlmStreamHolder(
+    val provider: String,
+    val model: String,
+    val stream: LlmHttpClient.LlmStream,
+)
 
 /**
  * Thrown by IO builtins when an operation fails (permission denied,

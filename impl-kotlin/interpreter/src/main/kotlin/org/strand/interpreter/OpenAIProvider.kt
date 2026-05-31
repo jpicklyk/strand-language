@@ -45,45 +45,7 @@ object OpenAIProvider {
                 "no API key configured for provider 'openai' (env: OPENAI_API_KEY)",
             )
 
-        val body = buildJsonObject {
-            put("model", JsonPrimitive(req.model))
-            if (req.maxTokens != null) put("max_tokens", JsonPrimitive(req.maxTokens))
-            if (req.temperature != null) put("temperature", JsonPrimitive(req.temperature))
-            put("messages", buildJsonArray {
-                // OpenAI takes system as a separate `system` role rather
-                // than a top-level field.
-                if (req.system != null) add(buildJsonObject {
-                    put("role", JsonPrimitive("system"))
-                    put("content", JsonPrimitive(req.system))
-                })
-                for (m in req.messages) add(openaiMessage(m))
-            })
-            if (req.tools.isNotEmpty()) {
-                put("tools", buildJsonArray {
-                    for (t in req.tools) add(buildJsonObject {
-                        put("type", JsonPrimitive("function"))
-                        put("function", buildJsonObject {
-                            put("name", JsonPrimitive(t.name))
-                            put("description", JsonPrimitive(t.description))
-                            put("parameters", t.parameterSchema)
-                        })
-                    })
-                })
-            }
-            if (req.responseSchema != null) {
-                put("response_format", buildJsonObject {
-                    put("type", JsonPrimitive("json_schema"))
-                    put("json_schema", buildJsonObject {
-                        put("name", JsonPrimitive("response"))
-                        put("strict", JsonPrimitive(true))
-                        put("schema", req.responseSchema)
-                    })
-                })
-            }
-            if (req.providerExtras is JsonObject) {
-                for ((k, v) in req.providerExtras) put(k, v)
-            }
-        }
+        val body = buildBody(req, stream = false)
 
         // Q-042: single auditable `.reveal()` call site for OpenAI generate.
         // The revealed value is consumed by the Bearer-token header below.
@@ -159,6 +121,89 @@ object OpenAIProvider {
             ?: throw IoFailure("openai-embed", "response missing embedding array")
         val values = embedding.map { it.jsonPrimitive.doubleOrNull ?: 0.0 }
         return floatsToBytesLE(values)
+    }
+
+    /**
+     * Build the Chat Completions request body. Shared by [generate]
+     * (`stream = false`) and [generateStreamOpen] (`stream = true`).
+     * The `stream` flag switches the response to SSE `data:`-framed
+     * chunks; `stream_options.include_usage` requests a trailing usage
+     * frame so a Strand-side decoder can recover token accounting.
+     */
+    private fun buildBody(req: GenerateRequest, stream: Boolean) = buildJsonObject {
+        put("model", JsonPrimitive(req.model))
+        if (req.maxTokens != null) put("max_tokens", JsonPrimitive(req.maxTokens))
+        if (req.temperature != null) put("temperature", JsonPrimitive(req.temperature))
+        put("messages", buildJsonArray {
+            // OpenAI takes system as a separate `system` role rather
+            // than a top-level field.
+            if (req.system != null) add(buildJsonObject {
+                put("role", JsonPrimitive("system"))
+                put("content", JsonPrimitive(req.system))
+            })
+            for (m in req.messages) add(openaiMessage(m))
+        })
+        if (req.tools.isNotEmpty()) {
+            put("tools", buildJsonArray {
+                for (t in req.tools) add(buildJsonObject {
+                    put("type", JsonPrimitive("function"))
+                    put("function", buildJsonObject {
+                        put("name", JsonPrimitive(t.name))
+                        put("description", JsonPrimitive(t.description))
+                        put("parameters", t.parameterSchema)
+                    })
+                })
+            })
+        }
+        if (req.responseSchema != null) {
+            put("response_format", buildJsonObject {
+                put("type", JsonPrimitive("json_schema"))
+                put("json_schema", buildJsonObject {
+                    put("name", JsonPrimitive("response"))
+                    put("strict", JsonPrimitive(true))
+                    put("schema", req.responseSchema)
+                })
+            })
+        }
+        if (req.providerExtras is JsonObject) {
+            for ((k, v) in req.providerExtras) put(k, v)
+        }
+        if (stream) {
+            put("stream", JsonPrimitive(true))
+            put("stream_options", buildJsonObject { put("include_usage", JsonPrimitive(true)) })
+        }
+    }
+
+    /**
+     * Q-045: open a streaming Chat Completion. Issues the same request as
+     * [generate] with `stream: true`, opens the SSE response, and returns
+     * the live [LlmHttpClient.LlmStream] the `OpenAI.Chat.CompletionsStream`
+     * builtin registers under [ResourceTable.KIND_LLM_STREAM]. Stateless;
+     * chunks are raw bytes (SSE decoding is deferred per proposal § 8).
+     */
+    fun generateStreamOpen(
+        req: GenerateRequest,
+        client: LlmHttpClient = DefaultLlmHttpClient,
+        credentials: CredentialProvider = Builtins.credentialProvider,
+    ): LlmHttpClient.LlmStream {
+        val credential = credentials.apiKey("openai")
+            ?: throw IoFailure(
+                "openai-credentials-missing",
+                "no API key configured for provider 'openai' (env: OPENAI_API_KEY)",
+            )
+        val body = buildBody(req, stream = true)
+        // Q-042: single auditable `.reveal()` call site for the OpenAI
+        // streaming open, symmetric with [generate]'s header builder.
+        val headers = listOf(
+            "Authorization" to "Bearer ${credential.reveal()}",
+            "Content-Type" to "application/json",
+            "Accept" to "text/event-stream",
+        )
+        return try {
+            client.openStream(CHAT_URL, headers, body.toString().toByteArray(Charsets.UTF_8))
+        } catch (e: java.io.IOException) {
+            throw IoFailure("openai-http", "chat-stream: ${e.message}")
+        }
     }
 
     private fun openaiMessage(m: LlmMessage): JsonObject = when (m) {

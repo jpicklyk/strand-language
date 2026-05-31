@@ -223,6 +223,21 @@ class CorpusTest {
         // passive-node path under empty capabilities.
         Case("/corpus/79-module-manifest-with-effects.json", Value.UnitV,
             "N-046 (Q-043 step 3b) accept case. A ModuleManifest root bundles a pure Int.identity export (declaredEffects []) and an effectful Fs.writeFile export (declaredEffects [Filesystem.Write]). Each export's declaredEffects exactly equals its effect surface, so the manifest is admitted; it evaluates to Unit."),
+        // Q-045 streaming I/O — verify-only structural exemplar. The program
+        // opens a streaming LLM completion (Anthropic.Messages.CreateStream,
+        // declaring E-035 LLM.Generate{provider, model}), drains it with a
+        // Fixpoint + Match over LLM.Stream.Receive's Option<Bytes>
+        // (Some(chunk) → recurse appending via Bytes.Concat, None → the
+        // accumulator), and closes the handle (LLM.Stream.Close) before
+        // returning the concatenated Bytes. The drain Lambda declares E-004
+        // Network.Receive — the load-bearing transport effect the proposal
+        // settles on structural-safety grounds — so the program's effect
+        // closure is {LLM.Generate, Network.Receive}. Verify-only: a real
+        // run needs a streaming HTTP transport and a credential; the runtime
+        // drain is exercised end-to-end by StreamingReceiveTest in the
+        // interpreter module with an injected transport.
+        Case("/corpus/81-llm-stream-drain.json", null,
+            "Q-045 verify-only: streaming-LLM drain. CreateStream declares E-035 LLM.Generate{provider=\"anthropic\", model=\"claude-opus-4-8\"}; the Fixpoint+Match drain over LLM.Stream.Receive's Option<Bytes> declares E-004 Network.Receive on its Lambda. Root type is Bytes. The runtime drain is covered by StreamingReceiveTest with an injected chunk transport."),
     )
 
     /**

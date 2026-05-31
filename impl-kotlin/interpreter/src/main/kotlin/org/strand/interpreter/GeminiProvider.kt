@@ -50,43 +50,7 @@ object GeminiProvider {
                 "no API key configured for provider 'gemini' (env: GEMINI_API_KEY or GOOGLE_API_KEY)",
             )
 
-        val body = buildJsonObject {
-            put("contents", buildJsonArray {
-                for (m in req.messages) add(geminiMessage(m))
-            })
-            if (req.system != null) {
-                put("systemInstruction", buildJsonObject {
-                    put("parts", buildJsonArray {
-                        add(buildJsonObject { put("text", JsonPrimitive(req.system)) })
-                    })
-                })
-            }
-            if (req.tools.isNotEmpty()) {
-                put("tools", buildJsonArray {
-                    add(buildJsonObject {
-                        put("functionDeclarations", buildJsonArray {
-                            for (t in req.tools) add(buildJsonObject {
-                                put("name", JsonPrimitive(t.name))
-                                put("description", JsonPrimitive(t.description))
-                                put("parameters", t.parameterSchema)
-                            })
-                        })
-                    })
-                })
-            }
-            val genConfig = buildJsonObject {
-                if (req.maxTokens != null) put("maxOutputTokens", JsonPrimitive(req.maxTokens))
-                if (req.temperature != null) put("temperature", JsonPrimitive(req.temperature))
-                if (req.responseSchema != null) {
-                    put("responseMimeType", JsonPrimitive("application/json"))
-                    put("responseSchema", req.responseSchema)
-                }
-            }
-            if (genConfig.isNotEmpty()) put("generationConfig", genConfig)
-            if (req.providerExtras is JsonObject) {
-                for ((k, v) in req.providerExtras) put(k, v)
-            }
-        }
+        val body = buildBody(req)
 
         // Q-042: single auditable `.reveal()` call site for Gemini generate.
         // Gemini's auth pattern is query-string (`?key=...`), not header — the
@@ -160,6 +124,80 @@ object GeminiProvider {
             ?: throw IoFailure("gemini-embed", "response missing embedding.values array")
         val values = embedding.map { it.jsonPrimitive.doubleOrNull ?: 0.0 }
         return floatsToBytesLE(values)
+    }
+
+    /**
+     * Build the generateContent request body. Shared by [generate] and
+     * [generateStreamOpen] — Gemini's streaming variant takes an
+     * identical body and differs only in the endpoint
+     * (`:streamGenerateContent?alt=sse` versus `:generateContent`).
+     */
+    private fun buildBody(req: GenerateRequest) = buildJsonObject {
+        put("contents", buildJsonArray {
+            for (m in req.messages) add(geminiMessage(m))
+        })
+        if (req.system != null) {
+            put("systemInstruction", buildJsonObject {
+                put("parts", buildJsonArray {
+                    add(buildJsonObject { put("text", JsonPrimitive(req.system)) })
+                })
+            })
+        }
+        if (req.tools.isNotEmpty()) {
+            put("tools", buildJsonArray {
+                add(buildJsonObject {
+                    put("functionDeclarations", buildJsonArray {
+                        for (t in req.tools) add(buildJsonObject {
+                            put("name", JsonPrimitive(t.name))
+                            put("description", JsonPrimitive(t.description))
+                            put("parameters", t.parameterSchema)
+                        })
+                    })
+                })
+            })
+        }
+        val genConfig = buildJsonObject {
+            if (req.maxTokens != null) put("maxOutputTokens", JsonPrimitive(req.maxTokens))
+            if (req.temperature != null) put("temperature", JsonPrimitive(req.temperature))
+            if (req.responseSchema != null) {
+                put("responseMimeType", JsonPrimitive("application/json"))
+                put("responseSchema", req.responseSchema)
+            }
+        }
+        if (genConfig.isNotEmpty()) put("generationConfig", genConfig)
+        if (req.providerExtras is JsonObject) {
+            for ((k, v) in req.providerExtras) put(k, v)
+        }
+    }
+
+    /**
+     * Q-045: open a streaming generateContent call. Posts the same body
+     * as [generate] to the `:streamGenerateContent?alt=sse` endpoint,
+     * opens the SSE response, and returns the live
+     * [LlmHttpClient.LlmStream] the `Gemini.GenerateContentStream`
+     * builtin registers under [ResourceTable.KIND_LLM_STREAM]. Stateless;
+     * chunks are raw bytes (SSE decoding deferred per proposal § 8).
+     */
+    fun generateStreamOpen(
+        req: GenerateRequest,
+        client: LlmHttpClient = DefaultLlmHttpClient,
+        credentials: CredentialProvider = Builtins.credentialProvider,
+    ): LlmHttpClient.LlmStream {
+        val credential = credentials.apiKey("gemini")
+            ?: throw IoFailure(
+                "gemini-credentials-missing",
+                "no API key configured for provider 'gemini' (env: GEMINI_API_KEY or GOOGLE_API_KEY)",
+            )
+        val body = buildBody(req)
+        // Q-042: single auditable `.reveal()` call site for the Gemini
+        // streaming open; the query-string auth pattern matches [generate].
+        val url = "$BASE_URL/${req.model}:streamGenerateContent?alt=sse&key=${credential.reveal()}"
+        val headers = listOf("Content-Type" to "application/json")
+        return try {
+            client.openStream(url, headers, body.toString().toByteArray(Charsets.UTF_8))
+        } catch (e: java.io.IOException) {
+            throw IoFailure("gemini-http", "streamGenerateContent: ${e.message}")
+        }
     }
 
     private fun geminiMessage(m: LlmMessage): JsonObject = when (m) {

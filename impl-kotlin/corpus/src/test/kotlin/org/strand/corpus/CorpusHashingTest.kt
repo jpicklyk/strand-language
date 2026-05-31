@@ -70,6 +70,12 @@ class CorpusHashingTest {
         // and the dual raw/canonical encoder paths end-to-end. Verifies Ok
         // (its exports' declared effects match their surfaces).
         "/corpus/79-module-manifest-with-effects.json",
+        // Q-045 streaming I/O — verify-only drain exemplar. Exercises the
+        // canonical encoding of a Fixpoint+Match drain over the streaming
+        // ForeignNodes (CreateStream / LLM.Stream.Receive / LLM.Stream.Close)
+        // plus an Option<Bytes> SumType; no resource Value ever enters the
+        // store so the program hashes deterministically like any other.
+        "/corpus/81-llm-stream-drain.json",
     )
 
     @TestFactory

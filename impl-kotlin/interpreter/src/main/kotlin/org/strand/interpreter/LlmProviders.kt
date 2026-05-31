@@ -142,6 +142,94 @@ interface LlmHttpClient {
             other is HttpResponse && status == other.status && body.contentEquals(other.body)
         override fun hashCode(): Int = status * 31 + body.contentHashCode()
     }
+
+    /**
+     * Q-045: open a streaming POST and return an [LlmStream] the caller
+     * drains one chunk at a time. The streaming-LLM `*.CreateStream`
+     * builtins call this; the returned stream is registered under
+     * [ResourceTable.KIND_LLM_STREAM] and pulled via `LLM.Stream.Receive`.
+     *
+     * The default implementation degrades gracefully: it performs a
+     * normal [post] and serves the full response body as a single chunk.
+     * Existing mock transports (which only implement [post]) therefore
+     * support streaming without change — a test that needs genuine
+     * multi-chunk delivery overrides this. [DefaultLlmHttpClient]
+     * overrides it with true incremental reads off the HTTP response
+     * input stream, installing the per-read timeout from
+     * [Builtins.streamReceiveTimeoutMillis].
+     */
+    fun openStream(
+        url: String,
+        headers: List<Pair<String, String>>,
+        body: ByteArray,
+    ): LlmStream {
+        val resp = post(url, headers, body)
+        if (resp.status !in 200..299) {
+            throw IoFailure(
+                "llm-stream-http-status",
+                "status ${resp.status}: ${String(resp.body, Charsets.UTF_8).take(500)}",
+            )
+        }
+        return SingleChunkLlmStream(resp.body)
+    }
+
+    /**
+     * A live, drainable streaming response. [read] returns up to
+     * `maxBytes` raw bytes per call (one or more unparsed SSE frames),
+     * or `null` at end-of-stream — the EOF signal `LLM.Stream.Receive`
+     * surfaces as `Option`'s `None`. [close] releases the underlying
+     * transport and is idempotent.
+     */
+    interface LlmStream {
+        fun read(maxBytes: Int): ByteArray?
+        fun close()
+    }
+}
+
+/**
+ * Q-045 fallback [LlmHttpClient.LlmStream]: serves a fully-buffered body
+ * as a sequence of `maxBytes`-bounded chunks, then EOF. Backs the
+ * default [LlmHttpClient.openStream] so non-streaming mock transports
+ * keep working, and is the natural shape an injected test transport can
+ * concatenate from.
+ */
+class SingleChunkLlmStream(body: ByteArray) : LlmHttpClient.LlmStream {
+    private var remaining: ByteArray? = body
+    override fun read(maxBytes: Int): ByteArray? {
+        val r = remaining ?: return null
+        if (maxBytes <= 0) return ByteArray(0)
+        return if (r.size <= maxBytes) {
+            remaining = null
+            r
+        } else {
+            remaining = r.copyOfRange(maxBytes, r.size)
+            r.copyOfRange(0, maxBytes)
+        }
+    }
+    override fun close() { remaining = null }
+}
+
+/**
+ * Q-045 production [LlmHttpClient.LlmStream]: incremental reads straight
+ * off the HTTP response [input] stream. A native `read` returning `-1`
+ * is end-of-stream (`null`); a [java.net.SocketTimeoutException] from
+ * the installed read timeout propagates to the builtin, which maps it to
+ * a recoverable `IoFailure("llm-stream-timeout", ...)`.
+ */
+class InputStreamLlmStream(
+    private val input: java.io.InputStream,
+    private val conn: java.net.HttpURLConnection?,
+) : LlmHttpClient.LlmStream {
+    override fun read(maxBytes: Int): ByteArray? {
+        if (maxBytes <= 0) return ByteArray(0)
+        val buf = ByteArray(maxBytes)
+        val n = input.read(buf)
+        return if (n < 0) null else buf.copyOf(n)
+    }
+    override fun close() {
+        try { input.close() } catch (_: java.io.IOException) { /* already closed */ }
+        conn?.disconnect()
+    }
 }
 
 /** Default JVM HttpURLConnection-backed transport. */
@@ -172,6 +260,47 @@ object DefaultLlmHttpClient : LlmHttpClient {
         } finally {
             conn.disconnect()
         }
+    }
+
+    /**
+     * Q-045: true incremental streaming over [java.net.HttpURLConnection].
+     * The read timeout is taken from [Builtins.streamReceiveTimeoutMillis]
+     * (host policy) so a stalled body cannot block a calling thread past
+     * the configured ceiling; a value outside the positive `Int` range
+     * (notably `EvaluationLimits.PERMISSIVE`) maps to `0` — the JVM's
+     * "no timeout". On a non-2xx open the connection is disconnected and
+     * an [IoFailure] is raised before any [LlmHttpClient.LlmStream] is
+     * handed back, so no partial stream survives a failed open.
+     */
+    override fun openStream(
+        url: String,
+        headers: List<Pair<String, String>>,
+        body: ByteArray,
+    ): LlmHttpClient.LlmStream {
+        val uri = java.net.URI(url)
+        val conn = uri.toURL().openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.doInput = true
+        conn.doOutput = true
+        conn.connectTimeout = 30_000
+        val timeout = Builtins.streamReceiveTimeoutMillis
+        conn.readTimeout = if (timeout in 1..Int.MAX_VALUE.toLong()) timeout.toInt() else 0
+        for ((name, value) in headers) conn.setRequestProperty(name, value)
+        conn.outputStream.use { it.write(body) }
+        val status = conn.responseCode
+        if (status !in 200..299) {
+            val errBody = try {
+                conn.errorStream?.readBytes() ?: ByteArray(0)
+            } catch (_: java.io.IOException) {
+                ByteArray(0)
+            }
+            conn.disconnect()
+            throw IoFailure(
+                "llm-stream-http-status",
+                "status $status: ${String(errBody, Charsets.UTF_8).take(500)}",
+            )
+        }
+        return InputStreamLlmStream(conn.inputStream, conn)
     }
 }
 
