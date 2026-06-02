@@ -2,14 +2,15 @@
 
 Strand is a research project to design and build a programming language for AI agents to **generate**, not for humans to author. Programs are content-addressed graphs of typed nodes with mandatory effect declarations. There is no concrete syntax. There is no human-readable projection layer.
 
-The design corpus (Wave 1–3) is substantially complete. Active work is the Kotlin/JVM reference implementation under `impl-kotlin/`. Milestone 2.1, Layer 1 (pure-computation core, N-001..N-019) is the current slice.
+The design corpus (Wave 1–3) is substantially complete. Active work is the Kotlin/JVM reference implementation under `impl-kotlin/`. This file does not track which slice is current — work proceeds on several fronts in parallel; consult [`impl-kotlin/README.md`](impl-kotlin/README.md) for implementation state and [`proposals/`](proposals/README.md) plus [`open-questions.md`](open-questions.md) for what is in flight.
 
 ## Read these before doing anything substantive
 
 - [`INDEX.md`](INDEX.md) — document tree, concept index, and the **authoritative identifier registry** (ADR-NNN, N-NNN, E-NNN, Q-NNN). Read INDEX before assuming what exists.
+- [`ROADMAP.md`](ROADMAP.md) — prioritized implementation work remaining to make Strand a usable language, in tiers. Start here to pick up or be assigned a tier or item; each entry points to its defining open question, proposal, or design document. Status is not tracked here — it is derived from the referenced Q-NNN and proposal location.
 - [`impl-kotlin/README.md`](impl-kotlin/README.md) — implementation state, layer scope, module layout.
 - [`impl-kotlin/CLAUDE.md`](impl-kotlin/CLAUDE.md) — implementation-side conventions, loaded when working inside `impl-kotlin/`.
-- [`proposals/README.md`](proposals/README.md) — draft design proposals for unimplemented features (Q-030, Q-031, Q-032). The next session can advance any of them by reading the corresponding document, confirming with Jeff, and executing.
+- [`proposals/README.md`](proposals/README.md) — draft design proposals for unimplemented features, plus an index of the implemented ones. The next session can advance any open proposal by reading the corresponding document, confirming with Jeff, and executing.
 
 For specific work, also read the documents most relevant to it. ADR-001 through ADR-004 and `design/node-algebra.md` are load-bearing for any verifier/interpreter work.
 
