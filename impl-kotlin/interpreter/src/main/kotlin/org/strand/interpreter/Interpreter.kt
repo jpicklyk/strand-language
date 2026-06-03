@@ -101,7 +101,38 @@ class Interpreter(
      * callback extends so admitted nodes are visible here.
      */
     private val resolveTarget: ((Hash) -> NodeId?)? = null,
+    /**
+     * Q-047 (Layer 7 step 2): runtime schema obligations. Maps each
+     * value-flow-site NodeId the verifier re-recorded with a
+     * [org.strand.verifier.TypeExpr.SchemaType] to that SchemaType. After
+     * the interpreter reduces such a NodeId to a [Value], it evaluates the
+     * schema's pure-expression invariants against the value and raises
+     * [InterpretError.SchemaInvariantViolation] on a `false` verdict —
+     * enforcing at runtime the obligations the verify-time
+     * [org.strand.schema.SchemaChecker] could only defer for dynamic
+     * values.
+     *
+     * Default empty: a caller that passes no obligations (the runtime
+     * module's per-actor interpreters, the SchemaChecker's own internal
+     * interpreter, every pre-Q-047 test) enforces nothing — behaviour is
+     * unchanged. The CLI `run` path builds the map from
+     * `VerifyResult.Ok.nodeTypes` and passes it in. Invariant bodies are
+     * evaluated with obligation-checking suppressed (see [inInvariant]) so
+     * a predicate's internal structure is never mistaken for the value
+     * under test.
+     */
+    private val schemaObligations: Map<NodeId, org.strand.verifier.TypeExpr.SchemaType> = emptyMap(),
 ) {
+
+    /**
+     * Q-047: re-entrancy guard for schema-obligation checking. Set while
+     * an invariant body is being evaluated so that obligation sites
+     * *inside* the predicate do not fire (the body is verified pure and
+     * `(valueType) -> Bool`; its sub-nodes describe the predicate, not a
+     * value flowing into a schema position). Single-threaded per
+     * Interpreter instance, matching the tree-walker's execution model.
+     */
+    private var inInvariant: Boolean = false
 
     /** Top-level evaluation under an empty capability context (pure-only). */
     fun eval(root: NodeId): Value = eval(root, capabilities = CapabilitySet.EMPTY)
@@ -354,7 +385,7 @@ class Interpreter(
         try {
             val node = store.getOrNull(id)
                 ?: throw InterpretException(InterpretError.MissingNode(at = id, missing = id))
-            return when (node) {
+            val result = when (node) {
                 is Node.IntLit -> allocV(counters, limits, id, Value.IntV(node.value))
                 is Node.FloatLit -> allocV(counters, limits, id, Value.FloatV(node.value))
                 is Node.StringLit -> allocV(counters, limits, id, Value.StringV(node.value))
@@ -500,8 +531,77 @@ class Interpreter(
             is Node.Invariant ->
                 throw InterpretException(InterpretError.NotCallable(at = id, gotKind = node::class.simpleName ?: "Type"))
             }
+            // Q-047 (Layer 7 step 2): if this NodeId is a schema-typed
+            // value-flow site, enforce the schema's invariants against the
+            // value we just produced. No-op when no obligations are
+            // installed (the common case) or while evaluating an invariant
+            // body (see [inInvariant]).
+            checkSchemaObligations(id, result, counters, limits)
+            return result
         } finally {
             counters.currentDepth--
+        }
+    }
+
+    /**
+     * Q-047: enforce any schema obligation recorded for [id] against the
+     * value [v] the interpreter just produced for it. For each invariant
+     * the schema declares, evaluate the invariant's pure-expression body
+     * on [v]; a `false` verdict raises [InterpretError.SchemaInvariantViolation]
+     * blaming [id]. A non-Bool verdict is a defensive internal error (the
+     * verifier's `SchemaInvariantBodyTypeMismatch` rule guarantees the body
+     * is `(valueType) -> Bool`). Invariants are checked in declaration
+     * order; the first failure wins.
+     */
+    private fun checkSchemaObligations(
+        id: NodeId,
+        v: Value,
+        counters: EvalCounters,
+        limits: EvaluationLimits,
+    ) {
+        if (schemaObligations.isEmpty() || inInvariant) return
+        val obligation = schemaObligations[id] ?: return
+        for (invariantId in obligation.invariants) {
+            val invariantNode = store.getOrNull(invariantId) as? Node.Invariant ?: continue
+            val verdict = evaluateInvariantBody(invariantNode.body, v, counters, limits)
+            if (verdict !is Value.BoolV) {
+                error(
+                    "Invariant $invariantId's body evaluated to a non-Bool value " +
+                        "($verdict); the verifier's SchemaInvariantBodyTypeMismatch rule should have rejected this."
+                )
+            }
+            if (!verdict.v) {
+                throw InterpretException(InterpretError.SchemaInvariantViolation(
+                    at = id,
+                    schema = obligation.schemaId,
+                    invariant = invariantId,
+                    valueDescription = v.toString(),
+                ))
+            }
+        }
+    }
+
+    /**
+     * Q-047: evaluate an invariant body Lambda on [value], with
+     * obligation-checking suppressed for the duration so the predicate's
+     * own structure is not re-checked. The body is pure (verifier rule),
+     * so it runs under an empty capability context; it shares the
+     * surrounding run's [counters] / [limits] so a pathological predicate
+     * cannot escape the Q-040 budget.
+     */
+    private fun evaluateInvariantBody(
+        bodyId: NodeId,
+        value: Value,
+        counters: EvalCounters,
+        limits: EvaluationLimits,
+    ): Value {
+        val prev = inInvariant
+        inInvariant = true
+        try {
+            val fn = eval(bodyId, emptyMap(), CapabilitySet.EMPTY, emptyList(), counters, limits)
+            return applyCallable(fn, listOf(value), CapabilitySet.EMPTY, counters, limits)
+        } finally {
+            inInvariant = prev
         }
     }
 

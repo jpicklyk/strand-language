@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "root": "schemaClaim",
+  "nodes": {
+    "intT":       { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":      { "type": "PrimitiveType", "kind": "Bool" },
+
+    "zero":       { "type": "IntLit", "value": 0 },
+    "xParam":     { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+    "xRef":       { "type": "VarRef", "binder": "xParam" },
+    "gtT":        { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "gt":         { "type": "ForeignNode", "target": "strand-builtin:Int.Gt", "foreignType": "gtT" },
+    "gtBody":     { "type": "Application", "function": "gt", "arguments": ["xRef", "zero"] },
+    "predLam":    { "type": "Lambda", "parameters": ["xParam"], "body": "gtBody" },
+
+    "positiveInvariant": {
+      "type": "Invariant",
+      "invariantName": "x_positive",
+      "targetSchema": "positiveInt",
+      "body": "predLam"
+    },
+    "positiveInt": {
+      "type": "Schema",
+      "schemaName": "PositiveInt",
+      "valueType": "intT",
+      "invariants": ["positiveInvariant"]
+    },
+
+    "pIn":        { "type": "ParameterDecl", "name": "p", "paramType": "positiveInt" },
+    "pInRef":     { "type": "VarRef", "binder": "pIn" },
+    "identityOfPositiveInt": {
+      "type": "Lambda",
+      "parameters": ["pIn"],
+      "body": "pInRef"
+    },
+
+    "five":       { "type": "IntLit", "value": 5 },
+    "three":      { "type": "IntLit", "value": 3 },
+    "subT":       { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "sub":        { "type": "ForeignNode", "target": "strand-builtin:Int.Sub", "foreignType": "subT" },
+    "subApp":     { "type": "Application", "function": "sub", "arguments": ["five", "three"] },
+
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfPositiveInt",
+      "arguments": ["subApp"]
+    }
+  }
+}

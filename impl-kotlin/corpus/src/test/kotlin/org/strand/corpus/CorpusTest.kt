@@ -238,6 +238,17 @@ class CorpusTest {
         // interpreter module with an injected transport.
         Case("/corpus/81-llm-stream-drain.json", null,
             "Q-045 verify-only: streaming-LLM drain. CreateStream declares E-035 LLM.Generate{provider=\"anthropic\", model=\"claude-opus-4-8\"}; the Fixpoint+Match drain over LLM.Stream.Receive's Option<Bytes> declares E-004 Network.Receive on its Lambda. Root type is Bytes. The runtime drain is covered by StreamingReceiveTest with an injected chunk transport."),
+
+        // Q-047 (Layer 7 step 2). A dynamic value (Int.Sub(5,3)) flows into
+        // a PositiveInt schema parameter. The value is non-static, so the
+        // verify-time SchemaChecker defers it (SchemaInvariantDeferred) and
+        // the graph verifies; it evaluates to the underlying Int (2). Runtime
+        // schema enforcement of the invariant is exercised in
+        // CorpusRuntimeSchemaTest, which installs the verifier's obligations
+        // on the interpreter (CorpusTest's interpreter has none, so here the
+        // program simply runs to its value).
+        Case("/corpus/82-runtime-schema-dynamic-pass.json", Value.IntV(2),
+            "Q-047 runtime-schema pass case: identity-over-PositiveInt applied to a dynamic Int.Sub(5,3). The argument is non-static so step-1 defers the invariant; the value (2) satisfies PositiveInt. Evaluates to IntV(2). CorpusRuntimeSchemaTest drives the same program with runtime obligations installed to assert the invariant is enforced."),
     )
 
     /**

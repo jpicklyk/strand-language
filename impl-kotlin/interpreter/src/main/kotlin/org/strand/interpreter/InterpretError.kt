@@ -166,6 +166,36 @@ sealed class InterpretError {
         val kind: SandboxViolationKind,
         val detail: String,
     ) : InterpretError()
+
+    /**
+     * Q-047 (Layer 7 step 2): a schema-typed value computed at runtime
+     * failed one of its schema's invariants. This is the runtime analogue
+     * of [org.strand.verifier.VerifyError.SchemaInvariantViolation]: the
+     * verifier's [org.strand.schema.SchemaChecker] catches violations on
+     * statically-known values at verify time, but defers values it cannot
+     * fold statically (function parameters, Application results, Match
+     * branches, foreign-call returns) as `SchemaInvariantDeferred`. This
+     * variant enforces those deferred obligations when the value
+     * materialises: at every value-flow site the verifier re-recorded
+     * with a [org.strand.verifier.TypeExpr.SchemaType], the interpreter
+     * evaluates each pure-expression invariant against the produced value
+     * and raises this on a `false` verdict.
+     *
+     * The combined discipline is sound and complete-at-runtime: verify
+     * time rejects statically-provable violations early; runtime rejects
+     * the rest. A schema violation is never silently emitted.
+     *
+     * [at] is the obligation site (the value-flow position the verifier
+     * typed as the schema); [schema] is the Schema node; [invariant] is
+     * the specific Invariant that failed; [valueDescription] is the
+     * offending value's `toString` for diagnostics.
+     */
+    data class SchemaInvariantViolation(
+        override val at: NodeId?,
+        val schema: NodeId,
+        val invariant: NodeId,
+        val valueDescription: String,
+    ) : InterpretError()
 }
 
 class InterpretException(val error: InterpretError) : RuntimeException(error.toString())

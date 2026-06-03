@@ -392,7 +392,19 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                 val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
                 Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
                 try {
-                    val interp = Interpreter(store, hashToNodeId, resolveTarget = resolveCb)
+                    // Q-047 (Layer 7 step 2): runtime schema enforcement.
+                    // The verifier re-records a SchemaType at every value-flow
+                    // site; pass those obligations to the interpreter so it
+                    // enforces invariants on dynamic values the verify-time
+                    // SchemaChecker could only defer.
+                    val schemaObligations = result.nodeTypes.mapNotNull { (nid, t) ->
+                        (t as? org.strand.verifier.TypeExpr.SchemaType)?.let { nid to it }
+                    }.toMap()
+                    val interp = Interpreter(
+                        store, hashToNodeId,
+                        resolveTarget = resolveCb,
+                        schemaObligations = schemaObligations,
+                    )
                     val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
                     val value = interp.eval(root, caps, limits)
                     println("value: $value")
