@@ -19,13 +19,19 @@ import org.strand.vm.Vm
  * corpus program below, the test asserts the bytecode VM produces the
  * same result as the tree-walking interpreter.
  *
- * The fixture list is intentionally narrow: only programs whose nodes
- * are within the slice-1 lowerer's scope (literals, lambda, application,
- * let, varref, NodeRef, TypeAbstraction, ForeignNode). Programs using
- * Match, Fixpoint, Product/SumValue, capabilities, handlers, state
- * machines, or schemas are excluded; the lowerer raises
- * [org.strand.bytecode.LoweringNotImplemented] for those categories.
- * Extending the list happens as each layer's lowering rules land.
+ * The fixture list grows as each layer's lowering rules land: it now
+ * spans Layer 1 (literals, lambda, application, let, varref, NodeRef,
+ * TypeAbstraction, ForeignNode), Layer 3 (capabilities, handlers), and
+ * Layer 5 (Match, Fixpoint, Product/SumValue, ConstructorPattern,
+ * recursive types). State-machine and async programs are covered by
+ * [VmMachineEquivalenceTest] / [VmAsyncMachineEquivalenceTest]; the
+ * static schema-invariant dispatch is covered by
+ * [VmSchemaEquivalenceTest]. A schema-bearing program is admissible here
+ * when its *value path* stays within the lowerer's scope — the Schema /
+ * Invariant nodes are reachable only through type edges, which the
+ * lowerer erases (see corpus 82 below). The lowerer raises
+ * [org.strand.bytecode.LoweringNotImplemented] for any category still out
+ * of scope.
  *
  * The corpus programs 08-product-type-decl and 09-sum-type-decl are
  * type-declaration only — their root nodes evaluate to a runtime Value
@@ -96,6 +102,19 @@ class VmEquivalenceTest {
         // Layer 5 — Recursive types (lists) + ConstructorPattern.
         Layer14Pair("31-recursive-list-head"),
         Layer14Pair("32-recursive-list-sum"),
+        // Q-047 (Layer 7 step 2) — a schema-bearing program on its value
+        // path. The PositiveInt Schema/Invariant nodes are reachable only
+        // through the parameter's type edge (erased at lowering and not
+        // consulted by the obligation-free interpreter run here), so the
+        // value path — identityOfPositiveInt(Int.Sub(5,3)) — lowers and
+        // evaluates to IntV(2) identically under both engines. This is the
+        // non-violating case: runtime schema enforcement is interpreter-
+        // only (the VM erases schemas pre-bytecode), so the *violation*
+        // sibling (corpus 83) is deliberately NOT here — it would diverge
+        // by design. CorpusRuntimeSchemaTest cross-checks that the VM
+        // value agrees with the interpreter-WITH-obligations result for
+        // this pass case.
+        Layer14Pair("82-runtime-schema-dynamic-pass"),
     )
 
     @TestFactory
