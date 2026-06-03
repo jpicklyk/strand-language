@@ -816,17 +816,29 @@ internal class CanonicalEncoder(
         // own tag (0=Block, 1=DropNew, 2=DropOld, 3=Sample), with the Sample
         // variant trailed by its intervalNanos parameter. ConsumerMode
         // ordinal: 0=Single, 1=Broadcast — stable forever.
+        // Q-046 additive-versioning rule: when source == null the encoding is
+        // byte-identical to the pre-Q-046 form in BOTH branches below (the
+        // all-default base-only case and the slice-3.1/3.6 some-non-default
+        // case). When source is set, its hash is appended as a single trailing
+        // field. This is collision-free: a source-only stream encodes to 3
+        // fields ([eventType, streamKind, source-hash]) — a length no pre-Q-046
+        // EventStream produces (those produce 2 or 5) — and the trailing field
+        // is a byte string, distinct in CBOR major type from the trailing uint
+        // (consumerMode) of the 5-field form.
         val baseFields = mutableListOf(
             CanonicalCbor.encodeBytes(hash(node.eventType, stack)),
             CanonicalCbor.encodeUint(node.streamKind.ordinal.toLong()),
         )
+        val sourceField: ByteArray? =
+            node.source?.let { CanonicalCbor.encodeBytes(hash(it, stack)) }
         val hasNonDefaultBuffer = node.bufferSize != null
         val hasNonDefaultPolicy = node.overflowPolicy != null &&
             node.overflowPolicy !is OverflowPolicy.BlockProducer
         val hasNonDefaultMode = node.consumerMode != null &&
             node.consumerMode != ConsumerMode.Single
         if (!hasNonDefaultBuffer && !hasNonDefaultPolicy && !hasNonDefaultMode) {
-            return encodeWithTag(CategoryTag.EventStream, baseFields)
+            val fields = if (sourceField != null) baseFields + sourceField else baseFields
+            return encodeWithTag(CategoryTag.EventStream, fields)
         }
         // Slice 3.1 / 3.6 fields: bufferSize (sentinel 0 for unset / default),
         // policy tag + optional Sample param, then consumerMode (sentinel 0 =
@@ -837,7 +849,9 @@ internal class CanonicalEncoder(
         val bufferEncoded = CanonicalCbor.encodeUint((node.bufferSize ?: 0).toLong())
         val policyFields = encodeOverflowPolicy(node.overflowPolicy ?: OverflowPolicy.BlockProducer)
         val modeEncoded = CanonicalCbor.encodeUint((node.consumerMode ?: ConsumerMode.Single).ordinal.toLong())
-        return encodeWithTag(CategoryTag.EventStream, baseFields + bufferEncoded + policyFields + modeEncoded)
+        val slice36 = baseFields + bufferEncoded + policyFields + modeEncoded
+        val fields = if (sourceField != null) slice36 + sourceField else slice36
+        return encodeWithTag(CategoryTag.EventStream, fields)
     }
 
     /**

@@ -339,7 +339,10 @@ class Hasher(private val rawStore: RawNodeStore) {
                 node.outputStreams.forEach { walk(it, stack, out) }
                 node.effects.forEach { walk(it, stack, out) }
             }
-            is Node.EventStream -> walk(node.eventType, stack, out)
+            is Node.EventStream -> {
+                walk(node.eventType, stack, out)
+                node.source?.let { walk(it, stack, out) }  // Q-046
+            }
             is Node.Transition -> {
                 node.guard?.let { walk(it, stack, out) }
                 walk(node.body, stack, out)

@@ -58,6 +58,21 @@ import org.strand.core.ProjectionSource
  * [hashToNodeId] to observe the admitted nodes, a federated caller must pass
  * the same mutable [FederatedProgram] instances the callback extends.
  */
+
+/**
+ * Q-046: the registry of IO-opening builtin targets a `source`-bound
+ * EventStream may reference, mapped to the semantic effect category each
+ * opener must declare. Mirrors the role of [WellKnownEffect] for the bridge:
+ * a `source` whose callee resolves to one of these targets is an admissible
+ * stream opener, and the opener's Application must declare the mapped effect.
+ */
+private val STREAM_OPENER_TARGETS: Map<String, String> = mapOf(
+    "strand-builtin:Anthropic.Messages.CreateStream" to "LLM.Generate",
+    "strand-builtin:OpenAI.Chat.CompletionsStream" to "LLM.Generate",
+    "strand-builtin:Gemini.GenerateContentStream" to "LLM.Generate",
+    "strand-builtin:Net.Connect" to "Network.Connect",
+)
+
 class Verifier(
     private val store: NodeStore,
     private val hashToNodeId: Map<Hash, NodeId> = emptyMap(),
@@ -2115,7 +2130,93 @@ class Verifier(
                 ))
                 throw VerifyAbort()
             }
+            // Q-046: if the stream is IO-backed (a `source` edge), enforce the
+            // bridge well-formedness rules before it is admitted.
+            streamNode.source?.let { sourceId ->
+                validateStreamSource(streamId, streamNode, eventType, sourceId)
+            }
             return streamNode to eventType
+        }
+
+        /**
+         * Q-046: well-formedness of a `source`-bound EventStream. The `source`
+         * edge must point at an Application of a registered IO-opening builtin
+         * whose declared semantic effect matches its kind; the stream must be
+         * `External`, carry a `Bytes` eventType, and (because byte chunks
+         * cannot be dropped without corruption) use `BlockProducer` overflow.
+         * Each violation reports its specific error and aborts.
+         */
+        private fun validateStreamSource(
+            streamId: NodeId,
+            stream: Node.EventStream,
+            eventType: TypeExpr,
+            sourceId: NodeId,
+        ) {
+            if (stream.streamKind != org.strand.core.StreamKind.External) {
+                report(VerifyError.StreamSourceOnNonExternal(at = streamId))
+                throw VerifyAbort()
+            }
+            if (eventType !is TypeExpr.Prim || eventType.kind != org.strand.core.Primitive.Bytes) {
+                report(VerifyError.StreamSourceTypeMismatch(at = streamId, eventType = stream.eventType))
+                throw VerifyAbort()
+            }
+            val policy = stream.overflowPolicy
+            if (policy != null && policy !is org.strand.core.OverflowPolicy.BlockProducer) {
+                report(VerifyError.ByteStreamSourceRequiresBlockProducer(at = streamId, policy = policy.toString()))
+                throw VerifyAbort()
+            }
+            val app = store.getOrNull(sourceId)
+            if (app !is Node.Application) {
+                report(VerifyError.StreamSourceNotAnOpener(
+                    at = streamId, source = sourceId,
+                    detail = "source must be an Application of an IO-opening builtin, got " +
+                        (app?.let { categoryName(it) } ?: "a dangling reference"),
+                ))
+                throw VerifyAbort()
+            }
+            val target = resolveForeignTarget(app.function)
+            val expectedEffect = target?.let { STREAM_OPENER_TARGETS[it] }
+            if (expectedEffect == null) {
+                report(VerifyError.StreamSourceNotAnOpener(
+                    at = streamId, source = sourceId,
+                    detail = "callee is not a registered stream opener (resolved target=$target)",
+                ))
+                throw VerifyAbort()
+            }
+            val declaredNames = app.effectInstances.mapNotNull { declId ->
+                val decl = store.getOrNull(declId) as? Node.EffectDecl ?: return@mapNotNull null
+                (store.getOrNull(decl.effectType) as? Node.EffectCategory)?.categoryName
+            }.toSet()
+            if (expectedEffect !in declaredNames) {
+                report(VerifyError.StreamSourceEffectMismatch(
+                    at = streamId, source = sourceId, expectedEffect = expectedEffect,
+                ))
+                throw VerifyAbort()
+            }
+        }
+
+        /**
+         * Q-046: resolve a function-position expression to the `target` string
+         * of the ForeignNode it denotes, walking VarRef → Let.value,
+         * NodeRef → hash, and Let bodies. Returns null when the chain does not
+         * reach a ForeignNode. Mirrors [resolveProjectedForeignNode] but does
+         * not require effect projections (the streaming opens are unprojected).
+         */
+        private fun resolveForeignTarget(functionExprId: NodeId): String? {
+            var current: NodeId = functionExprId
+            repeat(64) {
+                when (val node = store.getOrNull(current) ?: return null) {
+                    is Node.ForeignNode -> return node.target
+                    is Node.NodeRef -> current = resolveRefTarget(node.target) ?: return null
+                    is Node.VarRef -> {
+                        val binder = store.getOrNull(node.binder) ?: return null
+                        if (binder is Node.Let) current = binder.value else return null
+                    }
+                    is Node.Let -> current = node.body
+                    else -> return null
+                }
+            }
+            return null
         }
 
         /**

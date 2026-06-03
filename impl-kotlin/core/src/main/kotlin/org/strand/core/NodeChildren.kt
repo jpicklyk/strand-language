@@ -128,7 +128,10 @@ fun Node.childNodeIds(): List<NodeId> = when (this) {
         addAll(outputStreams)
         addAll(effects)
     }
-    is Node.EventStream -> listOf(eventType)
+    is Node.EventStream -> buildList {
+        add(eventType)
+        source?.let { add(it) }  // Q-046: the IO-opening node backing this stream
+    }
     is Node.Transition -> buildList {
         guard?.let { add(it) }
         add(body)

@@ -207,6 +207,63 @@ data class MachineGroup(
             ?: error("Expected EventStream at $streamId, got ${store.get(streamId)::class.simpleName}")
         return node.consumerMode ?: ConsumerMode.Single
     }
+
+    /**
+     * Q-046: the `External` streams in this group that carry a `source` edge,
+     * each paired with its IO-opening node. The runtime launches one feeder
+     * coroutine per entry at `runGroup`.
+     */
+    internal fun sourceBoundExternalStreams(): List<Pair<NodeId, NodeId>> =
+        uniqueStreams().mapNotNull { streamId ->
+            val node = store.get(streamId) as? Node.EventStream ?: return@mapNotNull null
+            val src = node.source
+            if (node.streamKind == StreamKind.External && src != null) streamId to src else null
+        }
+
+    /**
+     * Q-046 group-start soundness gate. The host-side feeder performs the
+     * opener's semantic effect (E-035 `LLM.Generate` / E-001 `Network.Connect`)
+     * and the E-004 `Network.Receive` reads on the program's behalf, outside
+     * any transition — so those transport effects appear in no machine's
+     * closure. To keep `closure(g)` a sound upper bound (the Q-044 harm bound)
+     * the group must hold the capabilities for them: for every `source`-bound
+     * external stream, the union of the opener's declared effect categories and
+     * `Network.Receive` must be covered by [capabilities]. Coverage is checked
+     * by category name (the feeder's `Network.Receive` has no graph node to key
+     * on, and the gate only needs to confirm the category is granted; the
+     * concrete socket the feeder opens is independently constrained by the
+     * Q-041 sandbox). A gap aborts the run before any IO source is opened, so a
+     * group whose context revoked `Network.Receive` (directly or via an
+     * enclosing `CapabilityScope`) cannot bridge a live stream.
+     */
+    internal fun validateStreamSourceCoverage() {
+        val bound = sourceBoundExternalStreams()
+        if (bound.isEmpty()) return
+        val grantedNames = capabilities.grants.keys.mapNotNull { catId ->
+            (store.getOrNull(catId) as? Node.EffectCategory)?.categoryName
+        }.toSet()
+        for ((streamId, sourceId) in bound) {
+            val required = openerEffectNames(sourceId) + DRAIN_EFFECT_NAME
+            val missing = required - grantedNames
+            if (missing.isNotEmpty()) {
+                throw MachineGroupValidationError.ExternalStreamSourceEffectUncovered(streamId, sourceId, missing)
+            }
+        }
+    }
+
+    /** The effect category names the opener Application at [sourceId] declares. */
+    private fun openerEffectNames(sourceId: NodeId): Set<String> {
+        val app = store.getOrNull(sourceId) as? Node.Application ?: return emptySet()
+        return app.effectInstances.mapNotNull { declId ->
+            val decl = store.getOrNull(declId) as? Node.EffectDecl ?: return@mapNotNull null
+            (store.getOrNull(decl.effectType) as? Node.EffectCategory)?.categoryName
+        }.toSet()
+    }
+
+    private companion object {
+        /** The transport effect the feeder's `Stream.Receive` reads incur. */
+        const val DRAIN_EFFECT_NAME = "Network.Receive"
+    }
 }
 
 /**
@@ -234,4 +291,12 @@ sealed class MachineGroupValidationError(message: String) : RuntimeException(mes
         MachineGroupValidationError("external stream $stream is listed as an output by $producers; external streams must be host-driven (no producing machine in the group)")
     class OutputStreamCannotBeConsumed(val stream: NodeId, val consumers: List<NodeId>) :
         MachineGroupValidationError("output stream $stream is listed as an input by $consumers; output streams must be host-drained (no consuming machine in the group)")
+    /**
+     * Q-046: a `source`-bound external stream's transport effects are not all
+     * covered by the group's capability context. Raised at group start before
+     * any IO source is opened — the soundness gate that keeps the harm bound
+     * intact for host-driven stream feeders.
+     */
+    class ExternalStreamSourceEffectUncovered(val stream: NodeId, val source: NodeId, val missing: Set<String>) :
+        MachineGroupValidationError("source-bound external stream $stream (opener $source) requires capabilities $missing not granted to the group")
 }

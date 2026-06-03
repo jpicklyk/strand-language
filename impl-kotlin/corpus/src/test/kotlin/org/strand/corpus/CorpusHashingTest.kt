@@ -76,6 +76,7 @@ class CorpusHashingTest {
         // plus an Option<Bytes> SumType; no resource Value ever enters the
         // store so the program hashes deterministically like any other.
         "/corpus/81-llm-stream-drain.json",
+        "/corpus/84-bridged-stream.json",
     )
 
     @TestFactory

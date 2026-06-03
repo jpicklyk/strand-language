@@ -124,7 +124,10 @@ fun Node.translateNodeIds(fn: (NodeId) -> NodeId): Node = when (this) {
         outputStreams = outputStreams.map(fn),
         effects = effects.map(fn),
     )
-    is Node.EventStream -> copy(eventType = fn(eventType))  // streamKind/buffer/policy/mode are not NodeIds
+    is Node.EventStream -> copy(  // streamKind/buffer/policy/mode are not NodeIds
+        eventType = fn(eventType),
+        source = source?.let(fn),  // Q-046: the IO-opening node backing this stream
+    )
     is Node.Transition -> copy(guard = guard?.let(fn), body = fn(body))
 
     // ----- Layer 7: Schema and Invariant -----

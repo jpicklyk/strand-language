@@ -210,10 +210,24 @@ sealed class Node {
      *    wraps the stream in a `MutableSharedFlow<Value>`; each consumer
      *    coroutine subscribes and sees every emitted event.
      *
-     * All three fields are optional in the canonical encoding: when each
-     * equals its default the encoder omits it and the resulting hash matches
-     * the pre-step-3 EventStream encoding byte-for-byte (additive versioning
-     * per ADR-003). Pre-step-3 corpus programs hash unchanged.
+     * Q-046 adds [source] for the actor-runtime bridge:
+     *  * [source] — when non-null on an `External` stream, the NodeId of the
+     *    IO-opening node that backs this stream (an `Application` of a
+     *    `*.CreateStream` LLM builtin or of `Net.Connect`). The runtime
+     *    launches one host-side feeder coroutine per `source`-bound stream
+     *    that drains the opened Q-045 handle and delivers each chunk as an
+     *    ordinary event. The verifier requires `source` to resolve to an
+     *    IO-opening Application whose declared effect matches its kind, the
+     *    stream's [eventType] to be `Bytes`, [streamKind] to be `External`,
+     *    and (because byte chunks corrupt under dropping) [overflowPolicy]
+     *    to be `BlockProducer`.
+     *
+     * All optional fields are omitted from the canonical encoding when they
+     * equal their default (null/Single for the enums, absent for [source]);
+     * the resulting hash matches the pre-feature EventStream encoding
+     * byte-for-byte (additive versioning per ADR-003). Pre-step-3 corpus
+     * programs hash unchanged; programs that omit [source] hash unchanged
+     * from their pre-Q-046 form.
      */
     data class EventStream(
         val eventType: NodeId,               // a Type
@@ -221,6 +235,7 @@ sealed class Node {
         val bufferSize: Int? = null,
         val overflowPolicy: OverflowPolicy? = null,
         val consumerMode: ConsumerMode? = null,
+        val source: NodeId? = null,          // Q-046: an IO-opening Application (External streams only)
     ) : Node()
 
     /**

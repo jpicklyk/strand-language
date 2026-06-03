@@ -550,6 +550,63 @@ sealed class VerifyError {
         val detail: String,
     ) : VerifyError()
 
+    // ----- Q-046 actor-runtime bridge: source-bound EventStream rules -----
+
+    /**
+     * An EventStream carries a `source` edge but is not an `External` stream.
+     * The IO-backing binding is only meaningful on an external ingress; an
+     * `Internal` or `Output` stream with a `source` is rejected.
+     */
+    data class StreamSourceOnNonExternal(
+        override val at: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A `source`-bound EventStream's `source` does not resolve to an
+     * Application of a registered IO-opening builtin (`*.CreateStream` or
+     * `Net.Connect`). [detail] records what the source actually was.
+     */
+    data class StreamSourceNotAnOpener(
+        override val at: NodeId,
+        val source: NodeId,
+        val detail: String,
+    ) : VerifyError()
+
+    /**
+     * The opener referenced by a `source`-bound EventStream does not declare
+     * the semantic effect its kind requires ([expectedEffect] — `LLM.Generate`
+     * for an LLM open, `Network.Connect` for a socket open). Without the
+     * opener's effect declaration the group-start coverage check has nothing
+     * to absorb, so the harm bound would be unsound.
+     */
+    data class StreamSourceEffectMismatch(
+        override val at: NodeId,
+        val source: NodeId,
+        val expectedEffect: String,
+    ) : VerifyError()
+
+    /**
+     * A `source`-bound EventStream's `eventType` is not `Bytes`. The Q-046
+     * core slice delivers raw byte chunks; decoded event types await the
+     * deferred framing-decoder layer.
+     */
+    data class StreamSourceTypeMismatch(
+        override val at: NodeId,
+        val eventType: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A `source`-bound byte-chunk EventStream declares a drop overflow policy
+     * ([policy]). Dropping a byte chunk removes a run of bytes mid-stream and
+     * corrupts every downstream decoder, so a byte-backed stream must use
+     * `BlockProducer`. Drop policies become admissible only once a framing
+     * decoder turns bytes into independently-interpretable records.
+     */
+    data class ByteStreamSourceRequiresBlockProducer(
+        override val at: NodeId,
+        val policy: String,
+    ) : VerifyError()
+
     /**
      * A StateMachine declares zero input streams. Every state machine must
      * have at least one input stream (the runtime needs *something* to

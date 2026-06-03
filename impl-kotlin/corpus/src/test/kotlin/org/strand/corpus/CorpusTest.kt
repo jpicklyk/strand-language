@@ -249,6 +249,18 @@ class CorpusTest {
         // program simply runs to its value).
         Case("/corpus/82-runtime-schema-dynamic-pass.json", Value.IntV(2),
             "Q-047 runtime-schema pass case: identity-over-PositiveInt applied to a dynamic Int.Sub(5,3). The argument is non-static so step-1 defers the invariant; the value (2) satisfies PositiveInt. Evaluates to IntV(2). CorpusRuntimeSchemaTest drives the same program with runtime obligations installed to assert the invariant is enforced."),
+
+        // Q-046 (actor-runtime bridge) — verify-only structural exemplar. A
+        // Bytes-accumulator state machine consumes an `External` Bytes stream
+        // whose `source` is an `Application` of `Net.Connect` (declaring
+        // E-001 Network.Connect). The verifier admits the source binding (the
+        // opener is a registered IO-open declaring its semantic effect, the
+        // eventType is Bytes, the stream is External with default
+        // BlockProducer). Running it would dial 127.0.0.1:9000; the end-to-end
+        // bridged drain + replay is covered by BridgedStreamTest over a
+        // loopback socket.
+        Case("/corpus/84-bridged-stream.json", null,
+            "Q-046 verify-only: a state machine consuming a source-bound External Bytes stream. The stream's `source` is an Application of Net.Connect declaring Network.Connect; the runtime feeder (BridgedStreamTest) drains the opened handle into the machine as Bytes events under the group's Network.Receive capability."),
     )
 
     /**

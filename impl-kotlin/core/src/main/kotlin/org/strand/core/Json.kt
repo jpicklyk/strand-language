@@ -508,6 +508,7 @@ object JsonIngest {
                 bufferSize = obj.optionalInt("bufferSize", ctx),
                 overflowPolicy = obj.optionalOverflowPolicy("overflowPolicy", ctx),
                 consumerMode = obj.optionalConsumerMode("consumerMode", ctx),
+                source = obj.optionalRef("source", ctx, resolve),
             )
             "Transition" -> Node.Transition(
                 guard = obj.optionalRef("guard", ctx, resolve),

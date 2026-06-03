@@ -191,6 +191,12 @@ class StateMachineRuntime(
         // consumerMode is Broadcast. Fails fast before allocating any
         // channels or coroutines.
         group.validateTopology()
+        // Q-046 soundness gate: a source-bound external stream's transport
+        // effects (the opener's semantic effect ∪ Network.Receive) must be
+        // covered by the group's capabilities. Checked here, before any IO
+        // source is opened, so a group whose context revoked Network.Receive
+        // cannot bridge a live stream.
+        group.validateStreamSourceCoverage()
         // Pass 1: allocate one StreamBus per unique stream NodeId. Direct
         // buses (the pre-slice-3.6 default) wrap a single Channel<Value>;
         // broadcast buses wrap a producer-facing Channel<Value> bridged into
@@ -300,6 +306,37 @@ class StateMachineRuntime(
             }
         }
 
+        // Pass 2c (Q-046): launch one host-side feeder per source-bound
+        // external stream. The opener is evaluated once here — outside any
+        // actor, under the group's capability context (the coverage gate above
+        // already confirmed the transport effects are granted) — to obtain the
+        // Q-045 streaming handle. Each feeder drains the handle and pushes
+        // chunks through the stream's OverflowDispatcher; its Job joins the
+        // handle's job list so await()/cancel() cover it. The opener is
+        // evaluated through an interpreter bound to the group's store so
+        // NodeRef/foreign resolution matches the actors' view.
+        val sourceBound = group.sourceBoundExternalStreams()
+        val feederJobs: List<Job> = if (sourceBound.isEmpty()) {
+            emptyList()
+        } else {
+            val openInterpreter = Interpreter(group.store, group.hashToNodeId, resolveTarget = resolveTarget)
+            sourceBound.map { (streamId, sourceId) ->
+                val handleValue = openInterpreter.eval(sourceId, group.capabilities, limits)
+                val handle = handleValue as? Value.Resource
+                    ?: error(
+                        "Q-046: source opener at $sourceId did not return a Resource handle, " +
+                            "got ${handleValue::class.simpleName}"
+                    )
+                val feeder = ExternalStreamFeeder(
+                    streamId = streamId,
+                    handle = handle,
+                    dispatcher = streamDispatchers.getValue(streamId),
+                    bus = streamBuses.getValue(streamId),
+                )
+                scope.launch { feeder.run() }
+            }
+        }
+
         // Host-facing channel handles. External inputs: host pushes events
         // into the producer-facing channel. External outputs: host drains
         // from the producer-facing channel (output streams have no machine
@@ -327,7 +364,7 @@ class StateMachineRuntime(
             externalInputs = externalInputs,
             externalOutputs = externalOutputs,
             instances = instanceHandles,
-            jobs = context.actorJobs.toList() + pumpJobs,
+            jobs = context.actorJobs.toList() + pumpJobs + feederJobs,
             streamDispatchers = streamDispatchers,
             streamProducerChannels = streamProducerChannels,
             nodeIdToHash = group.nodeIdToHash,
