@@ -230,18 +230,24 @@ object Builtins {
 
     /**
      * The verifier's `nodeTypes` map for the currently-executing
-     * program. Set by the interpreter at program startup so the
-     * tool-dispatch path can resolve a [Value.ToolDefV.parameterSchemaId]
-     * to its [org.strand.verifier.TypeExpr.SchemaType] (N-044). Cleared
-     * when the program completes.
+     * program. Set by the host — the CLI's `run` / `machine` / `group`
+     * paths and test harnesses — from a successful
+     * `VerifyResult.Ok.nodeTypes` before evaluation begins, and restored
+     * to the prior value in a `finally` afterward (the same save/restore
+     * pattern as [sandboxPolicy] / [streamReceiveTimeoutMillis]). The
+     * tool-dispatch path reads it to resolve a
+     * [Value.ToolDefV.parameterSchemaId] to its
+     * [org.strand.verifier.TypeExpr.SchemaType] (N-044); the N-045
+     * ResponseSchemaSpec projection reads it the same way. When left
+     * null, both paths degrade to empty `{}` JSON schemas.
      *
      * This is a single-program global rather than a per-call argument
      * because the LLM.Generate builtin is dispatched via the
      * higher-order builtin registry whose signature is fixed
      * `(args, applyFn) -> Value` — there is no slot for a typing
      * context. The pattern mirrors [llmHttpClient] / [credentialProvider]
-     * / [clock] / [random]: a singleton @Volatile that tests install
-     * around their setup/teardown.
+     * / [clock] / [random]: a singleton @Volatile that hosts and tests
+     * install around their setup/teardown.
      */
     @Volatile
     var verifierNodeTypes: Map<org.strand.core.NodeId, org.strand.verifier.TypeExpr>? = null

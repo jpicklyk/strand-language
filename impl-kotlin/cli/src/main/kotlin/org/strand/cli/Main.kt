@@ -256,6 +256,46 @@ private fun loadFinalized(text: String, limits: EvaluationLimits = EvaluationLim
     loadFinalizedWithIngest(text, limits).second
 
 /**
+ * Install the per-run host context on the [Builtins] singleton, run [block],
+ * and restore the prior values in a `finally`. Three slots are installed:
+ *
+ *  * [Builtins.sandboxPolicy] — Q-041. The library default is open; CLI
+ *    invocations override to secure (or to whatever the flags request).
+ *  * [Builtins.streamReceiveTimeoutMillis] — Q-045 per-read streaming-receive
+ *    ceiling, taken from [EvaluationLimits.streamReceiveTimeoutMillis].
+ *  * [Builtins.verifierNodeTypes] — the verifier's `nodeTypes` map from the
+ *    successful `VerifyResult.Ok`, so the N-044 ToolDef parameter-schema and
+ *    N-045 ResponseSchemaSpec projections can resolve a Schema NodeId to its
+ *    `TypeExpr.SchemaType`. Without this the LLM tool-dispatch path silently
+ *    degrades to empty `{}` JSON schemas on every real CLI run.
+ *
+ * Every CLI path that evaluates a verified program (`run`, `machine`,
+ * `group`) goes through this helper so the install/restore discipline cannot
+ * drift between subcommands. Internal (not private) so the CLI test suite
+ * can prove the wiring directly.
+ */
+internal fun <T> withProgramEvaluationContext(
+    sandboxPolicy: SandboxPolicy,
+    limits: EvaluationLimits,
+    verifierNodeTypes: Map<NodeId, org.strand.verifier.TypeExpr>?,
+    block: () -> T,
+): T {
+    val priorSandbox = Builtins.sandboxPolicy
+    val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
+    val priorNodeTypes = Builtins.verifierNodeTypes
+    Builtins.sandboxPolicy = sandboxPolicy
+    Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+    Builtins.verifierNodeTypes = verifierNodeTypes
+    try {
+        return block()
+    } finally {
+        Builtins.sandboxPolicy = priorSandbox
+        Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
+        Builtins.verifierNodeTypes = priorNodeTypes
+    }
+}
+
+/**
  * Build a permissive [CapabilitySet] that grants wildcard patterns for every
  * EffectCategory NodeId reachable in the verified store. Used by the
  * `--grant-all` CLI flag so capability-requiring corpus programs can run
@@ -381,39 +421,31 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // (informational, per the proposal's default disposition).
             if (!runSchemaCheck(schemaProgram, result, limits, resolveCb)) exitProcess(1)
             if (command == "run") {
-                // Q-041: install the sandbox policy on the Builtins
-                // singleton before eval. The library default is
-                // open; CLI invocations override to secure (or to
-                // whatever the flags request).
-                val priorSandbox = Builtins.sandboxPolicy
-                Builtins.sandboxPolicy = sandboxPolicy
-                // Q-045: install the per-read stream-receive timeout (host
-                // policy) for the duration of the run, restored afterward.
-                val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
-                Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+                // Install the host context (Q-041 sandbox, Q-045 stream
+                // timeout, verifier nodeTypes for N-044/N-045 schema
+                // projection) for the duration of the run.
                 try {
-                    // Q-047 (Layer 7 step 2): runtime schema enforcement.
-                    // The verifier re-records a SchemaType at every value-flow
-                    // site; pass those obligations to the interpreter so it
-                    // enforces invariants on dynamic values the verify-time
-                    // SchemaChecker could only defer.
-                    val schemaObligations = result.nodeTypes.mapNotNull { (nid, t) ->
-                        (t as? org.strand.verifier.TypeExpr.SchemaType)?.let { nid to it }
-                    }.toMap()
-                    val interp = Interpreter(
-                        store, hashToNodeId,
-                        resolveTarget = resolveCb,
-                        schemaObligations = schemaObligations,
-                    )
-                    val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
-                    val value = interp.eval(root, caps, limits)
-                    println("value: $value")
+                    withProgramEvaluationContext(sandboxPolicy, limits, result.nodeTypes) {
+                        // Q-047 (Layer 7 step 2): runtime schema enforcement.
+                        // The verifier re-records a SchemaType at every value-flow
+                        // site; pass those obligations to the interpreter so it
+                        // enforces invariants on dynamic values the verify-time
+                        // SchemaChecker could only defer.
+                        val schemaObligations = result.nodeTypes.mapNotNull { (nid, t) ->
+                            (t as? org.strand.verifier.TypeExpr.SchemaType)?.let { nid to it }
+                        }.toMap()
+                        val interp = Interpreter(
+                            store, hashToNodeId,
+                            resolveTarget = resolveCb,
+                            schemaObligations = schemaObligations,
+                        )
+                        val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
+                        val value = interp.eval(root, caps, limits)
+                        println("value: $value")
+                    }
                 } catch (e: InterpretException) {
                     System.err.println("interpretation failed: ${e.error}")
                     exitProcess(1)
-                } finally {
-                    Builtins.sandboxPolicy = priorSandbox
-                    Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
                 }
             }
         }
@@ -503,22 +535,17 @@ private fun runMachine(args: Array<String>) {
             val eventsText = File(eventsPath).readText()
             val events = EventCodec.parseEventList(eventsText)
             val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
-            // Q-041: install sandbox policy for the duration of the run.
-            val priorSandbox = Builtins.sandboxPolicy
-            Builtins.sandboxPolicy = sandboxPolicy
-            // Q-045: install the per-read stream-receive timeout.
-            val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
-            Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+            // Install the host context (Q-041 sandbox, Q-045 stream timeout,
+            // verifier nodeTypes for N-044/N-045) for the duration of the run.
             try {
-                val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
-                val trace = runtime.runMachine(root, events, caps, limits)
-                printTrace(trace)
+                withProgramEvaluationContext(sandboxPolicy, limits, result.nodeTypes) {
+                    val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
+                    val trace = runtime.runMachine(root, events, caps, limits)
+                    printTrace(trace)
+                }
             } catch (e: InterpretException) {
                 System.err.println("machine evaluation failed: ${e.error}")
                 exitProcess(1)
-            } finally {
-                Builtins.sandboxPolicy = priorSandbox
-                Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
             }
         }
     }
@@ -646,46 +673,41 @@ private fun runGroup(args: Array<String>) {
     val nameByNodeId: Map<NodeId, String> = ingest.nameMap.entries
         .associate { (name, id) -> id to name }
 
-    // Q-041: install sandbox policy for the duration of the group run.
-    val priorSandbox = Builtins.sandboxPolicy
-    Builtins.sandboxPolicy = sandboxPolicy
-    // Q-045: install the per-read stream-receive timeout.
-    val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
-    Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+    // Install the host context (Q-041 sandbox, Q-045 stream timeout,
+    // verifier nodeTypes for N-044/N-045) for the duration of the group run.
     try {
-        runBlocking {
-            val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
-            val handle = runtime.runGroup(group, this, limits)
+        withProgramEvaluationContext(sandboxPolicy, limits, verifyResult.nodeTypes) {
+            runBlocking {
+                val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
+                val handle = runtime.runGroup(group, this, limits)
 
-            // Send routed events on their designated input streams, then
-            // close all external inputs so the actors halt naturally.
-            for ((streamId, payload) in resolvedRouted) {
-                val channel = handle.externalInputs[streamId]
-                    ?: error("group: stream $streamId is not an external input")
-                channel.send(payload)
-            }
-            for (channel in handle.externalInputs.values) channel.close()
+                // Send routed events on their designated input streams, then
+                // close all external inputs so the actors halt naturally.
+                for ((streamId, payload) in resolvedRouted) {
+                    val channel = handle.externalInputs[streamId]
+                        ?: error("group: stream $streamId is not an external input")
+                    channel.send(payload)
+                }
+                for (channel in handle.externalInputs.values) channel.close()
 
-            // Drain output streams concurrently. Each emission is printed
-            // as it arrives; the actors continue until their input
-            // channels close and any pending transitions complete.
-            coroutineScope {
-                for ((streamId, channel) in handle.externalOutputs) {
-                    val name = nameByNodeId[streamId] ?: "<unnamed:$streamId>"
-                    launch {
-                        for (value in channel) println("output $name: $value")
+                // Drain output streams concurrently. Each emission is printed
+                // as it arrives; the actors continue until their input
+                // channels close and any pending transitions complete.
+                coroutineScope {
+                    for ((streamId, channel) in handle.externalOutputs) {
+                        val name = nameByNodeId[streamId] ?: "<unnamed:$streamId>"
+                        launch {
+                            for (value in channel) println("output $name: $value")
+                        }
                     }
                 }
+                handle.await()
+                if (emitMetrics) printMetrics(handle.metrics(), nameByNodeId)
             }
-            handle.await()
-            if (emitMetrics) printMetrics(handle.metrics(), nameByNodeId)
         }
     } catch (e: InterpretException) {
         System.err.println("group evaluation failed: ${e.error}")
         exitProcess(1)
-    } finally {
-        Builtins.sandboxPolicy = priorSandbox
-        Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
     }
 }
 
