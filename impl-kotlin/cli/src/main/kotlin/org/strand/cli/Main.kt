@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.strand.authoring.Authoring
 import org.strand.authoring.AuthoringException
 import org.strand.authoring.ConstraintGrammar
+import org.strand.authoring.LayerAGrammar
 import org.strand.core.ErrorVerbosity
 import org.strand.core.EvaluationLimits
 import org.strand.core.Hash
@@ -386,12 +387,15 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
     }
     reportFederationFlags(peerPaths, noCache, strictIntegrity)
     val text = File(path).readText()
-    val finalized = try {
-        loadFinalized(text, limits)
+    val (ingest, finalized) = try {
+        loadFinalizedWithIngest(text, limits)
     } catch (e: IngestError) {
         System.err.println("ingest failed: ${e.message}")
         exitProcess(1)
     }
+    // Error rendering: map opaque #N NodeIds in verifier/interpreter/schema
+    // output back to the author ids the agent wrote.
+    val annotator = NodeRefAnnotator(ingest.nameMap)
     // Q-043: with --peer-store programs, federate so cross-store NodeRefs
     // resolve through the peer chain (fetched + re-based into the shared
     // store); without, stay single-store (no resolver callback, behaviour
@@ -410,7 +414,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
     when (val result = verifier.verify(root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed:")
-            for (e in result.errors) System.err.println("  $e")
+            for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
             exitProcess(1)
         }
         is VerifyResult.Ok -> {
@@ -419,7 +423,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // evaluate any pure-expression invariants on statically-known
             // values. Violations halt; deferred diagnostics are surfaced
             // (informational, per the proposal's default disposition).
-            if (!runSchemaCheck(schemaProgram, result, limits, resolveCb)) exitProcess(1)
+            if (!runSchemaCheck(schemaProgram, result, annotator, limits, resolveCb)) exitProcess(1)
             if (command == "run") {
                 // Install the host context (Q-041 sandbox, Q-045 stream
                 // timeout, verifier nodeTypes for N-044/N-045 schema
@@ -444,7 +448,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                         println("value: $value")
                     }
                 } catch (e: InterpretException) {
-                    System.err.println("interpretation failed: ${e.error}")
+                    System.err.println("interpretation failed: ${annotator.annotate(e.error.toString())}")
                     exitProcess(1)
                 }
             }
@@ -462,6 +466,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
 private fun runSchemaCheck(
     finalized: FinalizedProgram,
     verifyResult: VerifyResult.Ok,
+    annotator: NodeRefAnnotator,
     limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
     resolveTarget: ((Hash) -> NodeId?)? = null,
 ): Boolean {
@@ -473,11 +478,11 @@ private fun runSchemaCheck(
         limits = limits,
     ).check()
     for (deferred in schemaResult.deferred) {
-        System.err.println("schema-check deferred: $deferred")
+        System.err.println("schema-check deferred: ${annotator.annotate(deferred.toString())}")
     }
     if (schemaResult.violations.isNotEmpty()) {
         System.err.println("schema-check failed:")
-        for (v in schemaResult.violations) System.err.println("  $v")
+        for (v in schemaResult.violations) System.err.println("  ${annotator.annotate(v.toString())}")
         return false
     }
     return true
@@ -504,12 +509,13 @@ private fun runMachine(args: Array<String>) {
     reportFederationFlags(peerPaths, noCache, strictIntegrity)
 
     val programText = File(programPath).readText()
-    val finalized = try {
-        loadFinalized(programText, limits)
+    val (ingest, finalized) = try {
+        loadFinalizedWithIngest(programText, limits)
     } catch (e: IngestError) {
         System.err.println("ingest failed: ${e.message}")
         exitProcess(1)
     }
+    val annotator = NodeRefAnnotator(ingest.nameMap)
     // Q-043: federate over --peer-store programs (single-store when none),
     // threading the resolver into the verifier, SchemaChecker, and runtime so a
     // transition function may reference a cross-store helper by targetHash.
@@ -524,14 +530,14 @@ private fun runMachine(args: Array<String>) {
     when (val result = verifier.verify(root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed:")
-            for (e in result.errors) System.err.println("  $e")
+            for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
             exitProcess(1)
         }
         is VerifyResult.Ok -> {
             // Layer 7 step 1: SchemaChecker also runs for `strand machine`,
             // matching `verify` / `run` semantics so a malformed Schema-bearing
             // value halts before any state-machine evaluation occurs.
-            if (!runSchemaCheck(schemaProgram, result, limits, resolveCb)) exitProcess(1)
+            if (!runSchemaCheck(schemaProgram, result, annotator, limits, resolveCb)) exitProcess(1)
             val eventsText = File(eventsPath).readText()
             val events = EventCodec.parseEventList(eventsText)
             val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
@@ -544,7 +550,7 @@ private fun runMachine(args: Array<String>) {
                     printTrace(trace)
                 }
             } catch (e: InterpretException) {
-                System.err.println("machine evaluation failed: ${e.error}")
+                System.err.println("machine evaluation failed: ${annotator.annotate(e.error.toString())}")
                 exitProcess(1)
             }
         }
@@ -622,14 +628,15 @@ private fun runGroup(args: Array<String>) {
     val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
     val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
 
+    val annotator = NodeRefAnnotator(ingest.nameMap)
     val verifier = Verifier(store, hashToNodeId, resolveCb)
     val verifyResult = verifier.verify(root)
     if (verifyResult is VerifyResult.Failed) {
         System.err.println("verification failed:")
-        for (e in verifyResult.errors) System.err.println("  $e")
+        for (e in verifyResult.errors) System.err.println("  ${annotator.annotate(e.toString())}")
         exitProcess(1)
     }
-    if (!runSchemaCheck(schemaProgram, verifyResult as VerifyResult.Ok, limits, resolveCb)) exitProcess(1)
+    if (!runSchemaCheck(schemaProgram, verifyResult as VerifyResult.Ok, annotator, limits, resolveCb)) exitProcess(1)
 
     // Collect every StateMachine NodeId from the canonical store. The
     // group includes ALL reachable StateMachines, regardless of whether
@@ -721,7 +728,7 @@ private fun runGroup(args: Array<String>) {
             }
         }
     } catch (e: InterpretException) {
-        System.err.println("group evaluation failed: ${e.error}")
+        System.err.println("group evaluation failed: ${annotator.annotate(e.error.toString())}")
         exitProcess(1)
     }
 }
@@ -799,8 +806,8 @@ private fun runAuthor(args: Array<String>) {
         exitProcess(2)
     }
     val layerAText = File(path).readText()
-    val dagJsonText = try {
-        Authoring.compileToDagJson(layerAText)
+    val compiled = try {
+        Authoring.compile(layerAText)
     } catch (e: AuthoringException) {
         System.err.println("Layer A compilation failed:")
         for (err in e.errors) {
@@ -809,20 +816,29 @@ private fun runAuthor(args: Array<String>) {
         exitProcess(1)
     }
     if (emitOnly) {
-        println(dagJsonText)
+        println(compiled.dagJson)
         return
     }
-    val finalized = loadFinalized(dagJsonText)
+    val (ingest, finalized) = loadFinalizedWithIngest(compiled.dagJson)
+    // Error rendering for the author path: annotate #N references with the
+    // Layer A author id and source line, and flag sugar-synthesized
+    // (`__if*` / `__when*` / ...) and implicit-prelude nodes as such so the
+    // agent knows whether an error sits in a line it wrote or an expansion.
+    val annotator = NodeRefAnnotator(
+        ingest.nameMap,
+        preludeNames = LayerAGrammar.reservedNodes.keys,
+        sourceLines = compiled.sourceLines,
+    )
     val verifier = Verifier(finalized.store, finalized.hashToNodeId)
     when (val result = verifier.verify(finalized.root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed for $path (after Layer A compile):")
-            for (e in result.errors) System.err.println("  $e")
+            for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
             exitProcess(1)
         }
         is VerifyResult.Ok -> {
             println("type: ${result.rootType}")
-            if (!runSchemaCheck(finalized, result)) exitProcess(1)
+            if (!runSchemaCheck(finalized, result, annotator)) exitProcess(1)
         }
     }
 }

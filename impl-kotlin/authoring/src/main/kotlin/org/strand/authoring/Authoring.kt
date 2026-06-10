@@ -20,12 +20,45 @@ import kotlinx.serialization.json.JsonObject
  */
 object Authoring {
 
+    /**
+     * Result of [compile]: the canonical dag-json text plus the diagnostic
+     * side-channels a driver (the `strand author` CLI) uses to map
+     * downstream verifier/interpreter errors back to what the agent wrote.
+     * Neither side-channel affects the emitted dag-json — [dagJson] is
+     * byte-identical to [compileToDagJson]'s output for the same input.
+     */
+    data class CompileResult(
+        /** Canonical dag-json text, identical to [compileToDagJson]. */
+        val dagJson: String,
+        /**
+         * Author id → 1-based Layer A source line, for every node that
+         * originates from a parsed line of the input document. Nodes the
+         * elaborator or emitter synthesizes (sugar expansions, implicit
+         * prelude) have no entry.
+         */
+        val sourceLines: Map<String, Int>,
+    )
+
     /** Parse [text] into a [LayerADocument]. */
     fun parse(text: String): LayerADocument = LayerAParser.parse(text)
 
     /** Compile [text] into canonical dag-json text. Runs elaboration. */
-    fun compileToDagJson(text: String): String =
-        DagJsonEmitter.emit(Elaborator.elaborate(parse(text)))
+    fun compileToDagJson(text: String): String = compile(text).dagJson
+
+    /**
+     * Compile [text] into canonical dag-json plus the per-node source-line
+     * map (see [CompileResult]). Runs elaboration.
+     */
+    fun compile(text: String): CompileResult {
+        val elaborated = Elaborator.elaborate(parse(text))
+        val sourceLines = elaborated.nodes
+            .filter { it.line > 0 }
+            .associate { it.id to it.line }
+        return CompileResult(
+            dagJson = DagJsonEmitter.emit(elaborated),
+            sourceLines = sourceLines,
+        )
+    }
 
     /** Compile [text] into a canonical dag-json [JsonObject]. Runs elaboration. */
     fun compileToJsonObject(text: String): JsonObject =
