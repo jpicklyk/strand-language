@@ -81,6 +81,35 @@ instantiation is rejected. Type inference is not performed.
 
 State-machine programs ship paired with `<id>-...events.json` event-list files for the `strand machine` CLI subcommand. The event-list JSON schema is documented in `runtime/EventCodec.kt`.
 
+## Golden hashes
+
+[`golden-hashes.json`](golden-hashes.json) is the language-independent conformance artifact for
+the canonical encoding ([`design/canonical-encoding.md`](../design/canonical-encoding.md)): it maps
+every corpus *program* to its root content hash (BLAKE3-256 multihash, one `0x1e` prefix byte +
+32 digest bytes, lowercase hex — the `Hash.toString()` form), plus every `layer-a/` fixture to the
+root hash of its compiled canonical form. Any second implementation (e.g. impl-rust) must
+reproduce these hashes from the same inputs; the Kotlin implementation asserts them in
+`CorpusGoldenHashTest` (`impl-kotlin/corpus`), which also enforces bidirectional coverage — adding
+a corpus program without a golden entry, or leaving a stale entry behind, fails the build.
+
+A corpus JSON file counts as a program iff its top-level object has both `root` and `nodes` keys;
+event-input files (`*.events.json`), the corpus-77 name registry (`registry.json`), and
+`golden-hashes.json` itself are excluded by that structural rule. Hashing does not require
+verification, so deliberately verifier-failing fixtures (73, 80, 83, ...) are covered too. A
+program that cannot be hashed standalone would be recorded with an explicit
+`"unhashable-standalone: <reason>"` value rather than omitted (currently none — even
+`76-multi-store-composition/app.json` hashes standalone, because its cross-store `targetHash`
+NodeRef carries the referenced hash inline).
+
+To regenerate after a legitimate corpus or encoding change, run from `impl-kotlin/`:
+
+```
+.\gradlew.bat :corpus:test --tests "org.strand.corpus.CorpusGoldenHashTest" -Dstrand.regenerateGoldenHashes=true
+```
+
+then diff `corpus/golden-hashes.json` — every changed hash must be explainable by an intentional
+change — and rerun the test without the flag to assert the fresh file.
+
 The `layer-a/` subdirectory holds Layer A authoring-projection forms (Q-034 step 1) for a representative subset of the corpus — currently 14 programs covering all major features: literals/types/binding (01-04), effects + foreign (12, 15), match patterns (18), fixpoint + recursive types (21, 31), product/sum values (23, 25), handlers (36), state machines (41), schemas (50). Each `<basename>.layer-a` is a compact-text projection of the corresponding `<basename>.json`; the round-trip property (Layer A → `Authoring.compileToDagJson` → canonical store hashes equal to the canonical JSON's canonical store) is asserted in `LayerARoundTripTest`. **Measured byte compression: 3.39× total across the 14-program subset** (per-program range 2.82×–4.40×), within the proposal's projection-only estimate. The canonical JSON files remain the authoritative form; Layer A is an additional projection of the same graph. Adding a new pair requires (a) the Layer A file, (b) a new entry in `LayerARoundTripTest.pairs`. The Layer A grammar (42 codes in `LayerAGrammar.codes`) covers all currently-implemented node categories except N-030 Name and N-031 Provenance (metadata-only; no current usage); extending coverage to those two is a small grammar addition when a corpus program needs it.
 
 Two TypeParameter nodes are the same type variable when they are the same

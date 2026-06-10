@@ -38,4 +38,12 @@ tasks.processResources {
 
 tasks.test {
     inputs.dir(sharedCorpusDir)
+    // Forward the golden-hash regeneration flag from the Gradle invocation to
+    // the test JVM (CorpusGoldenHashTest). When true, the test rewrites
+    // corpus/golden-hashes.json from the live implementation; see
+    // corpus/README.md for the exact command.
+    systemProperty(
+        "strand.regenerateGoldenHashes",
+        System.getProperty("strand.regenerateGoldenHashes") ?: "false",
+    )
 }
