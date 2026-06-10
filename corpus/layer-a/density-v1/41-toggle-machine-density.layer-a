@@ -7,7 +7,6 @@ emptyOutputsT PRD []
 stateFieldT PRF "state" boolT
 outputsFieldT PRF "outputs" emptyOutputsT
 resultT PRD [stateFieldT outputsFieldT]
-transitionFnT FNT [boolT unitT] resultT
 stateParam PRC "s" boolT
 eventParam PRC "e" unitT
 negatedState APP not [stateParam]

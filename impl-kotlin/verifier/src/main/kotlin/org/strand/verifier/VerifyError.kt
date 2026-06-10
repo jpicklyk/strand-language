@@ -337,6 +337,56 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * A Match's top-level patterns do not cover every value its scrutinee
+     * type can take, so evaluation could die at runtime with
+     * `NoMatchingCase`. The check is **top-level only**:
+     *
+     *  - A top-level wildcard or variable pattern (a catch-all) makes the
+     *    Match exhaustive regardless of the other cases.
+     *  - For a Sum-typed scrutinee (including a Recursive type that
+     *    unfolds to a Sum), every case name of the sum must appear as a
+     *    top-level constructor pattern; [missingCases] lists the case
+     *    names with no covering pattern.
+     *  - For a Bool-typed scrutinee, literal `true` and `false` patterns
+     *    together count as exhaustive; [missingCases] lists the missing
+     *    literal(s) (`"true"` / `"false"`).
+     *  - Any other scrutinee type (Int, String, products, functions, ...)
+     *    cannot be enumerated by literal patterns; without a catch-all the
+     *    Match is non-exhaustive and [missingCases] is empty.
+     *
+     * Nested-payload coverage analysis is deliberately out of scope: a
+     * constructor pattern whose payload pattern only matches some payload
+     * values (e.g. `Some(0)` via a nested literal pattern) still counts as
+     * covering its case at the top level. Agents needing payload-level
+     * totality should add a catch-all case.
+     *
+     * [scrutineeTypeDescription] is the rendered scrutinee type for
+     * diagnostics.
+     */
+    data class NonExhaustiveMatch(
+        override val at: NodeId,
+        val scrutineeTypeDescription: String,
+        val missingCases: List<String>
+    ) : VerifyError() {
+        override fun toString(): String {
+            val fix = when {
+                missingCases.isEmpty() ->
+                    "add a wildcard or variable catch-all case"
+                scrutineeTypeDescription == "Bool" ->
+                    "add a literal pattern for " +
+                        missingCases.joinToString(", ") { "'$it'" } +
+                        " or a wildcard case"
+                else ->
+                    "add a constructor pattern for " +
+                        missingCases.joinToString(", ") { "case '$it'" } +
+                        " or a wildcard case"
+            }
+            return "NonExhaustiveMatch(at=$at, scrutineeType=$scrutineeTypeDescription, " +
+                "missingCases=$missingCases): match does not cover every scrutinee value; $fix"
+        }
+    }
+
+    /**
      * A Fixpoint's body Lambda does not have the expected type for a
      * fixed-point body — specifically, the body must be a Lambda whose
      * first parameter type equals the Fixpoint's `recursionType` (the
@@ -1038,11 +1088,19 @@ sealed class VerifyResult {
      * positions whose value was not statically known at verify time. An
      * empty [deferredChecks] is the typical case for graphs that do not
      * use Schema (or that only use Schema with statically-known values).
+     *
+     * [warnings] is the general informational channel ([VerifyWarning]):
+     * diagnostics that never fail verification but flag conditions an
+     * agent almost certainly wants to know about (currently
+     * [VerifyWarning.UnreachableNode]). It is parallel to
+     * [deferredChecks], which stays dedicated to the Layer 7
+     * schema-deferral disposition.
      */
     data class Ok(
         val rootType: TypeExpr,
         val nodeTypes: Map<NodeId, TypeExpr>,
         val deferredChecks: List<VerifyError.SchemaInvariantDeferred> = emptyList(),
+        val warnings: List<VerifyWarning> = emptyList(),
     ) : VerifyResult()
     data class Failed(val errors: List<VerifyError>) : VerifyResult()
 }

@@ -8,7 +8,6 @@
     "yField":    { "type": "ProductTypeField", "name": "y", "fieldType": "intT" },
     "pointType": { "type": "ProductType", "fields": ["xField", "yField"] },
 
-    "fnType":    { "type": "FunctionType", "parameters": ["pointType"], "result": "intT" },
 
     "addT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
     "add":       { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },

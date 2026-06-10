@@ -2,7 +2,6 @@
   "version": 1,
   "root": "rootLet",
   "nodes": {
-    "intT":             { "type": "PrimitiveType", "kind": "Int" },
     "strT":             { "type": "PrimitiveType", "kind": "String" },
     "bytesT":           { "type": "PrimitiveType", "kind": "Bytes" },
 
@@ -72,7 +71,6 @@
     "callApp":          { "type": "Application", "function": "anthropicGen",
                           "arguments": ["requestValue"], "effectInstances": ["callDecl"] },
 
-    "stateParamRef":    { "type": "VarRef", "binder": "stateParam" },
     "noneOutput":       { "type": "SumValue", "ofType": "optionStrT", "caseName": "None" },
     "newStateFV":       { "type": "ProductFieldValue", "fieldName": "state",    "value": "eventParamRef" },
     "newOutput0FV":     { "type": "ProductFieldValue", "fieldName": "output_0", "value": "noneOutput" },

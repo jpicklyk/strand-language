@@ -7,6 +7,7 @@ import org.strand.core.NodeId
 import org.strand.core.NodeStore
 import org.strand.core.Primitive
 import org.strand.core.ProjectionSource
+import org.strand.core.translateNodeIds
 
 /**
  * Layer 1 verifier.
@@ -98,7 +99,79 @@ class Verifier(
         // may sit alongside the program it documents.
         state.checkManifests()
         if (state.errors.isNotEmpty()) return VerifyResult.Failed(state.errors)
-        return VerifyResult.Ok(rootType, state.nodeTypes.toMap())
+        return VerifyResult.Ok(
+            rootType,
+            state.nodeTypes.toMap(),
+            warnings = unreachableNodeWarnings(root),
+        )
+    }
+
+    /**
+     * Store-wide informational pass, run only after successful
+     * verification: flag every node in the store that no verification
+     * root can reach. Such a node was admitted but never type-checked
+     * and can never execute — almost always a node the author declared
+     * and forgot to wire into the program.
+     *
+     * Roots: the program [root]; every [Node.ModuleManifest] in the
+     * store plus its export targets (Hash boundaries resolved through
+     * [hashToNodeId] — manifests deliberately sit alongside the program
+     * they document, see [VerifyState.checkManifests]); every
+     * [Node.StateMachine] in the store (the group runtime drives all
+     * machines in the store, not only root-reachable ones); and every
+     * [Node.EffectCategory] in the store (effect categories are the
+     * grant vocabulary consumed by host-side capability policy — the CLI
+     * `--grant-all` path collects them store-wide, and a category may
+     * legitimately exist only to name a capability the program does NOT
+     * exercise, e.g. a CapabilityScope narrowing demonstration).
+     *
+     * Edges: every NodeId-typed field via [translateNodeIds] (the
+     * full-coverage structural walk — unlike `childNodeIds` it includes
+     * binder declarations such as ForallType / TypeAbstraction
+     * typeParameters and metadata edges such as `Invariant.targetSchema`,
+     * any of which keep a legitimately-referenced node out of this
+     * warning), plus [Node.NodeRef] Hash targets resolved through
+     * [hashToNodeId]. A target hash with no local NodeId is skipped —
+     * this pass never triggers federation fetches; anything fetched
+     * during verification is already in the store and the (mutable,
+     * caller-shared) reverse map.
+     */
+    private fun unreachableNodeWarnings(root: NodeId): List<VerifyWarning> {
+        val reached = mutableSetOf<NodeId>()
+        val queue = ArrayDeque<NodeId>()
+        fun enqueue(id: NodeId) {
+            if (store.contains(id) && reached.add(id)) queue.add(id)
+        }
+
+        enqueue(root)
+        for ((id, node) in store.entries()) {
+            when (node) {
+                is Node.ModuleManifest -> {
+                    enqueue(id)
+                    for (export in node.exports) {
+                        hashToNodeId[export.target]?.let(::enqueue)
+                    }
+                }
+                is Node.StateMachine -> enqueue(id)
+                is Node.EffectCategory -> enqueue(id)
+                else -> Unit
+            }
+        }
+
+        while (queue.isNotEmpty()) {
+            val node = store.getOrNull(queue.removeFirst()) ?: continue
+            node.translateNodeIds { child ->
+                enqueue(child)
+                child
+            }
+            if (node is Node.NodeRef) {
+                hashToNodeId[node.target]?.let(::enqueue)
+            }
+        }
+
+        return store.entries()
+            .filter { (id, _) -> id !in reached }
+            .map { (id, node) -> VerifyWarning.UnreachableNode(at = id, nodeTypeName = categoryName(node)) }
     }
 
     /** Thrown internally to abort checking once a fatal local error has been recorded. */
@@ -818,8 +891,97 @@ class Verifier(
                 }
             }
 
+            checkMatchExhaustiveness(id, node, scrutineeType)
+
             recordClosure(id, closure)
             return commonBodyType!!  // guaranteed non-null because cases.isNotEmpty()
+        }
+
+        /**
+         * Top-level exhaustiveness check for a Match whose cases have all
+         * passed per-case verification (so every case resolves to a
+         * MatchCase with a valid Pattern). Reports
+         * [VerifyError.NonExhaustiveMatch] without aborting — the Match's
+         * type inference is unaffected, and verification fails at the end
+         * of the pass.
+         *
+         * Rules (top-level patterns only; nested payload patterns are not
+         * analyzed — see the error's KDoc for the scope rationale):
+         *
+         *  1. Any top-level wildcard or variable pattern is a catch-all:
+         *     the Match is exhaustive.
+         *  2. Sum-typed scrutinee (or a Recursive that unfolds to a Sum,
+         *     matching the constructor-pattern unfold rule): every case
+         *     name must be covered by a top-level constructor pattern.
+         *  3. Bool-typed scrutinee: literal `true` and `false` patterns
+         *     together are exhaustive.
+         *  4. Any other scrutinee type: literal patterns can never
+         *     enumerate the type; non-exhaustive without a catch-all.
+         */
+        private fun checkMatchExhaustiveness(
+            id: NodeId,
+            node: Node.Match,
+            scrutineeType: TypeExpr,
+        ) {
+            // The case loop has already validated every case; these casts
+            // cannot fail here, but stay defensive.
+            val topLevelPatterns = node.cases.mapNotNull { caseId ->
+                val caseNode = store.getOrNull(caseId) as? Node.MatchCase ?: return@mapNotNull null
+                store.getOrNull(caseNode.pattern) as? Node.Pattern
+            }
+            if (topLevelPatterns.any {
+                    it is Node.Pattern.WildcardPattern || it is Node.Pattern.VariablePattern
+                }) return
+
+            // Constructor patterns check against a Recursive scrutinee by
+            // unfolding to the underlying Sum; exhaustiveness mirrors that.
+            val effective = when (scrutineeType) {
+                is TypeExpr.Recursive -> unfoldRecursive(scrutineeType)
+                else -> scrutineeType
+            }
+            when {
+                effective is TypeExpr.Sum -> {
+                    val covered = topLevelPatterns
+                        .filterIsInstance<Node.Pattern.ConstructorPattern>()
+                        .map { it.caseName }
+                        .toSet()
+                    val missing = effective.cases.map { it.name }.filter { it !in covered }
+                    if (missing.isNotEmpty()) {
+                        report(VerifyError.NonExhaustiveMatch(
+                            at = id,
+                            scrutineeTypeDescription = scrutineeType.toString(),
+                            missingCases = missing,
+                        ))
+                    }
+                }
+                effective is TypeExpr.Prim && effective.kind == Primitive.Bool -> {
+                    val coveredLiterals = topLevelPatterns
+                        .filterIsInstance<Node.Pattern.LiteralPattern>()
+                        .mapNotNull { (store.getOrNull(it.literal) as? Node.BoolLit)?.value }
+                        .toSet()
+                    val missing = listOf(true, false)
+                        .filter { it !in coveredLiterals }
+                        .map { it.toString() }
+                    if (missing.isNotEmpty()) {
+                        report(VerifyError.NonExhaustiveMatch(
+                            at = id,
+                            scrutineeTypeDescription = scrutineeType.toString(),
+                            missingCases = missing,
+                        ))
+                    }
+                }
+                else -> {
+                    // Only literal patterns remain possible here (constructor
+                    // patterns require a Sum; catch-alls returned above), and
+                    // literals can never enumerate Int/Float/String/Bytes/
+                    // Unit-adjacent or structural types.
+                    report(VerifyError.NonExhaustiveMatch(
+                        at = id,
+                        scrutineeTypeDescription = scrutineeType.toString(),
+                        missingCases = emptyList(),
+                    ))
+                }
+            }
         }
 
         /**
