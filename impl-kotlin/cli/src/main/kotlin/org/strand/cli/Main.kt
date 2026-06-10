@@ -813,13 +813,20 @@ private fun runAuthor(args: Array<String>) {
         for (err in e.errors) {
             System.err.println("  line ${err.line}: ${err.detail}")
         }
+        printElaborationNotes(e.elaborationGaps)
         exitProcess(1)
     }
     if (emitOnly) {
         println(compiled.dagJson)
         return
     }
-    val (ingest, finalized) = loadFinalizedWithIngest(compiled.dagJson)
+    val (ingest, finalized) = try {
+        loadFinalizedWithIngest(compiled.dagJson)
+    } catch (e: IngestError) {
+        System.err.println("ingest failed for $path (after Layer A compile): ${e.message}")
+        printElaborationNotes(compiled.elaborationGaps)
+        exitProcess(1)
+    }
     // Error rendering for the author path: annotate #N references with the
     // Layer A author id and source line, and flag sugar-synthesized
     // (`__if*` / `__when*` / ...) and implicit-prelude nodes as such so the
@@ -834,12 +841,35 @@ private fun runAuthor(args: Array<String>) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed for $path (after Layer A compile):")
             for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
+            printElaborationNotes(compiled.elaborationGaps)
             exitProcess(1)
         }
         is VerifyResult.Ok -> {
             println("type: ${result.rootType}")
-            if (!runSchemaCheck(finalized, result, annotator)) exitProcess(1)
+            if (!runSchemaCheck(finalized, result, annotator)) {
+                printElaborationNotes(compiled.elaborationGaps)
+                exitProcess(1)
+            }
         }
+    }
+}
+
+/**
+ * Q-034 gap policy: surface the Elaborator's attempted-but-failed
+ * inference cases as `elaboration note:` lines. Called ONLY from failure
+ * paths of `strand author` (compilation, ingest, verification, or
+ * schema-check failure) — a successful compile prints nothing, so the
+ * notes are zero-noise. The note frequently names the root cause of a
+ * cryptic downstream error (e.g. an "Unknown node id 'n'" ingest failure
+ * caused by an untypable compact-LAM parameter `n`).
+ */
+private fun printElaborationNotes(gaps: List<org.strand.authoring.ElaborationGap>) {
+    for (g in gaps) {
+        val where = if (g.line > 0) " (line ${g.line})" else ""
+        System.err.println(
+            "elaboration note: '${g.nodeId}'$where ${g.field} " +
+                "[${g.inferenceCase}]: ${g.reason}"
+        )
     }
 }
 

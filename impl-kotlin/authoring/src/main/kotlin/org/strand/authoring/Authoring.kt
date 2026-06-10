@@ -37,6 +37,14 @@ object Authoring {
          * prelude) have no entry.
          */
         val sourceLines: Map<String, Int>,
+        /**
+         * Inference cases the [Elaborator] attempted but could not resolve
+         * (Q-034 gap policy). Diagnostic only — the [dagJson] is emitted
+         * regardless. Drivers surface these ONLY when downstream
+         * ingest/verification fails; a gap that the verifier does not
+         * trip over is not worth reporting.
+         */
+        val elaborationGaps: List<ElaborationGap> = emptyList(),
     )
 
     /** Parse [text] into a [LayerADocument]. */
@@ -47,16 +55,27 @@ object Authoring {
 
     /**
      * Compile [text] into canonical dag-json plus the per-node source-line
-     * map (see [CompileResult]). Runs elaboration.
+     * map and elaboration-gap records (see [CompileResult]). Runs
+     * elaboration. When the emit phase fails, the thrown
+     * [AuthoringException] carries the gap records (the omitted
+     * annotation an inference case could not fill is frequently the
+     * root cause of the emit failure).
      */
     fun compile(text: String): CompileResult {
-        val elaborated = Elaborator.elaborate(parse(text))
+        val result = Elaborator.elaborateWithGaps(parse(text))
+        val elaborated = result.document
         val sourceLines = elaborated.nodes
             .filter { it.line > 0 }
             .associate { it.id to it.line }
+        val dagJson = try {
+            DagJsonEmitter.emit(elaborated)
+        } catch (e: AuthoringException) {
+            throw AuthoringException(e.errors, result.gaps)
+        }
         return CompileResult(
-            dagJson = DagJsonEmitter.emit(elaborated),
+            dagJson = dagJson,
             sourceLines = sourceLines,
+            elaborationGaps = result.gaps,
         )
     }
 
