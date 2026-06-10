@@ -3,7 +3,6 @@
   "root": "machine",
   "nodes": {
     "intT":         { "type": "PrimitiveType", "kind": "Int" },
-    "unitT":        { "type": "PrimitiveType", "kind": "Unit" },
 
     "someCase":     { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
     "noneCase":     { "type": "SumTypeCase", "name": "None", "caseType": null },

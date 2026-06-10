@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "root": "queryCall",
+  "root": "upsertThenQuery",
   "nodes": {
     "intT":         { "type": "PrimitiveType", "kind": "Int" },
     "strT":         { "type": "PrimitiveType", "kind": "String" },
@@ -43,6 +43,8 @@
 
     "queryReqLit":  { "type": "BytesLit", "value": "" },
     "queryCall":    { "type": "Application", "function": "query", "arguments": ["openCall", "queryReqLit"],
-                       "effectInstances": ["readDecl"] }
+                       "effectInstances": ["readDecl"] },
+
+    "upsertThenQuery": { "type": "Let", "name": "upserted", "value": "upsertCall", "body": "queryCall" }
   }
 }

@@ -7,7 +7,6 @@
     "nowT":      { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
     "now":       { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
     "callNow":   { "type": "Application", "function": "now", "arguments": [] },
-    "fakeT":     { "type": "FunctionType", "parameters": [], "result": "intT" },
     "innerLit":  { "type": "IntLit", "value": 2 },
     "innerLam":  { "type": "Lambda", "parameters": [], "body": "innerLit" },
     "inner":     { "type": "Handler", "intercept": "timeFx", "handle": "innerLam", "body": "callNow" },

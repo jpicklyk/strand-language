@@ -5,7 +5,6 @@
   "nodes": {
     "intT":              { "type": "PrimitiveType", "kind": "Int" },
     "stringT":           { "type": "PrimitiveType", "kind": "String" },
-    "boolT":             { "type": "PrimitiveType", "kind": "Bool" },
 
     "headingLevelF":     { "type": "ProductTypeField", "name": "level", "fieldType": "intT" },
     "headingTextF":      { "type": "ProductTypeField", "name": "text",  "fieldType": "stringT" },

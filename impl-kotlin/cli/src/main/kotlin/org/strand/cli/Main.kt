@@ -375,6 +375,9 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         }
         is VerifyResult.Ok -> {
             println("type: ${result.rootType}")
+            // Informational diagnostics (e.g. unreachable nodes): surfaced,
+            // never a failure.
+            for (w in result.warnings) System.err.println("warning: $w")
             // Layer 7 step 1: after type-checking, run the SchemaChecker to
             // evaluate any pure-expression invariants on statically-known
             // values. Violations halt; deferred diagnostics are surfaced

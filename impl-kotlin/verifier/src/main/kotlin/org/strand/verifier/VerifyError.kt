@@ -1088,11 +1088,19 @@ sealed class VerifyResult {
      * positions whose value was not statically known at verify time. An
      * empty [deferredChecks] is the typical case for graphs that do not
      * use Schema (or that only use Schema with statically-known values).
+     *
+     * [warnings] is the general informational channel ([VerifyWarning]):
+     * diagnostics that never fail verification but flag conditions an
+     * agent almost certainly wants to know about (currently
+     * [VerifyWarning.UnreachableNode]). It is parallel to
+     * [deferredChecks], which stays dedicated to the Layer 7
+     * schema-deferral disposition.
      */
     data class Ok(
         val rootType: TypeExpr,
         val nodeTypes: Map<NodeId, TypeExpr>,
         val deferredChecks: List<VerifyError.SchemaInvariantDeferred> = emptyList(),
+        val warnings: List<VerifyWarning> = emptyList(),
     ) : VerifyResult()
     data class Failed(val errors: List<VerifyError>) : VerifyResult()
 }

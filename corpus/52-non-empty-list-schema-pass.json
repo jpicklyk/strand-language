@@ -3,7 +3,6 @@
   "root": "schemaClaim",
   "nodes": {
     "intT":             { "type": "PrimitiveType", "kind": "Int" },
-    "boolT":            { "type": "PrimitiveType", "kind": "Bool" },
 
     "headFieldInner":   { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
     "tailFieldInner":   { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },

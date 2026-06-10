@@ -3,7 +3,6 @@
   "root": "counterMachine",
   "nodes": {
     "intT":             { "type": "PrimitiveType", "kind": "Int" },
-    "unitT":            { "type": "PrimitiveType", "kind": "Unit" },
 
     "incCase":          { "type": "SumTypeCase", "name": "Increment", "caseType": null },
     "decCase":          { "type": "SumTypeCase", "name": "Decrement", "caseType": null },

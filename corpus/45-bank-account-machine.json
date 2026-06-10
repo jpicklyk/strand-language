@@ -4,7 +4,6 @@
   "nodes": {
     "intT":              { "type": "PrimitiveType", "kind": "Int" },
     "boolT":             { "type": "PrimitiveType", "kind": "Bool" },
-    "unitT":             { "type": "PrimitiveType", "kind": "Unit" },
 
     "balanceFieldT":     { "type": "ProductTypeField", "name": "balance",          "fieldType": "intT" },
     "txCountFieldT":     { "type": "ProductTypeField", "name": "transactionCount", "fieldType": "intT" },

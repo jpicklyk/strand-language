@@ -4,7 +4,6 @@ emptyOutputsT PRD []
 stateFieldT PRF "state" boolT
 outputsFieldT PRF "outputs" emptyOutputsT
 resultT PRD [stateFieldT outputsFieldT]
-transitionFnT FNT [boolT unitT] resultT
 negatedState APP not [s]
 stateFieldV PFV "state" negatedState
 emptyOutputsV PV emptyOutputsT []

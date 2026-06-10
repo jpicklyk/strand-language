@@ -11,7 +11,6 @@
     "outputsFieldT":    { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyOutputsT" },
     "resultT":          { "type": "ProductType", "fields": ["stateFieldT", "outputsFieldT"] },
 
-    "transitionFnT":    { "type": "FunctionType", "parameters": ["boolT", "unitT"], "result": "resultT" },
     "boolNotFnT":       { "type": "FunctionType", "parameters": ["boolT"], "result": "boolT" },
 
     "boolNotFn":        { "type": "ForeignNode", "target": "strand-builtin:Bool.Not", "foreignType": "boolNotFnT" },
