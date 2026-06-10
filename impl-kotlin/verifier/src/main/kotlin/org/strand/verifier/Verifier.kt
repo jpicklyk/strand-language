@@ -818,8 +818,97 @@ class Verifier(
                 }
             }
 
+            checkMatchExhaustiveness(id, node, scrutineeType)
+
             recordClosure(id, closure)
             return commonBodyType!!  // guaranteed non-null because cases.isNotEmpty()
+        }
+
+        /**
+         * Top-level exhaustiveness check for a Match whose cases have all
+         * passed per-case verification (so every case resolves to a
+         * MatchCase with a valid Pattern). Reports
+         * [VerifyError.NonExhaustiveMatch] without aborting — the Match's
+         * type inference is unaffected, and verification fails at the end
+         * of the pass.
+         *
+         * Rules (top-level patterns only; nested payload patterns are not
+         * analyzed — see the error's KDoc for the scope rationale):
+         *
+         *  1. Any top-level wildcard or variable pattern is a catch-all:
+         *     the Match is exhaustive.
+         *  2. Sum-typed scrutinee (or a Recursive that unfolds to a Sum,
+         *     matching the constructor-pattern unfold rule): every case
+         *     name must be covered by a top-level constructor pattern.
+         *  3. Bool-typed scrutinee: literal `true` and `false` patterns
+         *     together are exhaustive.
+         *  4. Any other scrutinee type: literal patterns can never
+         *     enumerate the type; non-exhaustive without a catch-all.
+         */
+        private fun checkMatchExhaustiveness(
+            id: NodeId,
+            node: Node.Match,
+            scrutineeType: TypeExpr,
+        ) {
+            // The case loop has already validated every case; these casts
+            // cannot fail here, but stay defensive.
+            val topLevelPatterns = node.cases.mapNotNull { caseId ->
+                val caseNode = store.getOrNull(caseId) as? Node.MatchCase ?: return@mapNotNull null
+                store.getOrNull(caseNode.pattern) as? Node.Pattern
+            }
+            if (topLevelPatterns.any {
+                    it is Node.Pattern.WildcardPattern || it is Node.Pattern.VariablePattern
+                }) return
+
+            // Constructor patterns check against a Recursive scrutinee by
+            // unfolding to the underlying Sum; exhaustiveness mirrors that.
+            val effective = when (scrutineeType) {
+                is TypeExpr.Recursive -> unfoldRecursive(scrutineeType)
+                else -> scrutineeType
+            }
+            when {
+                effective is TypeExpr.Sum -> {
+                    val covered = topLevelPatterns
+                        .filterIsInstance<Node.Pattern.ConstructorPattern>()
+                        .map { it.caseName }
+                        .toSet()
+                    val missing = effective.cases.map { it.name }.filter { it !in covered }
+                    if (missing.isNotEmpty()) {
+                        report(VerifyError.NonExhaustiveMatch(
+                            at = id,
+                            scrutineeTypeDescription = scrutineeType.toString(),
+                            missingCases = missing,
+                        ))
+                    }
+                }
+                effective is TypeExpr.Prim && effective.kind == Primitive.Bool -> {
+                    val coveredLiterals = topLevelPatterns
+                        .filterIsInstance<Node.Pattern.LiteralPattern>()
+                        .mapNotNull { (store.getOrNull(it.literal) as? Node.BoolLit)?.value }
+                        .toSet()
+                    val missing = listOf(true, false)
+                        .filter { it !in coveredLiterals }
+                        .map { it.toString() }
+                    if (missing.isNotEmpty()) {
+                        report(VerifyError.NonExhaustiveMatch(
+                            at = id,
+                            scrutineeTypeDescription = scrutineeType.toString(),
+                            missingCases = missing,
+                        ))
+                    }
+                }
+                else -> {
+                    // Only literal patterns remain possible here (constructor
+                    // patterns require a Sum; catch-alls returned above), and
+                    // literals can never enumerate Int/Float/String/Bytes/
+                    // Unit-adjacent or structural types.
+                    report(VerifyError.NonExhaustiveMatch(
+                        at = id,
+                        scrutineeTypeDescription = scrutineeType.toString(),
+                        missingCases = emptyList(),
+                    ))
+                }
+            }
         }
 
         /**
