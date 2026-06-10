@@ -341,7 +341,13 @@ class StateMachineRuntime(
         // into the producer-facing channel. External outputs: host drains
         // from the producer-facing channel (output streams have no machine
         // consumer, so they remain pre-slice-3.6 plain Channel<Value>).
-        val externalInputs: Map<NodeId, SendChannel<Value>> = group.externalInputStreams()
+        //
+        // Q-046: source-bound external streams are NOT host-feedable — the
+        // feeder launched above is their sole producer and owns channel
+        // closure (see MachineGroup.hostFeedableExternalStreams). They are
+        // excluded here so a host close loop over externalInputs cannot
+        // close a channel out from under a live feeder.
+        val externalInputs: Map<NodeId, SendChannel<Value>> = group.hostFeedableExternalStreams()
             .associateWith { streamId -> streamBuses.getValue(streamId).producerChannel }
         val externalOutputs: Map<NodeId, ReceiveChannel<Value>> = group.externalOutputStreams()
             .associateWith { streamId -> streamBuses.getValue(streamId).producerChannel }

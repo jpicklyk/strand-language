@@ -682,10 +682,25 @@ private fun runGroup(args: Array<String>) {
                 val handle = runtime.runGroup(group, this, limits)
 
                 // Send routed events on their designated input streams, then
-                // close all external inputs so the actors halt naturally.
+                // close all host-feedable external inputs so the actors halt
+                // naturally. Q-046 source-bound streams are absent from
+                // externalInputs — the runtime's feeder is their sole
+                // producer and owns their closure, so the close loop below
+                // cannot touch them.
                 for ((streamId, payload) in resolvedRouted) {
                     val channel = handle.externalInputs[streamId]
-                        ?: error("group: stream $streamId is not an external input")
+                        ?: run {
+                            val streamName = nameByNodeId[streamId] ?: "$streamId"
+                            val node = store.getOrNull(streamId) as? Node.EventStream
+                            if (node?.source != null) {
+                                error(
+                                    "group: stream '$streamName' is source-bound (Q-046 — fed by " +
+                                        "the runtime from its IO source); routed events cannot be " +
+                                        "sent to it"
+                                )
+                            }
+                            error("group: stream '$streamName' is not an external input")
+                        }
                     channel.send(payload)
                 }
                 for (channel in handle.externalInputs.values) channel.close()
