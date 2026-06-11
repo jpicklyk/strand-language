@@ -850,6 +850,7 @@ private fun runAuthor(args: Array<String>) {
         }
         is VerifyResult.Ok -> {
             println("type: ${result.rootType}")
+            for (w in result.warnings) System.err.println("warning: ${annotator.annotate(w.toString())}")
             if (!runSchemaCheck(finalized, result, annotator)) {
                 printElaborationNotes(compiled.elaborationGaps)
                 exitProcess(1)
