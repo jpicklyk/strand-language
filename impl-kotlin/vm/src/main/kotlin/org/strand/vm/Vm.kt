@@ -160,7 +160,15 @@ class Vm(private val table: ChunkTable) {
                     // Dispatch directly via Builtins; no frame setup.
                     val builtin = Builtins.lookup(closure.target)
                         ?: error("applyClosure: no Builtins entry for foreign target '${closure.target}'")
-                    return builtin.invoke(args)
+                    return try {
+                        builtin.invoke(args)
+                    } catch (e: IllegalArgumentException) {
+                        throw InterpretException(InterpretError.BuiltinContractViolation(
+                            at = null,
+                            target = closure.target,
+                            detail = e.message ?: "builtin contract violation",
+                        ))
+                    }
                 }
                 else -> error("applyClosure: $closure is not callable (got ${closure::class.simpleName})")
             }
@@ -689,7 +697,20 @@ class Vm(private val table: ChunkTable) {
                     arg as? Value
                         ?: error("CALL_FOREIGN: arg is ${arg::class.simpleName}, not a Value")
                 }
-                val result = builtin.invoke(valueArgs)
+                val result = try {
+                    builtin.invoke(valueArgs)
+                } catch (e: IllegalArgumentException) {
+                    // Builtin contract violation (e.g. division by zero from
+                    // Int.Div / Int.Mod / Math.Mod). Translated to a structured,
+                    // uncatchable InterpretError. `at = null` because VM opcodes
+                    // do not carry NodeIds in slice 1 (matching Q-040 precedent
+                    // for ResourceExhaustion.at in the VM path).
+                    throw InterpretException(InterpretError.BuiltinContractViolation(
+                        at = null,
+                        target = fn.target,
+                        detail = e.message ?: "builtin contract violation",
+                    ))
+                }
                 current.stack.add(result)
             }
             is VmFixpoint -> {

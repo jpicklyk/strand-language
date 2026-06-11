@@ -961,6 +961,12 @@ class Interpreter(
                 throw InterpretException(translateIoFailure(id, io, limits))
             } catch (sv: SandboxViolation) {
                 throw InterpretException(translateSandboxViolation(id, sv, limits))
+            } catch (e: IllegalArgumentException) {
+                throw InterpretException(InterpretError.BuiltinContractViolation(
+                    at = id,
+                    target = callable.node.target,
+                    detail = e.message ?: "builtin contract violation",
+                ))
             }
         }
         is Value.FixpointFn -> {
@@ -1102,6 +1108,12 @@ class Interpreter(
                 throw InterpretException(translateIoFailure(id, io, limits))
             } catch (sv: SandboxViolation) {
                 throw InterpretException(translateSandboxViolation(id, sv, limits))
+            } catch (e: IllegalArgumentException) {
+                throw InterpretException(InterpretError.BuiltinContractViolation(
+                    at = id,
+                    target = fn.node.target,
+                    detail = e.message ?: "builtin contract violation",
+                ))
             }
         }
         val builtin = Builtins.lookup(fn.node.target)
@@ -1123,6 +1135,16 @@ class Interpreter(
             // the verbosity-aware helper so detail is scrubbed when
             // policy demands.
             throw InterpretException(translateSandboxViolation(id, sv, limits))
+        } catch (e: IllegalArgumentException) {
+            // Builtin contract violation (e.g. division by zero from
+            // Int.Div / Int.Mod / Math.Mod's require(b != 0L) guard).
+            // The boundary catch intentionally covers every IAE escaping
+            // any builtin — every such IAE is a contract failure.
+            throw InterpretException(InterpretError.BuiltinContractViolation(
+                at = id,
+                target = fn.node.target,
+                detail = e.message ?: "builtin contract violation",
+            ))
         }
     }
 
@@ -1207,6 +1229,12 @@ class Interpreter(
                     throw InterpretException(translateIoFailure(id, io, limits))
                 } catch (sv: SandboxViolation) {
                     throw InterpretException(translateSandboxViolation(id, sv, limits))
+                } catch (e: IllegalArgumentException) {
+                    throw InterpretException(InterpretError.BuiltinContractViolation(
+                        at = id,
+                        target = callable.node.target,
+                        detail = e.message ?: "builtin contract violation",
+                    ))
                 }
             }
             else -> throw InterpretException(

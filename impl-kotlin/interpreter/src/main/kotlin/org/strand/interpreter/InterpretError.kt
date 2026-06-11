@@ -240,6 +240,37 @@ sealed class InterpretError {
     }
 
     /**
+     * A builtin's internal contract was violated — for example, division by
+     * zero in [org.strand.interpreter.Builtins] `Int.Div`, `Int.Mod`, or
+     * `Math.Mod`. This is a program defect: the agent is responsible for
+     * guarding the divisor before calling the builtin; the runtime surfaces
+     * the raw `require(...)` failure as a structured, attributable error
+     * rather than a bare JVM `IllegalArgumentException`.
+     *
+     * [at] follows the [ResourceExhaustion] precedent: non-nullable when the
+     * tree-walking interpreter raises (it tracks the current NodeId) and
+     * nullable when the bytecode VM raises (opcodes do not carry NodeIds in
+     * slice 1, matching Q-040's Q-017 source-mapping deferral). The sealed
+     * base declares `at: NodeId?` so this variant uses `NodeId?` throughout
+     * for VM parity.
+     *
+     * Deliberately NOT catchable by [org.strand.core.Node.Attempt]: the
+     * program should never reach a zero divisor if it is correct; catching
+     * a contract failure would turn a defect into a silently absorbable
+     * event, which is contrary to the catchable/uncatchable taxonomy's
+     * organizing principle (proposals/error-recovery.md § 4.3).
+     */
+    data class BuiltinContractViolation(
+        override val at: NodeId?,
+        val target: String,
+        val detail: String,
+    ) : InterpretError() {
+        // Program defect: the agent guards the divisor; deliberately NOT
+        // catchable by Attempt (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
+
+    /**
      * Q-047 (Layer 7 step 2): a schema-typed value computed at runtime
      * failed one of its schema's invariants. This is the runtime analogue
      * of [org.strand.verifier.VerifyError.SchemaInvariantViolation]: the
