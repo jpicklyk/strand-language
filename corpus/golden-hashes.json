@@ -86,7 +86,10 @@
     "81-llm-stream-drain.json": "1e76abe76e8a4ab27c18dbc83cfe86e6be5f54bccb13cb6a6d895afc28f0602b3a",
     "82-runtime-schema-dynamic-pass.json": "1e9b9d9e244fe75010327c5abfd469c61c70c7d99210ed7f3d2750f558e41c8853",
     "83-runtime-schema-dynamic-violation.json": "1ef05a1842f3e0429244faae7bdab262286680b8412325efa5e51321711d54b54a",
-    "84-bridged-stream.json": "1eceec9b3160b03c746f594ce36896c81fb677d0386c06e29a061cc2a3a3803fb6"
+    "84-bridged-stream.json": "1eceec9b3160b03c746f594ce36896c81fb677d0386c06e29a061cc2a3a3803fb6",
+    "85-attempt-ok-passthrough.json": "1e27ebf11e640f6dc37d86d5d0720199caa137ec4f65c8ed5054c4ee55e566d29c",
+    "86-attempt-fs-read-fallback.json": "1e267099388b3e158065f8a563200e6045ad2cac4160ae92949c515c3fe2720ada",
+    "87-attempt-retry-with-backoff.json": "1ef7909a3cea1957b5d27894fb40e5e8da67333bbf62e7d4d30e7a8b90dc81917d"
   },
   "layerA": {
     "layer-a/density-v1.5/21-fixpoint-factorial-if.layer-a": "1e40d2797fc4598b64192a4dc468df0573559982c6d27e8b705399d62c17658c13",
