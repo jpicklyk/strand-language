@@ -68,9 +68,12 @@ class CorpusWarningSweepTest {
     fun `top-level corpus programs are warning-clean`(): List<DynamicTest> {
         val dir = corpusDir()
         Assumptions.assumeTrue(dir != null, "corpus/ not found from ${Paths.get("").toAbsolutePath()}")
+        // Exclude event-list files (.events.json) and non-program metadata files
+        // (golden-hashes.json is a hash-vector registry, not a Strand program).
+        val metadataFiles = setOf("golden-hashes.json")
         val programs = Files.list(dir).use { stream ->
             stream.toList()
-                .filter { it.extension == "json" && !it.name.endsWith(".events.json") }
+                .filter { it.extension == "json" && !it.name.endsWith(".events.json") && it.name !in metadataFiles }
                 .sortedBy { it.name }
         }
         assertTrue(programs.isNotEmpty(), "no corpus programs found under $dir")
