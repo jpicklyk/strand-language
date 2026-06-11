@@ -61,6 +61,15 @@ enum class Opcode(val code: Byte) {
     HANDLER_PUSH(0x72),
     HANDLER_POP(0x73),
 
+    // Error recovery — N-047 Attempt (Q-048). ATTEMPT_PUSH takes one
+    // operand: a JUMP-style relative offset to the err-label (where the
+    // unwinder resumes after pushing the ErrorPayload ProductV). It pushes
+    // an attempt marker recording the current frame depth, operand-stack
+    // depth, capability-stack depth, active-handler depth, and the saved
+    // currentCaps. ATTEMPT_POP pops the marker on the success path.
+    ATTEMPT_PUSH(0x74),
+    ATTEMPT_POP(0x75),
+
     // Pattern-matching helpers (Layer 5 step 1 — Match dispatch). Each
     // helper produces a Bool on the operand stack for the surrounding
     // JUMP_IF_FALSE to test. SUM_PAYLOAD pushes the SumV's payload

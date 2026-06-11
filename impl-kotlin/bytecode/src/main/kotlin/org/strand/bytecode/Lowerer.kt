@@ -198,6 +198,37 @@ class Lowerer(
                 lowerFixpoint(nodeId, node, chunk, scope)
             }
 
+            // N-047 Attempt (Q-048). Lowering (reusing SUM_NEW for the Ok/Err
+            // wrapping per the orchestrator's opcode-economy decision):
+            //
+            //   ATTEMPT_PUSH @errLabel   ; push marker (depths + saved caps)
+            //   <body opcodes>
+            //   ATTEMPT_POP              ; success path: drop the marker
+            //   SUM_NEW "Ok" hasPayload  ; wrap the body value as Ok(v)
+            //   JUMP @endLabel
+            //   errLabel:                ; unwinder has pushed the ErrorPayload
+            //   SUM_NEW "Err" hasPayload ; wrap the payload as Err({kind,detail})
+            //   endLabel:
+            //
+            // ATTEMPT_POP precedes the Ok SUM_NEW so the marker is gone before
+            // the wrap; the err-path skips ATTEMPT_POP entirely (the unwinder
+            // pops the marker when it consumes it).
+            is Node.Attempt -> {
+                val errOffset = chunk.emitJumpWithPlaceholder(Opcode.ATTEMPT_PUSH)
+                lowerExpr(node.body, chunk, scope)
+                chunk.emit(Opcode.ATTEMPT_POP)
+                val okIdx = chunk.constant(Constant.SumCaseC("Ok", hasPayload = true))
+                chunk.emit(Opcode.SUM_NEW, okIdx)
+                val endOffset = chunk.emitJumpWithPlaceholder(Opcode.JUMP)
+                // err-label: the unwinder resumes here with the ErrorPayload
+                // ProductV on the operand stack.
+                chunk.patchJump(errOffset)
+                val errIdx = chunk.constant(Constant.SumCaseC("Err", hasPayload = true))
+                chunk.emit(Opcode.SUM_NEW, errIdx)
+                // end-label.
+                chunk.patchJump(endOffset)
+            }
+
             // Layer 5 step 3a: ProductValue. Emit each field's value in
             // declaration order, then PRODUCT_NEW with a constant
             // recording the field names in the same order. The VM pops
@@ -384,6 +415,11 @@ class Lowerer(
                 }
             }
             is Node.TypeAbstraction -> {
+                walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
+            }
+            // N-047 Attempt — its body may reference outer binders (a TRY over
+            // an expression using a captured variable), so walk it.
+            is Node.Attempt -> {
                 walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
             }
             // Literals and NodeRef have no inner expressions that reference
