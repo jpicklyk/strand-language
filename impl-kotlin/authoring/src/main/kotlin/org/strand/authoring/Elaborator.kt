@@ -2018,24 +2018,31 @@ object Elaborator {
                 if (node.args.size >= 3) {
                     extractEffectsListOrdered(node.args[2])
                 } else {
-                    val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptyList()
+                    // Defensive: a compact LAM whose body is an Arg.Nested
+                    // (e.g. `LAM [x:intT] (APP mul [x 2])`) has args[1] as
+                    // Arg.Nested, not Arg.Bare — the ?. chain returns null and
+                    // we fall through to emptyList().  Prelude builtins used as
+                    // the APP callee are pure, so the closure is empty anyway.
+                    // Using getOrNull guards against any under-sized LAM node
+                    // (e.g. one produced by a future synthesis pass with < 2 args).
+                    val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptyList()
                     closureOf(bodyId, byId, HashSet(visited)).toList().sorted()
                 }
             }
             "VAR" -> {
-                val binderId = (node.args[0] as? Arg.Bare)?.text ?: return emptyList()
+                val binderId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptyList()
                 effectsOfOrdered(binderId, byId, visited)
             }
             "NRF" -> {
-                val targetId = (node.args[0] as? Arg.Bare)?.text ?: return emptyList()
+                val targetId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptyList()
                 effectsOfOrdered(targetId, byId, visited)
             }
             "LET" -> {
-                val valueId = (node.args[1] as? Arg.Bare)?.text ?: return emptyList()
+                val valueId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptyList()
                 effectsOfOrdered(valueId, byId, visited)
             }
             "FIX" -> {
-                val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptyList()
+                val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptyList()
                 effectsOfOrdered(bodyId, byId, visited)
             }
             else -> emptyList()
@@ -2060,20 +2067,20 @@ object Elaborator {
             "LET" -> closureOfLet(node, byId, visited)
             "MAT" -> closureOfMatch(node, byId, visited)
             "MC" -> {
-                val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
+                val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
                 closureOf(bodyId, byId, visited)
             }
             "FIX" -> {
-                val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
+                val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
                 closureOf(bodyId, byId, visited)
             }
             "H" -> closureOfHandler(node, byId, visited)
             "CAP" -> {
-                val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
+                val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
                 closureOf(bodyId, byId, visited)
             }
             "TAB" -> {
-                val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
+                val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
                 closureOf(bodyId, byId, visited)
             }
             "LAM", "FN", "VAR", "NRF", "RS",
@@ -2085,7 +2092,7 @@ object Elaborator {
             "SCH", "INV",
             "PLT", "PVR", "PWC", "PCN" -> emptySet()
             "PFG" -> {
-                val targetId = (node.args[0] as? Arg.Bare)?.text ?: return emptySet()
+                val targetId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptySet()
                 closureOf(targetId, byId, visited)
             }
             else -> emptySet()
@@ -2097,8 +2104,8 @@ object Elaborator {
         byId: Map<String, NodeDecl>,
         visited: MutableSet<String>,
     ): Set<String> {
-        val fnId = (node.args[0] as? Arg.Bare)?.text ?: return emptySet()
-        val argList = (node.args[1] as? Arg.Listing)?.items ?: emptyList()
+        val fnId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptySet()
+        val argList = (node.args.getOrNull(1) as? Arg.Listing)?.items ?: emptyList()
         val out = HashSet<String>()
         out += closureOf(fnId, byId, visited)
         for (arg in argList) {
@@ -2114,8 +2121,8 @@ object Elaborator {
         byId: Map<String, NodeDecl>,
         visited: MutableSet<String>,
     ): Set<String> {
-        val valueId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
-        val bodyId = (node.args[2] as? Arg.Bare)?.text ?: return emptySet()
+        val valueId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
+        val bodyId = (node.args.getOrNull(2) as? Arg.Bare)?.text ?: return emptySet()
         return closureOf(valueId, byId, visited) + closureOf(bodyId, byId, HashSet(visited))
     }
 
@@ -2124,8 +2131,8 @@ object Elaborator {
         byId: Map<String, NodeDecl>,
         visited: MutableSet<String>,
     ): Set<String> {
-        val scrutId = (node.args[0] as? Arg.Bare)?.text ?: return emptySet()
-        val caseList = (node.args[1] as? Arg.Listing)?.items ?: emptyList()
+        val scrutId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptySet()
+        val caseList = (node.args.getOrNull(1) as? Arg.Listing)?.items ?: emptyList()
         val out = HashSet<String>()
         out += closureOf(scrutId, byId, visited)
         for (case in caseList) {
@@ -2140,9 +2147,9 @@ object Elaborator {
         byId: Map<String, NodeDecl>,
         visited: MutableSet<String>,
     ): Set<String> {
-        val interceptId = (node.args[0] as? Arg.Bare)?.text ?: return emptySet()
-        val handleId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
-        val bodyId = (node.args[2] as? Arg.Bare)?.text ?: return emptySet()
+        val interceptId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptySet()
+        val handleId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
+        val bodyId = (node.args.getOrNull(2) as? Arg.Bare)?.text ?: return emptySet()
         val bodyClosure = closureOf(bodyId, byId, visited)
         val handleClosure = closureOf(handleId, byId, HashSet(visited))
         val handleEffects = effectsOf(handleId, byId, HashSet())
@@ -2164,24 +2171,27 @@ object Elaborator {
                 if (node.args.size >= 3) {
                     extractEffectsList(node.args[2])
                 } else {
-                    val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
+                    // Defensive: same as effectsOfOrdered — a compact LAM with a
+                    // nested body has args[1] as Arg.Nested, not Arg.Bare.
+                    // getOrNull prevents IndexOutOfBoundsException on under-sized nodes.
+                    val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
                     closureOf(bodyId, byId, HashSet(visited))
                 }
             }
             "VAR" -> {
-                val binderId = (node.args[0] as? Arg.Bare)?.text ?: return emptySet()
+                val binderId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptySet()
                 effectsOf(binderId, byId, visited)
             }
             "NRF" -> {
-                val targetId = (node.args[0] as? Arg.Bare)?.text ?: return emptySet()
+                val targetId = (node.args.getOrNull(0) as? Arg.Bare)?.text ?: return emptySet()
                 effectsOf(targetId, byId, visited)
             }
             "LET" -> {
-                val valueId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
+                val valueId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
                 effectsOf(valueId, byId, visited)
             }
             "FIX" -> {
-                val bodyId = (node.args[1] as? Arg.Bare)?.text ?: return emptySet()
+                val bodyId = (node.args.getOrNull(1) as? Arg.Bare)?.text ?: return emptySet()
                 effectsOf(bodyId, byId, visited)
             }
             else -> emptySet()

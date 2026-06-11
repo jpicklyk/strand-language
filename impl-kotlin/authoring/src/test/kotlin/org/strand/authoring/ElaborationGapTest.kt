@@ -3,6 +3,7 @@ package org.strand.authoring
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
 import org.strand.core.IngestError
 import org.strand.core.JsonIngest
@@ -112,5 +113,92 @@ class ElaborationGapTest {
         assertEquals(emptyList<ElaborationGap>(), compiled.elaborationGaps)
         // And the document is genuinely healthy: it ingests cleanly.
         JsonIngest.parse(compiled.dagJson)
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression tests for the effectsOfOrdered IndexOutOfBoundsException
+    // (Q-034 gap-scan feature, commit aed2db2).
+    //
+    // Root cause: effectsOfOrdered accessed node.args[1] directly for LAM
+    // nodes when args.size < 3.  A compact LAM whose body is an Arg.Nested
+    // expression (e.g. `LAM [x:intT] (APP mul [x 2])`) has args[1] as
+    // Arg.Nested, not Arg.Bare.  The `as? Arg.Bare` cast returns null and
+    // the `?: return emptyList()` safe-call short-circuits correctly — BUT
+    // only after args[1] is successfully retrieved.  If the node had been
+    // synthesized with < 2 args the retrieve itself would throw IOOB.
+    // The fix uses getOrNull(1) throughout effectsOfOrdered and the
+    // companion effectsOf / closureOf* helpers.
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun `compact LAM with inline APP of prelude builtin as body compiles and ingests cleanly`() {
+        // This is the crashing shape: a compact LAM whose body is a nested
+        // (APP mul ...) expression. Before the fix, elaborateWithGaps would
+        // crash with IndexOutOfBoundsException in effectsOfOrdered when the
+        // LAM was the callee of the outer APP node.
+        val text = """
+            @v=1 root=result
+            double LAM [x:intT] (APP mul [x 2])
+            five ILT 5
+            result APP double [five]
+        """.trimIndent()
+
+        val compiled = assertDoesNotThrow { Authoring.compile(text) }
+        assertEquals(emptyList<ElaborationGap>(), compiled.elaborationGaps)
+        // Must also ingest cleanly downstream.
+        assertDoesNotThrow { JsonIngest.parse(compiled.dagJson) }
+    }
+
+    @Test
+    fun `compact LAM with inline APP of prelude add builtin compiles cleanly`() {
+        // Same shape as the mul case — covers the add builtin explicitly.
+        val text = """
+            @v=1 root=result
+            increment LAM [x:intT] (APP add [x 1])
+            three ILT 3
+            result APP increment [three]
+        """.trimIndent()
+
+        val compiled = assertDoesNotThrow { Authoring.compile(text) }
+        assertEquals(emptyList<ElaborationGap>(), compiled.elaborationGaps)
+        assertDoesNotThrow { JsonIngest.parse(compiled.dagJson) }
+    }
+
+    @Test
+    fun `compact LAM passed as higher-order argument with prelude-builtin body compiles cleanly`() {
+        // The List.Map scenario from evaluation/dynamic/prompts/strand-system.md.
+        // The compact LAM `double` has a nested (APP mul ...) body and is
+        // passed as a value argument to a higher-order FN (mapFn).  This was
+        // the reported trigger: elaborateApplication on `mapped APP mapFn ...`
+        // calls effectsOfOrdered on mapFn (no crash), but a different
+        // elaboration ordering could reach the LAM's effectsOfOrdered path.
+        val text = """
+            @v=1 root=mapped
+            selfRef RS
+            headInner PRF "head" intT
+            tailInner PRF "tail" selfRef
+            consInner PRD [headInner tailInner]
+            consCase SCS "Cons" consInner
+            nilCase SCS "Nil" _
+            listSum SUM [consCase nilCase]
+            listT RT listSum
+            headOuter PRF "head" intT
+            tailOuter PRF "tail" listT
+            consOuter PRD [headOuter tailOuter]
+            nilV SV listT "Nil" _
+            five SV listT "Cons" (PV consOuter [head=5 tail=nilV])
+            list SV listT "Cons" (PV consOuter [head=3 tail=five])
+            double LAM [x:intT] (APP mul [x 2])
+            fnT FNT [intT] intT
+            mapT FNT [listT fnT] listT
+            mapFn FN "strand-builtin:List.Map" mapT
+            mapped APP mapFn [list double]
+        """.trimIndent()
+
+        val compiled = assertDoesNotThrow { Authoring.compile(text) }
+        assertEquals(emptyList<ElaborationGap>(), compiled.elaborationGaps)
+        // The full program must also ingest cleanly — this is the List.Map
+        // example from strand-system.md that MUST keep compiling.
+        assertDoesNotThrow { JsonIngest.parse(compiled.dagJson) }
     }
 }
