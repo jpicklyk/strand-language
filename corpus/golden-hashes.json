@@ -71,7 +71,7 @@
     "65-option-parseint-fallback.json": "1e663219d7e8b97734f77c7c21add858d1fcade121a5a15ccae9b5bfe3db59b447",
     "66-json-value-nested.json": "1e7d73266df2328bc61e66356832f95c3330145fe6747505394cfd9b75619d09be",
     "67-llm-state-machine-with-tool.json": "1e922602388c15c3dae81b6c221c740c60a133f593762de11551e66dbf3ce548cb",
-    "68-vector-pinecone-upsert-query.json": "1e79ce0948b40d6e7ca7765541ef8a9a3c9a4164a3ff80b999b2e993b41e6a9df9",
+    "68-vector-pinecone-upsert-query.json": "1ed4236960b4a6c667ec49b693a408f975a2c2f18a79079fd56607283978c43ed6",
     "69-response-schema-spec.json": "1ee721b947c1cc3987bc2c1590cd5e16f7c0e94a5ab4847b1d8665e2455c0155fa",
     "70-fs-write-projection-happy.json": "1e951d95b3b566dff92eaf17e4bb9ca1915af5fc966c6abd52b4b51b81d47d6554",
     "71-fixpoint-no-base-case.json": "1e853d1a987f741f96ae4f16b2f3412fa2cb96585a6da9cff313803a90313aa900",
