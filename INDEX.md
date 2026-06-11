@@ -140,6 +140,8 @@ Alphabetical index of major concepts in the Strand design, with primary referenc
 | Effect refinement lattice (implementation) | `proposals/implemented/refinement-lattice-capability-matching.md` | (whole document) |
 | Empirical evaluation | `research-plan.md` | Phase 3 |
 | Encryption envelope | `design/encryption-model.md` | Envelope structure |
+| Error recovery (Attempt) | `design/node-algebra.md` | Control flow |
+| Error recovery (implementation) | `proposals/implemented/error-recovery.md` | (whole document) |
 | Event ordering | `design/state-machines.md` | Event ordering |
 | Event streams | `decisions/ADR-007-state-machines.md` | Decision |
 | Evaluation metrics | `research-plan.md` | Phase 3 |
@@ -281,7 +283,7 @@ Inventory specified in [`design/node-algebra.md`](design/node-algebra.md). Curre
 | N-044 | ToolDef | Agent-native capabilities |
 | N-045 | ResponseSchemaSpec | Agent-native capabilities |
 | N-046 | ModuleManifest | Composition and distribution |
-| N-047 | Attempt | Control flow (reserved for Q-048; proposed in [`proposals/error-recovery.md`](proposals/error-recovery.md)) |
+| N-047 | Attempt | Control flow |
 
 New node categories receive higher numbers; existing numbers are not reused.
 

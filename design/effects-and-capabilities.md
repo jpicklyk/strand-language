@@ -2,7 +2,7 @@
 
 **Document:** `design/effects-and-capabilities.md`
 **Status:** Wave 3 draft
-**Last revised:** 2026-05-26 (§ Diagnostic and host-environment effects added — E-032 Log.Write, E-033 OS.Read, E-034 System.Exit — to support the Log.* / OS.* / System.Exit builtin slice added in `stdlib expansion round 3`. No parameters; all three are simple guard categories.) 2026-05-23 (§ Effect handlers expanded with N-043 Handler node shape, closure algebra, runtime dispatch — per Q-030 resolution in `proposals/implemented/effect-handlers.md`)
+**Last revised:** 2026-06-11 (§ Effect handlers › Boundaries gains the Handler-versus-Attempt distinction: Handler (N-043) replaces dispatch before the intercepted call runs; Attempt (N-047, Q-048) observes outcomes of real operations, reifying catchable failures as `Err` values, with `closureOf(attempt) = closureOf(body)` because failures are not effects. Full Attempt semantics in `proposals/implemented/error-recovery.md`.) 2026-05-26 (§ Diagnostic and host-environment effects added — E-032 Log.Write, E-033 OS.Read, E-034 System.Exit — to support the Log.* / OS.* / System.Exit builtin slice added in `stdlib expansion round 3`. No parameters; all three are simple guard categories.) 2026-05-23 (§ Effect handlers expanded with N-043 Handler node shape, closure algebra, runtime dispatch — per Q-030 resolution in `proposals/implemented/effect-handlers.md`)
 
 ## Summary
 
@@ -208,6 +208,8 @@ Evaluation enters a Handler by computing the handle value once, in the surroundi
 
 The handler mechanism is not a substitute for capability mediation. A handler can intercept an effect but cannot synthesize the capability to perform it: the handler runs under the surrounding capability context and its own declared effects are checked there. A handler can mock an effectful operation away (returning a constant), can translate one effect into another (the handler performs its own effect in service of the body's), and can capture lexical state at Handler-entry to implement bounded-call patterns; it cannot let the body access a resource its surrounding context never granted.
 
+Handler and Attempt (N-047) divide the failure-handling space without overlap. A Handler replaces dispatch: interception fires before the intercepted call runs, so the real operation and its capability check are skipped, and the body never observes whether the real operation would have succeeded. An Attempt observes outcomes: the body's operations run for real, under the real capability context, and a catchable runtime failure is reified as an `Err` value the program matches on. The closure algebra differs accordingly — Handler subtracts its intercepted category from the body's closure, while `closureOf(attempt) = closureOf(body)` because failures are not effects. The two compose without special cases: a Handler inside an Attempt body subtracts before the Attempt passes the closure through, and an Attempt inside a Handler body is an ordinary expression whose closure unions upward. The Attempt node, the catchable-failure taxonomy, and the uncatchability of capability and refinement denials (a program cannot probe the policy surface through catch) are specified in [`proposals/implemented/error-recovery.md`](../proposals/implemented/error-recovery.md).
+
 ## Effect inference {#effect-inference}
 
 [Q-007](../open-questions.md#Q-007) asks how effects are determined for code that does not declare them explicitly. Strand's answer is conservative: native graph nodes always declare effects directly through effect edges; the language does not infer effects from node bodies. For foreign code, the answer depends on the source language and the available metadata.
@@ -256,3 +258,4 @@ At runtime, each node's effect declarations are confirmed at evaluation time. Th
 - [`research-plan.md`](../research-plan.md)
 - [`rendering-and-views.md`](rendering-and-views.md) — output emission as existing effect categories
 - [`proposals/implemented/effect-handlers.md`](../proposals/implemented/effect-handlers.md) — full algebra and implementation notes for the no-continuation Handler form
+- [`proposals/implemented/error-recovery.md`](../proposals/implemented/error-recovery.md) — Attempt (N-047) and the catchable-failure taxonomy; the failure-observation counterpart to Handler
