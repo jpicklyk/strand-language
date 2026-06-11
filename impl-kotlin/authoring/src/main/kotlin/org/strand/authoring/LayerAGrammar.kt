@@ -884,6 +884,29 @@ object LayerAGrammar {
             refFields = mapOf("result" to "httpRespT"),
         ),
 
+        // N-047 Attempt (Q-048). The Err case of every Attempt result carries
+        // the fixed ErrorPayload product {kind: String, detail: String}. The
+        // `RES` type sugar and the WHEN-over-TRY elaborator inference case both
+        // expand to a SumType referencing `errPayloadT`, so the agent matches
+        // `Err(e)` and reads `PFG e "kind"` / `PFG e "detail"` with no local
+        // declarations. Field order (kind, detail) matches the verifier's
+        // synthesized ErrorPayload so the agent's Match patterns hash-equal the
+        // synthesized Result.
+        "errKindField" to ReservedNodeSpec(
+            jsonType = "ProductTypeField",
+            stringFields = mapOf("name" to "kind"),
+            refFields = mapOf("fieldType" to "stringT"),
+        ),
+        "errDetailField" to ReservedNodeSpec(
+            jsonType = "ProductTypeField",
+            stringFields = mapOf("name" to "detail"),
+            refFields = mapOf("fieldType" to "stringT"),
+        ),
+        "errPayloadT" to ReservedNodeSpec(
+            jsonType = "ProductType",
+            refListFields = mapOf("fields" to listOf("errKindField", "errDetailField")),
+        ),
+
         // Function types — process + time
         "procWaitT" to ReservedNodeSpec(
             jsonType = "FunctionType",
@@ -2257,6 +2280,30 @@ object LayerAGrammar {
                 FieldSpec("body", ArgKind.REFERENCE, "body"),
             ),
             producesValue = true,
+        ),
+
+        // Attempt — N-047 error recovery (Q-048). `TRY body` wraps an
+        // expression so a catchable runtime failure surfaces as
+        // `Err({kind, detail})` rather than terminating evaluation. The result
+        // type is the verifier-synthesized `Ok(T) | Err(ErrorPayload)`; the
+        // `RES` type sugar (or the WHEN-over-TRY elaborator inference case)
+        // produces the matching SumType for the agent's Match patterns.
+        "TRY" to CodeSchema(
+            jsonType = "Attempt",
+            required = listOf(FieldSpec("body", ArgKind.REFERENCE, "body")),
+            producesValue = true,
+        ),
+
+        // RES — the Result-sum type sugar for N-047 Attempt. `RES okType`
+        // expands at emit time to the SumType `Ok(okType) | Err(errPayloadT)`
+        // (two SCS children + the SUM), mirroring the IF/WHEN sugar precedent.
+        // The placeholder schema here only fixes the arg count; the real
+        // expansion is `expandResSugar` in DagJsonEmitter. RES is
+        // type-producing so it may appear at a type-position reference slot.
+        "RES" to CodeSchema(
+            jsonType = "SumType",
+            required = listOf(FieldSpec("okType", ArgKind.REFERENCE, "okType", acceptsType = true)),
+            producesType = true,
         ),
 
         // Composite values (Layer 5 steps 3a, 3b).

@@ -115,6 +115,7 @@ object DagJsonEmitter {
         var varRefCounter: Int = 0
         var ifCounter: Int = 0
         var whenCounter: Int = 0
+        var resCounter: Int = 0
         var exprCounter: Int = 0
         var lamPrcCounter: Int = 0
         val synthesized: LinkedHashMap<String, JsonObject> = linkedMapOf()
@@ -223,6 +224,7 @@ object DagJsonEmitter {
         fun freshVarRefId(): String = "__var${varRefCounter++}"
         fun freshIfPrefix(): String = "__if${ifCounter++}"
         fun freshWhenPrefix(): String = "__when${whenCounter++}"
+        fun freshResPrefix(): String = "__res${resCounter++}"
         fun freshExprId(): String = "__expr${exprCounter++}"
         /**
          * Mint a unique synthesized PRC id for a compact-LAM param. The
@@ -362,6 +364,9 @@ object DagJsonEmitter {
         // Layer A density v3 (Slice 9) — WHEN/constructor-pattern sugar.
         if (node.code == "WHEN") return expandWhenSugar(node, errors, ctx)
 
+        // N-047 error recovery (Q-048) — RES Result-sum type sugar.
+        if (node.code == "RES") return expandResSugar(node, errors, ctx)
+
         val fields = mutableMapOf<String, JsonElement>()
         fields["type"] = JsonPrimitive(schema.jsonType)
 
@@ -477,6 +482,57 @@ object DagJsonEmitter {
             put("type", "Match")
             put("scrutinee", scrutineeId)
             put("cases", JsonArray(listOf(JsonPrimitive(caseTrueId), JsonPrimitive(caseFalseId))))
+        }
+    }
+
+    /**
+     * N-047 (Q-048) — RES Result-sum type sugar expansion.
+     *
+     * Takes the user's `resT RES okType` and produces a 3-node SumType tower
+     * with the same canonical hash as the explicit form:
+     *
+     *     __resN_ok_case   SumTypeCase{name=Ok,  caseType=<okType>}
+     *     __resN_err_case  SumTypeCase{name=Err, caseType=errPayloadT}
+     *     <user id>        SumType{cases=[__resN_ok_case, __resN_err_case]}
+     *
+     * `errPayloadT` is the implicit-prelude ProductType {kind, detail}
+     * (synthesized by the reserved-name table). The `okType` arg is a bare
+     * type reference; it is passed through unchanged (the verifier resolves
+     * it). The resulting SumType structurally — and therefore hash- —
+     * matches the `Ok(T) | Err(ErrorPayload)` that the verifier synthesizes
+     * for an Attempt over a body of type T, so a Match against `resT`
+     * type-checks against the Attempt result.
+     */
+    private fun expandResSugar(
+        node: NodeDecl,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): JsonObject? {
+        val okTypeArg = node.args[0]
+        val okTypeId = (okTypeArg as? Arg.Bare)?.text ?: run {
+            shapeMismatch(node.line, "RES", 0, "okType reference", okTypeArg, errors)
+            return null
+        }
+
+        val prefix = ctx.freshResPrefix()
+        val okCaseId = "${prefix}_ok_case"
+        val errCaseId = "${prefix}_err_case"
+
+        ctx.synthesized[okCaseId] = buildJsonObject {
+            put("type", "SumTypeCase")
+            put("name", "Ok")
+            put("caseType", okTypeId)
+        }
+        ctx.synthesized[errCaseId] = buildJsonObject {
+            put("type", "SumTypeCase")
+            put("name", "Err")
+            // errPayloadT is resolved through the implicit-prelude reserved table.
+            put("caseType", "errPayloadT")
+        }
+
+        return buildJsonObject {
+            put("type", "SumType")
+            put("cases", JsonArray(listOf(JsonPrimitive(okCaseId), JsonPrimitive(errCaseId))))
         }
     }
 
