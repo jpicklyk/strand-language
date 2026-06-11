@@ -121,9 +121,9 @@ result APP parse [input]
 
 ```layer-a
 mapFnT FNT [intT] intT      -- the per-element callback type
-mapT FNT [mapFnT listOfIntT] listOfIntT
+mapT FNT [listOfIntT mapFnT] listOfIntT    -- list FIRST, fn second
 listMap FN "strand-builtin:List.Map" mapT
-doubled APP listMap [doubleFn xs]
+doubled APP listMap [xs doubleFn]
 ```
 
 `Map.*` and `Set.*` use opaque-handle surface types (typically `bytesT` placeholder) since Strand has no parametric Map<K,V> primitive yet.

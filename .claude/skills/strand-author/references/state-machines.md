@@ -42,7 +42,7 @@ Every StateMachine with inputs must declare `receiveFx` (`"StateMachine.Receive"
 toggle SM transFn initialState [inStream] [outStream] [receiveFx sendFx]
 ```
 
-If you omit one of these, the verifier returns `StateMachineMissingImplicitEffect(at=#sm, missing={"StateMachine.Receive"})`.
+If you omit one of these, the verifier returns `StateMachineMissingImplicitEffect(at=#N, missing={"StateMachine.Receive"})` where `#N` is the SM's integer node id.
 
 ## A toggle machine — full example
 

@@ -20,8 +20,11 @@ helper LAM [] helperBody [writeFx]                     -- LAM declares writeFx
 
 If the LAM is missing the effect, the verifier returns:
 ```
-UncoveredEffects(at=#helper, missing={#writeFx})
+UncoveredEffects(at=#9, missing={#31})
 ```
+Node ids are integers, not author ids; the CLI annotates them with the
+author id where available (here `#9` would map to `helper` and `#31` to
+`writeFx`).
 
 This is the most common authoring slip when wrapping an effectful call in a Lambda. Always declare the effects on the LAM that surrounds an effectful body.
 
@@ -104,7 +107,7 @@ The handler's `handle` signature must match the intercepted call:
 - `Time.Now` is `() -> Int`, so `handle` is `LAM [] <Int-producing-expr>`.
 - `Net.Connect` is `(String, Int) -> Int`, so `handle` is `LAM [h:stringT p:intT] <Int-producing-expr>`.
 
-Mismatch returns `HandlerSignatureMismatch(at=#handler, expected=..., actual=...)`.
+Mismatch returns `HandlerSignatureMismatch(at=#7, expected=..., actual=...)` where `#7` is the Handler's integer node id (CLI-annotated with the author id).
 
 Innermost handler wins for nested same-category handlers:
 
@@ -121,7 +124,7 @@ outer H nowFx outerLam inner        -- outer; covers inner's residual closure
 
 ## Effect closure verification — common errors and fixes
 
-- `UncoveredEffects(at=#lam, missing={...})` → add the named EffectCategory ids to the LAM's effects list: `LAM [params] body [fx1 fx2]`.
+- `UncoveredEffects(at=#N, missing={...})` → add the named EffectCategory ids to the LAM's effects list: `LAM [params] body [fx1 fx2]`.
 - `EffectInstanceCoverageMismatch` → an Application's `effectInstances` list doesn't match the callee's declared effects 1:1. Supply one EFD per declared effect category, in matching order.
 - `EffectDeclArityMismatch` / `EffectDeclParameterTypeMismatch` → fix the EFD's parameter list to match the EffectCategory's declared parameter types.
 - `NonEffectCategoryInEffectList` → the `intercept` arg to a Handler (or an entry in an `effects` list) must be an EffectCategory NodeId. Don't pass a ForeignNode there.

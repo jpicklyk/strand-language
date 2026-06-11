@@ -133,11 +133,11 @@ These exist but need explicit FN + FNT declarations at the use site (mostly beca
 For these, declare:
 
 ```layer-a
-mapT FNT [funcT listT] listT          -- pick concrete element types
+mapT FNT [listT funcT] listT          -- list FIRST, fn second; pick concrete element types
 mapFn FN "strand-builtin:List.Map" mapT
 ```
 
-then `APP mapFn [...]`.
+then `APP mapFn [xs doubleFn]`.
 
 ## Using prelude entries
 

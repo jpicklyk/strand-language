@@ -70,14 +70,14 @@ Incorrect:
 If the verifier rejects an emission, you'll receive feedback in shapes like:
 
     verification failed:
-      ErrorName(at=#<author-id>, <detail>)
+      ErrorName(at=#<N>, <detail>)
 
 or for Layer A compile errors:
 
     Layer A compilation failed:
       line N: <message>
 
-The author id and the error class name are precise — use them to locate and fix the failing node. Layer A compile errors fire before the verifier; fix them first.
+Verifier errors reference nodes by integer node id (`#23`), never by author id. The CLI annotates each `#N` with the corresponding author id (and the Layer A line where known); nodes the compiler synthesized (sugar expansions, implicit prelude) are flagged as such. Use the annotation plus the error class name to locate and fix the failing node. Layer A compile errors fire before the verifier; fix them first.
 
 ## Choosing which cluster references to load
 
@@ -123,13 +123,13 @@ If unfamiliar with any code here, load the relevant references file.
 
 ## Working with verifier errors
 
-The verifier produces structured errors with `at=#<id>` naming the offending node. Common error classes and what they typically mean:
+The verifier produces structured errors with `at=#<N>` naming the offending node by integer node id (the CLI annotates it with the author id where available). Common error classes and what they typically mean:
 
-- `UncoveredEffects(at=#lam, missing={...})` — a Lambda's body uses an effect, but the Lambda's `effects` slot doesn't declare it. Add the effect category to the LAM's effects list: `LAM [params] body [effectCategory1 effectCategory2]`.
+- `UncoveredEffects(at=#12, missing={...})` — a Lambda's body uses an effect, but the Lambda's `effects` slot doesn't declare it. Add the effect category to the LAM's effects list: `LAM [params] body [effectCategory1 effectCategory2]`.
 - `EffectDeclArityMismatch` / `EffectDeclParameterTypeMismatch` — the parameter list on an EffectDecl doesn't match the EffectCategory's parameter count or types. Check the EFC's declared parameters and supply matching positional values in the EFD.
-- `HandlerSignatureMismatch(at=#handler, expected=..., actual=...)` — the `handle` lambda's type doesn't match the intercepted function's signature. Adjust the LAM's parameter types and body return type to match.
-- `SchemaInvariantViolation(at=#value, schema=..., invariant=...)` — a statically-known value violates a Schema's invariant. Either change the value or relax the invariant.
-- `UnboundRecursiveSelf(at=#node, hint=...)` — a RecursiveSelf reference can't resolve to an enclosing RecursiveType. Read the hint — it points at the inner/outer PRD split, or now (after auto-Outer-PRD synthesis) is usually rescued automatically.
+- `HandlerSignatureMismatch(at=#7, expected=..., actual=...)` — the `handle` lambda's type doesn't match the intercepted function's signature. Adjust the LAM's parameter types and body return type to match.
+- `SchemaInvariantViolation(at=#19, schema=..., invariant=...)` — a statically-known value violates a Schema's invariant. Either change the value or relax the invariant.
+- `UnboundRecursiveSelf(at=#4, hint=...)` — a RecursiveSelf reference can't resolve to an enclosing RecursiveType. Read the hint — it points at the inner/outer PRD split, or now (after auto-Outer-PRD synthesis) is usually rescued automatically.
 - `code 'X' at position N expected <kind> but got <actual>` — Layer A compile error at the tokenization level. The slot at position N expected a different argument shape. Common cases: passing a bare token where a list belongs, or vice versa.
 
 When you receive a verifier error, focus on the specific node id and error class. Don't rewrite the whole program — fix the named node.

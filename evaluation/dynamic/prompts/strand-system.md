@@ -1102,14 +1102,35 @@ left-to-right; Map and Filter preserve order. Empty list inputs
 produce empty results (Nil) or the init value (Fold) or the
 appropriate boolean (Any → false, All → true vacuously).
 
-Typical Layer A density usage:
+These builtins are polymorphic and NOT in the prelude — declare an
+explicit FNT + FN pair at each use site, choosing concrete element
+types. Complete density-v4 example — double every element of [3, 5]
+(note the inner/outer ProductType split for the recursive list type):
 
-    val LAM x intT (Application Int.Mul (xRef intT) two)
-    mapResult APP mapFn list double
+    @v=1 root=mapped
+    selfRef RS
+    headInner PRF "head" intT
+    tailInner PRF "tail" selfRef
+    consInner PRD [headInner tailInner]
+    consCase SCS "Cons" consInner
+    nilCase SCS "Nil" _
+    listSum SUM [consCase nilCase]
+    listT RT listSum
+    headOuter PRF "head" intT
+    tailOuter PRF "tail" listT
+    consOuter PRD [headOuter tailOuter]
+    nilV SV listT "Nil" _
+    five SV listT "Cons" (PV consOuter [head=5 tail=nilV])
+    list SV listT "Cons" (PV consOuter [head=3 tail=five])
+    double LAM [x:intT] (APP mul [x 2])
+    fnT FNT [intT] intT
+    mapT FNT [listT fnT] listT
+    mapFn FN "strand-builtin:List.Map" mapT
+    mapped APP mapFn [list double]
 
-The lambda's `parameters` and `effects` follow the standard LAM
-shape; the FunctionType for the lambda parameter of the higher-
-order builtin must match its arity.
+The fn-parameter slot of the higher-order FNT (`fnT` above) must
+match the lambda's arity — List.Fold's fn slot is a two-parameter
+`FNT [accT elemT] accT`.
 
 ## Stdlib expansion round 4
 
@@ -1691,6 +1712,11 @@ Verifier errors look like:
 
 Common error classes you may encounter:
 
+- `CategoryMismatch` — a field references a node of the wrong category
+  for the position (e.g., a value where a Type belongs). The error names
+  the field and both categories.
+- `UnboundVariable` — a VarRef's binder (PRC or LET) is not in scope at
+  the VarRef's position. Reference only enclosing binders.
 - `UnboundTypeParameter` — a TypeParameter is referenced from outside any
   enclosing TypeAbstraction or ForallType that lists it. Add the TPM to the
   binder's `typeParameters` list, or wrap the body in a TAB.
@@ -1712,9 +1738,35 @@ Common error classes you may encounter:
 - `ArityMismatch` — wrong number of arguments at an Application.
 - `NotAFunction` — the Application's function position has a non-function
   type.
+- `NonExhaustiveMatch` — a Match misses possible scrutinee values. A Sum
+  scrutinee must cover every declared case with top-level constructor
+  patterns or include a wildcard/variable catch-all; a Bool scrutinee
+  needs both literals or a catch-all.
+- `EmptyMatch` — a Match with zero cases. At least one case is required.
+- `PatternTypeMismatch` — a pattern's `patternType` does not equal the
+  Match's scrutinee type (strict structural equality).
+- `MatchCaseBodyTypeDivergence` — two case bodies (including IF/WHEN
+  branches) have different types. All branches must agree.
+- `FixpointBodyShapeMismatch` — a FIX body must be a Lambda whose FIRST
+  parameter has the recursionType (the recursive-call slot) and whose
+  remaining parameters and result match the recursionType's.
 - `UncoveredEffects` — a Lambda's body uses effects the Lambda failed to
   declare. Add the missing EffectCategory NodeIds to the Lambda's `effects`
   list.
+- `EffectDeclArityMismatch` / `EffectDeclParameterTypeMismatch` — an EFD's
+  parameter list does not match its EffectCategory's declared parameter
+  count or types. Supply matching positional values.
+- `EffectInstanceCoverageMismatch` — an Application's effectInstances do
+  not cover the callee's declared effect categories exactly (one EffectDecl
+  per declared category, none extra).
+- `CapabilityScopeUnsatisfiable` — a CAP narrows capabilities below the
+  body's effect closure. Add the missing categories to the CAP or move the
+  effectful code outside it.
+- `HandlerNotAFunction` / `HandlerOverPolymorphicHandle` — a Handler's
+  `handle` expression must evaluate to a monomorphic function value.
+- `HandlerSignatureMismatch` — an intercepted call's argument and result
+  types must equal the handler function's. Adjust the handle lambda's
+  parameter types and result to match the intercepted callee.
 - `StateMachineMissingImplicitEffect` — a StateMachine is missing
   `receiveFx` or `sendFx`. Add the appropriate effect category to the SM's
   `effects` list.
@@ -1722,15 +1774,35 @@ Common error classes you may encounter:
   type is not `(State, Event) -> (State, Outputs)` for either the
   OutputBatch product shape or the tagged-list recursive shape. Check the
   result PRD's field order: `state` first, `outputs` second.
+- `StateMachineInitialStateTypeMismatch` — the SM's initialState type does
+  not match the State half of the transition function's signature.
 - `OutputStreamEventTypeMismatch` — an output stream's eventType disagrees
   with the corresponding `output_i: Option<...>` slot of the transition's
   OutputBatch product.
 - `SchemaInvariantViolation` — a statically-known value flowing into a
   Schema-typed position failed one of the Schema's invariants. Check the
   invariant body and the value being supplied.
+- `SchemaInvariantBodyMustBePure` — an Invariant's body declares effects or
+  is a ForeignNode. Invariant bodies must be pure `(valueType) -> Bool`
+  lambdas.
+- `ToolParamTypeUnsupported` — a ToolDef's parameterSchema valueType has no
+  JSON Schema projection (FunctionType, ForallType, or unbound
+  TypeParameter). Tool parameter types must be plain data shapes.
+- `NodeRefTargetMustBeClosed` — a NodeRef's target subgraph contains free
+  VarRef / TypeParameter references to binders outside itself. NodeRef
+  targets must be self-contained.
+- `UnboundRecursiveSelf` — an RS was resolved outside any enclosing RT
+  walk; almost always the INNER product was used at a top-level value-
+  construction site. Use the OUTER product there (see the inner/outer
+  split above); the error's hint field carries the full explanation.
 
-Use the `at=#<nodeId>` field to locate the offending node in your program;
-the node id is the position in your document's declaration order.
+Use the `at=#<nodeId>` field to locate the offending node. Node ids follow
+the order of the compiled dag-json document: your declared nodes in line
+order FIRST, then sugar-synthesized nodes (IF/WHEN expansion towers,
+auto-VarRefs, inline literals, nested `(CODE ...)` forms), then implicit-
+prelude nodes. The CLI annotates each `#N` with the author id (and Layer A
+line where known) and flags synthesized/prelude nodes as such, so counting
+positions by hand should rarely be needed.
 
 ## Output convention
 
