@@ -44,13 +44,17 @@ object LayerATranslator {
 
     /**
      * Sugar codes that share a `jsonType` with a canonical code (today: `IF`
-     * and `WHEN` both share `"Match"` with `MAT`). Step 1's translator skips
-     * them during code resolution; the canonical `MAT` is the right pick
-     * when no structural detection is in play. A future step that adds
-     * density-sugar projection will positively detect IF/WHEN trigger
-     * patterns and override this default.
+     * and `WHEN` both share `"Match"` with `MAT`; `RES` shares `"SumType"`
+     * with `SUM`). Step 1's translator skips them during code resolution; the
+     * canonical code (`MAT` / `SUM`) is the right pick when no structural
+     * detection is in play. A future step that adds density-sugar projection
+     * will positively detect the trigger patterns and override this default.
+     *
+     * `TRY` (jsonType `"Attempt"`) is NOT a sugar in this sense — it is the
+     * only code for the Attempt category, so the reverse projection picks it
+     * for every Attempt node directly.
      */
-    private val SUGAR_CODES = setOf("IF", "WHEN")
+    private val SUGAR_CODES = setOf("IF", "WHEN", "RES")
 
     /**
      * Codes whose optional fields are always emitted explicitly (as empty

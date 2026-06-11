@@ -107,6 +107,9 @@ fun Node.childNodeIds(): List<NodeId> = when (this) {
     }
     is Node.Fixpoint -> listOf(recursionType, body)
 
+    // ----- Error recovery (N-047) -----
+    is Node.Attempt -> listOf(body)
+
     // ----- Layer 5: composite values -----
     is Node.ProductValue -> buildList { add(ofType); addAll(fields) }
     is Node.ProductFieldValue -> listOf(value)

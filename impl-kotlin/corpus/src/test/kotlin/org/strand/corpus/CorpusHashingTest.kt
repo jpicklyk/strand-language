@@ -77,6 +77,9 @@ class CorpusHashingTest {
         // store so the program hashes deterministically like any other.
         "/corpus/81-llm-stream-drain.json",
         "/corpus/84-bridged-stream.json",
+        "/corpus/85-attempt-ok-passthrough.json",
+        "/corpus/86-attempt-fs-read-fallback.json",
+        "/corpus/87-attempt-retry-with-backoff.json",
     )
 
     @TestFactory

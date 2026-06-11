@@ -303,6 +303,12 @@ class Hasher(private val rawStore: RawNodeStore) {
                 walk(node.body, stack, out)
             }
 
+            is Node.Attempt -> {
+                // N-047: Attempt introduces no binders, so the body is walked
+                // in the surrounding stack like any ordinary expression child.
+                walk(node.body, stack, out)
+            }
+
             is Node.ProductValue -> {
                 walk(node.ofType, stack, out)
                 node.fields.forEach { walk(it, stack, out) }

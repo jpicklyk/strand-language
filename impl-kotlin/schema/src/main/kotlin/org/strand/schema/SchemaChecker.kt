@@ -217,6 +217,10 @@ class SchemaChecker(
             is Node.Application,
             is Node.ForeignNode,
             is Node.Fixpoint,
+            // N-047 Attempt is never static: its result depends on whether the
+            // body raises a catchable failure at runtime, which the static
+            // folder cannot determine. Defer to the runtime obligation.
+            is Node.Attempt,
             is Node.Match,
             is Node.Handler,
             is Node.CapabilityScope,

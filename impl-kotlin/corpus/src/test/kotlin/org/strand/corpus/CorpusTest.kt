@@ -261,6 +261,24 @@ class CorpusTest {
         // loopback socket.
         Case("/corpus/84-bridged-stream.json", null,
             "Q-046 verify-only: a state machine consuming a source-bound External Bytes stream. The stream's `source` is an Application of Net.Connect declaring Network.Connect; the runtime feeder (BridgedStreamTest) drains the opened handle into the machine as Bytes events under the group's Network.Receive capability."),
+
+        // N-047 Attempt (Q-048, proposals/error-recovery.md § 7). Three
+        // scenarios: 85 Ok-passthrough (a TRY over a pure Int literal,
+        // unwrapped by Match to the Ok payload), 86 Fs.Read fallback (a TRY
+        // over a Fs.Read on a path that cannot exist; the catchable
+        // filesystem-read IoFailure becomes Err and the Match yields the
+        // fallback bytes), 87 retry-with-backoff (a Fixpoint counts down
+        // attempts, sleeping 0ms between tries against a deterministically-
+        // missing relative path; after the final attempt the give-up branch
+        // returns the fallback). The expected values assert on the fallback /
+        // Ok payload only — the platform-varying Err.detail string is never
+        // embedded in an expected value (branch-on-kind, never detail).
+        Case("/corpus/85-attempt-ok-passthrough.json", Value.IntV(42L),
+            "N-047 Attempt Ok passthrough: TRY over IntLit(42) yields Ok(42); the Match unwraps it to 42. The canonical exemplar of the verifier-synthesized Result<T> = Ok(T) | Err({kind, detail}) sum that every Attempt result inhabits."),
+        Case("/corpus/86-attempt-fs-read-fallback.json", Value.BytesV("{}".toByteArray()),
+            "N-047 Attempt Fs.Read fallback: TRY over Fs.Read on a path that cannot exist; the catchable filesystem-read IoFailure becomes Err({kind: \"filesystem-read\", detail: ...}) and the Match takes the Err branch, yielding the default bytes {} (0x7b7d). Asserts on the fallback value only — Err.detail is platform-varying."),
+        Case("/corpus/87-attempt-retry-with-backoff.json", Value.BytesV("{}".toByteArray()),
+            "N-047 Attempt retry-with-backoff (the canonical agent program): a Fixpoint counts down from 2, on each Err Time.Sleep(0)s and recurses with a deterministically-missing relative path; after the final attempt the give-up branch returns the default bytes {}. Hermetic (relative path, 0ms backoff) so it runs fast and offline."),
     )
 
     /**
@@ -278,6 +296,12 @@ class CorpusTest {
         // Q-030 program 39 needs the handler's own effect (Filesystem.Write)
         // granted; the intercepted Time.Now is consumed by the Handler.
         "/corpus/39-handler-itself-performs-effect.json" to listOf("fsWriteFx"),
+        // N-047 Attempt programs: the Fs.Read / Time.Sleep calls inside the
+        // TRY body still need their effects granted — Attempt is transparent
+        // to the capability check (the catchable failure happens AFTER the
+        // call is authorized and attempted).
+        "/corpus/86-attempt-fs-read-fallback.json" to listOf("readFx"),
+        "/corpus/87-attempt-retry-with-backoff.json" to listOf("readFx", "sleepFx"),
     )
 
     /**

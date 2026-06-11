@@ -115,6 +115,16 @@ class VmEquivalenceTest {
         // value agrees with the interpreter-WITH-obligations result for
         // this pass case.
         Layer14Pair("82-runtime-schema-dynamic-pass"),
+        // N-047 Attempt (Q-048). 85 (Ok passthrough — a pure TRY) and 86
+        // (Fs.Read fallback — the catchable IoFailure path) hold VM
+        // equivalence: the Err payload excludes NodeIds, so both backends
+        // construct identical Err values from the same Builtins IoFailure. 87
+        // (retry-with-backoff) also holds — the file is deterministically
+        // missing and Time.Sleep(0) is a no-op delay, so the retry loop is
+        // identical under both engines.
+        Layer14Pair("85-attempt-ok-passthrough"),
+        Layer14Pair("86-attempt-fs-read-fallback"),
+        Layer14Pair("87-attempt-retry-with-backoff"),
     )
 
     @TestFactory

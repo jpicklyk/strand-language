@@ -10,6 +10,8 @@ import org.strand.core.NodeId
 import org.strand.interpreter.Builtins
 import org.strand.interpreter.InterpretError
 import org.strand.interpreter.InterpretException
+import org.strand.interpreter.IoFailure
+import org.strand.interpreter.SandboxViolation
 import org.strand.interpreter.Value
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -43,6 +45,13 @@ class Vm(private val table: ChunkTable) {
     private var currentCaps: Set<Int> = emptySet()
     private val capStack: ArrayDeque<Set<Int>> = ArrayDeque()
     private val handlers: MutableList<VmActiveHandler> = mutableListOf()
+
+    // Error recovery — N-047 Attempt (Q-048). Each ATTEMPT_PUSH records a
+    // marker; on a catchable failure the unwinder truncates `frames` and the
+    // marker frame's operand stack to the recorded depths, restores the
+    // capability/handler depths and saved caps, pushes the ErrorPayload
+    // ProductV, and resumes at the recorded err-label pc.
+    private val attemptStack: ArrayDeque<AttemptMarker> = ArrayDeque()
 
     /**
      * Execute the bytecode and return the top-of-stack value at HALT.
@@ -91,6 +100,7 @@ class Vm(private val table: ChunkTable) {
         currentCaps = initialCaps
         capStack.clear()
         handlers.clear()
+        attemptStack.clear()
         val frame = Frame(chunk = table.root, captures = emptyArray())
         val frames = ArrayDeque<Frame>()
         frames.addLast(frame)
@@ -123,32 +133,44 @@ class Vm(private val table: ChunkTable) {
         // be invoking this from inside an active CapabilityScope or Handler
         // context (e.g., a transition function called from a CapabilityScope
         // body). For top-level callers, both stacks should be empty.
+        //
+        // The attempt-marker stack, by contrast, IS isolated per applyClosure
+        // run: markers record frame depths into the fresh [frames] deque this
+        // call builds, so a marker from an outer evaluation must not be
+        // consulted here. Snapshot and restore around the run.
+        val savedAttempts = ArrayDeque(attemptStack)
+        attemptStack.clear()
         val frames = ArrayDeque<Frame>()
-        when (closure) {
-            is VmClosure -> {
-                val sub = table[closure.chunkIndex]
-                val frame = Frame(chunk = sub, captures = closure.captures)
-                for ((i, arg) in args.withIndex()) frame.locals[i] = arg
-                frames.addLast(frame)
+        try {
+            when (closure) {
+                is VmClosure -> {
+                    val sub = table[closure.chunkIndex]
+                    val frame = Frame(chunk = sub, captures = closure.captures)
+                    for ((i, arg) in args.withIndex()) frame.locals[i] = arg
+                    frames.addLast(frame)
+                }
+                is VmFixpoint -> {
+                    val sub = table[closure.chunkIndex]
+                    val frame = Frame(chunk = sub, captures = closure.captures)
+                    frame.locals[0] = closure  // recursive-self slot
+                    for ((i, arg) in args.withIndex()) frame.locals[i + 1] = arg
+                    frames.addLast(frame)
+                }
+                is VmForeign -> {
+                    // Dispatch directly via Builtins; no frame setup.
+                    val builtin = Builtins.lookup(closure.target)
+                        ?: error("applyClosure: no Builtins entry for foreign target '${closure.target}'")
+                    return builtin.invoke(args)
+                }
+                else -> error("applyClosure: $closure is not callable (got ${closure::class.simpleName})")
             }
-            is VmFixpoint -> {
-                val sub = table[closure.chunkIndex]
-                val frame = Frame(chunk = sub, captures = closure.captures)
-                frame.locals[0] = closure  // recursive-self slot
-                for ((i, arg) in args.withIndex()) frame.locals[i + 1] = arg
-                frames.addLast(frame)
-            }
-            is VmForeign -> {
-                // Dispatch directly via Builtins; no frame setup.
-                val builtin = Builtins.lookup(closure.target)
-                    ?: error("applyClosure: no Builtins entry for foreign target '${closure.target}'")
-                return builtin.invoke(args)
-            }
-            else -> error("applyClosure: $closure is not callable (got ${closure::class.simpleName})")
+            val raw = runLoopMapped(frames, limits)
+            return raw as? Value
+                ?: error("applyClosure: callable returned ${raw::class.simpleName}, expected a Value")
+        } finally {
+            attemptStack.clear()
+            attemptStack.addAll(savedAttempts)
         }
-        val raw = runLoopMapped(frames, limits)
-        return raw as? Value
-            ?: error("applyClosure: callable returned ${raw::class.simpleName}, expected a Value")
     }
 
     /**
@@ -236,6 +258,7 @@ class Vm(private val table: ChunkTable) {
             val current = frames.last()
             val op = Opcode.fromByte(current.code[current.pc])
             current.pc++
+            try {
             when (op) {
                 Opcode.POP -> current.stack.removeLast()
                 Opcode.DUP -> current.stack.add(current.stack.last())
@@ -316,6 +339,29 @@ class Vm(private val table: ChunkTable) {
                 }
                 Opcode.HANDLER_POP -> {
                     handlers.removeLast()
+                }
+
+                Opcode.ATTEMPT_PUSH -> {
+                    // N-047 (Q-048). The operand is a JUMP-style relative
+                    // offset to the err-label; after reading it, current.pc
+                    // points at the first body instruction, so the absolute
+                    // err-label pc is `current.pc + offset`. Record the
+                    // current depths + caps so the unwinder can restore them.
+                    val offset = current.operand()
+                    attemptStack.addLast(AttemptMarker(
+                        frameDepth = frames.size,
+                        stackDepth = current.stack.size,
+                        capStackDepth = capStack.size,
+                        handlerDepth = handlers.size,
+                        savedCaps = currentCaps,
+                        errPc = current.pc + offset,
+                    ))
+                }
+                Opcode.ATTEMPT_POP -> {
+                    // Success path: the body produced a value with no
+                    // catchable failure; drop the marker. The Ok SUM_NEW
+                    // follows in the bytecode stream.
+                    attemptStack.removeLast()
                 }
 
                 Opcode.PRODUCT_NEW -> {
@@ -486,7 +532,104 @@ class Vm(private val table: ChunkTable) {
                     throw VmOpcodeNotImplemented(op)
                 }
             }
+            } catch (io: IoFailure) {
+                // Parity with the interpreter's translateIoFailure: a raw
+                // IoFailure escaping a builtin is translated to the structured
+                // InterpretError.IoFailure (honouring the verbosity gate) and
+                // then handled by the attempt-unwind path. Closes the
+                // pre-existing VM/interpreter parity gap (proposals/
+                // error-recovery.md § 6.3).
+                val translated = InterpretException(translateVmIoFailure(io, limits))
+                if (!unwindToAttempt(frames, translated.error)) throw translated
+            } catch (sv: SandboxViolation) {
+                // A raw SandboxViolation is likewise translated for parity, but
+                // it is UNCATCHABLE — translate to its terminal InterpretError
+                // form and rethrow. The marker stack is never consulted.
+                throw InterpretException(translateVmSandboxViolation(sv, limits))
+            } catch (ie: InterpretException) {
+                // An already-structured InterpretException (e.g. a future
+                // catchable variant). Unwind only if catchable AND a marker is
+                // available; otherwise propagate. The uncatchable filter is the
+                // error's own `isCatchable` property.
+                if (!unwindToAttempt(frames, ie.error)) throw ie
+            }
         }
+    }
+
+    /**
+     * N-047 (Q-048) unwind. If [error] is catchable and an attempt marker is
+     * available, truncate [frames] and the marker frame's operand stack to the
+     * recorded depths, restore the capability/handler stacks and saved caps,
+     * push the `{kind, detail}` ErrorPayload ProductV, and resume at the
+     * recorded err-label pc. Returns true when the unwind was performed; false
+     * when [error] is uncatchable or no marker is active (the caller rethrows).
+     */
+    private fun unwindToAttempt(frames: ArrayDeque<Frame>, error: InterpretError): Boolean {
+        if (!error.isCatchable) return false
+        if (attemptStack.isEmpty()) return false
+        val marker = attemptStack.removeLast()
+        // Truncate the frame stack back to the marker's frame.
+        while (frames.size > marker.frameDepth) frames.removeLast()
+        val markerFrame = frames.last()
+        // Truncate the marker frame's operand stack to the recorded depth.
+        while (markerFrame.stack.size > marker.stackDepth) markerFrame.stack.removeLast()
+        // Restore capability + handler scopes.
+        while (capStack.size > marker.capStackDepth) capStack.removeLast()
+        currentCaps = marker.savedCaps
+        while (handlers.size > marker.handlerDepth) handlers.removeLast()
+        // Push the ErrorPayload {kind, detail}; the err-label's SUM_NEW wraps
+        // it as Err(payload).
+        markerFrame.stack.add(buildErrorPayload(error))
+        // Resume at the err-label.
+        markerFrame.pc = marker.errPc
+        return true
+    }
+
+    /**
+     * Build the `{kind: String, detail: String}` ErrorPayload product for a
+     * caught error. Field order matches the verifier's synthesized payload and
+     * the interpreter's `errorPayload` builder.
+     */
+    private fun buildErrorPayload(error: InterpretError): Value.ProductV {
+        val (kind, detail) = when (error) {
+            is InterpretError.IoFailure -> error.kind to error.detail
+            is InterpretError.SchemaInvariantViolation -> "schema-invariant" to error.valueDescription
+            else -> error("buildErrorPayload called on uncatchable error $error")
+        }
+        return Value.ProductV(linkedMapOf(
+            "kind" to Value.StringV(kind),
+            "detail" to Value.StringV(detail),
+        ))
+    }
+
+    /**
+     * Translate a raw [IoFailure] to the structured [InterpretError.IoFailure],
+     * honouring [EvaluationLimits.errorVerbosity] exactly as the interpreter's
+     * `translateIoFailure` does. `at` is null — VM opcodes carry no NodeIds.
+     */
+    private fun translateVmIoFailure(io: IoFailure, limits: EvaluationLimits): InterpretError.IoFailure {
+        val detail = when (limits.errorVerbosity) {
+            org.strand.core.ErrorVerbosity.Redacted -> io.detail
+            org.strand.core.ErrorVerbosity.Full -> io.unscrubbedDetail
+            org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
+        }
+        // IoFailure.at is non-null; the VM carries no NodeIds, so use a
+        // sentinel. (The Err payload excludes `at` entirely — § 4.2.)
+        return InterpretError.IoFailure(at = NodeId(-1), kind = io.kind, detail = detail)
+    }
+
+    /**
+     * Translate a raw [SandboxViolation] to the terminal
+     * [InterpretError.SandboxViolation] (uncatchable). Mirrors the
+     * interpreter's `translateSandboxViolation`.
+     */
+    private fun translateVmSandboxViolation(sv: SandboxViolation, limits: EvaluationLimits): InterpretError.SandboxViolation {
+        val detail = when (limits.errorVerbosity) {
+            org.strand.core.ErrorVerbosity.Redacted -> sv.detail
+            org.strand.core.ErrorVerbosity.Full -> sv.unscrubbedDetail
+            org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
+        }
+        return InterpretError.SandboxViolation(at = NodeId(-1), kind = sv.kind, detail = detail)
     }
 
     /**
@@ -569,6 +712,25 @@ class Vm(private val table: ChunkTable) {
  * value plus the handler's runtime callable value (typically VmClosure).
  */
 internal data class VmActiveHandler(val intercept: Int, val handlerValue: Any)
+
+/**
+ * N-047 (Q-048) attempt marker. Recorded at every `ATTEMPT_PUSH`; consumed by
+ * the unwinder on a catchable failure (popped on the success path by
+ * `ATTEMPT_POP`). [frameDepth] / [stackDepth] are the `frames.size` and the
+ * marker frame's operand-stack size at push time; [capStackDepth] /
+ * [handlerDepth] are the capability- and handler-stack depths; [savedCaps] is
+ * the `currentCaps` to restore; [errPc] is the absolute pc (in the marker
+ * frame) of the err-label where the unwinder resumes after pushing the
+ * ErrorPayload.
+ */
+internal data class AttemptMarker(
+    val frameDepth: Int,
+    val stackDepth: Int,
+    val capStackDepth: Int,
+    val handlerDepth: Int,
+    val savedCaps: Set<Int>,
+    val errPc: Int,
+)
 
 /**
  * Thrown when a CALL site's callee declares an effect that is not in

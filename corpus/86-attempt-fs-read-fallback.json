@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "root": "result",
+  "nodes": {
+    "stringT":     { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":      { "type": "PrimitiveType", "kind": "Bytes" },
+
+    "kindField":   { "type": "ProductTypeField", "name": "kind", "fieldType": "stringT" },
+    "detailField": { "type": "ProductTypeField", "name": "detail", "fieldType": "stringT" },
+    "errPayloadT": { "type": "ProductType", "fields": ["kindField", "detailField"] },
+
+    "okCase":      { "type": "SumTypeCase", "name": "Ok", "caseType": "bytesT" },
+    "errCase":     { "type": "SumTypeCase", "name": "Err", "caseType": "errPayloadT" },
+    "resultBytesT":{ "type": "SumType", "cases": ["okCase", "errCase"] },
+
+    "readFx":      { "type": "EffectCategory", "categoryName": "Filesystem.Read" },
+    "fsReadT":     { "type": "FunctionType", "parameters": ["stringT"], "result": "bytesT", "effects": ["readFx"] },
+    "fsRead":      { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "fsReadT", "effects": ["readFx"] },
+
+    "pathS":       { "type": "StringLit", "value": "strand-attempt-nonexistent/config.json" },
+    "readApp":     { "type": "Application", "function": "fsRead", "arguments": ["pathS"] },
+    "tryRead":     { "type": "Attempt", "body": "readApp" },
+
+    "varB":        { "type": "Pattern", "kind": "variable", "patternType": "bytesT", "name": "b" },
+    "patOk":       { "type": "Pattern", "kind": "constructor", "patternType": "resultBytesT", "caseName": "Ok", "payloadPattern": "varB" },
+    "bRef":        { "type": "VarRef", "binder": "varB" },
+    "caseOk":      { "type": "MatchCase", "pattern": "patOk", "body": "bRef" },
+
+    "varE":        { "type": "Pattern", "kind": "variable", "patternType": "errPayloadT", "name": "e" },
+    "patErr":      { "type": "Pattern", "kind": "constructor", "patternType": "resultBytesT", "caseName": "Err", "payloadPattern": "varE" },
+    "defaultB":    { "type": "BytesLit", "value": "7b7d" },
+    "caseErr":     { "type": "MatchCase", "pattern": "patErr", "body": "defaultB" },
+
+    "result":      { "type": "Match", "scrutinee": "tryRead", "cases": ["caseOk", "caseErr"] }
+  }
+}

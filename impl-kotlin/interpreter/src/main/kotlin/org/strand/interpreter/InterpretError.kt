@@ -20,17 +20,46 @@ import org.strand.core.NodeId
 sealed class InterpretError {
     abstract val at: NodeId?
 
+    /**
+     * Whether an enclosing `Attempt` node (N-047, Q-048) may observe this
+     * error as an `Err({kind, detail})` value rather than letting it
+     * terminate evaluation. Implements the catchable/uncatchable taxonomy of
+     * `proposals/error-recovery.md` § 4.3.
+     *
+     * The organizing principle: **catchable errors are failures of the
+     * world; uncatchable errors are defects of the program or decisions of
+     * the host.** Only [IoFailure] (every transport/filesystem/process/
+     * provider failure — the operation was authorized and attempted, the
+     * world declined) and [SchemaInvariantViolation] (dynamic data failing
+     * validation) are catchable. Every other variant — infrastructure
+     * defects, program defects, host-policy stops (capability, refinement,
+     * sandbox, budget) — is terminal regardless of any surrounding Attempt.
+     *
+     * This is an `abstract val` on the sealed hierarchy (not a `when` table)
+     * so a future InterpretError variant cannot be added without explicitly
+     * taking a position on its catchability.
+     */
+    abstract val isCatchable: Boolean
+
     /** A reference resolved to a missing node at runtime. */
-    data class MissingNode(override val at: NodeId, val missing: NodeId) : InterpretError()
+    data class MissingNode(override val at: NodeId, val missing: NodeId) : InterpretError() {
+        override val isCatchable: Boolean get() = false
+    }
 
     /** A non-closure value appeared in function position. */
-    data class NotCallable(override val at: NodeId, val gotKind: String) : InterpretError()
+    data class NotCallable(override val at: NodeId, val gotKind: String) : InterpretError() {
+        override val isCatchable: Boolean get() = false
+    }
 
     /** Arity mismatch at call time. (Unreachable on verified graphs but defensive.) */
-    data class ArityMismatch(override val at: NodeId, val expected: Int, val actual: Int) : InterpretError()
+    data class ArityMismatch(override val at: NodeId, val expected: Int, val actual: Int) : InterpretError() {
+        override val isCatchable: Boolean get() = false
+    }
 
     /** A VarRef pointed to a binder not present in the runtime environment. */
-    data class UnboundAtRuntime(override val at: NodeId, val binder: NodeId) : InterpretError()
+    data class UnboundAtRuntime(override val at: NodeId, val binder: NodeId) : InterpretError() {
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * An Application of a Lambda or ForeignNode whose declared effects are
@@ -49,7 +78,11 @@ sealed class InterpretError {
     data class CapabilityViolation(
         override val at: NodeId,
         val missing: Set<NodeId>
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Host policy: observable denial would turn the capability context
+        // into a probeable oracle (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * An Application's call-site requirement (the evaluated EffectDecl
@@ -68,7 +101,11 @@ sealed class InterpretError {
         val category: NodeId,
         val requirement: List<Value>,
         val available: List<CapabilityPattern>,
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Host policy: the refinement lattice is the finer-grained half of
+        // the capability-denial surface (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * A ForeignNode's `target` identifier was not registered in the
@@ -78,7 +115,12 @@ sealed class InterpretError {
     data class UnknownForeignTarget(
         override val at: NodeId,
         val target: String
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Deployment defect: the binding is host configuration; the agent
+        // regenerates against a supported target (proposals/error-recovery.md
+        // § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * A Match evaluation exhausted all cases without any pattern matching
@@ -88,7 +130,12 @@ sealed class InterpretError {
      */
     data class NoMatchingCase(
         override val at: NodeId
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Program defect (latent type error): the recovery path is the agent
+        // adding the missing case, not the program absorbing it
+        // (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * A [org.strand.core.Node.NodeRef]'s target [Hash] is not in the local
@@ -99,7 +146,13 @@ sealed class InterpretError {
     data class NodeRefTargetNotInStore(
         override val at: NodeId,
         val targetHash: Hash
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Infrastructure: cross-store resolution failure is Q-016/Q-043
+        // territory; recoverable remote-fetch wants its own retry mechanism,
+        // not a silent reclassification here (proposals/error-recovery.md
+        // § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * An IO builtin (Layer 4 step 2 — Filesystem, Network, Process,
@@ -117,7 +170,12 @@ sealed class InterpretError {
         override val at: NodeId,
         val kind: String,
         val detail: String,
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Failure of the world: the prime catchable class. The operation was
+        // authorized and attempted; the world declined
+        // (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = true
+    }
 
     /**
      * Q-040: a host-configured resource cap was exceeded at evaluation
@@ -142,7 +200,13 @@ sealed class InterpretError {
         val kind: ExhaustionKind,
         val current: Long,
         val limit: Long,
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Host policy (budget): the counters are evaluation-global, so a
+        // catch handler would itself run with the budget already exhausted —
+        // allowing the catch would let a program convert the host's hard stop
+        // into a soft, absorbable event (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * Q-041: a `Fs.*`, `Net.Connect`, or `Http.Request` builtin saw an
@@ -165,7 +229,15 @@ sealed class InterpretError {
         override val at: NodeId,
         val kind: SandboxViolationKind,
         val detail: String,
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Host policy (Q-041 boundary): a program that can catch sandbox
+        // denials can map the workspace boundary or blocked-IP ranges
+        // silently. The "learn what was rejected and retry within policy"
+        // goal is feedback to the agent across generations via the host's
+        // error report, not observability within an evaluation
+        // (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = false
+    }
 
     /**
      * Q-047 (Layer 7 step 2): a schema-typed value computed at runtime
@@ -195,7 +267,14 @@ sealed class InterpretError {
         val schema: NodeId,
         val invariant: NodeId,
         val valueDescription: String,
-    ) : InterpretError()
+    ) : InterpretError() {
+        // Failure of the world (data): dynamic data failing validation is the
+        // normal case in agent workloads (reject one record, continue). The
+        // Err payload excludes the offending value (§ 4.2), so the
+        // never-silently-emitted schema discipline is not subverted
+        // (proposals/error-recovery.md § 4.3).
+        override val isCatchable: Boolean get() = true
+    }
 }
 
 class InterpretException(val error: InterpretError) : RuntimeException(error.toString())

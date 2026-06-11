@@ -428,6 +428,9 @@ object JsonIngest {
                 recursionType = obj.requireRef("recursionType", ctx, resolve),
                 body = obj.requireRef("body", ctx, resolve)
             )
+            "Attempt" -> Node.Attempt(
+                body = obj.requireRef("body", ctx, resolve)
+            )
 
             "ProductValue" -> Node.ProductValue(
                 ofType = obj.requireRef("ofType", ctx, resolve),
@@ -538,7 +541,7 @@ object JsonIngest {
             )
 
             else -> throw IngestError.Malformed(
-                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-046)"
+                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-047)"
             )
         }
     }

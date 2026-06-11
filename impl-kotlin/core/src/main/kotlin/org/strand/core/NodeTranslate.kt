@@ -106,6 +106,9 @@ fun Node.translateNodeIds(fn: (NodeId) -> NodeId): Node = when (this) {
     }
     is Node.Fixpoint -> copy(recursionType = fn(recursionType), body = fn(body))
 
+    // ----- Error recovery (N-047) -----
+    is Node.Attempt -> copy(body = fn(body))
+
     // ----- Layer 5: composite values -----
     is Node.ProductValue -> copy(ofType = fn(ofType), fields = fields.map(fn))
     is Node.ProductFieldValue -> copy(value = fn(value))  // fieldName is metadata

@@ -225,6 +225,7 @@ internal class CanonicalEncoder(
         is Node.MatchCase -> encodeMatchCase(id, node, stack)
         is Node.Pattern -> encodePattern(node, stack)
         is Node.Fixpoint -> encodeFixpoint(node, stack)
+        is Node.Attempt -> encodeAttempt(node, stack)
 
         is Node.ProductValue -> encodeProductValue(node, stack)
         is Node.ProductFieldValue -> encodeProductFieldValue(node, stack)
@@ -698,6 +699,16 @@ internal class CanonicalEncoder(
         return encodeWithTag(CategoryTag.Fixpoint, listOf(
             CanonicalCbor.encodeBytes(hash(node.recursionType, stack)),
             CanonicalCbor.encodeBytes(hash(node.body, stack)),
+        ))
+    }
+
+    private fun encodeAttempt(node: Node.Attempt, stack: BinderStack): ByteArray {
+        // [tag=47, body-hash]. N-047 has one child, no content fields, and
+        // introduces no binders — the body is hashed under the surrounding
+        // binder context. Two Attempts over hash-identical bodies are the
+        // same node (proposals/error-recovery.md § 4.4).
+        return encodeWithTag(CategoryTag.Attempt, listOf(
+            encodeExpressionChild(node.body, stack),
         ))
     }
 

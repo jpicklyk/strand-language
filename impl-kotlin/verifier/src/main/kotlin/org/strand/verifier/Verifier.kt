@@ -438,6 +438,7 @@ class Verifier(
                 is Node.CapabilityScope -> inferCapabilityScope(id, node, scope, typeParams)
                 is Node.Match -> inferMatch(id, node, scope, typeParams)
                 is Node.Fixpoint -> inferFixpoint(id, node, scope, typeParams)
+                is Node.Attempt -> inferAttempt(id, node, scope, typeParams)
                 is Node.ProductValue -> inferProductValue(id, node, scope, typeParams)
                 is Node.ProductFieldGet -> inferProductFieldGet(id, node, scope, typeParams)
                 is Node.SumValue -> inferSumValue(id, node, scope, typeParams)
@@ -1409,6 +1410,78 @@ class Verifier(
             return recT
         }
 
+        /**
+         * N-047 Attempt (Q-048, proposals/error-recovery.md § 5).
+         *
+         * Typing: `infer(Attempt(body)) = SumType[Ok(infer(body)),
+         * Err(ErrorPayload)]` where `ErrorPayload = {kind: String,
+         * detail: String}`. The synthesized [TypeExpr.Sum] is built the same
+         * way as [synthesizeInputEventSum] (a direct TypeExpr with a synthetic
+         * `origin`, which type equality ignores), so it is structurally — and
+         * therefore hash- — identical to the SumType an agent declares for its
+         * Match patterns via the `RES`/`errPayloadT` Layer A sugars.
+         *
+         * `AttemptBodyMustBeMonomorphic`: if the body's type is a `Forall`,
+         * reject — `Result<Forall ...>` would put a polymorphic value inside a
+         * monomorphic sum case which no Match could eliminate under the
+         * explicit-instantiation discipline. Mirrors
+         * `HandlerOverPolymorphicHandle`.
+         *
+         * Effect closure: `closureOf(attempt) = closureOf(body)`. Failures are
+         * not effects; an Attempt declares nothing, subtracts nothing, and
+         * narrows nothing. This is the load-bearing soundness statement for
+         * Q-044 — the harm bound is computed identically with and without
+         * Attempt nodes.
+         */
+        private fun inferAttempt(
+            id: NodeId,
+            node: Node.Attempt,
+            scope: Map<NodeId, TypeExpr>,
+            typeParams: Set<NodeId>,
+        ): TypeExpr {
+            val bodyType = infer(node.body, scope, typeParams)
+            if (bodyType is TypeExpr.Forall) {
+                report(VerifyError.AttemptBodyMustBeMonomorphic(at = id, residual = bodyType))
+                throw VerifyAbort()
+            }
+            // closureOf(attempt) = closureOf(body): Attempt is transparent to
+            // the effect closure.
+            recordClosure(id, closureOf(node.body))
+            return synthesizeResultSum(bodyType)
+        }
+
+        /**
+         * Synthesize the `Ok(T) | Err(ErrorPayload)` structural sum for an
+         * Attempt over a body of type [okType]. Built as a direct TypeExpr
+         * (origin ignored by equality), so it is structurally identical to the
+         * SumType an agent declares — case order `Ok, Err` and the
+         * ErrorPayload field order `kind, detail` match the `RES` / `errPayloadT`
+         * Layer A sugars and the system-prompt error model.
+         */
+        private fun synthesizeResultSum(okType: TypeExpr): TypeExpr.Sum =
+            TypeExpr.Sum(
+                origin = NodeId(-1),
+                cases = listOf(
+                    TypeExpr.Sum.Case("Ok", okType),
+                    TypeExpr.Sum.Case("Err", errorPayloadType()),
+                ),
+            )
+
+        /**
+         * The fixed `ErrorPayload = {kind: String, detail: String}` product.
+         * Field order is significant for type equality ([TypeExpr.Product]
+         * compares its field list positionally); `kind` precedes `detail` to
+         * match the agent-declared `errPayloadT` prelude entry.
+         */
+        private fun errorPayloadType(): TypeExpr.Product =
+            TypeExpr.Product(
+                origin = NodeId(-1),
+                fields = listOf(
+                    TypeExpr.Product.Field("kind", TypeExpr.Prim(Primitive.String)),
+                    TypeExpr.Product.Field("detail", TypeExpr.Prim(Primitive.String)),
+                ),
+            )
+
         private fun inferForeignNode(
             id: NodeId,
             node: Node.ForeignNode,
@@ -1653,6 +1726,10 @@ class Verifier(
                         visit(node.body)
                     }
                     is Node.Fixpoint -> visit(node.body)
+                    // An Attempt is transparent to the handler walk: a Handler
+                    // inside an Attempt body, or an intercepted call inside an
+                    // Attempt body, must still be reached for signature checks.
+                    is Node.Attempt -> visit(node.body)
                     is Node.ProductValue -> node.fields.forEach(::visit)
                     is Node.ProductFieldValue -> visit(node.value)
                     is Node.ProductFieldGet -> visit(node.target)

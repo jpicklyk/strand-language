@@ -573,6 +573,21 @@ sealed class VerifyError {
         val gotType: TypeExpr
     ) : VerifyError()
 
+    // ----- Error recovery (N-047) -----
+
+    /**
+     * An `Attempt`'s [body] has a `Forall` type rather than a monomorphic
+     * type. The Attempt's result is the structural sum
+     * `Ok(T) | Err(ErrorPayload)`; a polymorphic `T` would place a
+     * polymorphic value inside a monomorphic sum case which no Match could
+     * eliminate under the explicit-instantiation discipline. Mirrors
+     * [HandlerOverPolymorphicHandle]. [residual] is the body's Forall type.
+     */
+    data class AttemptBodyMustBeMonomorphic(
+        override val at: NodeId,
+        val residual: TypeExpr
+    ) : VerifyError()
+
     // ----- State machines (N-027..N-029) -----
 
     /**
@@ -1140,6 +1155,7 @@ internal fun categoryName(node: Node?): String = when (node) {
     is Node.Pattern.WildcardPattern -> "WildcardPattern"
     is Node.Pattern.ConstructorPattern -> "ConstructorPattern"
     is Node.Fixpoint -> "Fixpoint"
+    is Node.Attempt -> "Attempt"
     is Node.ProductValue -> "ProductValue"
     is Node.ProductFieldValue -> "ProductFieldValue"
     is Node.ProductFieldGet -> "ProductFieldGet"
