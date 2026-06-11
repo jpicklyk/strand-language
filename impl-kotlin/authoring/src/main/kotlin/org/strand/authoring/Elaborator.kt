@@ -81,6 +81,38 @@ package org.strand.authoring
  * fundamentally requires unification, the elaborator gives up and falls
  * through to the verifier's explicit-annotation requirement.
  */
+/**
+ * One inference case the [Elaborator] attempted but could not resolve.
+ *
+ * The proposal's `ElaborationGap` policy ("emit a structured gap
+ * diagnostic; the LLM must annotate") is realized as a post-fixed-point
+ * scan: after [Elaborator.elaborate] converges, every field an inference
+ * pass targets that is still absent is, by construction, a case the
+ * elaborator attempted and failed (a resolvable case would have been
+ * filled in by the fixed point). Gap records are diagnostic only — they
+ * never change the emitted dag-json — and the `strand author` driver
+ * surfaces them as `elaboration note:` lines exclusively when compilation
+ * or downstream verification fails, so a successful compile stays silent.
+ */
+data class ElaborationGap(
+    /** Author id of the node carrying the unresolved field. */
+    val nodeId: String,
+    /** The field (or parameter slot) that remains unresolved. */
+    val field: String,
+    /** Short name of the inference case that was attempted. */
+    val inferenceCase: String,
+    /** One-line explanation of why the inference could not resolve. */
+    val reason: String,
+    /** 1-based Layer A source line of the node; 0 when synthesized. */
+    val line: Int,
+)
+
+/** Result of [Elaborator.elaborateWithGaps]: the elaborated document plus gap records. */
+data class ElaborationResult(
+    val document: LayerADocument,
+    val gaps: List<ElaborationGap>,
+)
+
 object Elaborator {
 
     private const val FIXED_POINT_MAX_ITERATIONS = 8
@@ -155,6 +187,136 @@ object Elaborator {
             current = afterAllNodeRewrites
         }
         return current
+    }
+
+    /**
+     * [elaborate] plus the structured gap scan: every inference case the
+     * fixed point attempted but left unresolved produces an
+     * [ElaborationGap] record. See [collectGaps] for the per-case
+     * detection rules.
+     */
+    fun elaborateWithGaps(doc: LayerADocument): ElaborationResult {
+        val elaborated = elaborate(doc)
+        return ElaborationResult(elaborated, collectGaps(elaborated))
+    }
+
+    /**
+     * Post-fixed-point gap scan over the elaborated [doc]. Because every
+     * inference pass runs to a fixed point, any targeted field still
+     * absent here is an attempted-but-failed inference, never a
+     * not-yet-reached one. Four structural cases are detected:
+     *
+     *  1. A compact LAM parameter entry still untyped (`name` with no
+     *     `:type` suffix and no separate PRC declaration) — the
+     *     compact-LAM call-site / usage / state-machine-context inference
+     *     found nothing. Downstream this surfaces as an "Unknown node id"
+     *     ingest error, which is meaningless without this note.
+     *  2. A separate PRC declaration still missing its `paramType` —
+     *     the Q-034 §5.3 case-1 call-site inference found no
+     *     unambiguous call site.
+     *  3. An SCS whose `caseType` is omitted while at least one
+     *     payload-bearing SV uses the case — the case-7 inference saw
+     *     the usages but the payload types were unresolvable or
+     *     conflicting. (An omitted caseType with NO payload-bearing
+     *     usage is a legitimate payload-less case, not a gap.)
+     *  4. A FIX whose `recursionType` references a name that is neither
+     *     declared, reserved, nor synthesized — the case-6 FunctionType
+     *     synthesis could not resolve the body Lambda's parameter or
+     *     result types.
+     *
+     * Lambda.effects / Application.effectInstances / typeArguments are
+     * not scanned: their absence elaborates to well-defined defaults
+     * (empty closure / context defaulting), not to a missing mandatory
+     * field, so the verifier's own diagnostics are already precise.
+     */
+    private fun collectGaps(doc: LayerADocument): List<ElaborationGap> {
+        val byId = doc.nodes.associateBy { it.id }
+        val gaps = mutableListOf<ElaborationGap>()
+
+        // Case 1: compact-LAM parameters still untyped.
+        for (lam in doc.nodes) {
+            if (lam.code != "LAM") continue
+            val params = (lam.args.getOrNull(0) as? Arg.Listing)?.items ?: continue
+            for (entry in params) {
+                val text = (entry as? Arg.Bare)?.text ?: continue
+                if (':' in text || text == "_") continue
+                if (byId[text]?.code == "PRC") continue  // covered by case 2
+                gaps += ElaborationGap(
+                    nodeId = lam.id,
+                    field = "parameter '$text' paramType",
+                    inferenceCase = "compact-LAM parameter inference",
+                    reason = "no call site, usage, or state-machine context determined " +
+                        "the type of parameter '$text'; annotate it as `$text:<type>`",
+                    line = lam.line,
+                )
+            }
+        }
+
+        // Case 2: separate ParameterDecls still missing paramType.
+        for (prc in doc.nodes) {
+            if (prc.code != "PRC") continue
+            if (prc.args.getOrNull(1) is Arg.Bare) continue
+            gaps += ElaborationGap(
+                nodeId = prc.id,
+                field = "paramType",
+                inferenceCase = "Lambda.paramType call-site inference",
+                reason = "no unambiguous call site or context resolved the parameter " +
+                    "type; declare it explicitly",
+                line = prc.line,
+            )
+        }
+
+        // Case 3: SCS caseType omitted while payload-bearing SVs use the case.
+        val attemptedScs = LinkedHashSet<String>()
+        for (sv in doc.nodes) {
+            if (sv.code != "SV") continue
+            val ofTypeId = (sv.args.getOrNull(0) as? Arg.Bare)?.text ?: continue
+            val caseName = (sv.args.getOrNull(1) as? Arg.Str)?.value ?: continue
+            val payloadArg = sv.args.getOrNull(2) ?: continue
+            if (payloadArg is Arg.Null) continue
+            val sum = byId[ofTypeId] ?: continue
+            if (sum.code != "SUM") continue
+            val cases = (sum.args.getOrNull(0) as? Arg.Listing)?.items ?: continue
+            for (caseRef in cases) {
+                val caseId = (caseRef as? Arg.Bare)?.text ?: continue
+                val scs = byId[caseId] ?: continue
+                if (scs.code != "SCS") continue
+                val scsName = (scs.args.getOrNull(0) as? Arg.Str)?.value ?: continue
+                if (scsName != caseName) continue
+                if (scs.args.getOrNull(1) !is Arg.Bare) attemptedScs += caseId
+                break
+            }
+        }
+        for (scsId in attemptedScs) {
+            val scs = byId.getValue(scsId)
+            gaps += ElaborationGap(
+                nodeId = scsId,
+                field = "caseType",
+                inferenceCase = "SumTypeCase.caseType inference from SumValue payloads",
+                reason = "payload-bearing SumValue usages exist but their payload types " +
+                    "were unresolvable or conflicting; declare the caseType explicitly",
+                line = scs.line,
+            )
+        }
+
+        // Case 4: FIX recursionType referencing an undeclared, unsynthesized name.
+        for (fix in doc.nodes) {
+            if (fix.code != "FIX") continue
+            val recTypeRef = (fix.args.getOrNull(0) as? Arg.Bare)?.text ?: continue
+            if (recTypeRef in byId) continue
+            if (recTypeRef in LayerAGrammar.reservedNodes) continue
+            gaps += ElaborationGap(
+                nodeId = fix.id,
+                field = "recursionType",
+                inferenceCase = "FunctionType synthesis from the FIX body Lambda",
+                reason = "'$recTypeRef' is not declared and its signature could not be " +
+                    "synthesized (a body parameter type or the body's result type was " +
+                    "unresolvable); declare `$recTypeRef FNT [...] <result>`",
+                line = fix.line,
+            )
+        }
+
+        return gaps
     }
 
     // ========================================================================

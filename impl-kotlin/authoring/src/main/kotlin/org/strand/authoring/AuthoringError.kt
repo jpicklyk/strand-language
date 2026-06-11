@@ -73,5 +73,16 @@ sealed class AuthoringError {
     }
 }
 
-class AuthoringException(val errors: List<AuthoringError>) :
-    RuntimeException("Layer A authoring failed:\n" + errors.joinToString("\n") { "  line ${it.line}: ${it.detail}" })
+class AuthoringException(
+    val errors: List<AuthoringError>,
+    /**
+     * Inference cases the [Elaborator] attempted but could not resolve
+     * before the failure (Q-034 gap policy). Populated when the failure
+     * occurred after elaboration ran (the [DagJsonEmitter] phase); empty
+     * for parse-phase failures where elaboration never executed. Drivers
+     * print these as `elaboration note:` lines alongside the errors so
+     * the agent can see which omitted annotation caused the downstream
+     * failure.
+     */
+    val elaborationGaps: List<ElaborationGap> = emptyList(),
+) : RuntimeException("Layer A authoring failed:\n" + errors.joinToString("\n") { "  line ${it.line}: ${it.detail}" })

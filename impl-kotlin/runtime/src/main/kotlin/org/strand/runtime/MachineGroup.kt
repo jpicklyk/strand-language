@@ -221,6 +221,25 @@ data class MachineGroup(
         }
 
     /**
+     * Q-046: the subset of [externalInputStreams] the host may feed and
+     * close — external input streams WITHOUT a `source` edge. A
+     * `source`-bound external stream is deliberately excluded: its sole
+     * producer is the runtime's [ExternalStreamFeeder], which owns channel
+     * closure via [StreamBus.producerHalted] when the IO source reaches
+     * EOF / failure. Exposing a host-facing [kotlinx.coroutines.channels.SendChannel]
+     * for it would create a second producer with conflicting closure
+     * ownership — a host `close()` while the feeder is mid-drain crashes
+     * the feeder with `ClosedSendChannelException`, and host-injected
+     * events would interleave non-replayably with the recorded IO chunks.
+     * [StateMachineRuntime.runGroup] builds [MachineGroupHandle.externalInputs]
+     * from this list, so source-bound streams never surface to the host.
+     */
+    internal fun hostFeedableExternalStreams(): List<NodeId> {
+        val sourceBound = sourceBoundExternalStreams().map { it.first }.toSet()
+        return externalInputStreams().filter { it !in sourceBound }
+    }
+
+    /**
      * Q-046 group-start soundness gate. The host-side feeder performs the
      * opener's semantic effect (E-035 `LLM.Generate` / E-001 `Network.Connect`)
      * and the E-004 `Network.Receive` reads on the program's behalf, outside

@@ -30,7 +30,16 @@ import kotlinx.coroutines.channels.Channel
  *    for byte-equal trace assertions.
  */
 class MachineGroupHandle internal constructor(
-    /** Each `external` input stream NodeId, paired with the channel the host pushes into. */
+    /**
+     * Each host-feedable `external` input stream NodeId, paired with the
+     * channel the host pushes into. The host owns closure of these channels
+     * (close after the last event so the consuming actors halt naturally).
+     *
+     * Q-046: `source`-bound external streams do NOT appear here — their
+     * sole producer is the runtime's [ExternalStreamFeeder], which owns
+     * channel closure when the IO source reaches EOF or fails. See
+     * [MachineGroup.hostFeedableExternalStreams].
+     */
     val externalInputs: Map<NodeId, SendChannel<Value>>,
     /** Each `output` stream NodeId, paired with the channel the host drains. */
     val externalOutputs: Map<NodeId, ReceiveChannel<Value>>,

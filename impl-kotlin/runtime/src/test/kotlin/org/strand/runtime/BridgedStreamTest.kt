@@ -3,6 +3,8 @@ package org.strand.runtime
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertArrayEquals
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -166,6 +168,55 @@ class BridgedStreamTest {
         }
     }
 
+    @Test
+    fun `source-bound stream is not host-feedable and host close loop does not crash the feeder`() {
+        val server = ServerSocket(0)
+        val payload = "feeder-survives-host-closes".toByteArray(Charsets.UTF_8)
+        val writer = Thread {
+            server.accept().use { client ->
+                client.getOutputStream().apply { write(payload); flush() }
+            }
+        }
+        try {
+            writer.start()
+            val finalized = finalize(twoMachineProgram(port = server.localPort))
+            assertTrue(Verifier(finalized.store, finalized.hashToNodeId).verify(finalized.root) is VerifyResult.Ok)
+            val group = buildGroup(finalized, grantReceive = true)
+            val runtime = StateMachineRuntime(finalized.store, finalized.hashToNodeId)
+            runBlocking {
+                val handle = runtime.runGroup(group, this)
+                val sourceBoundId = finalized.store.entries()
+                    .first { (_, n) -> n is Node.EventStream && n.source != null }
+                    .first
+                // Contract: the source-bound stream is fed and closed by the
+                // runtime's feeder, so it must NOT surface as host-feedable.
+                assertFalse(
+                    handle.externalInputs.containsKey(sourceBoundId),
+                    "source-bound external stream must not appear in handle.externalInputs",
+                )
+                // The plain external input IS host-feedable.
+                val plainInput = handle.externalInputs.values.single()
+                plainInput.send(Value.IntV(5))
+                // Mimic the CLI's shutdown sequence: close every external
+                // input the handle exposes. Before the fix this loop included
+                // the source-bound channel and crashed the live feeder with
+                // ClosedSendChannelException.
+                for (channel in handle.externalInputs.values) channel.close()
+                handle.await()
+                val states = handle.allInstances.values.map { it.currentState }
+                val bytesState = states.filterIsInstance<Value.BytesV>().single()
+                val intState = states.filterIsInstance<Value.IntV>().single()
+                // The feeder drained the socket to EOF undisturbed...
+                assertArrayEquals(payload, bytesState.v)
+                // ...and the host-fed machine processed its routed event.
+                assertEquals(5L, intState.v)
+            }
+        } finally {
+            server.close()
+            writer.join(2000)
+        }
+    }
+
     // ---- helpers --------------------------------------------------------
 
     private fun verify(json: String): VerifyResult {
@@ -214,16 +265,14 @@ class BridgedStreamTest {
         """.trimIndent()
 
         /**
-         * A Bytes-accumulator state machine consuming a `source`-bound external
-         * stream. [streamAndSourceNodes] supplies the `inStr` node (and any
-         * extra source/opener nodes it references); [port] is baked into the
-         * `Net.Connect` opener's port literal.
+         * The node entries for the Bytes-accumulator machine `m` consuming a
+         * `source`-bound external stream. [streamAndSourceNodes] supplies the
+         * `inStr` node (and any extra source/opener nodes it references);
+         * [port] is baked into the `Net.Connect` opener's port literal.
+         * Shared between the single-machine [program] and the two-machine
+         * [twoMachineProgram] fixtures.
          */
-        private fun program(streamAndSourceNodes: String, port: Int = 1): String = """
-        {
-          "version": 1,
-          "root": "m",
-          "nodes": {
+        private fun machineANodes(streamAndSourceNodes: String, port: Int): String = """
             "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
             "intT":   { "type": "PrimitiveType", "kind": "Int" },
             "strT":   { "type": "PrimitiveType", "kind": "String" },
@@ -265,6 +314,61 @@ class BridgedStreamTest {
               "outputStreams": [],
               "effects": ["receiveFx", "netReceiveCat"]
             }
+        """.trimIndent()
+
+        /**
+         * A Bytes-accumulator state machine consuming a `source`-bound external
+         * stream. [streamAndSourceNodes] supplies the `inStr` node (and any
+         * extra source/opener nodes it references); [port] is baked into the
+         * `Net.Connect` opener's port literal.
+         */
+        private fun program(streamAndSourceNodes: String, port: Int = 1): String = """
+        {
+          "version": 1,
+          "root": "m",
+          "nodes": {
+            ${machineANodes(streamAndSourceNodes, port)}
+          }
+        }
+        """.trimIndent()
+
+        /**
+         * Two machines under a corpus-48-style Let-chain root: machine `m`
+         * is the bridged Bytes accumulator (source-bound external stream),
+         * machine `mB` is an Int adder consuming a plain (host-feedable)
+         * external input stream `plainIn`. Exercises the host-side contract
+         * that source-bound streams are not host-feedable while ordinary
+         * external inputs still are.
+         */
+        private fun twoMachineProgram(port: Int): String = """
+        {
+          "version": 1,
+          "root": "rootLet",
+          "nodes": {
+            ${machineANodes(EXTERNAL_SOURCED, port)},
+            "plainIn": { "type": "EventStream", "eventType": "intT", "streamKind": "external" },
+            "bsP":   { "type": "ParameterDecl", "name": "bs", "paramType": "intT" },
+            "beP":   { "type": "ParameterDecl", "name": "be", "paramType": "intT" },
+            "bsRef": { "type": "VarRef", "binder": "bsP" },
+            "beRef": { "type": "VarRef", "binder": "beP" },
+            "addT":  { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+            "addFn": { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+            "badd":  { "type": "Application", "function": "addFn", "arguments": ["bsRef", "beRef"] },
+            "bsft":  { "type": "ProductTypeField", "name": "state", "fieldType": "intT" },
+            "bresT": { "type": "ProductType", "fields": ["bsft", "oft"] },
+            "bsV":   { "type": "ProductFieldValue", "fieldName": "state", "value": "badd" },
+            "bresult": { "type": "ProductValue", "ofType": "bresT", "fields": ["bsV", "oV"] },
+            "blam":  { "type": "Lambda", "parameters": ["bsP", "beP"], "body": "bresult" },
+            "binit": { "type": "IntLit", "value": 0 },
+            "mB": {
+              "type": "StateMachine",
+              "transitionFn": "blam",
+              "initialState": "binit",
+              "inputStreams": ["plainIn"],
+              "outputStreams": [],
+              "effects": ["receiveFx"]
+            },
+            "rootLet": { "type": "Let", "name": "_mA", "value": "m", "body": "mB" }
           }
         }
         """.trimIndent()

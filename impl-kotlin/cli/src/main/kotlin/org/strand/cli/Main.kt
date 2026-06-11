@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.strand.authoring.Authoring
 import org.strand.authoring.AuthoringException
 import org.strand.authoring.ConstraintGrammar
+import org.strand.authoring.LayerAGrammar
 import org.strand.core.ErrorVerbosity
 import org.strand.core.EvaluationLimits
 import org.strand.core.Hash
@@ -256,6 +257,46 @@ private fun loadFinalized(text: String, limits: EvaluationLimits = EvaluationLim
     loadFinalizedWithIngest(text, limits).second
 
 /**
+ * Install the per-run host context on the [Builtins] singleton, run [block],
+ * and restore the prior values in a `finally`. Three slots are installed:
+ *
+ *  * [Builtins.sandboxPolicy] — Q-041. The library default is open; CLI
+ *    invocations override to secure (or to whatever the flags request).
+ *  * [Builtins.streamReceiveTimeoutMillis] — Q-045 per-read streaming-receive
+ *    ceiling, taken from [EvaluationLimits.streamReceiveTimeoutMillis].
+ *  * [Builtins.verifierNodeTypes] — the verifier's `nodeTypes` map from the
+ *    successful `VerifyResult.Ok`, so the N-044 ToolDef parameter-schema and
+ *    N-045 ResponseSchemaSpec projections can resolve a Schema NodeId to its
+ *    `TypeExpr.SchemaType`. Without this the LLM tool-dispatch path silently
+ *    degrades to empty `{}` JSON schemas on every real CLI run.
+ *
+ * Every CLI path that evaluates a verified program (`run`, `machine`,
+ * `group`) goes through this helper so the install/restore discipline cannot
+ * drift between subcommands. Internal (not private) so the CLI test suite
+ * can prove the wiring directly.
+ */
+internal fun <T> withProgramEvaluationContext(
+    sandboxPolicy: SandboxPolicy,
+    limits: EvaluationLimits,
+    verifierNodeTypes: Map<NodeId, org.strand.verifier.TypeExpr>?,
+    block: () -> T,
+): T {
+    val priorSandbox = Builtins.sandboxPolicy
+    val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
+    val priorNodeTypes = Builtins.verifierNodeTypes
+    Builtins.sandboxPolicy = sandboxPolicy
+    Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+    Builtins.verifierNodeTypes = verifierNodeTypes
+    try {
+        return block()
+    } finally {
+        Builtins.sandboxPolicy = priorSandbox
+        Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
+        Builtins.verifierNodeTypes = priorNodeTypes
+    }
+}
+
+/**
  * Build a permissive [CapabilitySet] that grants wildcard patterns for every
  * EffectCategory NodeId reachable in the verified store. Used by the
  * `--grant-all` CLI flag so capability-requiring corpus programs can run
@@ -346,12 +387,15 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
     }
     reportFederationFlags(peerPaths, noCache, strictIntegrity)
     val text = File(path).readText()
-    val finalized = try {
-        loadFinalized(text, limits)
+    val (ingest, finalized) = try {
+        loadFinalizedWithIngest(text, limits)
     } catch (e: IngestError) {
         System.err.println("ingest failed: ${e.message}")
         exitProcess(1)
     }
+    // Error rendering: map opaque #N NodeIds in verifier/interpreter/schema
+    // output back to the author ids the agent wrote.
+    val annotator = NodeRefAnnotator(ingest.nameMap)
     // Q-043: with --peer-store programs, federate so cross-store NodeRefs
     // resolve through the peer chain (fetched + re-based into the shared
     // store); without, stay single-store (no resolver callback, behaviour
@@ -370,7 +414,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
     when (val result = verifier.verify(root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed:")
-            for (e in result.errors) System.err.println("  $e")
+            for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
             exitProcess(1)
         }
         is VerifyResult.Ok -> {
@@ -382,41 +426,33 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // evaluate any pure-expression invariants on statically-known
             // values. Violations halt; deferred diagnostics are surfaced
             // (informational, per the proposal's default disposition).
-            if (!runSchemaCheck(schemaProgram, result, limits, resolveCb)) exitProcess(1)
+            if (!runSchemaCheck(schemaProgram, result, annotator, limits, resolveCb)) exitProcess(1)
             if (command == "run") {
-                // Q-041: install the sandbox policy on the Builtins
-                // singleton before eval. The library default is
-                // open; CLI invocations override to secure (or to
-                // whatever the flags request).
-                val priorSandbox = Builtins.sandboxPolicy
-                Builtins.sandboxPolicy = sandboxPolicy
-                // Q-045: install the per-read stream-receive timeout (host
-                // policy) for the duration of the run, restored afterward.
-                val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
-                Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+                // Install the host context (Q-041 sandbox, Q-045 stream
+                // timeout, verifier nodeTypes for N-044/N-045 schema
+                // projection) for the duration of the run.
                 try {
-                    // Q-047 (Layer 7 step 2): runtime schema enforcement.
-                    // The verifier re-records a SchemaType at every value-flow
-                    // site; pass those obligations to the interpreter so it
-                    // enforces invariants on dynamic values the verify-time
-                    // SchemaChecker could only defer.
-                    val schemaObligations = result.nodeTypes.mapNotNull { (nid, t) ->
-                        (t as? org.strand.verifier.TypeExpr.SchemaType)?.let { nid to it }
-                    }.toMap()
-                    val interp = Interpreter(
-                        store, hashToNodeId,
-                        resolveTarget = resolveCb,
-                        schemaObligations = schemaObligations,
-                    )
-                    val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
-                    val value = interp.eval(root, caps, limits)
-                    println("value: $value")
+                    withProgramEvaluationContext(sandboxPolicy, limits, result.nodeTypes) {
+                        // Q-047 (Layer 7 step 2): runtime schema enforcement.
+                        // The verifier re-records a SchemaType at every value-flow
+                        // site; pass those obligations to the interpreter so it
+                        // enforces invariants on dynamic values the verify-time
+                        // SchemaChecker could only defer.
+                        val schemaObligations = result.nodeTypes.mapNotNull { (nid, t) ->
+                            (t as? org.strand.verifier.TypeExpr.SchemaType)?.let { nid to it }
+                        }.toMap()
+                        val interp = Interpreter(
+                            store, hashToNodeId,
+                            resolveTarget = resolveCb,
+                            schemaObligations = schemaObligations,
+                        )
+                        val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
+                        val value = interp.eval(root, caps, limits)
+                        println("value: $value")
+                    }
                 } catch (e: InterpretException) {
-                    System.err.println("interpretation failed: ${e.error}")
+                    System.err.println("interpretation failed: ${annotator.annotate(e.error.toString())}")
                     exitProcess(1)
-                } finally {
-                    Builtins.sandboxPolicy = priorSandbox
-                    Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
                 }
             }
         }
@@ -433,6 +469,7 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
 private fun runSchemaCheck(
     finalized: FinalizedProgram,
     verifyResult: VerifyResult.Ok,
+    annotator: NodeRefAnnotator,
     limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
     resolveTarget: ((Hash) -> NodeId?)? = null,
 ): Boolean {
@@ -444,11 +481,11 @@ private fun runSchemaCheck(
         limits = limits,
     ).check()
     for (deferred in schemaResult.deferred) {
-        System.err.println("schema-check deferred: $deferred")
+        System.err.println("schema-check deferred: ${annotator.annotate(deferred.toString())}")
     }
     if (schemaResult.violations.isNotEmpty()) {
         System.err.println("schema-check failed:")
-        for (v in schemaResult.violations) System.err.println("  $v")
+        for (v in schemaResult.violations) System.err.println("  ${annotator.annotate(v.toString())}")
         return false
     }
     return true
@@ -475,12 +512,13 @@ private fun runMachine(args: Array<String>) {
     reportFederationFlags(peerPaths, noCache, strictIntegrity)
 
     val programText = File(programPath).readText()
-    val finalized = try {
-        loadFinalized(programText, limits)
+    val (ingest, finalized) = try {
+        loadFinalizedWithIngest(programText, limits)
     } catch (e: IngestError) {
         System.err.println("ingest failed: ${e.message}")
         exitProcess(1)
     }
+    val annotator = NodeRefAnnotator(ingest.nameMap)
     // Q-043: federate over --peer-store programs (single-store when none),
     // threading the resolver into the verifier, SchemaChecker, and runtime so a
     // transition function may reference a cross-store helper by targetHash.
@@ -495,33 +533,28 @@ private fun runMachine(args: Array<String>) {
     when (val result = verifier.verify(root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed:")
-            for (e in result.errors) System.err.println("  $e")
+            for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
             exitProcess(1)
         }
         is VerifyResult.Ok -> {
             // Layer 7 step 1: SchemaChecker also runs for `strand machine`,
             // matching `verify` / `run` semantics so a malformed Schema-bearing
             // value halts before any state-machine evaluation occurs.
-            if (!runSchemaCheck(schemaProgram, result, limits, resolveCb)) exitProcess(1)
+            if (!runSchemaCheck(schemaProgram, result, annotator, limits, resolveCb)) exitProcess(1)
             val eventsText = File(eventsPath).readText()
             val events = EventCodec.parseEventList(eventsText)
             val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
-            // Q-041: install sandbox policy for the duration of the run.
-            val priorSandbox = Builtins.sandboxPolicy
-            Builtins.sandboxPolicy = sandboxPolicy
-            // Q-045: install the per-read stream-receive timeout.
-            val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
-            Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+            // Install the host context (Q-041 sandbox, Q-045 stream timeout,
+            // verifier nodeTypes for N-044/N-045) for the duration of the run.
             try {
-                val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
-                val trace = runtime.runMachine(root, events, caps, limits)
-                printTrace(trace)
+                withProgramEvaluationContext(sandboxPolicy, limits, result.nodeTypes) {
+                    val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
+                    val trace = runtime.runMachine(root, events, caps, limits)
+                    printTrace(trace)
+                }
             } catch (e: InterpretException) {
-                System.err.println("machine evaluation failed: ${e.error}")
+                System.err.println("machine evaluation failed: ${annotator.annotate(e.error.toString())}")
                 exitProcess(1)
-            } finally {
-                Builtins.sandboxPolicy = priorSandbox
-                Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
             }
         }
     }
@@ -598,14 +631,15 @@ private fun runGroup(args: Array<String>) {
     val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
     val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
 
+    val annotator = NodeRefAnnotator(ingest.nameMap)
     val verifier = Verifier(store, hashToNodeId, resolveCb)
     val verifyResult = verifier.verify(root)
     if (verifyResult is VerifyResult.Failed) {
         System.err.println("verification failed:")
-        for (e in verifyResult.errors) System.err.println("  $e")
+        for (e in verifyResult.errors) System.err.println("  ${annotator.annotate(e.toString())}")
         exitProcess(1)
     }
-    if (!runSchemaCheck(schemaProgram, verifyResult as VerifyResult.Ok, limits, resolveCb)) exitProcess(1)
+    if (!runSchemaCheck(schemaProgram, verifyResult as VerifyResult.Ok, annotator, limits, resolveCb)) exitProcess(1)
 
     // Collect every StateMachine NodeId from the canonical store. The
     // group includes ALL reachable StateMachines, regardless of whether
@@ -649,46 +683,56 @@ private fun runGroup(args: Array<String>) {
     val nameByNodeId: Map<NodeId, String> = ingest.nameMap.entries
         .associate { (name, id) -> id to name }
 
-    // Q-041: install sandbox policy for the duration of the group run.
-    val priorSandbox = Builtins.sandboxPolicy
-    Builtins.sandboxPolicy = sandboxPolicy
-    // Q-045: install the per-read stream-receive timeout.
-    val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
-    Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
+    // Install the host context (Q-041 sandbox, Q-045 stream timeout,
+    // verifier nodeTypes for N-044/N-045) for the duration of the group run.
     try {
-        runBlocking {
-            val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
-            val handle = runtime.runGroup(group, this, limits)
+        withProgramEvaluationContext(sandboxPolicy, limits, verifyResult.nodeTypes) {
+            runBlocking {
+                val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
+                val handle = runtime.runGroup(group, this, limits)
 
-            // Send routed events on their designated input streams, then
-            // close all external inputs so the actors halt naturally.
-            for ((streamId, payload) in resolvedRouted) {
-                val channel = handle.externalInputs[streamId]
-                    ?: error("group: stream $streamId is not an external input")
-                channel.send(payload)
-            }
-            for (channel in handle.externalInputs.values) channel.close()
+                // Send routed events on their designated input streams, then
+                // close all host-feedable external inputs so the actors halt
+                // naturally. Q-046 source-bound streams are absent from
+                // externalInputs — the runtime's feeder is their sole
+                // producer and owns their closure, so the close loop below
+                // cannot touch them.
+                for ((streamId, payload) in resolvedRouted) {
+                    val channel = handle.externalInputs[streamId]
+                        ?: run {
+                            val streamName = nameByNodeId[streamId] ?: "$streamId"
+                            val node = store.getOrNull(streamId) as? Node.EventStream
+                            if (node?.source != null) {
+                                error(
+                                    "group: stream '$streamName' is source-bound (Q-046 — fed by " +
+                                        "the runtime from its IO source); routed events cannot be " +
+                                        "sent to it"
+                                )
+                            }
+                            error("group: stream '$streamName' is not an external input")
+                        }
+                    channel.send(payload)
+                }
+                for (channel in handle.externalInputs.values) channel.close()
 
-            // Drain output streams concurrently. Each emission is printed
-            // as it arrives; the actors continue until their input
-            // channels close and any pending transitions complete.
-            coroutineScope {
-                for ((streamId, channel) in handle.externalOutputs) {
-                    val name = nameByNodeId[streamId] ?: "<unnamed:$streamId>"
-                    launch {
-                        for (value in channel) println("output $name: $value")
+                // Drain output streams concurrently. Each emission is printed
+                // as it arrives; the actors continue until their input
+                // channels close and any pending transitions complete.
+                coroutineScope {
+                    for ((streamId, channel) in handle.externalOutputs) {
+                        val name = nameByNodeId[streamId] ?: "<unnamed:$streamId>"
+                        launch {
+                            for (value in channel) println("output $name: $value")
+                        }
                     }
                 }
+                handle.await()
+                if (emitMetrics) printMetrics(handle.metrics(), nameByNodeId)
             }
-            handle.await()
-            if (emitMetrics) printMetrics(handle.metrics(), nameByNodeId)
         }
     } catch (e: InterpretException) {
-        System.err.println("group evaluation failed: ${e.error}")
+        System.err.println("group evaluation failed: ${annotator.annotate(e.error.toString())}")
         exitProcess(1)
-    } finally {
-        Builtins.sandboxPolicy = priorSandbox
-        Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
     }
 }
 
@@ -765,31 +809,70 @@ private fun runAuthor(args: Array<String>) {
         exitProcess(2)
     }
     val layerAText = File(path).readText()
-    val dagJsonText = try {
-        Authoring.compileToDagJson(layerAText)
+    val compiled = try {
+        Authoring.compile(layerAText)
     } catch (e: AuthoringException) {
         System.err.println("Layer A compilation failed:")
         for (err in e.errors) {
             System.err.println("  line ${err.line}: ${err.detail}")
         }
+        printElaborationNotes(e.elaborationGaps)
         exitProcess(1)
     }
     if (emitOnly) {
-        println(dagJsonText)
+        println(compiled.dagJson)
         return
     }
-    val finalized = loadFinalized(dagJsonText)
+    val (ingest, finalized) = try {
+        loadFinalizedWithIngest(compiled.dagJson)
+    } catch (e: IngestError) {
+        System.err.println("ingest failed for $path (after Layer A compile): ${e.message}")
+        printElaborationNotes(compiled.elaborationGaps)
+        exitProcess(1)
+    }
+    // Error rendering for the author path: annotate #N references with the
+    // Layer A author id and source line, and flag sugar-synthesized
+    // (`__if*` / `__when*` / ...) and implicit-prelude nodes as such so the
+    // agent knows whether an error sits in a line it wrote or an expansion.
+    val annotator = NodeRefAnnotator(
+        ingest.nameMap,
+        preludeNames = LayerAGrammar.reservedNodes.keys,
+        sourceLines = compiled.sourceLines,
+    )
     val verifier = Verifier(finalized.store, finalized.hashToNodeId)
     when (val result = verifier.verify(finalized.root)) {
         is VerifyResult.Failed -> {
             System.err.println("verification failed for $path (after Layer A compile):")
-            for (e in result.errors) System.err.println("  $e")
+            for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
+            printElaborationNotes(compiled.elaborationGaps)
             exitProcess(1)
         }
         is VerifyResult.Ok -> {
             println("type: ${result.rootType}")
-            if (!runSchemaCheck(finalized, result)) exitProcess(1)
+            if (!runSchemaCheck(finalized, result, annotator)) {
+                printElaborationNotes(compiled.elaborationGaps)
+                exitProcess(1)
+            }
         }
+    }
+}
+
+/**
+ * Q-034 gap policy: surface the Elaborator's attempted-but-failed
+ * inference cases as `elaboration note:` lines. Called ONLY from failure
+ * paths of `strand author` (compilation, ingest, verification, or
+ * schema-check failure) — a successful compile prints nothing, so the
+ * notes are zero-noise. The note frequently names the root cause of a
+ * cryptic downstream error (e.g. an "Unknown node id 'n'" ingest failure
+ * caused by an untypable compact-LAM parameter `n`).
+ */
+private fun printElaborationNotes(gaps: List<org.strand.authoring.ElaborationGap>) {
+    for (g in gaps) {
+        val where = if (g.line > 0) " (line ${g.line})" else ""
+        System.err.println(
+            "elaboration note: '${g.nodeId}'$where ${g.field} " +
+                "[${g.inferenceCase}]: ${g.reason}"
+        )
     }
 }
 
