@@ -2,7 +2,7 @@
 
 **Document:** `02-core-thesis.md`
 **Status:** Stable
-**Last revised:** 2026-05-29
+**Last revised:** 2026-06-11
 
 ## Summary
 
@@ -86,6 +86,26 @@ The claims are individually defensible but produce the most distinctive properti
 
 **State machines as graph fixpoints requires (1) + (3) + (4).** Transition functions are graph nodes (1) with explicit effect declarations (3) and stable identities (4) that allow long-running machines to reference their transition logic by hash. The detailed design appears in [`design/state-machines.md`](design/state-machines.md).
 
+## The strongest alternatives {#strongest-alternatives}
+
+The lead claim — that the maximum harm of agent-generated code is computable and bounded before execution — is not unique to Strand as a goal. The thesis is tested most honestly against the strongest competing approaches to that goal, not only against the unconfined conventional baseline measured in [`evaluation/containment-results.md`](evaluation/containment-results.md). Two families come closest; both are surveyed in [`01-prior-art.md`](01-prior-art.md).
+
+**Capability-checked readable languages.** Scala 3's capture checking (the Caprese project) brings capability tracking into the type system of a mainstream language, and Odersky et al. apply it directly to the agent threat model, deriving static effect and leakage bounds over agent-generated code ("Tracking Capabilities for Safer Agents," arXiv 2603.00991, 2026). Flix makes effect tracking mandatory rather than opt-in for every function. These systems deliver static effect bounds and capability confinement — a substantial fraction of what Claims 3 and 5 provide — inside languages with deep training-corpus presence, mature toolchains, and a surface syntax a human reviewer reads directly.
+
+**Runtime capability mediation without a new language.** CaMeL (arXiv 2503.18813) attaches capabilities to data values and executes agent-emitted code in a restricted-Python interpreter, bounding what an injected instruction can cause a program to do without changing the language the model emits. The sandboxed code-execution pattern generalizes the same move: agent-generated TypeScript or Python runs inside a capability-scoped execution environment, and the operative harm bound is the environment's grant rather than any property of the code.
+
+Both families reach much of the containment the conventional baseline lacks, and they retain what Strand gives up: the model emits a language it is already fluent in, the existing library and tooling ecosystem applies, and the generated artifact is text a human can review directly when review is wanted. Against these alternatives, the graph-native, content-addressed form must buy something specific. The thesis holds that it buys four properties.
+
+First, verification operates on the artifact itself at admission. A Strand store verifies the graph it received: well-formedness and the effect closure are recomputed from the received bytes before any node is admitted, so the consumer of a program establishes the guarantee over exactly the artifact it will execute, with no trust required in the producer's compiler, build configuration, or toolchain version. In a text language the corresponding guarantee is a property of a compilation run the consumer did not witness; relying on it means re-running the toolchain over the source, trusting an attestation of someone else's run, or trusting the producer.
+
+Second, the harm bound is computable from the stored artifact at any later time. The bound defined in [`evaluation/containment-results.md`](evaluation/containment-results.md) is a function of the graph and its capability context, per subgraph, evaluable whenever the question is asked — at admission, at audit, at an incident postmortem — without the source, the build environment, or the producer's cooperation. In the text-language alternatives the analogous bound is established at the original compile; recovering it later requires recovering the toolchain and the exact source that produced the deployed artifact.
+
+Third, content addressing makes the verified artifact's identity stable across federation. A subgraph verified once is identified by its hash on every store that holds it ([`ADR-003-content-addressing.md`](decisions/ADR-003-content-addressing.md)), which is what makes admit-once semantics and signed-manifest distribution coherent ([Q-043](open-questions.md#Q-043)): the artifact a signature attests is byte-identical to the artifact every consumer holds and can re-verify. Verified fragments of a text-language program have no comparable identity — names, versions, and build products vary independently of content.
+
+Fourth, per-node encryption and effect-driven placement — the long-horizon claims of [§integration](#integration) — have no equivalent in either family. Both depend on programs being graphs of discretely identified, individually effect-annotated nodes: the unit of encryption and the unit of placement is the node, and neither a text-language compilation unit nor a sandboxed script decomposes that way.
+
+What the alternatives provide and Strand does not is equally part of the comparison. Model fluency is the largest item: a model emits Scala, TypeScript, or Python at training-corpus fluency with no in-context grammar to teach, and the measured cost asymmetry in [`evaluation/dynamic-results.md`](evaluation/dynamic-results.md) is dominated by exactly that gap. Ecosystem is the second: decades of libraries, editors, and analysis tooling apply to the readable alternatives, and none of it applies to Strand. Human review is the third: where a human chooses to read the generated code, the alternatives produce an artifact made for reading. The comparison the thesis stakes is therefore narrow: where the consumer of generated code is not its producer, where the bound must be re-derived from the artifact long after generation, and where verified components must retain identity across distribution, the graph-native form provides properties that neither capability-checked text languages nor runtime mediation provides. Where those conditions do not hold, the alternatives are stronger on every remaining axis.
+
 ## Outcome claims and evaluation priority {#outcome-priority}
 
 The five design claims above are predicted to produce five outcome advantages for AI-generated code, enumerated in [`00-motivation.md`](00-motivation.md): higher first-pass correctness, lower inference cost per task, stronger security guarantees, native distribution, and cleaner confidential-computing integration. These outcomes are not weighted equally as evaluation targets. The ordering below reflects which advantages derive most directly from the design claims and which are most distinctive relative to the conventional languages used for AI generation.
@@ -122,6 +142,7 @@ To avoid overstatement, several things are explicitly not claimed:
 - [`research-plan.md`](research-plan.md) — evaluation methodology
 - [`evaluation/dynamic-results.md`](evaluation/dynamic-results.md) — dynamic-cost measurement underlying the inference-cost re-weighting (Q-021)
 - [`evaluation/containment-results.md`](evaluation/containment-results.md) — containment measurement substantiating the structural-safety lead claim (Q-044)
+- [`open-questions.md`](open-questions.md) — Q-034 (authoring projection), Q-043 (federation and manifests)
 
 **Incoming references:**
 - [`README.md`](README.md)
