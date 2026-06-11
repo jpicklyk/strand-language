@@ -460,10 +460,18 @@ object LayerAGrammar {
         "writeFx" to ReservedNodeSpec(
             jsonType = "EffectCategory",
             stringFields = mapOf("categoryName" to "Filesystem.Write"),
+            // E-007: Filesystem.Write{path: String} — one parameter so that
+            // Q-039 projections (ArgRef(0) on fsWrite / fsAppend / fsDelete)
+            // match the category's declared arity at verifier admission.
+            refListFields = mapOf("parameters" to listOf("stringT")),
         ),
         "connectFx" to ReservedNodeSpec(
             jsonType = "EffectCategory",
             stringFields = mapOf("categoryName" to "Network.Connect"),
+            // E-001: Network.Connect{host: String, port: Int} — two parameters
+            // so that Q-039 projections ([ArgRef(0), ArgRef(1)] on netConnect)
+            // match the category's declared arity at verifier admission.
+            refListFields = mapOf("parameters" to listOf("stringT", "intT")),
         ),
         "cryptoFx" to ReservedNodeSpec(
             jsonType = "EffectCategory",
@@ -480,6 +488,10 @@ object LayerAGrammar {
         "readFx" to ReservedNodeSpec(
             jsonType = "EffectCategory",
             stringFields = mapOf("categoryName" to "Filesystem.Read"),
+            // E-006: Filesystem.Read{path: String} — one parameter so that
+            // Q-039 projections (ArgRef(0) on fsRead / fsExists) match the
+            // category's declared arity at verifier admission.
+            refListFields = mapOf("parameters" to listOf("stringT")),
         ),
         "netSendFx" to ReservedNodeSpec(
             jsonType = "EffectCategory",

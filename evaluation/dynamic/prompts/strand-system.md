@@ -438,10 +438,10 @@ Effect categories (20):
     spawnFx       — StateMachine.Spawn
     terminateFx   — StateMachine.Terminate
     nowFx         — Time.Now
-    writeFx       — Filesystem.Write (declared by Fs.Write/Append/Delete)
-    connectFx     — Network.Connect (declared by Net.Connect and Http.Request)
+    writeFx       — Filesystem.Write{path: String} (E-007; declared by Fs.Write/Append/Delete; Q-039 projection pins `path` to ArgRef(0))
+    connectFx     — Network.Connect{host: String, port: Int} (E-001; declared by Net.Connect and Http.Request; Q-039 projection pins host→ArgRef(0), port→ArgRef(1))
     cryptoFx      — Crypto.RandomBytes (declared by every Random.* call)
-    readFx        — Filesystem.Read (declared by Fs.Read/Exists)
+    readFx        — Filesystem.Read{path: String} (E-006; declared by Fs.Read/Exists; Q-039 projection pins `path` to ArgRef(0))
     netSendFx     — Network.Send (declared by Net.Send and Http.Request); distinct from sendFx (StateMachine.Send)
     netRecvFx     — Network.Receive (declared by Net.Receive and Http.Request); distinct from receiveFx
     procWaitFx    — Process.Wait (declared by procWait)
