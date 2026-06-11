@@ -141,6 +141,7 @@ Tags are stable numeric identifiers drawn from the N-NNN registry; once publishe
 | 44 | ToolDef | N-044 | |
 | 45 | ResponseSchemaSpec | N-045 | |
 | 46 | ModuleManifest | N-046 | |
+| 47 | Attempt | N-047 | single child (the body), no content fields, introduces no binder |
 
 Values 30 and 31 carry no assignment: N-030 Name and N-031 Provenance have no canonical encoding of their own. A structural Name's UTF-8 content is inlined into its parent's encoding (§ Hash construction of `node-algebra.md`), and Provenance is metadata, excluded entirely.
 
@@ -235,6 +236,9 @@ The gate on non-empty preserves every pre-Q-039 hash. The projection list and ea
 | Match (23) | `H(scrutinee)`, `array(H(case)...)` in declaration order |
 | MatchCase (24) | `H(pattern)` in the **outer** context, `H(body)` in the body context (one frame of the pattern's VariablePatterns in depth-first order, omitted when the pattern binds nothing) |
 | Fixpoint (26) | `H(recursionType)`, `H(body)` — both plain hash references; the body Lambda's recursive-call slot is a verification fact, not an encoding one |
+| Attempt (47) | `H(body)` — a single hash reference; Attempt has no content fields and introduces no binder, so the body is hashed in the surrounding binder context |
+
+Attempt's `Ok(T) | Err({kind, detail})` result type is a verification fact synthesized by the verifier, not an encoding one: nothing about the result sum, the catchable-failure taxonomy, or the error payload appears in the bytes. Two Attempts over hash-identical bodies are the same node.
 
 Pattern (25) layouts share the tag and lead with a kind discriminator:
 

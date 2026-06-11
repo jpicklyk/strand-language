@@ -273,4 +273,38 @@ class CanonicalEncodingSpecTest {
         )
         assertArrayEquals(sentinel, encoder.encode(bodyRef, emptyList()))
     }
+
+    // ----- Trace 7: Attempt (single body hash reference, no content fields) -----
+
+    @Test
+    fun `Attempt over IntLit 42 - tag 47 then the body hash reference`() {
+        // Spec § Control flow: Attempt (47) encodes a single field H(body) — a
+        // hash reference to the body in the surrounding context — with no
+        // content fields and no binder. The implementer's reference trace is
+        // 00 00 00 2F 58 21 <33-byte body hash>.
+        val store = NodeStore()
+        val body = store.add(Node.IntLit(42))
+        val att = store.add(Node.Attempt(body = body))
+        val encoder = newEncoder(store)
+
+        // The body IntLit 42 encodes as [tag 1][int(42)] = 00 00 00 01 18 2a,
+        // whose multihash is corpus program 01's golden root hash.
+        val bodyEncoding = byteArrayOf(0x00, 0x00, 0x00, 0x01, 0x18, 0x2a)
+        assertArrayEquals(bodyEncoding, encoder.encode(body))
+        val bodyHash = multihash(bodyEncoding)
+        assertEquals(
+            "1e6970ba0a8f8e82923c82d5b40927ba0ba9d0dcfc526c3308e509a28e9f16caad",
+            hex(bodyHash),
+        )
+
+        // Attempt: [tag 47 = 00 00 00 2f][H(body)]. Tag 47 is 0x2f; the hash
+        // reference is the byte-string header 0x58 0x21 then the 33 hash bytes.
+        val expected = tag(47) + hashRef(bodyHash)
+        val actual = encoder.encode(att)
+        assertArrayEquals(expected, actual) { "Attempt encoding: ${hex(actual)}" }
+
+        // Exactly 4 tag + 2 CBOR header + 33 hash = 39 bytes, beginning 00 00 00 2f.
+        assertEquals(4 + 2 + 33, actual.size)
+        assertArrayEquals(byteArrayOf(0x00, 0x00, 0x00, 0x2f), actual.copyOfRange(0, 4))
+    }
 }
