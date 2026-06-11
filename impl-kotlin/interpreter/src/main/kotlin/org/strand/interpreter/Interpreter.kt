@@ -409,6 +409,7 @@ class Interpreter(
                     ))
                 }
                 is Node.TypeAbstraction -> eval(node.body, env, context, handlers, counters, limits) // erased at runtime
+                is Node.Attempt -> evalAttempt(id, node, env, context, handlers, counters, limits)
                 is Node.Application -> applyCall(id, node, env, context, handlers, counters, limits)
                 is Node.Let -> {
                     val bound = eval(node.value, env, context, handlers, counters, limits)
@@ -684,6 +685,73 @@ class Interpreter(
     ): Value {
         val payload = node.payload?.let { eval(it, env, context, handlers, counters, limits) }
         return allocV(counters, limits, id, Value.SumV(node.caseName, payload))
+    }
+
+    /**
+     * N-047 Attempt (Q-048, proposals/error-recovery.md § 6.1). Evaluate the
+     * body; on success produce `SumV("Ok", v)`; on a *catchable*
+     * [InterpretException] (the `isCatchable` taxonomy — [InterpretError.IoFailure]
+     * and [InterpretError.SchemaInvariantViolation] only) produce
+     * `SumV("Err", {kind, detail})` and continue. Uncatchable errors
+     * (program defects, host-policy stops, budget exhaustion, sandbox
+     * denials) re-throw unchanged.
+     *
+     * Only [InterpretException] is inspected: raw JVM exceptions (e.g. the
+     * `require(...)` contract failures of [Builtins]) are NOT caught, so
+     * anything unstructured remains terminal by default. Capability context,
+     * the active-handler list, and the schema-obligation map all thread
+     * through the body unchanged — Attempt is transparent to all three.
+     * Stack-depth bookkeeping needs no special handling: each `eval` frame
+     * decrements `counters.currentDepth` in its `finally`, so unwinding to
+     * this catch restores the correct depth.
+     */
+    private fun evalAttempt(
+        id: NodeId,
+        node: Node.Attempt,
+        env: Map<NodeId, Value>,
+        context: CapabilitySet,
+        handlers: List<ActiveHandler>,
+        counters: EvalCounters,
+        limits: EvaluationLimits,
+    ): Value {
+        return try {
+            val v = eval(node.body, env, context, handlers, counters, limits)
+            allocV(counters, limits, id, Value.SumV("Ok", v))
+        } catch (e: InterpretException) {
+            if (!e.error.isCatchable) throw e
+            allocV(counters, limits, id, Value.SumV("Err", errorPayload(e.error, counters, limits, id)))
+        }
+    }
+
+    /**
+     * Build the `ErrorPayload = {kind: String, detail: String}` product for a
+     * caught error (proposals/error-recovery.md § 4.2). The strings are taken
+     * from the already-translated [InterpretError] — `IoFailure.detail` has
+     * passed through the Q-042 credential scrubber and verbosity gate at
+     * construction, so the caught detail is exactly the scrubbed form the
+     * host would have seen. For [InterpretError.SchemaInvariantViolation] the
+     * kind is the fixed tag `"schema-invariant"` and the detail is the
+     * value-description (which deliberately excludes the offending value's
+     * full structure — only `valueDescription` for diagnostics). The error is
+     * always catchable by the time this is called.
+     */
+    private fun errorPayload(
+        error: InterpretError,
+        counters: EvalCounters,
+        limits: EvaluationLimits,
+        at: NodeId,
+    ): Value {
+        val (kind, detail) = when (error) {
+            is InterpretError.IoFailure -> error.kind to error.detail
+            is InterpretError.SchemaInvariantViolation -> "schema-invariant" to error.valueDescription
+            else -> error("errorPayload called on uncatchable error $error; " +
+                "evalAttempt must check isCatchable before constructing a payload.")
+        }
+        val fields = linkedMapOf<String, Value>(
+            "kind" to allocV(counters, limits, at, Value.StringV(kind)),
+            "detail" to allocV(counters, limits, at, Value.StringV(detail)),
+        )
+        return allocV(counters, limits, at, Value.ProductV(fields))
     }
 
     private fun evalMatch(

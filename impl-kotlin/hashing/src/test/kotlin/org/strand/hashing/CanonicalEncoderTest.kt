@@ -426,5 +426,61 @@ class CanonicalEncoderTest {
         return Triple(bytes, store, handler)
     }
 
+    // ----- Attempt (N-047) -----
+
+    @Test
+    fun `Attempt encoding is the N-047 tag followed by the body-hash byte string`() {
+        // Byte trace per proposals/error-recovery.md § 4.4 and
+        // design/canonical-encoding.md: [tag=47 (0x00 00 00 2F)] then the
+        // CBOR byte string of the 33-byte multi-hash of the body child.
+        val store = NodeStore()
+        val body = store.add(Node.IntLit(42))
+        val att = store.add(Node.Attempt(body = body))
+        val bytes = newEncoder(store).encode(att)
+
+        // Tag is big-endian 0x00 00 00 2F for N-047 Attempt.
+        assertEquals(0x00.toByte(), bytes[0])
+        assertEquals(0x00.toByte(), bytes[1])
+        assertEquals(0x00.toByte(), bytes[2])
+        assertEquals(0x2F.toByte(), bytes[3])
+
+        // Next is a CBOR byte string of length 33 (the multi-hash):
+        // major type 2, length 33 -> 0x58 0x21.
+        assertEquals(0x58.toByte(), bytes[4])
+        assertEquals(0x21.toByte(), bytes[5])
+        // 4 tag bytes + 2 CBOR header bytes + 33 hash bytes = 39 total.
+        assertEquals(4 + 2 + 33, bytes.size)
+
+        // The 33 hash bytes equal the encoded body's own hash.
+        val bodyHash = mockHash(newEncoder(store).encode(body))
+        assertArrayEquals(bodyHash, bytes.copyOfRange(6, bytes.size))
+    }
+
+    @Test
+    fun `two Attempts over hash-identical bodies encode byte-identically`() {
+        val a = NodeStore().let { s ->
+            val body = s.add(Node.IntLit(7)); val att = s.add(Node.Attempt(body)); newEncoder(s).encode(att)
+        }
+        val b = NodeStore().let { s ->
+            val body = s.add(Node.IntLit(7)); val att = s.add(Node.Attempt(body)); newEncoder(s).encode(att)
+        }
+        assertArrayEquals(a, b) {
+            "Two Attempts over structurally identical bodies must encode byte-identically."
+        }
+    }
+
+    @Test
+    fun `Attempts over different bodies hash differently`() {
+        val a = NodeStore().let { s ->
+            val body = s.add(Node.IntLit(7)); val att = s.add(Node.Attempt(body)); newEncoder(s).encode(att)
+        }
+        val b = NodeStore().let { s ->
+            val body = s.add(Node.IntLit(8)); val att = s.add(Node.Attempt(body)); newEncoder(s).encode(att)
+        }
+        assertFalse(a.contentEquals(b)) {
+            "Attempts over different bodies should not collide on the hash."
+        }
+    }
+
     private fun ByteArray.toHex(): String = joinToString(" ") { "%02x".format(it) }
 }
