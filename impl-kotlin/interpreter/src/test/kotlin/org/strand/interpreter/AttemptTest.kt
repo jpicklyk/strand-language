@@ -130,7 +130,10 @@ class AttemptTest {
             "att":      { "type": "Attempt", "body": "callLoop" }
           }
         }""")
-        val limits = EvaluationLimits.DEFAULTS.copy(maxSteps = 500L)
+        // Keep maxSteps small so the infinite Fixpoint trips ResourceExhaustion
+        // after a shallow recursion — enough to prove propagation, without
+        // leaving deep-stack pressure in the shared test fork.
+        val limits = EvaluationLimits.DEFAULTS.copy(maxSteps = 50L)
         val ex = org.junit.jupiter.api.assertThrows<InterpretException> {
             Interpreter(l.store, l.hashToNodeId).eval(l.root, CapabilitySet.EMPTY, limits)
         }
@@ -219,7 +222,10 @@ class AttemptTest {
             "outer":    { "type": "Attempt", "body": "inner" }
           }
         }""")
-        val limits = EvaluationLimits.DEFAULTS.copy(maxSteps = 500L)
+        // Keep maxSteps small so the infinite Fixpoint trips ResourceExhaustion
+        // after a shallow recursion — enough to prove propagation, without
+        // leaving deep-stack pressure in the shared test fork.
+        val limits = EvaluationLimits.DEFAULTS.copy(maxSteps = 50L)
         val ex = org.junit.jupiter.api.assertThrows<InterpretException> {
             Interpreter(l.store, l.hashToNodeId).eval(l.root, CapabilitySet.EMPTY, limits)
         }
