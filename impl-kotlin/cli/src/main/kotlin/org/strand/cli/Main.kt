@@ -420,8 +420,9 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         is VerifyResult.Ok -> {
             println("type: ${result.rootType}")
             // Informational diagnostics (e.g. unreachable nodes): surfaced,
-            // never a failure.
-            for (w in result.warnings) System.err.println("warning: $w")
+            // never a failure. Route through the annotator so UnreachableNode
+            // warnings show #N ('authorId') matching the error rendering.
+            for (w in result.warnings) System.err.println("warning: ${annotator.annotate(w.toString())}")
             // Layer 7 step 1: after type-checking, run the SchemaChecker to
             // evaluate any pure-expression invariants on statically-known
             // values. Violations halt; deferred diagnostics are surfaced
