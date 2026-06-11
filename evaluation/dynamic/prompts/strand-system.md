@@ -144,6 +144,13 @@ name get the security property for free.
 - `PWC patternType:ref` — Pattern (wildcard kind). `p1 PWC intT`
 - `PCN patternType:ref caseName:String [payloadPattern:nullable-ref]` — Pattern (constructor kind). `p1 PCN optT "Some" p2`
 
+### Error recovery
+
+- `TRY body:ref` — Attempt (produces value). Runs `body`; if it succeeds with `v`, yields `Ok(v)`; if `body` raises a *catchable* runtime failure, yields `Err({kind, detail})` and evaluation continues. Uncatchable failures propagate through. `t TRY readApp`
+- `RES okType:ref` — Result-sum type sugar. Expands to the SumType `Ok(okType) | Err(errPayloadT)`, the type of `TRY (... : okType)`. Match the result with `WHEN t (RES bytesT) "Ok(b) -> b | Err(e) -> defaultB"`.
+
+See the error model section below for the catchable `kind` vocabulary and the uncatchable list.
+
 ### Fixpoint and composite values
 
 - `FIX recursionType:ref body:ref` — Fixpoint (produces value). `fact FIX factT bodyLam`. The body Lambda's FIRST parameter is the recursive call slot; remaining parameters are the user-facing ones.
@@ -299,7 +306,7 @@ Primitive types (6):
     unitT      — PrimitiveType Unit
     bytesT     — PrimitiveType Bytes
 
-FunctionType signatures (116):
+FunctionType signatures (117):
 
     addT eqIntT ltT leT gtT geT     — (Int, Int) -> Int  or  (Int, Int) -> Bool
     subT mulT divT modT             — (Int, Int) -> Int
@@ -332,6 +339,7 @@ FunctionType signatures (116):
     llmStreamCloseT                 — (Int) -> Unit  (Q-045 streaming-LLM handle release)
     httpReqT                        — (String, String, Bytes) -> httpRespT
     httpRespT                       — ProductType {status: Int, body: Bytes}
+    errPayloadT                     — ProductType {kind: String, detail: String}  (the Err case of every TRY result; see error model)
     procWaitT                       — (Int) -> Int
     sleepT                          — (Int) -> Unit
     strLenT                         — (String) -> Int
@@ -485,6 +493,45 @@ variants) and `LLM.Stream.Receive` / `Net.Stream.Receive` (Q-045 drains,
 return `Option<Bytes>`). When using these, declare the FN with the
 appropriate target string and an FNT for the concrete type at this call
 site. `LLM.Stream.Close` *is* in the prelude as `llmStreamClose`.
+
+## Error model (TRY / Attempt)
+
+`TRY body` observes a runtime failure as a value. It yields `Ok(v)` on success
+and `Err({kind: String, detail: String})` when `body` raises a *catchable*
+failure. The result type is `RES okType` = `Ok(okType) | Err(errPayloadT)`;
+match it with `WHEN`/`MAT` + constructor patterns exactly like `Option`. Scope
+one `TRY` over a whole pipeline — it catches the first catchable failure
+anywhere in `body`. Wrap only genuinely fallible operations (IO and schema
+checks); a `TRY` around pure logic only adds an `Ok` you must immediately
+unwrap.
+
+Catchable failures (these become `Err`): only IO operations and runtime schema
+checks. Branch on `Err.kind`, never on `Err.detail` — `kind` is a stable closed
+vocabulary; `detail` interpolates platform- and locale-varying host text and is
+not portable across hosts. Use `detail` only as opaque diagnostic output (e.g.,
+to feed your next generation), never as a control-flow discriminator.
+
+`kind` vocabulary (the actual strings):
+
+    filesystem-read filesystem-write filesystem-append filesystem-exists
+    filesystem-delete filesystem-list                 — Fs.* failures
+    network-connect network-send network-receive network-close
+    network-stream-receive network-stream-timeout     — Net.* failures
+    http-request http-listen http-accept http-respond http-server-close
+    process-spawn process-wait process-envvar         — Process.* failures
+    llm-stream-receive llm-stream-close               — streaming-LLM drains
+    anthropic-http openai-http openai-embed gemini-http gemini-embed
+    pinecone-open pinecone-query ... chroma-open ...   — provider failures
+    schema-invariant                                  — a runtime Schema check failed
+
+Uncatchable — these terminate evaluation regardless of any enclosing `TRY`
+(they propagate to the host, which reports them so YOU can regenerate or so the
+host can enforce policy): a missed `Match` case, a non-callable in call
+position, an arity/scope defect, a capability or refinement denial, a sandbox
+denial, the resource budget (steps / stack / allocations / wall clock), an
+unknown foreign target, and `Int.Div`/`Int.Mod`/`Math.Mod` by zero. Do not wrap
+these expecting recovery — fix the program (add the case, guard the divisor,
+request the capability) rather than `TRY`ing around a defect.
 
 ### HTTP server (`Http.Listen` / `Http.Accept` / `Http.Respond` / `Http.ServerClose`)
 
