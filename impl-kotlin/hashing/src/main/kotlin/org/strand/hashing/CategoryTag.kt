@@ -111,5 +111,8 @@ value class CategoryTag(val value: Int) {
 
         // Composition and distribution (N-046)
         val ModuleManifest = CategoryTag(46)
+
+        // Error recovery (N-047)
+        val Attempt = CategoryTag(47)
     }
 }

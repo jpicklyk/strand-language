@@ -641,6 +641,38 @@ sealed class Node {
         val body: NodeId            // a Lambda
     ) : Node()
 
+    /**
+     * N-047. Attempt: observe a runtime failure as a value (Q-048,
+     * `proposals/error-recovery.md`). Evaluating an Attempt evaluates
+     * [body]; if [body] produces a value `v`, the Attempt produces
+     * `Ok(v)`; if evaluation of [body] raises a *catchable*
+     * [org.strand.interpreter.InterpretError] (the `isCatchable` taxonomy —
+     * `IoFailure` and `SchemaInvariantViolation` only), the Attempt produces
+     * `Err({kind, detail})` and evaluation continues. Every other
+     * InterpretError (program defects, host-policy stops, budget exhaustion,
+     * sandbox denials) propagates through the Attempt unchanged.
+     *
+     * Edges: a single structural edge [body] (any Expression). No content
+     * fields; identity is fully structural — two Attempts over hash-identical
+     * bodies are the same node.
+     *
+     * Binders: Attempt introduces none. [body] is hashed under the
+     * surrounding binder context, so in [org.strand.hashing.Hasher.walk] it
+     * is an ordinary (not bound) node.
+     *
+     * Verifier constraints (see `Verifier.inferAttempt`): the type of
+     * `Attempt(body : T)` is the verifier-synthesized structural sum
+     * `Ok(T) | Err(ErrorPayload)` where `ErrorPayload = {kind: String,
+     * detail: String}`, synthesized through the same store-backed path as
+     * `synthesizeInputEventSum` so it is hash-identical to an agent-declared
+     * equivalent. The body's type must not be a `Forall`
+     * (`AttemptBodyMustBeMonomorphic`). The effect closure is unchanged:
+     * `closureOf(attempt) = closureOf(body)` — failures are not effects.
+     */
+    data class Attempt(
+        val body: NodeId            // an Expression
+    ) : Node()
+
     // ----- Composite values (N-037..N-039) -----
 
     /**
