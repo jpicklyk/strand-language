@@ -2,11 +2,11 @@
 
 **Document:** `01-prior-art.md`
 **Status:** Stable
-**Last revised:** Initial draft
+**Last revised:** 2026-06-11
 
 ## Summary
 
-Strand exists in a research landscape that includes purpose-built AI agent languages, AI-oriented modifications to existing languages, graph-structured programming environments, effect-typed languages, and capability-based systems. This document surveys the relevant prior work and identifies where Strand's design diverges from each tradition. The survey is not exhaustive; it focuses on systems whose design decisions directly inform or contrast with Strand's.
+Strand exists in a research landscape that includes purpose-built AI agent languages, AI-oriented modifications to existing languages, decode-time structure enforcement for text languages, graph-structured programming environments, effect-typed languages, capability-based systems, and distributed dataflow systems. This document surveys the relevant prior work and identifies where Strand's design diverges from each tradition. The survey is not exhaustive; it focuses on systems whose design decisions directly inform or contrast with Strand's. External systems are cited inline by primary source; the References section tracks corpus-internal citations.
 
 ## Languages designed for LLM agent use {#llm-agent-languages}
 
@@ -34,6 +34,24 @@ Markov is a proposed (not implemented) language design that leans into Rust's pa
 
 **Relation to Strand:** Markov and Strand share the framing that LLM characteristics should inform language design, but Markov preserves human-readable text representation. Strand treats this preservation as the constraint that prevented Markov-like proposals from reaching their potential. The two designs may be complementary at different points in the AI-coding maturity curve.
 
+### MoonBit {#prior-moonbit}
+
+MoonBit is a general-purpose language, initiated in late 2022, that describes itself as AI-friendly by construction ([Fei et al., LLM4Code/ICSE 2024](https://dl.acm.org/doi/10.1145/3643795.3648376)). Its design choices target the mechanics of transformer inference rather than the program model: a flat top-level structure with mandatory type signatures and minimal nesting improves KV-cache reuse during generation, and structural interfaces allow interfaces and their implementations to be generated nearly linearly, reducing cache misses. The toolchain integrates with the sampler directly — a local sampling pass adjusts generated tokens in real time to keep output syntactically valid, and a global sampling pass checks semantic well-formedness.
+
+**Relation to Strand:** MoonBit establishes that inference mechanics — cache locality, sampler integration, token-order linearity — are a design axis of their own, distinct from the program-model axis Strand occupies. MoonBit optimizes the decoding loop for a human-readable text language and retains human authorship as a goal; Strand optimizes the artifact and abandons human authorship. The two are orthogonal enough to compose: a Strand authoring projection could in principle adopt MoonBit-style flatness for cache efficiency. MoonBit's sampler-integrated toolchain is also an early instance of the decode-time enforcement surveyed in [decode-time structure enforcement](#prior-constrained-decoding).
+
+### CodeAct {#prior-codeact}
+
+CodeAct ([Wang et al., ICML 2024](https://arxiv.org/abs/2402.01030)) consolidates LLM agent actions into executable Python code rather than JSON or constrained-text tool-call formats. Across seventeen models on API-Bank and a purpose-built benchmark, code actions achieve up to 20% higher success rates than the structured alternatives, attributed to models' training-corpus fluency in Python and the ability of code to compose tools, branch, and reuse intermediate results within a single action.
+
+**Relation to Strand:** CodeAct is direct counter-evidence to the assumption that structured action formats are preferable for agent emission: when the model must produce a format it has rarely seen, success rates drop relative to Python, and Strand's canonical form is maximally far from the training distribution. The evaluation in [`research-plan.md`](research-plan.md) must treat this as the effect to overcome, not an artifact to design around. Strand's position is that the deficit is a property of unconstrained sampling rather than of structured targets as such — constrained decoding against the authoring grammar removes the format-fluency penalty at emission time — and that verification, containment, and distribution properties of the artifact justify the remaining cost. That position is a hypothesis the empirical phases test; CodeAct defines the baseline it is tested against.
+
+### Zero (Vercel Labs) {#prior-zero}
+
+Zero is an experimental systems language released by Vercel Labs in May 2026 ([github.com/vercel-labs/zerolang](https://github.com/vercel-labs/zerolang)) whose toolchain treats AI agents as the primary consumer. The compiler emits JSON diagnostics with stable error codes and typed repair metadata by default, and companion commands expose machine-readable explanations and fix plans, so an agent's repair loop never parses prose. Functions declare capability-based I/O effects in their signatures, enforced at compile time. Subsequent releases moved Zero to an explicitly graph-native model: the semantic graph is the program database and the compiler input, agents read and modify programs through query and patch commands whose patches are validated before storage, and agents address program elements through explicit handles — symbols, node identifiers, graph hashes, types, effects, and capabilities. Human-readable text files are retained as projections for review rather than as the source of truth.
+
+**Relation to Strand:** Zero is the closest contemporary system to Strand's combination of agent-first toolchain, graph-as-source, and effects declared in the program's interface, and its independent emergence is evidence that this region of the design space is being converged on rather than idiosyncratic. The divergences are the projection layer and the role the graph plays. Zero maintains a human-readable text projection and a human review path, which Strand omits per [`decisions/ADR-002-no-human-projection.md`](decisions/ADR-002-no-human-projection.md). Zero is a single-machine systems language compiling to small native binaries; its graph is the working database of a compiler, and its effect declarations are discharged at compile time. Strand's graph is the canonical artifact itself — content-addressed identity, admission-time verification of the effect closure, and runtime capability checks and placement decisions derived from the same edges. Zero is experimental and pre-1.0; its trajectory bears directly on Strand's evaluation and should be tracked.
+
 ## AI-oriented modifications to existing languages {#prior-modifications}
 
 ### SimPy {#prior-simpy}
@@ -49,6 +67,12 @@ ShortCoder applies ten AST-preserving simplification rules to Python, achieving 
 Token Sugar identifies high-frequency code patterns in a corpus and replaces them with reversible shorthand. The approach is complementary to syntactic simplifications like SimPy: 799 pattern-to-shorthand pairs achieve up to 15.1% additional token reduction.
 
 **Relation of all three to Strand:** These projects demonstrate that even purely syntactic modifications to existing languages produce measurable improvements in LLM generation efficiency. They establish a lower bound on the benefit of AI-oriented language design. Strand's hypothesis is that abandoning text representation entirely will produce substantially larger improvements, but this hypothesis must be tested against these baselines, not against unmodified text languages. The research plan accounts for this in its evaluation strategy.
+
+## Decode-time structure enforcement {#prior-constrained-decoding}
+
+Constrained decoding restricts a model's next-token distribution so that emitted text always conforms to a target structure, moving well-formedness guarantees from post-hoc checking into the sampling loop. XGrammar ([Dong et al., arXiv 2411.15100](https://arxiv.org/abs/2411.15100)) makes context-free-grammar-constrained generation practical at serving scale by partitioning the vocabulary into tokens checkable ahead of time and tokens requiring runtime interpretation, reaching near-zero overhead in integrated inference engines. Type-constrained code generation ([Mündler et al., PLDI 2025](https://dl.acm.org/doi/10.1145/3729274)) extends enforcement past syntax: prefix automata combined with a search over inhabitable types soundly guarantee well-typedness of the emitted program during decoding, formalized on a simply-typed calculus and demonstrated on TypeScript.
+
+**Relation to Strand:** This line of work reproduces, for ordinary text languages, the guarantee stated as a consequence of Claim 1 in [`02-core-thesis.md`](02-core-thesis.md): that syntactic errors do not exist as a category. With grammar-constrained decoding a model emitting Python or TypeScript cannot produce a parse error, and with type-constrained decoding it cannot produce a type error, all without abandoning text representation. This bounds the value of syntax-error elimination as a differentiator — the advantage is available to text languages at the cost of inference-stack integration, and Strand itself relies on the same technique for its authoring layer. The boundary of decode-time enforcement is the property class it can decide from the prefix alone. Strand's admission-time verification holds without trusting the generator or its serving stack, applies to artifacts regardless of provenance, and checks properties — the effect closure of a subgraph against the capabilities of an execution context — that depend on the environment the program will run in, which no decode-time mechanism can decide. As enforcement advances from grammars to types, the residual differentiation concentrates in those environment-dependent, artifact-level checks.
 
 ## Graph-structured programming environments {#prior-graph-environments}
 
