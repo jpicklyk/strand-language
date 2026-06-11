@@ -95,6 +95,12 @@ class LayerAReverseRoundTripTest {
         "/corpus/61-markdown-document.json",
         "/corpus/62-non-empty-markdown-pass.json",
         "/corpus/63-non-empty-markdown-fail.json",
+        // N-047 Attempt (Q-048): the TRY code reverse-projects every Attempt
+        // node. Corpus 85-87 exercise the round-trip over Ok-passthrough,
+        // Fs.Read fallback, and retry-with-backoff shapes.
+        "/corpus/85-attempt-ok-passthrough.json",
+        "/corpus/86-attempt-fs-read-fallback.json",
+        "/corpus/87-attempt-retry-with-backoff.json",
     )
 
     @TestFactory

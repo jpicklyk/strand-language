@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "root": "result",
+  "nodes": {
+    "intT":        { "type": "PrimitiveType", "kind": "Int" },
+    "stringT":     { "type": "PrimitiveType", "kind": "String" },
+
+    "kindField":   { "type": "ProductTypeField", "name": "kind", "fieldType": "stringT" },
+    "detailField": { "type": "ProductTypeField", "name": "detail", "fieldType": "stringT" },
+    "errPayloadT": { "type": "ProductType", "fields": ["kindField", "detailField"] },
+
+    "okCase":      { "type": "SumTypeCase", "name": "Ok", "caseType": "intT" },
+    "errCase":     { "type": "SumTypeCase", "name": "Err", "caseType": "errPayloadT" },
+    "resultIntT":  { "type": "SumType", "cases": ["okCase", "errCase"] },
+
+    "lit":         { "type": "IntLit", "value": 42 },
+    "tryLit":      { "type": "Attempt", "body": "lit" },
+
+    "varV":        { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "v" },
+    "patOk":       { "type": "Pattern", "kind": "constructor", "patternType": "resultIntT", "caseName": "Ok", "payloadPattern": "varV" },
+    "vRef":        { "type": "VarRef", "binder": "varV" },
+    "caseOk":      { "type": "MatchCase", "pattern": "patOk", "body": "vRef" },
+
+    "varE":        { "type": "Pattern", "kind": "variable", "patternType": "errPayloadT", "name": "e" },
+    "patErr":      { "type": "Pattern", "kind": "constructor", "patternType": "resultIntT", "caseName": "Err", "payloadPattern": "varE" },
+    "fallbackLit": { "type": "IntLit", "value": 0 },
+    "caseErr":     { "type": "MatchCase", "pattern": "patErr", "body": "fallbackLit" },
+
+    "result":      { "type": "Match", "scrutinee": "tryLit", "cases": ["caseOk", "caseErr"] }
+  }
+}

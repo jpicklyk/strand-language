@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":         { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":        { "type": "PrimitiveType", "kind": "Bool" },
+    "unitT":        { "type": "PrimitiveType", "kind": "Unit" },
+    "stringT":      { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":       { "type": "PrimitiveType", "kind": "Bytes" },
+
+    "kindField":    { "type": "ProductTypeField", "name": "kind", "fieldType": "stringT" },
+    "detailField":  { "type": "ProductTypeField", "name": "detail", "fieldType": "stringT" },
+    "errPayloadT":  { "type": "ProductType", "fields": ["kindField", "detailField"] },
+
+    "okCase":       { "type": "SumTypeCase", "name": "Ok", "caseType": "bytesT" },
+    "errCase":      { "type": "SumTypeCase", "name": "Err", "caseType": "errPayloadT" },
+    "resultBytesT": { "type": "SumType", "cases": ["okCase", "errCase"] },
+
+    "readFx":       { "type": "EffectCategory", "categoryName": "Filesystem.Read" },
+    "sleepFx":      { "type": "EffectCategory", "categoryName": "Time.Sleep" },
+
+    "fsReadT":      { "type": "FunctionType", "parameters": ["stringT"], "result": "bytesT", "effects": ["readFx"] },
+    "fsRead":       { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "fsReadT", "effects": ["readFx"] },
+    "sleepT":       { "type": "FunctionType", "parameters": ["intT"], "result": "unitT", "effects": ["sleepFx"] },
+    "sleep":        { "type": "ForeignNode", "target": "strand-builtin:Time.Sleep", "foreignType": "sleepT", "effects": ["sleepFx"] },
+    "subT":         { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "sub":          { "type": "ForeignNode", "target": "strand-builtin:Int.Sub", "foreignType": "subT", "effects": [] },
+    "eqT":          { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "eq":           { "type": "ForeignNode", "target": "strand-builtin:Int.Eq", "foreignType": "eqT", "effects": [] },
+
+    "retryT":       { "type": "FunctionType", "parameters": ["intT"], "result": "bytesT", "effects": ["readFx", "sleepFx"] },
+
+    "self":         { "type": "ParameterDecl", "name": "self", "paramType": "retryT" },
+    "n":            { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+    "selfRef":      { "type": "VarRef", "binder": "self" },
+    "nRef":         { "type": "VarRef", "binder": "n" },
+
+    "pathS":        { "type": "StringLit", "value": "strand-attempt-retry-nonexistent/data.json" },
+    "readApp":      { "type": "Application", "function": "fsRead", "arguments": ["pathS"] },
+    "tryRead":      { "type": "Attempt", "body": "readApp" },
+
+    "okVarB":       { "type": "Pattern", "kind": "variable", "patternType": "bytesT", "name": "b" },
+    "okPat":        { "type": "Pattern", "kind": "constructor", "patternType": "resultBytesT", "caseName": "Ok", "payloadPattern": "okVarB" },
+    "okBRef":       { "type": "VarRef", "binder": "okVarB" },
+    "okMC":         { "type": "MatchCase", "pattern": "okPat", "body": "okBRef" },
+
+    "zeroLit":      { "type": "IntLit", "value": 0 },
+    "isLast":       { "type": "Application", "function": "eq", "arguments": ["nRef", "zeroLit"] },
+
+    "trueLit":      { "type": "BoolLit", "value": true },
+    "truePat":      { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "trueLit" },
+    "defaultB":     { "type": "BytesLit", "value": "7b7d" },
+    "giveUpMC":     { "type": "MatchCase", "pattern": "truePat", "body": "defaultB" },
+
+    "falseLit":     { "type": "BoolLit", "value": false },
+    "falsePat":     { "type": "Pattern", "kind": "literal", "patternType": "boolT", "literal": "falseLit" },
+    "backoffMs":    { "type": "IntLit", "value": 0 },
+    "sleepApp":     { "type": "Application", "function": "sleep", "arguments": ["backoffMs"] },
+    "oneLit":       { "type": "IntLit", "value": 1 },
+    "nextN":        { "type": "Application", "function": "sub", "arguments": ["nRef", "oneLit"] },
+    "recurApp":     { "type": "Application", "function": "selfRef", "arguments": ["nextN"] },
+    "retryLet":     { "type": "Let", "name": "_", "value": "sleepApp", "body": "recurApp" },
+    "retryMC":      { "type": "MatchCase", "pattern": "falsePat", "body": "retryLet" },
+
+    "decideMatch":  { "type": "Match", "scrutinee": "isLast", "cases": ["giveUpMC", "retryMC"] },
+
+    "errVarE":      { "type": "Pattern", "kind": "variable", "patternType": "errPayloadT", "name": "e" },
+    "errPat":       { "type": "Pattern", "kind": "constructor", "patternType": "resultBytesT", "caseName": "Err", "payloadPattern": "errVarE" },
+    "errMC":        { "type": "MatchCase", "pattern": "errPat", "body": "decideMatch" },
+
+    "tryMatch":     { "type": "Match", "scrutinee": "tryRead", "cases": ["okMC", "errMC"] },
+
+    "retryBody":    { "type": "Lambda", "parameters": ["self", "n"], "body": "tryMatch", "effects": ["readFx", "sleepFx"] },
+    "retry":        { "type": "Fixpoint", "recursionType": "retryT", "body": "retryBody" },
+
+    "initialN":     { "type": "IntLit", "value": 2 },
+    "app":          { "type": "Application", "function": "retry", "arguments": ["initialN"] }
+  }
+}
