@@ -10,7 +10,7 @@ This document specifies the inventory of node types that constitute a Strand gra
 
 The design adopts roughly 30 node types organized into eight categories: literals, types, functions and binding, references, effects and capabilities, control flow, state machines, and metadata. The categorization reflects how graphs are constructed and reasoned about; it does not impose runtime distinctions beyond what each type's semantics requires.
 
-Resolves [Q-001](../open-questions.md#Q-001) (node inventory), [Q-019](../open-questions.md#Q-019) (iterative computation), and [Q-024](../open-questions.md#Q-024) (versioning) as proposed designs. Identifiers N-001 through N-031 are assigned below, alongside N-034 (TypeAbstraction) and N-035 (ForallType) which extend the function-and-binding and type groups for explicit type abstraction in the System F style. Schema and Invariant (N-032, N-033) are specified separately in [`rendering-and-views.md`](rendering-and-views.md).
+Resolves [Q-001](../open-questions.md#Q-001) (node inventory), [Q-019](../open-questions.md#Q-019) (iterative computation), and [Q-024](../open-questions.md#Q-024) (versioning) as proposed designs. Identifiers N-001 through N-031 are assigned below, alongside N-034 (TypeAbstraction) and N-035 (ForallType) which extend the function-and-binding and type groups for explicit type abstraction in the System F style. Schema and Invariant (N-032, N-033) are specified separately in [`rendering-and-views.md`](rendering-and-views.md). Categories assigned after this document's inventory — N-036 CapabilityScope and N-043 Handler ([`effects-and-capabilities.md`](effects-and-capabilities.md)), N-037 through N-042 (product, sum, and recursive-type values), N-044 ToolDef and N-045 ResponseSchemaSpec, and N-046 ModuleManifest — are specified in the documents and proposals that introduce them; the authoritative registry is [`INDEX.md`](../INDEX.md).
 
 ## Foundations {#foundations}
 
@@ -33,6 +33,8 @@ Name (N-030) and Provenance (N-031) are both nodes in the algebra. Provenance is
 For lambda nodes, alpha equivalence is enforced by the canonical encoding: parameter binding sites are encoded by their position within the lambda, and variable references in the body are encoded by the position of their binder rather than by any name or stable identifier of the binder. Two lambdas that differ only in parameter naming hash to the same value.
 
 The hash function is a multi-hash as specified in [ADR-003](../decisions/ADR-003-content-addressing.md), with BLAKE3 as the default. The hash output is a 32-byte digest prefixed with a one-byte function identifier; references between nodes carry the full prefixed digest.
+
+The byte-level realization of these rules — framing, the canonical-CBOR subset, the complete category-tag and discriminator tables, presence-prefix and default-gating rules, binder-reference sentinels, and the full metadata-exclusion list — is specified normatively in [`canonical-encoding.md`](canonical-encoding.md), with committed conformance vectors for every corpus program in [`corpus/golden-hashes.json`](../corpus/golden-hashes.json). Cross-implementation hash conformance is tracked as [Q-052](../open-questions.md#Q-052).
 
 ## Node inventory {#node-inventory}
 
@@ -220,7 +222,7 @@ Strand's type system is structural, parametric, and effect-aware. Types are node
 - Universal quantification via ForallType (N-035): a type expression of the form `forall a1, ..., an. T`, with the bound parameters scoping over `T`.
 - Parametric application: an Application whose function has a ForallType supplies a positional list of type arguments; the verifier substitutes them into the ForallType's body to obtain a FunctionType for value-argument checking. No separate ParametrizedType node is required.
 
-Subtyping is structural: a product with fields `{a: Int, b: Bool}` is a subtype of a product with fields `{a: Int}` (width subtyping); function subtyping is contravariant in arguments and covariant in returns; effect subtyping is on effect-set inclusion (a function with fewer declared effects is a subtype of a function with more declared effects). The full subtyping algorithm is part of the reference implementation; the design adopts the standard structural subtyping rules without modification.
+Type compatibility is strict structural equality. An argument's type must equal the corresponding parameter type; two function types compare by parameter types, result type, and declared effect row, so function compatibility is effect-exact. The single relaxation is at schema boundaries: a value of type `T` may flow into a position typed `SchemaType<T>` and vice versa, supporting schema-refined values. Structural subtyping — width subtyping on products, contravariant argument and covariant result positions on functions, effect-set inclusion on the arrow — is a candidate extension that the current verification discipline does not implement; whether to adopt it or retain strict equality is tracked as [Q-049](../open-questions.md#Q-049). `TypeParameter` bounds are parsed but not enforced pending the same decision.
 
 Type inference is not performed by the language; type annotations are mandatory at function boundaries. This is consistent with the agent-generation use case: an agent emits typed nodes, the verifier confirms; the language does not infer types because the agent already knows what types it intends to assign.
 
@@ -248,7 +250,7 @@ This decision favors uniformity and verifiability over surface convenience. An a
 
 [Q-024](../open-questions.md#Q-024) asks how the algebra itself migrates as Strand evolves. The design adopted here is conservative.
 
-The category tag in the canonical encoding identifies node category by a numeric ID. The current inventory uses N-001 through N-031. New node categories receive higher numbers; existing numbers are not reused or reassigned. A graph that uses only category tags valid in version V can be loaded by any runtime that supports version ≥ V. Adding a new node category does not invalidate older graphs because their hashes remain stable; the older runtime simply does not understand the new category.
+The category tag in the canonical encoding identifies node category by a numeric ID. The registry currently extends through N-046; [`INDEX.md`](../INDEX.md) is authoritative. New node categories receive higher numbers; existing numbers are not reused or reassigned. A graph that uses only category tags valid in version V can be loaded by any runtime that supports version ≥ V. Adding a new node category does not invalidate older graphs because their hashes remain stable; the older runtime simply does not understand the new category.
 
 When a node category's edge schema changes (e.g., a new optional edge is added), the change is treated as a new category with a different category tag. The original category remains valid for existing graphs; new graphs may use the new category. The category tag space is sized to accommodate this growth without contention.
 
@@ -262,6 +264,7 @@ Effect categories and the algebra of types may extend over time. Strand commits 
 - [`ADR-004-effects-as-edges.md`](../decisions/ADR-004-effects-as-edges.md) — effect edges
 - [`ADR-005-foreign-nodes.md`](../decisions/ADR-005-foreign-nodes.md) — ForeignNode category
 - [`ADR-007-state-machines.md`](../decisions/ADR-007-state-machines.md) — StateMachine, EventStream
+- [`canonical-encoding.md`](canonical-encoding.md) — byte-level canonical encoding specification
 - [`effects-and-capabilities.md`](effects-and-capabilities.md) — effect category inventory
 - [`state-machines.md`](state-machines.md) — state machine semantics
 - [`open-questions.md`](../open-questions.md) — Q-001, Q-019, Q-024 resolved here
@@ -277,3 +280,4 @@ Effect categories and the algebra of types may extend over time. Strand commits 
 - [`rendering-and-views.md`](rendering-and-views.md) — extends node algebra with Schema (N-032) and Invariant (N-033)
 - [`decisions/ADR-009-structured-outputs.md`](../decisions/ADR-009-structured-outputs.md) — schema mechanism additions
 - [`proposals/implemented/agent-native-capabilities.md`](../proposals/implemented/agent-native-capabilities.md) — extends node algebra with ToolDef (N-044) and ResponseSchemaSpec (N-045)
+- [`canonical-encoding.md`](canonical-encoding.md) — realizes the hash-construction rules at byte level

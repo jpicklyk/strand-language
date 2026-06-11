@@ -4,6 +4,22 @@ Auto-generated companion to `evaluation/results.md` (static cost). Where
 the static framework measures bytes-per-emission, this framework measures
 **tokens-per-successful-task** across the verifier-feedback retry loop.
 
+## Token-count methodology
+
+All token figures in this document are byte-proxy estimates. Unless a
+run's artifacts carry explicit provider token counts
+(`response-metadata.json`), the harness computes
+`tokens = (chars + 3) / 4` over the message text
+(`strand_eval/step.py`). No run recorded to date supplies provider
+counts, so every per-cell and headline number below — including the
+cross-language ratios and dollar figures — inherits this approximation.
+Tokenizer behavior is content-dependent: dense symbolic Layer A, Python,
+and Kotlin do not tokenize at equal characters-per-token rates, so the
+cross-language ratios carry an unquantified and possibly directional
+error. Re-deriving the counts from the persisted artifacts with real
+tokenizers is an open follow-up under
+[`proposals/model-api-integration.md`](proposals/model-api-integration.md).
+
 ## Task suite — 15 tasks as of 2026-05-28
 
 Tasks 01–10 are the original suite (factorial, json-value,

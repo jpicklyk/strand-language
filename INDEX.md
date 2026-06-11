@@ -82,6 +82,7 @@ strand-design/
 │   └── ADR-009-structured-outputs.md  Structured outputs and verifier invariants
 ├── design/
 │   ├── node-algebra.md                Node types and well-formedness
+│   ├── canonical-encoding.md          Byte-level canonical encoding and hash construction
 │   ├── effects-and-capabilities.md    Effect system specification
 │   ├── security-model.md              Threat model and defenses
 │   ├── distribution-model.md          Distribution and placement
@@ -115,6 +116,7 @@ Alphabetical index of major concepts in the Strand design, with primary referenc
 | Blessed output libraries | `design/rendering-and-views.md` | Blessed library set |
 | Bootstrap corpus | `research-plan.md` | Phase 1 |
 | Bytecode VM | `decisions/ADR-008-compilation-target.md` | Decision |
+| Canonical encoding (byte-level) | `design/canonical-encoding.md` | Per-category encodings |
 | Capability context | `02-core-thesis.md` | Capability execution |
 | Capability delegation | `design/effects-and-capabilities.md` | Delegation |
 | Capability-mediated execution | `02-core-thesis.md` | Claim 5 |
@@ -146,6 +148,7 @@ Alphabetical index of major concepts in the Strand design, with primary referenc
 | Foreign binding trust | `design/security-model.md` | Foreign binding trust |
 | Foreign function interface | `decisions/ADR-005-foreign-nodes.md` | Decision |
 | Foreign nodes | `decisions/ADR-005-foreign-nodes.md` | Decision |
+| Golden hash vectors | `corpus/golden-hashes.json` | (whole document) |
 | Graph-native representation | `decisions/ADR-001-graph-not-text.md` | Decision |
 | HTML5 schema | `design/rendering-and-views.md` | Blessed library set |
 | Hash-based identity | `decisions/ADR-003-content-addressing.md` | Decision |
@@ -278,6 +281,7 @@ Inventory specified in [`design/node-algebra.md`](design/node-algebra.md). Curre
 | N-044 | ToolDef | Agent-native capabilities |
 | N-045 | ResponseSchemaSpec | Agent-native capabilities |
 | N-046 | ModuleManifest | Composition and distribution |
+| N-047 | Attempt | Control flow (reserved for Q-048; proposed in [`proposals/error-recovery.md`](proposals/error-recovery.md)) |
 
 New node categories receive higher numbers; existing numbers are not reused.
 
@@ -326,11 +330,11 @@ Inventory specified in [`design/effects-and-capabilities.md`](design/effects-and
 | E-037 | Vector.Read | Vector storage |
 | E-038 | Vector.Write | Vector storage |
 
-E-035 and E-036 are reserved for Q-037 (`LLM.Generate`, `LLM.Embed`); E-037 and E-038 are reserved for Q-038 (vector storage). New effect categories receive higher numbers; existing numbers are not reused.
+E-035 and E-036 were assigned by Q-037 (`LLM.Generate`, `LLM.Embed`) and E-037 and E-038 by Q-038 (vector storage); all four are implemented in the reference implementation. New effect categories receive higher numbers; existing numbers are not reused.
 
 ### Open questions (Q-NNN)
 
-Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-047 are currently assigned.
+Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-059 are currently assigned.
 
 ## Cross-reference graph {#cross-references}
 
@@ -352,7 +356,8 @@ The following table summarizes which documents cite which others, providing a na
 | `decisions/ADR-007-state-machines.md` | `01`, `02`, ADR-001, ADR-003, ADR-004, ADR-005, `design/state-machines.md`, `design/distribution-model.md`, `open-questions.md` | `02`, ADR-005, ADR-008 |
 | `decisions/ADR-008-compilation-target.md` | `02`, ADR-001, ADR-003, ADR-004, ADR-005, ADR-006, ADR-007, `design/node-algebra.md`, `open-questions.md` | `02`, `research-plan.md` |
 | `decisions/ADR-009-structured-outputs.md` | `02`, ADR-001, ADR-002, ADR-003, ADR-004, ADR-005, ADR-007, `design/node-algebra.md`, `design/rendering-and-views.md`, `design/security-model.md`, `open-questions.md` | `design/rendering-and-views.md` |
-| `design/node-algebra.md` | ADR-001, ADR-003, ADR-004, ADR-005, ADR-007, `effects-and-capabilities.md`, `state-machines.md`, `open-questions.md` | ADR-001, ADR-003, ADR-008, `effects-and-capabilities.md`, `state-machines.md`, `encryption-model.md`, `research-plan.md` |
+| `design/node-algebra.md` | ADR-001, ADR-003, ADR-004, ADR-005, ADR-007, `canonical-encoding.md`, `effects-and-capabilities.md`, `state-machines.md`, `open-questions.md` | ADR-001, ADR-003, ADR-008, `canonical-encoding.md`, `effects-and-capabilities.md`, `state-machines.md`, `encryption-model.md`, `research-plan.md` |
+| `design/canonical-encoding.md` | ADR-003, `node-algebra.md`, `corpus/golden-hashes.json`, `corpus/README.md` | `node-algebra.md` |
 | `design/effects-and-capabilities.md` | `02`, ADR-004, ADR-005, `node-algebra.md`, `encryption-model.md`, `security-model.md`, `state-machines.md`, `open-questions.md` | ADR-004, `node-algebra.md`, `security-model.md`, `distribution-model.md`, `state-machines.md`, `encryption-model.md`, `research-plan.md` |
 | `design/state-machines.md` | `02`, `01`, ADR-003, ADR-004, ADR-007, ADR-008, `node-algebra.md`, `effects-and-capabilities.md`, `distribution-model.md`, `open-questions.md` | ADR-007, `01`, `node-algebra.md`, `distribution-model.md`, `research-plan.md` |
 | `design/encryption-model.md` | ADR-003, ADR-006, `effects-and-capabilities.md`, `security-model.md`, `open-questions.md` | ADR-006, `security-model.md`, `research-plan.md` |
