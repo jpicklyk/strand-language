@@ -1,0 +1,13 @@
+# Task 18 — ShortName schema over a runtime username (density v4).
+# concat is dynamic, so the invariant defers at verify time and is
+# enforced under `strand run` (Q-047). Probes the runtime
+# SchemaInvariantViolation when the 12-char value flows in raw.
+@v=1 root=app
+lenOk LAM [s:stringT] (APP le [(APP strLen [s]) 8])
+nameInv INV "max-8-chars" shortName lenOk
+shortName SCH "ShortName" stringT [nameInv]
+full APP concat [(STR "strand") (STR "_agent")]
+trimmed APP subStr [full 0 8]
+idLam LAM [p:shortName] p
+flowed APP idLam [trimmed]
+app APP strLen [flowed]

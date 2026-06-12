@@ -1,0 +1,12 @@
+# Task 21 — audit write inside a narrowed CAP (density v4).
+# The scoped body's closure is {writeFx, nowFx} (the path derivation
+# reads the clock inside the scope). Probes
+# CapabilityScopeUnsatisfiable on the natural [writeFx]-only grant.
+@v=1 root=app
+writeT FNT [stringT] intT [writeFx]
+write FN "strand-builtin:Filesystem.Write" writeT [writeFx]
+ts APP intToStr [(APP now [])]
+logPath APP concat [(STR "audit-") ts]
+writeCall APP write [logPath]
+scoped CAP [writeFx nowFx] writeCall
+app APP add [scoped 7]

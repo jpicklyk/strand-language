@@ -1,0 +1,18 @@
+# Layer A form: clock-derived audit path written via the
+# Filesystem.Write stub inside a CAP narrowed to exactly the body's
+# effect closure {writeFx, nowFx}; program adds 7 -> 7. Deriving the
+# path reads the clock INSIDE the scope, so narrowing to [writeFx]
+# alone trips CapabilityScopeUnsatisfiable. Uses prelude writeFx/
+# nowFx/now/intToStr/concat/add/stringT/intT; the stub FN and
+# literals are explicit.
+@v=1 root=app
+writeT FNT [stringT] intT [writeFx]
+write FN "strand-builtin:Filesystem.Write" writeT [writeFx]
+callNow APP now []
+ts APP intToStr [callNow]
+prefix STR "audit-"
+logPath APP concat [prefix ts]
+writeCall APP write [logPath]
+scoped CAP [writeFx nowFx] writeCall
+seven ILT 7
+app APP add [scoped seven]

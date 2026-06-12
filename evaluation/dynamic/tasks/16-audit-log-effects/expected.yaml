@@ -1,0 +1,11 @@
+check: pure-value
+description: |
+  Helper doubles its argument (21 -> 42) and logs a timestamped audit
+  entry. Probes `UncoveredEffects` when the explicitly-declared
+  Lambda effect row omits nowFx (the clock read used to build the
+  audit message).
+value:
+  type: int
+  representation:
+    python: "42"
+    strand: "IntV(v=42)"

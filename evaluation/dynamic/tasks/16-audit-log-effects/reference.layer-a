@@ -1,0 +1,34 @@
+# Layer A form: audited doubling helper. Doubles 21 -> 42 and logs a
+# timestamped audit entry. The helper Lambda's body exercises BOTH
+# Log.Write (logInfo) and Time.Now (now), so its explicit effect row
+# must carry both categories. Probes UncoveredEffects when the row
+# only lists the "obvious" logFx.
+@v=1 root=app
+intT PRM Int
+stringT PRM String
+unitT PRM Unit
+nowFx EFC "Time.Now"
+nowT FNT [] intT [nowFx]
+now FN "strand-builtin:Time.Now" nowT [nowFx]
+logFx EFC "Log.Write"
+logT FNT [stringT] unitT [logFx]
+logInfo FN "strand-builtin:Log.Info" logT [logFx]
+i2sT FNT [intT] stringT
+intToStr FN "strand-builtin:String.FromInt" i2sT
+concatT FNT [stringT stringT] stringT
+concat FN "strand-builtin:String.Concat" concatT
+mulT FNT [intT intT] intT
+mul FN "strand-builtin:Int.Mul" mulT
+callNow APP now []
+ts APP intToStr [callNow]
+prefix STR "audit:"
+msg APP concat [prefix ts]
+logCall APP logInfo [msg]
+x PRC "x" intT
+xv VAR x
+two ILT 2
+double APP mul [xv two]
+helperBody LET "ignore" logCall double
+auditedDouble LAM [x] helperBody [nowFx logFx]
+twentyOne ILT 21
+app APP auditedDouble [twentyOne]

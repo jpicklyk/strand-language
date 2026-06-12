@@ -1,0 +1,12 @@
+check: pure-value
+description: |
+  Clock-derived audit path written via the Filesystem.Write stub
+  (returns 0) inside a CAP narrowed to exactly the body's effects
+  {writeFx, nowFx}; program adds 7. Probes
+  `CapabilityScopeUnsatisfiable` when the natural narrow-to-writeFx
+  grant omits the clock read used to derive the path.
+value:
+  type: int
+  representation:
+    python: "7"
+    strand: "IntV(v=7)"

@@ -1,0 +1,13 @@
+check: pure-value
+description: |
+  ShortName schema (strLen <= 8) over a runtime-concatenated username
+  "strand" + "_agent", truncated to its first 8 characters before it
+  flows into the schema-typed parameter. Final value strLen = 8.
+  Probes the Q-047 runtime SchemaInvariantViolation when the
+  12-character concatenation flows in untruncated (verify passes with
+  SchemaInvariantDeferred; the violation fires under `strand run`).
+value:
+  type: int
+  representation:
+    python: "8"
+    strand: "IntV(v=8)"
