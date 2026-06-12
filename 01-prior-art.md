@@ -180,12 +180,14 @@ Strand's design occupies a specific point in this landscape that no existing sys
 6. First-class state machines as fixpoints over event streams
 7. Designed for AI generation rather than human authorship
 
-is, to the authors' knowledge, novel as a combination. Individual elements have precedents in the systems described above. The research contribution is the integration: testing whether these elements compose into a language that performs better than text languages for AI generation on the metrics described in [`00-motivation.md`](00-motivation.md).
+is, to the authors' knowledge, novel as a combination. Individual elements have precedents in the systems described above, and the 2023–2026 landscape has claimed several of them individually. Mandatory effect declarations are no longer distinctive: Flix tracks the effects of every expression with no untracked-IO category. Capabilities tied to static effect tracking are no longer distinctive: Scala 3 capture checking models effects as capabilities in types, and its application to agent code generation is published work. A capability-confined actor runtime is no longer distinctive: Lunatic ships it, and Pony preceded both. An agent-first toolchain over a graph-as-database with effects in signatures exists in Zero, and design-for-AI-generation is the stated premise of MoonBit, Pel, and Zero alike. The seven-item combination remains unoccupied, but the claim Strand rests on is narrower and should be stated as such: a sound per-subgraph effect closure computable from the content-addressed artifact itself, verified at admission, with no concrete syntax in the canonical form. No surveyed system has this property — in each, the guarantee attaches to a compilation, an interpreter, or a host-granted sandbox rather than to the artifact, or the artifact retains a textual canonical form. The research contribution is the integration: testing whether these elements compose into a language that performs better than text languages for AI generation on the metrics described in [`00-motivation.md`](00-motivation.md), against baselines that now include the constrained-decoding and capability-harness systems surveyed above.
 
 ## References
 
 **Outgoing references:**
 - [`00-motivation.md`](00-motivation.md) — the motivation this prior art informs
+- [`02-core-thesis.md`](02-core-thesis.md) — Claims 1 and 2, bounded by decode-time enforcement and the Darklang result
+- [`decisions/ADR-002-no-human-projection.md`](decisions/ADR-002-no-human-projection.md) — the no-projection decision Zero diverges from
 - [`design/state-machines.md`](design/state-machines.md) — how Strand handles workloads beyond dataflow
 - [`research-plan.md`](research-plan.md) — empirical evaluation against these baselines
 

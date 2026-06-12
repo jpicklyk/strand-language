@@ -62,6 +62,7 @@ The decision is reversible at a future cost. If at some future point a projectio
 
 **Incoming references:**
 - [`00-motivation.md`](../00-motivation.md) — cites this ADR from the no-human-readability section
+- [`01-prior-art.md`](../01-prior-art.md) — cites this ADR from the Zero comparison
 - [`02-core-thesis.md`](../02-core-thesis.md) — cites this ADR from Claim 2
 - [`ADR-001-graph-not-text.md`](ADR-001-graph-not-text.md) — defers projection scope to this ADR
 - [`ADR-006-per-node-encryption.md`](ADR-006-per-node-encryption.md) — interaction with encrypted-node visibility in analysis tooling
