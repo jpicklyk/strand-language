@@ -474,6 +474,94 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# Subcommand: aggregate
+# --------------------------------------------------------------------------
+
+
+def cmd_aggregate(args: argparse.Namespace) -> int:
+    """Aggregate step-mode per-cell summary.json files into one report.
+
+    Step-mode runs (the primary sub-agent-dispatch methodology) produce
+    one session directory per (task, config, sample) cell, each with a
+    summary.json. This subcommand globs them, groups by configuration,
+    and renders the same per-task and aggregate tables as `report` —
+    including mean [CI] brackets from the stdlib percentile bootstrap
+    when a (task, config) cell has N>1 samples, and the token-source
+    label per cell.
+    """
+    from strand_eval.types import RunMetrics, TaskMetrics
+
+    summary_paths: list[Path] = []
+    for root in args.sessions:
+        root_path = Path(root)
+        if root_path.is_file() and root_path.name == "summary.json":
+            summary_paths.append(root_path)
+        elif root_path.is_dir():
+            summary_paths.extend(sorted(root_path.glob("**/summary.json")))
+        else:
+            print(f"WARNING: {root_path} is neither a directory nor a summary.json; skipping", file=sys.stderr)
+    if not summary_paths:
+        print("ERROR: no summary.json files found under the given --sessions roots.", file=sys.stderr)
+        return 1
+
+    config_to_samples: dict[str, list[TaskMetrics]] = {}
+    total_cost = 0.0
+    converged = 0
+    for path in summary_paths:
+        try:
+            cell = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"WARNING: could not read {path}: {e}", file=sys.stderr)
+            continue
+        if "task_id" not in cell or "config" not in cell:
+            # A run-level summary.json (from `strand-eval run`) or some
+            # other file; cell summaries always carry task_id + config.
+            print(f"WARNING: {path} is not a step-mode cell summary; skipping", file=sys.stderr)
+            continue
+        tm = TaskMetrics(
+            task_id=cell["task_id"],
+            config=cell["config"],
+            sample_index=cell.get("sample_index", 0),
+            model=cell.get("model", "unknown"),
+            success=bool(cell.get("success", False)),
+            converged_at_attempt=cell.get("converged_at_attempt"),
+            total_input_tokens=int(cell.get("total_input_tokens", 0)),
+            total_output_tokens=int(cell.get("total_output_tokens", 0)),
+            total_cache_read_tokens=int(cell.get("total_cache_read_tokens", 0)),
+            total_cache_creation_tokens=int(cell.get("total_cache_creation_tokens", 0)),
+            total_cost_usd=float(cell.get("total_cost_usd", 0.0)),
+            token_source=cell.get("token_source", "unknown"),
+        )
+        config_to_samples.setdefault(tm.config, []).append(tm)
+        total_cost += tm.total_cost_usd
+        if tm.success:
+            converged += 1
+
+    total_cells = sum(len(v) for v in config_to_samples.values())
+    if total_cells == 0:
+        print("ERROR: no step-mode cell summaries found.", file=sys.stderr)
+        return 1
+    run = RunMetrics(
+        run_id=args.run_id,
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None,
+        config_name_to_task_metrics=config_to_samples,
+        total_cost_usd=round(total_cost, 6),
+        total_cells=total_cells,
+        converged_cells=converged,
+    )
+    report = render_report(run, baseline_config=args.baseline)
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report + "\n", encoding="utf-8")
+        print(f"report written to {out_path}")
+    else:
+        print(report)
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Subcommand: step
 # --------------------------------------------------------------------------
 
@@ -644,6 +732,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rep.add_argument("--runs-dir", default=None, dest="runs_dir")
     p_rep.add_argument("--baseline", default="python-type-hints")
     p_rep.set_defaults(func=cmd_report)
+
+    # aggregate — roll up step-mode per-cell summary.json files.
+    p_agg = subs.add_parser(
+        "aggregate",
+        help=(
+            "Aggregate step-mode per-cell summary.json files (one session "
+            "directory per cell) into per-task and aggregate Markdown "
+            "tables with bootstrap CIs when a cell has N>1 samples."
+        ),
+    )
+    p_agg.add_argument(
+        "--sessions",
+        required=True,
+        nargs="+",
+        help=(
+            "One or more roots to search recursively for summary.json "
+            "files (e.g., runs/2026-06-12-run8). Individual summary.json "
+            "paths are also accepted."
+        ),
+    )
+    p_agg.add_argument("--baseline", default="python-type-hints")
+    p_agg.add_argument("--run-id", default="step-aggregate", dest="run_id")
+    p_agg.add_argument("--out", default=None, help="Write the Markdown report here instead of stdout")
+    p_agg.set_defaults(func=cmd_aggregate)
 
     # step — file-IPC step-mode for Claude Code or any external driver.
     p_step = subs.add_parser(
