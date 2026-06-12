@@ -3,6 +3,7 @@
 **Document:** `decisions/ADR-002-no-human-projection.md`
 **Status:** Accepted
 **Date:** 2026-05-23
+**Last revised:** 2026-06-11 (Clarifying paragraph in the Decision section: the Q-034 Layer A authoring projection and its Q-036 reverse direction are tool-layer emission and consumption surfaces for agents, not the human-readable projection this record declines to provide. The decision itself is unchanged.)
 **Supersedes:** none
 **Superseded by:** none
 
@@ -19,6 +20,8 @@ The question this decision answers is whether Strand provides a textual projecti
 Strand does not provide a canonical textual projection from graph to text. There is no pretty-printer that emits a designated surface syntax. There is no bidirectional mapping between a text form and the graph that the language considers authoritative.
 
 Human inspection is supported, but through analysis tooling that operates directly on the graph: structured queries, dependency visualizations, structured diffs between graphs, and subgraph renderings selected by purpose (a security audit view, a control flow view, a dependency view). These tools may produce text, tables, or diagrams as output for specific purposes, but no single rendering is treated as the canonical view of a program.
+
+The decision is scoped to human-facing projection. The Layer A authoring surface ([Q-034](../open-questions.md#Q-034)), through which agents emit programs, and its reverse direction ([Q-036](../open-questions.md#Q-036)), through which agents read existing ones, are tool-layer forms optimized for model emission and consumption, not renderings designed for human reading, and neither holds canonical status: no hash, verification result, or program identity attaches to Layer A text, and the projection may be revised or retired without affecting any stored program. What this record declines to provide remains undelivered — a textual surface designed for human reading, maintained as a primary interface, and treated by the language as the rendering of a program.
 
 This decision is a scope choice, not a fundamental impossibility. Nothing in Strand's design prevents a future projection layer from being built as separate tooling, and a community-maintained projection may emerge if the language reaches sufficient adoption. The decision adopted here is that the core language, the reference implementation, and the research evaluation do not depend on a projection layer existing.
 
@@ -58,7 +61,7 @@ The decision is reversible at a future cost. If at some future point a projectio
 - [`01-prior-art.md`](../01-prior-art.md) — Unison, Hazel, MPS comparisons
 - [`ADR-001-graph-not-text.md`](ADR-001-graph-not-text.md) — graph-native foundation
 - [`ADR-006-per-node-encryption.md`](ADR-006-per-node-encryption.md) — interaction with encryption
-- [`open-questions.md`](../open-questions.md) — Q-023 analysis tooling
+- [`open-questions.md`](../open-questions.md) — Q-023 analysis tooling; Q-034, Q-036 authoring-projection status
 
 **Incoming references:**
 - [`00-motivation.md`](../00-motivation.md) — cites this ADR from the no-human-readability section
