@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.strand.core.JsonIngest
+import org.strand.core.Node
 import org.strand.hashing.Hasher
 import org.strand.verifier.VerifyResult
 import org.strand.verifier.Verifier
@@ -114,51 +115,57 @@ class PreludeProjectionAdmissionTest {
     // ── EffectCategory parameter counts ─────────────────────────────────────
 
     /**
-     * Structural consistency check: every [ReservedEffectProjection]'s
-     * source count must equal its referenced [ReservedNodeSpec] category's
-     * declared parameter count. A mismatch means the category's arity is
-     * wrong relative to its projection, which is exactly the bug this test
-     * class was written to prevent from regressing.
+     * Structural consistency check: every prelude ForeignNode projection's
+     * source count must equal its referenced EffectCategory's declared
+     * parameter count. A mismatch means the category's arity is wrong
+     * relative to its projection, which is exactly the bug this test class
+     * was written to prevent from regressing.
      *
-     * This test operates over the prelude registry itself (no compilation
-     * step needed) and covers the full set of effectProjections — not just
-     * the Filesystem / Network trio.
+     * Q-063 scenario 4: the check runs against the **generated prelude
+     * module** — the bundled snapshot ingested and finalized into canonical
+     * [org.strand.core.Node]s — rather than the in-memory reserved-spec
+     * table. The module is the published artifact; drift between table and
+     * module is separately caught by `PreludeModuleConformanceTest`, so
+     * checking the module covers the table transitively while exercising
+     * what consumers actually fetch.
      */
     @Test
     fun `every prelude effectProjection source count matches its category parameter count`() {
-        val reserved = LayerAGrammar.reservedNodes
+        val ingest = JsonIngest.parse(PreludeModule.loaded.text)
+        val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
+        val nameByNodeId = ingest.nameMap.entries.associate { (name, id) -> id to name }
 
-        // Build a map from reserved-name → declared parameter count for all
-        // EffectCategory entries.
-        val categoryParamCount: Map<String, Int> = reserved
-            .filter { (_, spec) -> spec.jsonType == "EffectCategory" }
-            .mapValues { (_, spec) ->
-                // An EffectCategory may declare `parameters` via refListFields.
-                // If the field is absent the category is parameterless (count=0).
-                spec.refListFields["parameters"]?.size ?: 0
-            }
-
-        // Walk every ForeignNode entry that has effectProjections and assert
-        // that each projection's source list has the same size as the
-        // corresponding category's parameter count.
+        var projectionsChecked = 0
         val mismatches = mutableListOf<String>()
-        for ((name, spec) in reserved) {
-            for (proj in spec.effectProjections) {
-                val expected = categoryParamCount[proj.category]
-                    ?: error("effectProjection in '$name' references unknown category '${proj.category}'")
+        for ((id, node) in finalized.store.entries()) {
+            if (node !is Node.ForeignNode || node.effectProjections.isEmpty()) continue
+            for (proj in node.effectProjections) {
+                val category = finalized.store.getOrNull(proj.category)
+                if (category !is Node.EffectCategory) {
+                    mismatches.add(
+                        "module node '${nameByNodeId[id]}': projection category " +
+                            "${proj.category} is not an EffectCategory",
+                    )
+                    continue
+                }
+                projectionsChecked++
+                val expected = category.parameters.size
                 val actual = proj.sources.size
                 if (expected != actual) {
                     mismatches.add(
-                        "prelude '$name' → category '${proj.category}': " +
-                        "category declares $expected parameter(s), projection has $actual source(s)",
+                        "module node '${nameByNodeId[id]}' → category '${category.categoryName}': " +
+                            "category declares $expected parameter(s), projection has $actual source(s)",
                     )
                 }
             }
         }
 
+        assertTrue(projectionsChecked > 0) {
+            "expected the generated prelude module to carry effectProjections; found none"
+        }
         assertTrue(mismatches.isEmpty()) {
-            "Prelude registry effectProjection arity mismatches:\n" +
-            mismatches.joinToString("\n  ", prefix = "  ")
+            "Generated prelude module effectProjection arity mismatches:\n" +
+                mismatches.joinToString("\n  ", prefix = "  ")
         }
     }
 
