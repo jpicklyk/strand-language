@@ -609,6 +609,9 @@ def cmd_step(args: argparse.Namespace) -> int:
 
         feedback_fmt = FeedbackFormat(cfg.get("feedback_format", args.feedback_format))
         max_retries = int(cfg.get("max_retries", args.max_retries))
+        max_reference_turns = int(
+            cfg.get("max_reference_turns", args.max_reference_turns)
+        )
 
         state = step_init(
             session_dir=session_dir,
@@ -622,6 +625,8 @@ def cmd_step(args: argparse.Namespace) -> int:
             feedback_format=feedback_fmt,
             max_retries=max_retries,
             sample_index=args.sample_index,
+            max_reference_turns=max_reference_turns,
+            references_dir=Path(args.references_dir) if args.references_dir else None,
         )
         print(f"session initialized: {session_dir}")
         print(f"prompt at: {session_dir / 'turn-00' / 'prompt.md'}")
@@ -643,11 +648,23 @@ def cmd_step(args: argparse.Namespace) -> int:
         return 2
 
     if state.status == "needs-response":
-        print(
-            f"verify failed on attempt {state.attempt - 1}; "
-            f"prompt for attempt {state.attempt} written at "
-            f"{session_dir / f'turn-{state.attempt:02d}' / 'prompt.md'}"
+        last_turn_type = (
+            state.emissions[-1].get("turn_type", "emission")
+            if state.emissions
+            else "emission"
         )
+        prompt_path = session_dir / f"turn-{state.attempt:02d}" / "prompt.md"
+        if last_turn_type == "reference-request":
+            print(
+                f"reference turn served ({state.reference_turns} of "
+                f"{state.max_reference_turns} used); "
+                f"prompt for turn {state.attempt} written at {prompt_path}"
+            )
+        else:
+            print(
+                f"verify failed on turn {state.attempt - 1}; "
+                f"prompt for turn {state.attempt} written at {prompt_path}"
+            )
         return 0
     if state.status == "converged":
         print(
@@ -661,10 +678,47 @@ def cmd_step(args: argparse.Namespace) -> int:
         return 1
     # exhausted
     print(
-        f"exhausted after {len(state.emissions)} attempts without converging. "
+        f"exhausted after {len(state.emissions)} turns without converging. "
         f"summary at {session_dir / 'summary.json'}"
     )
     return 2
+
+
+# --------------------------------------------------------------------------
+# Subcommand: lookup
+# --------------------------------------------------------------------------
+
+
+def cmd_lookup(args: argparse.Namespace) -> int:
+    """Resolve reference topics / builtin signatures outside the harness.
+
+    The same lookup the step-mode ``strand:need`` channel uses
+    (Q-060 M-2): a topic name prints the reference section, a dotted
+    builtin name prints its authoritative signature block, a prelude
+    reserved name prints its catalog line, and an unknown name prints a
+    nearest-match suggestion (exit 1) — never a fabricated signature.
+    """
+    from strand_eval.reference_lookup import ReferenceLookup
+
+    references_dir = (
+        Path(args.references_dir) if args.references_dir else None
+    )
+    lookup = ReferenceLookup(references_dir)
+    if not lookup.topic_names():
+        print(
+            f"ERROR: no reference sections found under "
+            f"{references_dir or 'prompts/references'}.",
+            file=sys.stderr,
+        )
+        return 2
+    all_found = True
+    blocks = []
+    for name in args.names:
+        result = lookup.lookup(name)
+        blocks.append(result.text)
+        all_found = all_found and result.found
+    print("\n\n---\n\n".join(blocks))
+    return 0 if all_found else 1
 
 
 # --------------------------------------------------------------------------
@@ -788,7 +842,36 @@ def _build_parser() -> argparse.ArgumentParser:
     p_step.add_argument("--sample", type=int, default=0, dest="sample_index")
     p_step.add_argument("--tasks-dir", default=None, dest="tasks_dir")
     p_step.add_argument("--configs-dir", default=None, dest="configs_dir")
+    p_step.add_argument(
+        "--max-reference-turns", type=int, default=3, dest="max_reference_turns",
+        help=(
+            "(--init only) cap on strand:need reference turns per cell; "
+            "requests past the cap consume emission attempts. A config "
+            "YAML max_reference_turns key overrides this."
+        ),
+    )
+    p_step.add_argument(
+        "--references-dir", default=None, dest="references_dir",
+        help="(--init only) reference-sections directory (default prompts/references)",
+    )
     p_step.set_defaults(func=cmd_step)
+
+    # lookup — the strand:need resolver as a standalone CLI.
+    p_lookup = subs.add_parser(
+        "lookup",
+        help=(
+            "Resolve reference topics, builtin signatures, or prelude "
+            "names against prompts/references/ — the same lookup the "
+            "step-mode strand:need channel serves. Exit 1 on any miss "
+            "(misses print nearest-match suggestions)."
+        ),
+    )
+    p_lookup.add_argument("names", nargs="+", help="Topic, dotted builtin, or prelude name(s)")
+    p_lookup.add_argument(
+        "--references-dir", default=None, dest="references_dir",
+        help="Reference-sections directory (default prompts/references)",
+    )
+    p_lookup.set_defaults(func=cmd_lookup)
 
     return parser
 

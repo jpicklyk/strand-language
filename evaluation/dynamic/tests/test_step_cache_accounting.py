@@ -97,6 +97,7 @@ def test_caller_metadata_cache_fields_flow_to_summary(step_session):
     assert summary["attempts"] == [
         {
             "attempt": 0,
+            "turn_type": "emission",
             "input_tokens": 100,
             "output_tokens": 50,
             "cache_read_input_tokens": 20000,

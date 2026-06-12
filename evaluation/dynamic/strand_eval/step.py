@@ -38,6 +38,23 @@ Exit codes::
     0  needs-response  — caller should write response.md and re-invoke
     1  converged       — summary.json has the final metrics
     2  exhausted       — summary.json has the partial metrics
+
+Reference turns (Q-060 M-2)::
+
+    A response whose first non-blank line is
+    ``strand:need <topic-or-builtin> [<topic-or-builtin>...]`` (and that
+    carries no fenced code block) is a reference request, not an
+    emission. The harness appends a user message containing only the
+    requested reference text — a section from prompts/references/ or a
+    builtin's signature block; unknown names get a nearest-match
+    suggestion, never a fabricated signature — and writes the next
+    turn's prompt. Reference turns do not consume emission attempts but
+    are capped per cell (``max_reference_turns``, default 3); requests
+    past the cap are answered with a budget-exhausted notice and DO
+    consume an emission attempt, so a looping agent still terminates.
+    Every turn's tokens are recorded with a ``turn_type`` label
+    ("emission" / "reference-request"), and each served reference's
+    appended text is token-counted under its own source label.
 """
 
 from __future__ import annotations
@@ -50,6 +67,11 @@ from typing import Any, Optional
 
 from strand_eval.languages import Language, get_language
 from strand_eval.metrics import estimate_cost
+from strand_eval.reference_lookup import (
+    DEFAULT_REFERENCES_DIR,
+    ReferenceLookup,
+    build_reference_reply,
+)
 from strand_eval.tokens import (
     SOURCE_CALLER,
     combine_sources,
@@ -92,6 +114,15 @@ class StepState:
     # Token counts for the static prompt components, recorded at init:
     # {"system": {"tokens": N, "source": "api"|"byte-proxy"}, "task": {...}}
     prompt_token_counts: dict = field(default_factory=dict)
+    # Reference-query channel (Q-060 M-2). reference_turns counts served
+    # reference turns; emission attempts are attempt - reference_turns.
+    # references_dir="" means the packaged prompts/references default.
+    max_reference_turns: int = 3
+    reference_turns: int = 0
+    references_dir: str = ""
+    # One record per reference turn: {"turn", "requested", "served",
+    # "missed", "appended_tokens", "token_source"}.
+    reference_requests: list[dict] = field(default_factory=list)
 
     def save(self) -> None:
         Path(self.session_dir, "session.json").write_text(
@@ -121,6 +152,8 @@ def step_init(
     feedback_format: FeedbackFormat = FeedbackFormat.PROSE,
     max_retries: int = 5,
     sample_index: int = 0,
+    max_reference_turns: int = 3,
+    references_dir: Optional[Path] = None,
 ) -> StepState:
     """Initialize a new step session. Writes turn-00/prompt.md and exits."""
     session_dir = Path(session_dir).resolve()
@@ -160,6 +193,8 @@ def step_init(
         attempt=0,
         status="needs-response",
         prompt_token_counts=prompt_token_counts,
+        max_reference_turns=max_reference_turns,
+        references_dir=str(references_dir) if references_dir else "",
     )
 
     _write_prompt_for_turn(state)
@@ -237,9 +272,15 @@ def step_advance(session_dir: Path) -> StepState:
         cache_creation_input_tokens=cache_creation_tokens,
     )
 
-    # Append the assistant turn.
+    # Append the assistant turn. Reference requests are recorded under
+    # their own turn_type label so token attribution stays separable.
+    requested_names = _parse_reference_request(response_text)
+    turn_type = "reference-request" if requested_names is not None else "emission"
     state.messages.append({"role": Role.ASSISTANT.value, "content": response_text})
-    state.emissions.append(_emission_to_dict(emission))
+    state.emissions.append(_emission_to_dict(emission, turn_type=turn_type))
+
+    if requested_names is not None:
+        return _advance_reference_turn(state, requested_names)
 
     # Verify + run via the language adapter.
     language = get_language(state.language_name)
@@ -258,7 +299,7 @@ def step_advance(session_dir: Path) -> StepState:
         )
         state.messages.append({"role": Role.USER.value, "content": feedback})
         state.attempt += 1
-        if state.attempt >= state.max_retries:
+        if _emission_attempts(state) >= state.max_retries:
             state.status = "exhausted"
             _write_summary(state)
         else:
@@ -272,7 +313,7 @@ def step_advance(session_dir: Path) -> StepState:
         state.messages.append({"role": Role.USER.value, "content": feedback})
         state.run_result = None  # clear; the failed run shouldn't pollute final metrics
         state.attempt += 1
-        if state.attempt >= state.max_retries:
+        if _emission_attempts(state) >= state.max_retries:
             state.status = "exhausted"
             _write_summary(state)
         else:
@@ -280,9 +321,13 @@ def step_advance(session_dir: Path) -> StepState:
         state.save()
         return state
 
-    # Converged.
+    # Converged. converged_at_attempt is the EMISSION-attempt index —
+    # reference turns are excluded so first-pass means "the first program
+    # the agent emitted verified", whether or not it read references
+    # first (the reference round-trip cost shows up in the token totals,
+    # which is where the A/B gate measures it).
     state.success = True
-    state.converged_at_attempt = state.attempt
+    state.converged_at_attempt = _emission_attempts(state)
     state.run_result = _run_to_dict(run_result)
     state.status = "converged"
     _write_summary(state)
@@ -295,6 +340,97 @@ def step_advance(session_dir: Path) -> StepState:
 # --------------------------------------------------------------------------
 
 
+REFERENCE_REQUEST_PREFIX = "strand:need"
+
+
+def _parse_reference_request(response_text: str) -> Optional[list[str]]:
+    """The requested names when the response is a reference request.
+
+    The protocol is strict so a program containing the literal string can
+    never be misread: the request must be the FIRST non-blank line of the
+    response, and a response carrying a fenced code block is always
+    treated as a program (the program wins if an agent emits both).
+    Returns None when the response is an emission.
+    """
+    if "```" in response_text:
+        return None
+    for line in response_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(REFERENCE_REQUEST_PREFIX):
+            rest = stripped[len(REFERENCE_REQUEST_PREFIX):]
+            if rest and not rest[0].isspace():
+                return None  # e.g. "strand:needs..." — not the protocol line
+            return rest.split()
+        return None
+    return None
+
+
+def _emission_attempts(state: StepState) -> int:
+    """Emission attempts consumed so far (reference turns excluded)."""
+    return state.attempt - state.reference_turns
+
+
+def _references_dir(state: StepState) -> Path:
+    return Path(state.references_dir) if state.references_dir else DEFAULT_REFERENCES_DIR
+
+
+def _advance_reference_turn(state: StepState, names: list[str]) -> StepState:
+    """Serve one reference request (or the over-cap notice) and advance.
+
+    Within the cap, the turn appends only the requested reference text
+    and does not consume an emission attempt. Past the cap, the request
+    is answered with a budget-exhausted notice and counts as an emission
+    attempt, so an agent stuck requesting references still exhausts.
+    """
+    if state.reference_turns >= state.max_reference_turns:
+        notice = (
+            f"Reference budget exhausted ({state.reference_turns} of "
+            f"{state.max_reference_turns} reference turns used). No further "
+            "references will be served, and this request consumed an "
+            "emission attempt. Emit the Layer A program now."
+        )
+        state.messages.append({"role": Role.USER.value, "content": notice})
+        state.attempt += 1
+        if _emission_attempts(state) >= state.max_retries:
+            state.status = "exhausted"
+            _write_summary(state)
+        else:
+            _write_prompt_for_turn(state)
+        state.save()
+        return state
+
+    lookup = ReferenceLookup(_references_dir(state))
+    reply, served, missed = build_reference_reply(
+        lookup,
+        names,
+        turns_used_after=state.reference_turns + 1,
+        max_turns=state.max_reference_turns,
+    )
+    # The served text becomes conversation input from the next turn on;
+    # count it now under its own source label so the cost of the
+    # reference channel is attributable without transcript re-derivation.
+    counter = default_counter()
+    appended = counter.count_text(reply, state.model)
+    state.reference_requests.append(
+        {
+            "turn": state.attempt,
+            "requested": names,
+            "served": served,
+            "missed": missed,
+            "appended_tokens": appended.tokens,
+            "token_source": appended.source,
+        }
+    )
+    state.messages.append({"role": Role.USER.value, "content": reply})
+    state.reference_turns += 1
+    state.attempt += 1
+    _write_prompt_for_turn(state)
+    state.save()
+    return state
+
+
 def _write_prompt_for_turn(state: StepState) -> None:
     turn_dir = Path(state.session_dir) / f"turn-{state.attempt:02d}"
     turn_dir.mkdir(parents=True, exist_ok=True)
@@ -302,11 +438,19 @@ def _write_prompt_for_turn(state: StepState) -> None:
     # Render the message stack as readable Markdown for the human-facing
     # caller, plus a structured request.json for tooling that wants the
     # raw form (e.g., to forward to the Anthropic SDK later).
+    attempt_line = (
+        f"Attempt: {_emission_attempts(state) + 1} / {state.max_retries}"
+    )
+    if state.max_reference_turns > 0:
+        attempt_line += (
+            f" | Reference turns used: {state.reference_turns} / "
+            f"{state.max_reference_turns}"
+        )
     md_lines: list[str] = [
         f"# Turn {state.attempt:02d} of session {Path(state.session_dir).name}",
         "",
         f"Task: `{state.task_id}` | Config: `{state.config_name}` | Model: `{state.model}`",
-        f"Attempt: {state.attempt + 1} / {state.max_retries}",
+        attempt_line,
         "",
         "---",
         "",
@@ -375,18 +519,24 @@ def _write_summary(state: StepState) -> None:
     # cache versus billed at the full input rate. In byte-proxy sessions
     # (no API response to read usage from) the cache fields are 0 — the
     # proxy cannot observe cache behavior and the harness never
-    # fabricates cache figures.
+    # fabricates cache figures. turn_type labels separate emission turns
+    # from reference-request turns (Q-060 M-2) so the channel's cost is
+    # attributable per turn.
     attempts = [
         {
             "attempt": i,
-            "input_tokens": e.input_tokens,
-            "output_tokens": e.output_tokens,
-            "cache_read_input_tokens": e.cache_read_input_tokens,
-            "cache_creation_input_tokens": e.cache_creation_input_tokens,
-            "token_source": e.token_source,
+            "turn_type": d.get("turn_type", "emission"),
+            "input_tokens": d["input_tokens"],
+            "output_tokens": d["output_tokens"],
+            "cache_read_input_tokens": d.get("cache_read_input_tokens", 0),
+            "cache_creation_input_tokens": d.get("cache_creation_input_tokens", 0),
+            "token_source": d.get("token_source", "byte-proxy"),
         }
-        for i, e in enumerate(emissions)
+        for i, d in enumerate(state.emissions)
     ]
+    emission_attempts = sum(
+        1 for d in state.emissions if d.get("turn_type", "emission") == "emission"
+    )
 
     summary = {
         "task_id": state.task_id,
@@ -397,6 +547,10 @@ def _write_summary(state: StepState) -> None:
         "status": state.status,
         "converged_at_attempt": state.converged_at_attempt,
         "total_attempts": len(state.emissions),
+        "emission_attempts": emission_attempts,
+        "reference_turns": state.reference_turns,
+        "max_reference_turns": state.max_reference_turns,
+        "reference_requests": state.reference_requests,
         "total_input_tokens": metrics.total_input_tokens,
         "total_output_tokens": metrics.total_output_tokens,
         "total_cache_read_tokens": metrics.total_cache_read_tokens,
@@ -427,9 +581,10 @@ def _format_run_feedback(run_result: RunResult) -> str:
     return "\n".join(lines)
 
 
-def _emission_to_dict(e: EmissionResult) -> dict:
+def _emission_to_dict(e: EmissionResult, turn_type: str = "emission") -> dict:
     return {
         "content": e.content,
+        "turn_type": turn_type,
         "input_tokens": e.input_tokens,
         "output_tokens": e.output_tokens,
         "cache_read_input_tokens": e.cache_read_input_tokens,
