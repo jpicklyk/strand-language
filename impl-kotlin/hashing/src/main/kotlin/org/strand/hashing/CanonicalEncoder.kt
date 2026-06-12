@@ -1051,14 +1051,23 @@ internal class CanonicalEncoder(
      * otherwise emits the child's hash as a CBOR byte string.
      */
     private fun encodeTypePositionChild(childId: NodeId, stack: BinderStack): ByteArray {
-        val child = fetchCanonical(childId)
+        // Q-066: do not require a canonical node here. A pre-finalization
+        // RawNodeRef is a legal type-position child (the verifier's
+        // resolveType follows NodeRef in type positions), and the spec
+        // defines T(c) as identical to H(c) for every child that is not a
+        // bound TypeParameter — `hash` dispatches on the stored form and
+        // handles the raw ref. The previous `fetchCanonical` here crashed
+        // with a raw IllegalStateException, found by the Q-066 mutation
+        // fuzzer (SwapReference on corpus 10).
+        val child = (lookup(childId) as? StoredNode.Canonical)?.node
         return if (child is Node.TypeParameter && resolvePosition(childId, stack) != null) {
             // Bound TypeParameter: inline positional reference (NOT a hash).
             encode(childId, stack)
         } else {
-            // Any other type, or a free TypeParameter (the verifier would
-            // reject the latter, but we encode defensively): emit the child's
-            // hash as a 33-byte byte string.
+            // Any other type — including a NodeRef boundary — or a free
+            // TypeParameter (the verifier would reject the latter, but we
+            // encode defensively): emit the child's hash as a 33-byte byte
+            // string.
             CanonicalCbor.encodeBytes(hash(childId, stack))
         }
     }

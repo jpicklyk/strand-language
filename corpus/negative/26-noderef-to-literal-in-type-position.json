@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "root": "f",
+  "nodes": {
+    "shared": {
+      "type": "IntLit",
+      "value": 123
+    },
+    "ref": {
+      "type": "NodeRef",
+      "target": "shared"
+    },
+    "x": {
+      "type": "ParameterDecl",
+      "name": "x",
+      "paramType": "ref"
+    },
+    "xUse": {
+      "type": "VarRef",
+      "binder": "x"
+    },
+    "f": {
+      "type": "Lambda",
+      "parameters": [
+        "x"
+      ],
+      "body": "xUse"
+    }
+  }
+}

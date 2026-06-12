@@ -207,21 +207,14 @@ class CorpusMutationFuzzTest {
      * are tracked for an encoder-side fix. Keep this list EMPTY in the
      * steady state; every entry is a defect being worked.
      *
-     * Current entry (found by SwapReference on corpus 10 at 300
-     * iterations): a local NodeRef referenced from a *type position*
-     * (e.g. ParameterDecl.paramType) crashes the canonical encoder's
-     * type-position walk with `IllegalStateException("Expected canonical
-     * node ... found RawNodeRef")`. The spec defines this case — `T(c)`
-     * falls back to `H(c)` for any non-bound-TypeParameter child,
-     * including a NodeRef — and the verifier's `resolveType` follows
-     * NodeRef in type positions, so the document is well-formed and the
-     * gap is in the encoder's pre-finalization walk. The fix lives in
-     * `CanonicalEncoder`, which the Q-066 independent-encoder rule keeps
-     * closed until the Python conformance encoder has shipped; remove
-     * this exclusion with that fix.
+     * Currently empty. (The one historical entry — a local NodeRef in a
+     * type position crashing the encoder's type-position walk, found by
+     * SwapReference on corpus 10 — was fixed in `CanonicalEncoder` once
+     * the Q-066 independent Python encoder had shipped and the
+     * independence rule no longer kept that file closed. Negative entry
+     * 26 preserves the trigger.)
      */
-    private fun isKnownDefect(t: Throwable): Boolean =
-        t is IllegalStateException && t.message?.contains("found RawNodeRef") == true
+    private fun isKnownDefect(t: Throwable): Boolean = false
 
     // ----- The admission invariant -----
 

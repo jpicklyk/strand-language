@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "CategoryMismatch",
+  "notes": "A parameter whose paramType is a NodeRef to an IntLit. A NodeRef in a type position is legitimate (T(c) encodes as H(c) per the spec, and resolveType follows the reference), so the graph hashes cleanly and the rejection correctly lands at the verifier: the referenced node is a literal, not a type. Preserved from the fuzzer's swap-reference operator on corpus 10, which exposed a raw IllegalStateException in the encoder's type-position walk for exactly this shape (fixed in CanonicalEncoder after the independent Python encoder shipped)."
+}
