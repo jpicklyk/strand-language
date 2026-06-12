@@ -1,6 +1,6 @@
 # Strand — session brief for Claude
 
-Strand is a research project to design and build a programming language for AI agents to **generate**, not for humans to author. Programs are content-addressed graphs of typed nodes with mandatory effect declarations. There is no concrete syntax. There is no human-readable projection layer.
+Strand is a research project to design and build a programming language for AI agents to **generate**, not for humans to author. Programs are content-addressed graphs of typed nodes with mandatory effect declarations. The artifact of record is the verified graph: there is no canonical concrete syntax (agent-facing authoring projections such as Layer A carry no program identity and are never verified) and no human-readable projection layer.
 
 The design corpus (Wave 1–3) is substantially complete. Active work is the Kotlin/JVM reference implementation under `impl-kotlin/`. This file does not track which slice is current — work proceeds on several fronts in parallel; consult [`impl-kotlin/README.md`](impl-kotlin/README.md) for implementation state and [`proposals/`](proposals/README.md) plus [`open-questions.md`](open-questions.md) for what is in flight.
 
