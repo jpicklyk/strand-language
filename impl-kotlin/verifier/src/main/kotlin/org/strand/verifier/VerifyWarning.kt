@@ -47,4 +47,40 @@ sealed class VerifyWarning {
                 "reachable from any verification root (program root, ModuleManifest, " +
                 "StateMachine, EffectCategory); wire it into the program or remove it"
     }
+
+    /**
+     * Q-065: a replay-relevant closure — a [org.strand.core.Node.StateMachine]
+     * transition function or an [org.strand.core.Node.Invariant] body —
+     * references an effect-free builtin whose registry entry is not
+     * marked Deterministic. Replay, snapshot recovery, and invariant
+     * re-evaluation all assume that re-evaluating a structurally pure
+     * expression yields the same value; an effect-free builtin that is
+     * behaviorally stateful or nondeterministic silently breaks that
+     * guarantee.
+     *
+     * No shipping registry entry can trigger this: the registration
+     * constraint (`Builtins.resolveRegistration`) requires effect-free
+     * builtins to declare Deterministic explicitly. The warning is the
+     * second lock on that door — it catches the combination at
+     * composition time if the registration constraint is ever loosened,
+     * and it catches a ForeignNode that under-declares its effects
+     * (declaring none while targeting a builtin the registry knows is
+     * Stateful or Nondeterministic). Effect-declaring ForeignNodes are
+     * not flagged — their nondeterminism is already mediated by the
+     * effect and capability machinery.
+     *
+     * [machineOrInvariant] is the StateMachine or Invariant whose
+     * replay-relevant closure references the builtin; [builtin] is the
+     * registry target string.
+     */
+    data class NondeterministicInReplayContext(
+        val machineOrInvariant: NodeId,
+        val builtin: String,
+    ) : VerifyWarning() {
+        override fun toString(): String =
+            "NondeterministicInReplayContext(machineOrInvariant=$machineOrInvariant, " +
+                "builtin=$builtin): a transition function or invariant body references an " +
+                "effect-free builtin whose registry entry is not marked Deterministic; " +
+                "replay and re-evaluation are not reproducible through this call"
+    }
 }

@@ -102,7 +102,7 @@ class Verifier(
         return VerifyResult.Ok(
             rootType,
             state.nodeTypes.toMap(),
-            warnings = unreachableNodeWarnings(root),
+            warnings = unreachableNodeWarnings(root) + replayDeterminismWarnings(),
         )
     }
 
@@ -172,6 +172,74 @@ class Verifier(
         return store.entries()
             .filter { (id, _) -> id !in reached }
             .map { (id, node) -> VerifyWarning.UnreachableNode(at = id, nodeTypeName = categoryName(node)) }
+    }
+
+    /**
+     * Q-065: store-wide informational pass, run only after successful
+     * verification. For every replay-relevant closure — each
+     * [Node.StateMachine]'s transition function and each
+     * [Node.Invariant]'s body — walk the referenced subgraph and flag
+     * every effect-free [Node.ForeignNode] whose registry entry
+     * [ReplayDeterminism] knows is NOT marked Deterministic.
+     *
+     * Scope is deliberately the effect-free ForeignNodes: an
+     * effect-declaring ForeignNode is already mediated by the effect and
+     * capability machinery (a machine that calls it must declare the
+     * category on `StateMachine.effects`, an invariant body is rejected
+     * outright by the purity rules), so flagging it here would
+     * double-report what the effect closure already surfaces. The live
+     * targets are (a) a structurally-pure-but-nondeterministic builtin
+     * admitted past a loosened registration constraint and (b) a
+     * ForeignNode that under-declares its effects while targeting a
+     * builtin the registry knows is Stateful or Nondeterministic.
+     *
+     * Unknown targets (oracle answers null — non-registry bindings, or a
+     * verifier-only classpath with no oracle provider) are not flagged;
+     * see [BuiltinDeterminismOracle].
+     *
+     * Edges mirror [unreachableNodeWarnings]: every NodeId-typed field
+     * via [translateNodeIds], plus NodeRef Hash targets resolved through
+     * [hashToNodeId]. One warning per (context, builtin target) pair.
+     */
+    private fun replayDeterminismWarnings(): List<VerifyWarning> {
+        val warnings = mutableListOf<VerifyWarning>()
+        for ((contextId, contextNode) in store.entries()) {
+            val closureRoot = when (contextNode) {
+                is Node.StateMachine -> contextNode.transitionFn
+                is Node.Invariant -> contextNode.body
+                else -> null
+            } ?: continue
+
+            val flagged = sortedSetOf<String>()
+            val reached = mutableSetOf<NodeId>()
+            val queue = ArrayDeque<NodeId>()
+            fun enqueue(id: NodeId) {
+                if (store.contains(id) && reached.add(id)) queue.add(id)
+            }
+            enqueue(closureRoot)
+            while (queue.isNotEmpty()) {
+                val node = store.getOrNull(queue.removeFirst()) ?: continue
+                if (node is Node.ForeignNode && node.effects.isEmpty() &&
+                    ReplayDeterminism.isDeterministic(node.target) == false
+                ) {
+                    flagged += node.target
+                }
+                node.translateNodeIds { child ->
+                    enqueue(child)
+                    child
+                }
+                if (node is Node.NodeRef) {
+                    hashToNodeId[node.target]?.let(::enqueue)
+                }
+            }
+            for (target in flagged) {
+                warnings += VerifyWarning.NondeterministicInReplayContext(
+                    machineOrInvariant = contextId,
+                    builtin = target,
+                )
+            }
+        }
+        return warnings
     }
 
     /** Thrown internally to abort checking once a fatal local error has been recorded. */
