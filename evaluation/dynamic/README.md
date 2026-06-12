@@ -165,6 +165,57 @@ scales. Within one run keep one mode (set
 `STRAND_EVAL_TOKEN_COUNT=byte-proxy` explicitly when extending an old
 byte-proxy run); across runs compare only like-labeled numbers.
 
+## Prompt caching and cache accounting
+
+The anthropic backend always sends Anthropic `cache_control` blocks
+(Q-060 M-1): one ephemeral breakpoint on the system prompt and one on
+the first user message (the static task preamble). Within a cell's
+retry loop both are byte-identical across attempts, so every retry
+after the first pays cache-read rates (10% of the input rate) for the
+prompt prefix instead of full input rates; across cells sharing one
+system prompt the system-prefix entry is reused too. No flag is
+needed — a cached N=5 API run is just:
+
+```
+strand-eval run \
+    --backend anthropic \
+    --tasks 01-factorial,...,22-list-append-sum \
+    --config strand-layer-a-density-v4,python-type-hints \
+    --models claude-sonnet-4-7 \
+    --samples 5 --budget 60
+```
+
+Cache accounting flows end to end under distinct labels, never folded
+into the plain input count:
+
+- Per attempt: the API usage fields `cache_read_input_tokens` and
+  `cache_creation_input_tokens` are recorded on every emission, in
+  fixtures, transcripts, and the `attempts` array of each cell summary
+  in `summary.json` (alongside the uncached `input_tokens`).
+- Per cell: `total_cache_read_tokens` / `total_cache_creation_tokens`
+  in `summary.json`; `total_input_tokens` remains uncached input only.
+- In reports: when any cell shows cache traffic, per-task tables gain
+  `Cache read` / `Cache write` columns (mean tokens per successful
+  sample) and the aggregate table gains `Cache read tokens`,
+  `Cache write tokens`, and `Cache hit rate` (reads as a fraction of
+  all input-side tokens). The `Tokens/success` column is the explicit
+  sum of uncached input + cache reads + cache writes + output, so a
+  cache-hot run shows its real compute rather than appearing to use
+  zero input.
+- Cost: cache reads/writes are priced at their own rates
+  (`CACHE_PRICING` in `metrics.py` — 0.1x / 1.25x the input rate).
+
+Step mode has no API client, so cache figures exist there only when
+the driver relays them from a real API response: add
+`cache_read_input_tokens` / `cache_creation_input_tokens` to a turn's
+`response-metadata.json` and they flow into the summary and reports
+identically. Cached counts are API-sourced by definition. In
+byte-proxy mode (no `ANTHROPIC_API_KEY`, no caller metadata) the cache
+fields are recorded as zero — neither the `count_tokens` endpoint nor
+the chars/4 proxy can observe cache behavior, and the harness never
+fabricates cache figures — so byte-proxy reports simply omit the cache
+columns.
+
 ## Multi-sample runs and bootstrap CIs (step mode)
 
 Every cell in Runs 1-7 was N=1. The N>1 machinery is now end-to-end:

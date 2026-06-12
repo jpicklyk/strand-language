@@ -325,21 +325,47 @@ def per_task_table(
     """Render a Markdown table for one task across configurations.
 
     Columns: Configuration | Convergence | Tokens/success (mean [CI]) |
-    Token source | Cost/success | x vs baseline. The CI brackets only
-    appear when N>1 for that cell; with N=1 the column collapses to a
-    single value. The token-source column labels each cell's counting
-    provenance ("api" / "byte-proxy" / ...) so figures from different
-    scales are never presented as comparable without saying so.
+    [Cache read | Cache write |] Token source | Cost/success | x vs
+    baseline. The CI brackets only appear when N>1 for that cell; with
+    N=1 the column collapses to a single value. The token-source column
+    labels each cell's counting provenance ("api" / "byte-proxy" / ...)
+    so figures from different scales are never presented as comparable
+    without saying so.
+
+    The cache columns appear when any sample for this task carries
+    prompt-cache traffic, and report mean cache-read / cache-write
+    tokens per successful sample as their own figures — they are part
+    of the Tokens/success total (see ``_cell_tokens_value``) but are
+    never folded invisibly into the uncached input count. Runs without
+    cache telemetry (e.g. byte-proxy step sessions) have all-zero cache
+    fields and render without the columns.
     """
     baseline_samples = [tm for tm in config_metrics.get(baseline_config, []) if tm.task_id == task_id]
     baseline_stat = cell_stat(baseline_samples, _cell_tokens_value)
     baseline_mean = baseline_stat.mean if baseline_stat is not None else None
 
+    all_task_samples = [
+        tm
+        for samples in config_metrics.values()
+        for tm in samples
+        if tm.task_id == task_id
+    ]
+    show_cache = any(
+        tm.total_cache_read_tokens + tm.total_cache_creation_tokens > 0
+        for tm in all_task_samples
+    )
+
+    header_cols = ["Configuration", "Convergence", "Tokens/success"]
+    if show_cache:
+        header_cols.extend(["Cache read", "Cache write"])
+    header_cols.extend(
+        ["Token source", "Cost/success (USD)", f"x vs {baseline_config}"]
+    )
     lines: list[str] = [
         f"## {task_id}",
         "",
-        f"| Configuration | Convergence | Tokens/success | Token source | Cost/success (USD) | x vs {baseline_config} |",
-        "|---------------|-------------|----------------|--------------|--------------------|------------------------|",
+        "| " + " | ".join(header_cols) + " |",
+        "|" + "|".join("---" for _ in header_cols) + "|",
     ]
     for config_name, samples in sorted(config_metrics.items()):
         task_samples = [tm for tm in samples if tm.task_id == task_id]
@@ -355,9 +381,16 @@ def per_task_table(
             ratio_str = f"{tok_stat.mean / baseline_mean:.2f}"
         else:
             ratio_str = "n/a"
-        lines.append(
-            f"| {config_name} | {conv} | {tokens_str} | {source_str} | {cost_str} | {ratio_str} |"
-        )
+        row = [config_name, conv, tokens_str]
+        if show_cache:
+            read_stat = cell_stat(task_samples, lambda s: s.total_cache_read_tokens)
+            write_stat = cell_stat(
+                task_samples, lambda s: s.total_cache_creation_tokens
+            )
+            row.append(read_stat.render() if read_stat is not None else "n/a")
+            row.append(write_stat.render() if write_stat is not None else "n/a")
+        row.extend([source_str, cost_str, ratio_str])
+        lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines)
 
 
@@ -369,8 +402,12 @@ def aggregate_table(
 
     For each configuration, compute the geomean of per-task
     mean-tokens-per-success ratios against the baseline configuration's
-    mean-tokens-per-success. Aggregate cache-hit rate is reported when
-    any cell shows non-zero cache traffic.
+    mean-tokens-per-success. When any cell shows non-zero cache traffic,
+    three cache columns are appended: total cache-read tokens, total
+    cache-write tokens (each its own column, never folded into the
+    uncached input count), and the cache hit rate (reads as a fraction
+    of all input-side tokens). Runs without cache telemetry render
+    without the columns.
     """
     # Collect all task ids in the data.
     task_ids: set[str] = set()
@@ -401,7 +438,7 @@ def aggregate_table(
         "Token source",
     ]
     if show_cache:
-        header_cols.append("Cache hit rate")
+        header_cols.extend(["Cache read tokens", "Cache write tokens", "Cache hit rate"])
     lines: list[str] = ["## Aggregate", ""]
     lines.append("| " + " | ".join(header_cols) + " |")
     lines.append("|" + "|".join("---" for _ in header_cols) + "|")
@@ -432,6 +469,8 @@ def aggregate_table(
             cache_out = sum(s.total_cache_creation_tokens for s in samples)
             uncached = sum(s.total_input_tokens for s in samples)
             total_input = cache_in + cache_out + uncached
+            row.append(f"{cache_in:,}")
+            row.append(f"{cache_out:,}")
             if total_input > 0:
                 hit_rate = cache_in / total_input
                 row.append(f"{hit_rate * 100:.1f}%")

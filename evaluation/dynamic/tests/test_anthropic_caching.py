@@ -170,6 +170,65 @@ def test_missing_cache_fields_default_to_zero(install_mock_anthropic, monkeypatc
     assert result.cache_creation_input_tokens == 0
 
 
+def test_first_user_message_gets_cache_breakpoint(install_mock_anthropic):
+    """The static task preamble (first user message) carries its own
+    ephemeral cache_control block so retries within a cell extend the
+    cached prefix to system + task."""
+    from strand_eval.backends.anthropic import AnthropicBackend
+    from strand_eval.types import Message, Role
+
+    backend = AnthropicBackend()
+    messages = [
+        Message(role=Role.SYSTEM, content="sys"),
+        Message(role=Role.USER, content="task preamble"),
+    ]
+    backend.emit(messages, model="claude-sonnet-4-7")
+
+    captured = backend._client.messages.last_kwargs  # type: ignore[attr-defined]
+    first_user = captured["messages"][0]
+    assert first_user["role"] == "user"
+    assert isinstance(first_user["content"], list)
+    assert first_user["content"][0] == {
+        "type": "text",
+        "text": "task preamble",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_later_turns_are_not_cache_marked(install_mock_anthropic):
+    """Only the first user message (the static preamble) is marked; retry
+    feedback and assistant emissions vary per turn and stay plain strings."""
+    from strand_eval.backends.anthropic import AnthropicBackend
+    from strand_eval.types import Message, Role
+
+    backend = AnthropicBackend()
+    messages = [
+        Message(role=Role.SYSTEM, content="sys"),
+        Message(role=Role.USER, content="task preamble"),
+        Message(role=Role.ASSISTANT, content="emission 1"),
+        Message(role=Role.USER, content="verifier feedback"),
+    ]
+    backend.emit(messages, model="claude-sonnet-4-7")
+
+    captured = backend._client.messages.last_kwargs  # type: ignore[attr-defined]
+    api_messages = captured["messages"]
+    assert isinstance(api_messages[0]["content"], list)  # preamble: marked
+    assert api_messages[1]["content"] == "emission 1"  # plain string
+    assert api_messages[2]["content"] == "verifier feedback"  # plain string
+
+
+def test_preamble_breakpoint_without_system_prompt(install_mock_anthropic):
+    """The preamble breakpoint does not depend on a system prompt existing."""
+    from strand_eval.backends.anthropic import AnthropicBackend
+    from strand_eval.types import Message, Role
+
+    backend = AnthropicBackend()
+    backend.emit([Message(role=Role.USER, content="only turn")], model="claude-sonnet-4-7")
+    captured = backend._client.messages.last_kwargs  # type: ignore[attr-defined]
+    assert "system" not in captured
+    assert captured["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
 def test_multiple_system_messages_concatenate(install_mock_anthropic):
     from strand_eval.backends.anthropic import AnthropicBackend
     from strand_eval.types import Message, Role

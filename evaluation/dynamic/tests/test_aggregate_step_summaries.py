@@ -68,6 +68,8 @@ def _write_cell(
     tokens_out: int,
     success: bool = True,
     token_source: str = "byte-proxy",
+    cache_read: int = 0,
+    cache_creation: int = 0,
 ) -> None:
     cell_dir = root / name
     cell_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +86,8 @@ def _write_cell(
                 "total_attempts": 1,
                 "total_input_tokens": tokens_in,
                 "total_output_tokens": tokens_out,
+                "total_cache_read_tokens": cache_read,
+                "total_cache_creation_tokens": cache_creation,
                 "total_cost_usd": 0.01,
                 "token_source": token_source,
             }
@@ -123,6 +127,46 @@ def test_aggregate_mixed_sources_are_labeled(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "mixed(api+byte-proxy)" in out
+
+
+def test_aggregate_carries_cache_columns(tmp_path, capsys):
+    """Cached step cells surface cache reads/writes as their own columns
+    in both the per-task and aggregate tables — never folded silently
+    into the uncached input count."""
+    root = tmp_path / "cached-run"
+    _write_cell(
+        root, "strand-01-s0", "01-factorial", "strand-layer-a-density-v4", 0,
+        tokens_in=2500, tokens_out=400, token_source="api",
+        cache_read=20000, cache_creation=21500,
+    )
+    _write_cell(
+        root, "python-01-s0", "01-factorial", "python-type-hints", 0,
+        tokens_in=1500, tokens_out=120, token_source="api",
+    )
+    rc = main(["aggregate", "--sessions", str(root)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Per-task table: distinct cache columns with the cell's values.
+    assert "Cache read" in out
+    assert "Cache write" in out
+    assert "20,000" in out
+    assert "21,500" in out
+    # Aggregate table: token totals plus the hit rate.
+    assert "Cache read tokens" in out
+    assert "Cache write tokens" in out
+    assert "Cache hit rate" in out
+    # Hit rate for the strand config: 20000 / (20000 + 21500 + 2500) = 45.5%
+    assert "45.5%" in out
+
+
+def test_aggregate_without_cache_traffic_omits_cache_columns(tmp_path, capsys):
+    root = tmp_path / "uncached-run"
+    _write_cell(root, "a", "01-factorial", "python-type-hints", 0, 1500, 100)
+    rc = main(["aggregate", "--sessions", str(root)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Cache read" not in out
+    assert "Cache hit rate" not in out
 
 
 def test_aggregate_writes_out_file(tmp_path, capsys):

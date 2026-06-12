@@ -222,6 +222,44 @@ def test_aggregate_table_shows_cache_hit_rate_when_present():
     assert "88.9%" in md
 
 
+def test_aggregate_table_shows_cache_token_totals_as_columns():
+    cells_baseline = [_make_metrics("t1", "baseline", 0, True, 1000)]
+    cand = _make_metrics("t1", "candidate", 0, True, 1000)
+    cand.total_cache_read_tokens = 4000
+    cand.total_cache_creation_tokens = 2000
+    by_cfg = {"baseline": cells_baseline, "candidate": [cand]}
+    md = aggregate_table(by_cfg, baseline_config="baseline")
+    assert "Cache read tokens" in md
+    assert "Cache write tokens" in md
+    cand_line = [line for line in md.splitlines() if line.startswith("| candidate")][0]
+    assert "4,000" in cand_line
+    assert "2,000" in cand_line
+
+
+def test_per_task_table_shows_cache_columns_when_present():
+    base = _make_metrics("t1", "baseline", 0, True, 1000)
+    cand = _make_metrics("t1", "candidate", 0, True, 1000)
+    cand.total_cache_read_tokens = 4000
+    cand.total_cache_creation_tokens = 2000
+    by_cfg = {"baseline": [base], "candidate": [cand]}
+    md = per_task_table("t1", by_cfg, baseline_config="baseline")
+    assert "Cache read" in md
+    assert "Cache write" in md
+    cand_line = [line for line in md.splitlines() if line.startswith("| candidate")][0]
+    assert "4,000" in cand_line
+    assert "2,000" in cand_line
+    # The uncached-input-based Tokens/success total includes the cache
+    # components explicitly (500 in + 500 out + 4000 read + 2000 write).
+    assert "7,000" in cand_line
+
+
+def test_per_task_table_omits_cache_columns_when_no_cache_traffic():
+    cells = [_make_metrics("t1", "baseline", 0, True, 1000)]
+    md = per_task_table("t1", {"baseline": cells}, baseline_config="baseline")
+    assert "Cache read" not in md
+    assert "Cache write" not in md
+
+
 def test_aggregate_table_omits_cache_column_when_no_cache_traffic():
     cells = [
         _make_metrics("t1", "baseline", 0, True, 1000),

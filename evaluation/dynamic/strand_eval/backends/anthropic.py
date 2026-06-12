@@ -46,7 +46,7 @@ class AnthropicBackend(EmissionBackend):
         # The Anthropic Messages API takes the system prompt separately from
         # the user/assistant turn list.
         system_text = ""
-        api_messages: list[dict[str, str]] = []
+        api_messages: list[dict] = []
         for msg in messages:
             if msg.role == Role.SYSTEM:
                 # If multiple system messages, concatenate.
@@ -62,6 +62,16 @@ class AnthropicBackend(EmissionBackend):
         # Cache writes ($3.75/M) happen on the first call of a window.
         # On Sonnet 4.7 prompt caching is GA — no beta header needed.
         system_blocks = self._build_system_blocks(system_text)
+
+        # Second breakpoint: the first user message is the static task
+        # preamble (the task description), byte-identical across every retry
+        # within a cell. Marking it extends the cached prefix to
+        # system + task, so a retry's uncached input is only the feedback
+        # turns. Two of the API's four allowed breakpoints are used: the
+        # system block (shared across cells with the same prompt) and this
+        # one (shared across retries within the cell). Prefixes below the
+        # model's minimum cacheable size silently don't cache — no error.
+        self._mark_task_preamble(api_messages)
         api_kwargs: dict = {
             "model": model,
             "max_tokens": self._max_tokens,
@@ -132,6 +142,27 @@ class AnthropicBackend(EmissionBackend):
             # Counts come from the API usage block: real tokenizer counts.
             token_source="api",
         )
+
+    @staticmethod
+    def _mark_task_preamble(api_messages: list[dict]) -> None:
+        """Add a cache breakpoint on the first user message, in place.
+
+        Converts the first user message's string content into the
+        list-of-blocks form with ephemeral cache_control. Later messages
+        (retry feedback, assistant emissions) are left as plain strings —
+        they vary per turn and would only churn cache entries.
+        """
+        for msg in api_messages:
+            if msg["role"] == "user":
+                if isinstance(msg["content"], str):
+                    msg["content"] = [
+                        {
+                            "type": "text",
+                            "text": msg["content"],
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ]
+                return
 
     @staticmethod
     def _build_system_blocks(system_text: str) -> list[dict]:

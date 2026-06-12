@@ -117,7 +117,12 @@ def _serialize_task_metrics(tm: TaskMetrics) -> dict[str, Any]:
     """Render a TaskMetrics as a JSON-safe dict.
 
     Drops `transcript` and `raw_response` to keep the summary small;
-    full transcripts live under `transcripts/` per the proposal.
+    full transcripts live under `transcripts/` per the proposal. The
+    per-attempt ``attempts`` records keep the prompt-cache usage fields
+    (``cache_read_input_tokens`` / ``cache_creation_input_tokens``)
+    distinct from the uncached ``input_tokens`` count, per attempt.
+    Backends without cache telemetry record 0 for both — the fields are
+    never estimated.
     """
     return {
         "task_id": tm.task_id,
@@ -131,6 +136,17 @@ def _serialize_task_metrics(tm: TaskMetrics) -> dict[str, Any]:
         "total_output_tokens": tm.total_output_tokens,
         "total_cache_read_tokens": tm.total_cache_read_tokens,
         "total_cache_creation_tokens": tm.total_cache_creation_tokens,
+        "attempts": [
+            {
+                "attempt": i,
+                "input_tokens": em.input_tokens,
+                "output_tokens": em.output_tokens,
+                "cache_read_input_tokens": em.cache_read_input_tokens,
+                "cache_creation_input_tokens": em.cache_creation_input_tokens,
+                "token_source": em.token_source,
+            }
+            for i, em in enumerate(tm.emissions)
+        ],
         "total_cost_usd": tm.total_cost_usd,
         "token_source": tm.token_source,
         "verify_oks": [vr.ok for vr in tm.verify_results],

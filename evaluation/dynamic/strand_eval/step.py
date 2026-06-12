@@ -203,6 +203,12 @@ def step_advance(session_dir: Path) -> StepState:
         output_tokens = int(metadata.get("output_tokens", 0))
         latency_ms = int(metadata.get("latency_ms", 0))
         token_source = str(metadata.get("token_source", SOURCE_CALLER))
+        # Prompt-cache figures exist only when the caller relays them from a
+        # real API response's usage block (cache_read_input_tokens /
+        # cache_creation_input_tokens). They are API-sourced by definition;
+        # the counting fallback below never fabricates them.
+        cache_read_tokens = int(metadata.get("cache_read_input_tokens", 0))
+        cache_creation_tokens = int(metadata.get("cache_creation_input_tokens", 0))
     else:
         counter = default_counter()
         # Input ~= every message in the stack so far. Output ~= response.
@@ -212,6 +218,12 @@ def step_advance(session_dir: Path) -> StepState:
         output_tokens = output_count.tokens
         latency_ms = 0
         token_source = combine_sources([input_count.source, output_count.source])
+        # No API response to read cache fields from: both the count_tokens
+        # endpoint ("api") and the chars/4 proxy ("byte-proxy") count text;
+        # neither can observe cache behavior, so the fields stay 0 rather
+        # than being estimated.
+        cache_read_tokens = 0
+        cache_creation_tokens = 0
 
     emission = EmissionResult(
         content=response_text,
@@ -221,6 +233,8 @@ def step_advance(session_dir: Path) -> StepState:
         latency_ms=latency_ms,
         finish_reason="end_turn",
         token_source=token_source,
+        cache_read_input_tokens=cache_read_tokens,
+        cache_creation_input_tokens=cache_creation_tokens,
     )
 
     # Append the assistant turn.
@@ -345,11 +359,34 @@ def _write_summary(state: StepState) -> None:
         emissions=emissions,
         total_input_tokens=sum(e.input_tokens for e in emissions),
         total_output_tokens=sum(e.output_tokens for e in emissions),
+        total_cache_read_tokens=sum(e.cache_read_input_tokens for e in emissions),
+        total_cache_creation_tokens=sum(
+            e.cache_creation_input_tokens for e in emissions
+        ),
         verify_results=verify_results,
         run_result=run_result,
         token_source=token_source,
     )
     metrics.total_cost_usd = estimate_cost(metrics, state.model)
+
+    # Per-attempt usage records keep the cache fields distinct from the
+    # uncached input count: a downstream reader can always recover how
+    # much of each attempt's prompt was served from / written to the
+    # cache versus billed at the full input rate. In byte-proxy sessions
+    # (no API response to read usage from) the cache fields are 0 — the
+    # proxy cannot observe cache behavior and the harness never
+    # fabricates cache figures.
+    attempts = [
+        {
+            "attempt": i,
+            "input_tokens": e.input_tokens,
+            "output_tokens": e.output_tokens,
+            "cache_read_input_tokens": e.cache_read_input_tokens,
+            "cache_creation_input_tokens": e.cache_creation_input_tokens,
+            "token_source": e.token_source,
+        }
+        for i, e in enumerate(emissions)
+    ]
 
     summary = {
         "task_id": state.task_id,
@@ -362,6 +399,9 @@ def _write_summary(state: StepState) -> None:
         "total_attempts": len(state.emissions),
         "total_input_tokens": metrics.total_input_tokens,
         "total_output_tokens": metrics.total_output_tokens,
+        "total_cache_read_tokens": metrics.total_cache_read_tokens,
+        "total_cache_creation_tokens": metrics.total_cache_creation_tokens,
+        "attempts": attempts,
         "total_cost_usd": metrics.total_cost_usd,
         "token_source": token_source,
         "prompt_token_counts": state.prompt_token_counts,
@@ -392,6 +432,8 @@ def _emission_to_dict(e: EmissionResult) -> dict:
         "content": e.content,
         "input_tokens": e.input_tokens,
         "output_tokens": e.output_tokens,
+        "cache_read_input_tokens": e.cache_read_input_tokens,
+        "cache_creation_input_tokens": e.cache_creation_input_tokens,
         "model": e.model,
         "latency_ms": e.latency_ms,
         "finish_reason": e.finish_reason,
@@ -410,6 +452,10 @@ def _emission_from_dict(d: dict) -> EmissionResult:
         # Pre-labeling step sessions estimated with chars/4, so the
         # honest backfill for legacy data is "byte-proxy".
         token_source=d.get("token_source", "byte-proxy"),
+        # Pre-caching sessions had no API cache telemetry; 0 is the honest
+        # backfill (no cache traffic was observed, none is claimed).
+        cache_read_input_tokens=d.get("cache_read_input_tokens", 0),
+        cache_creation_input_tokens=d.get("cache_creation_input_tokens", 0),
     )
 
 
