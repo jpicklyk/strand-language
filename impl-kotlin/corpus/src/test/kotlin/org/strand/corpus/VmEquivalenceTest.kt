@@ -1,13 +1,16 @@
 package org.strand.corpus
 
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 import org.strand.bytecode.Lowerer
 import org.strand.core.JsonIngest
 import org.strand.core.Node
 import org.strand.hashing.Hasher
+import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.Interpreter
 import org.strand.verifier.VerifyResult
@@ -39,6 +42,26 @@ import org.strand.vm.Vm
  * evaluate them. They're excluded here because the interpreter throws.
  */
 class VmEquivalenceTest {
+
+    companion object {
+        // Corpus 16/17 (and the 12-14/33-40 families) call Time.Now, which
+        // reads the injectable Builtins.clock. The interpreter run and the
+        // VM run of the same program execute milliseconds apart, so under
+        // the default SystemClock the two results can straddle a
+        // millisecond boundary and the equality assertion flakes. Install
+        // the fixed replay clock for the duration of this class, mirroring
+        // CorpusTest.
+        @JvmStatic
+        @BeforeAll
+        fun installFixedClock() {
+            Builtins.clock = Builtins.FixedClock(Builtins.FIXED_REPLAY_TIMESTAMP)
+        }
+        @JvmStatic
+        @AfterAll
+        fun restoreSystemClock() {
+            Builtins.clock = Builtins.SystemClock
+        }
+    }
 
     private data class Layer14Pair(val baseName: String)
 
