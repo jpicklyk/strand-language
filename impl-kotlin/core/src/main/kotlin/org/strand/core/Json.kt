@@ -247,6 +247,24 @@ object JsonIngest {
         // invariant for programmatically-built stores.)
         validateBinderCategories(orderedEntries.map { it.key }, nameToId, slots)
 
+        // Pass 2.6 (Q-066): reject reference cycles. The canonical form is a
+        // Merkle DAG — children appear by hash, and ADR-003 forbids
+        // self-referential hashes — so a cyclic document can never be
+        // content-addressed; without this check a cycle crashes the hash
+        // walk with a raw StackOverflowError. The walk follows the same
+        // hash-relevant edges as the encoder: [childNodeIds] for canonical
+        // nodes minus VarRef.binder (binders are positionally encoded
+        // back-edges by design — every Let-bound VarRef points back at its
+        // Let), plus the raw NodeRef / ModuleManifest target ids that
+        // finalize must hash first.
+        //
+        // The same pass enforces (2.7) that every local NodeRef's target is
+        // reachable from the program root: a local NodeRef's canonical form
+        // is its target's content hash, and the hash walk only computes
+        // hashes for root-reachable nodes — an unreachable target leaves
+        // the NodeRef with no canonical form at all.
+        validateAcyclic(orderedEntries.map { it.key }, nameToId, slots, nameToId.getValue(rootName))
+
         // Pass 3: commit to the raw store. Every slot must be Resolved; an
         // unresolved slot would indicate an ingest bug, not a malformed
         // document, because pass 2 visits every entry.
@@ -279,11 +297,32 @@ object JsonIngest {
     }
 
     /**
-     * Q-066 pass 2.5: enforce the binder-position category invariants that
-     * the canonical encoding's positional binder scheme depends on. Runs
-     * after pass 2 (so forward references are resolved) and before pass 3.
-     * Violations raise [IngestError.Malformed] naming the offending node,
-     * field, and actual category.
+     * Q-066 pass 2.5: enforce the structural category invariants that the
+     * canonical encoding depends on. Runs after pass 2 (so forward
+     * references are resolved) and before pass 3. Violations raise
+     * [IngestError.Malformed] naming the offending node, field, and actual
+     * category.
+     *
+     * Two invariant groups, both load-bearing for the encoder rather than
+     * mere type errors:
+     *
+     *  1. **Positional binder and name-keyed children.** Lambda.parameters
+     *     must be ParameterDecl (positional binder encoding);
+     *     TypeAbstraction / ForallType typeParameters must be TypeParameter
+     *     (same); ProductType.fields must be ProductTypeField,
+     *     SumType.cases must be SumTypeCase, ProductValue.fields must be
+     *     ProductFieldValue (name-keyed child encodings read the child's
+     *     name field); MatchCase.pattern must be a Pattern (the pattern's
+     *     binder structure is encoded inline).
+     *
+     *  2. **Intrinsic nodes have no standalone encoding.** A ParameterDecl
+     *     is encoded inline in its enclosing Lambda; the only legal edges
+     *     to one are Lambda.parameters entries and VarRef.binder
+     *     back-references. Any other edge would make the hash walk visit
+     *     it standalone, which the encoding does not define.
+     *
+     * The verifier's CategoryMismatch rule still guards the same shapes
+     * for programmatically-built stores.
      */
     private fun validateBinderCategories(
         orderedNames: List<String>,
@@ -302,14 +341,13 @@ object JsonIngest {
         fun nodeAt(id: NodeId): Node? =
             ((slots.getValue(id) as? IngestSlot.Resolved)?.stored as? StoredNode.Canonical)?.node
 
-        fun requireBinder(owner: String, field: String, ids: List<NodeId>, expected: String) {
+        fun requireCategory(owner: String, field: String, ids: List<NodeId>, expected: (Node?) -> Boolean, expectedName: String) {
             for ((i, childId) in ids.withIndex()) {
-                val actual = categoryOf(childId)
-                if (actual != expected) {
+                if (!expected(nodeAt(childId))) {
                     throw IngestError.Malformed(
                         "Node '$owner' field $field[$i] references " +
-                            "'${idToName[childId] ?: childId}' ($actual); " +
-                            "$field entries must be $expected nodes"
+                            "'${idToName[childId] ?: childId}' (${categoryOf(childId)}); " +
+                            "$field entries must be $expectedName nodes"
                     )
                 }
             }
@@ -318,12 +356,178 @@ object JsonIngest {
         for (name in orderedNames) {
             when (val node = nodeAt(nameToId.getValue(name))) {
                 is Node.Lambda ->
-                    requireBinder(name, "Lambda.parameters", node.parameters, "ParameterDecl")
+                    requireCategory(name, "Lambda.parameters", node.parameters,
+                        { it is Node.ParameterDecl }, "ParameterDecl")
                 is Node.TypeAbstraction ->
-                    requireBinder(name, "TypeAbstraction.typeParameters", node.typeParameters, "TypeParameter")
+                    requireCategory(name, "TypeAbstraction.typeParameters", node.typeParameters,
+                        { it is Node.TypeParameter }, "TypeParameter")
                 is Node.ForallType ->
-                    requireBinder(name, "ForallType.typeParameters", node.typeParameters, "TypeParameter")
+                    requireCategory(name, "ForallType.typeParameters", node.typeParameters,
+                        { it is Node.TypeParameter }, "TypeParameter")
+                is Node.ProductType ->
+                    requireCategory(name, "ProductType.fields", node.fields,
+                        { it is Node.ProductTypeField }, "ProductTypeField")
+                is Node.SumType ->
+                    requireCategory(name, "SumType.cases", node.cases,
+                        { it is Node.SumTypeCase }, "SumTypeCase")
+                is Node.ProductValue ->
+                    requireCategory(name, "ProductValue.fields", node.fields,
+                        { it is Node.ProductFieldValue }, "ProductFieldValue")
+                is Node.MatchCase ->
+                    requireCategory(name, "MatchCase.pattern", listOf(node.pattern),
+                        { it is Node.Pattern }, "Pattern")
                 else -> {}
+            }
+        }
+
+        // Group 2: ParameterDecl may only be referenced from
+        // Lambda.parameters or VarRef.binder. Walk every other
+        // hash-relevant edge and reject ParameterDecl targets.
+        for (name in orderedNames) {
+            val id = nameToId.getValue(name)
+            val stored = (slots.getValue(id) as? IngestSlot.Resolved)?.stored ?: continue
+            val generalEdges: List<NodeId> = when (stored) {
+                is StoredNode.Canonical -> when (val node = stored.node) {
+                    is Node.VarRef -> emptyList()
+                    is Node.Lambda -> node.body.let { listOf(it) } + node.effects
+                    // Projection categories are hashed inline by the
+                    // encoder (childNodeIds excludes them); they are
+                    // general edges for this rule.
+                    is Node.ForeignNode ->
+                        node.childNodeIds() + node.effectProjections.map { it.category }
+                    is Node.FunctionType ->
+                        node.childNodeIds() + node.effectProjections.map { it.category }
+                    else -> node.childNodeIds()
+                }
+                is StoredNode.RawNodeRef -> listOf(stored.targetId)
+                is StoredNode.RawModuleManifest ->
+                    stored.exports.map { it.target } + stored.exports.flatMap { it.declaredEffects }
+            }
+            for (target in generalEdges) {
+                if (nodeAt(target) is Node.ParameterDecl) {
+                    throw IngestError.Malformed(
+                        "Node '$name' references ParameterDecl " +
+                            "'${idToName[target] ?: target}' from a non-binder position; " +
+                            "a ParameterDecl is intrinsic to its Lambda and may only be " +
+                            "referenced from Lambda.parameters or VarRef.binder"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Q-066 pass 2.6: reject reference cycles with a structured
+     * [IngestError.Malformed]. Iterative three-color DFS (no recursion — a
+     * legitimate document may be tens of thousands of nodes deep) over the
+     * hash-relevant edge set: [childNodeIds] for canonical nodes excluding
+     * [Node.VarRef.binder] (binders are positionally encoded back-edges),
+     * the raw target of a pre-finalization NodeRef, and the export targets
+     * plus declared effects of a pre-finalization ModuleManifest.
+     */
+    private fun validateAcyclic(
+        orderedNames: List<String>,
+        nameToId: Map<String, NodeId>,
+        slots: Map<NodeId, IngestSlot>,
+        rootId: NodeId,
+    ) {
+        fun edgesOf(id: NodeId): List<NodeId> {
+            val stored = ((slots.getValue(id) as? IngestSlot.Resolved)?.stored) ?: return emptyList()
+            return when (stored) {
+                is StoredNode.Canonical -> when (val node = stored.node) {
+                    is Node.VarRef -> emptyList()
+                    // EffectProjection.category is excluded from
+                    // childNodeIds (federation-walk concerns) but IS
+                    // hashed inline by the canonical encoding, so it
+                    // participates in cycles.
+                    is Node.ForeignNode ->
+                        node.childNodeIds() + node.effectProjections.map { it.category }
+                    is Node.FunctionType ->
+                        node.childNodeIds() + node.effectProjections.map { it.category }
+                    else -> node.childNodeIds()
+                }
+                is StoredNode.RawNodeRef -> listOf(stored.targetId)
+                is StoredNode.RawModuleManifest ->
+                    stored.exports.map { it.target } + stored.exports.flatMap { it.declaredEffects }
+            }
+        }
+
+        val idToName = nameToId.entries.associate { (n, i) -> i to n }
+        val white = 0
+        val gray = 1
+        val black = 2
+        val color = HashMap<NodeId, Int>()
+        for (startName in orderedNames) {
+            val start = nameToId.getValue(startName)
+            if ((color[start] ?: white) != white) continue
+            val stack = ArrayDeque<Pair<NodeId, Iterator<NodeId>>>()
+            color[start] = gray
+            stack.addLast(start to edgesOf(start).iterator())
+            while (stack.isNotEmpty()) {
+                val (id, children) = stack.last()
+                if (children.hasNext()) {
+                    val child = children.next()
+                    when (color[child] ?: white) {
+                        white -> {
+                            color[child] = gray
+                            stack.addLast(child to edgesOf(child).iterator())
+                        }
+                        gray -> throw IngestError.Malformed(
+                            "Reference cycle involving node '${idToName[child] ?: child}' " +
+                                "(reached again from '${idToName[id] ?: id}'); " +
+                                "a Strand program is a DAG — children appear by hash and " +
+                                "cannot reference an ancestor"
+                        )
+                        else -> {}
+                    }
+                } else {
+                    color[id] = black
+                    stack.removeLast()
+                }
+            }
+        }
+
+        // Pass 2.7: every local NodeRef's target must be reachable from the
+        // root over the same edge set (which itself flows through NodeRef
+        // targets), because the NodeRef's canonical form is the target's
+        // hash and the hash walk computes hashes only for root-reachable
+        // nodes. Unreachable non-NodeRef nodes remain a warning-level
+        // concern (the verifier's unreachable-node sweep), not an ingest
+        // error — they have standalone encodings and crash nothing.
+        val reachable = HashSet<NodeId>()
+        val queue = ArrayDeque<NodeId>()
+        reachable.add(rootId)
+        queue.addLast(rootId)
+        while (queue.isNotEmpty()) {
+            for (child in edgesOf(queue.removeFirst())) {
+                if (reachable.add(child)) queue.addLast(child)
+            }
+        }
+        for (name in orderedNames) {
+            val id = nameToId.getValue(name)
+            val stored = (slots.getValue(id) as? IngestSlot.Resolved)?.stored
+            if (stored is StoredNode.RawNodeRef) {
+                if (stored.targetId !in reachable) {
+                    throw IngestError.Malformed(
+                        "NodeRef '$name' targets '${idToName[stored.targetId] ?: stored.targetId}', " +
+                            "which is not reachable from the root; a local NodeRef target must be " +
+                            "reachable so its content hash is computed"
+                    )
+                }
+                // Intrinsic nodes (TypeParameter, RecursiveSelf; ParameterDecl
+                // is covered by the pass 2.5 intrinsic rule) never receive a
+                // standalone hash — the hash walk skips them — so a NodeRef
+                // targeting one has no canonical form.
+                val targetNode = ((slots.getValue(stored.targetId) as? IngestSlot.Resolved)
+                    ?.stored as? StoredNode.Canonical)?.node
+                if (targetNode is Node.TypeParameter || targetNode is Node.RecursiveSelf) {
+                    throw IngestError.Malformed(
+                        "NodeRef '$name' targets intrinsic node " +
+                            "'${idToName[stored.targetId] ?: stored.targetId}' " +
+                            "(${targetNode::class.simpleName}); intrinsic nodes have no " +
+                            "standalone hash and cannot be NodeRef targets"
+                    )
+                }
             }
         }
     }
@@ -600,7 +804,14 @@ object JsonIngest {
             "EventStream" -> Node.EventStream(
                 eventType = obj.requireRef("eventType", ctx, resolve),
                 streamKind = parseStreamKind(obj.requireString("streamKind", ctx), ctx),
-                bufferSize = obj.optionalInt("bufferSize", ctx),
+                bufferSize = obj.optionalInt("bufferSize", ctx)?.also {
+                    // Q-066: the canonical encoding carries bufferSize as a
+                    // CBOR uint, so a negative value is unencodable; it is
+                    // also meaningless as a channel capacity.
+                    if (it < 0) throw IngestError.Malformed(
+                        "EventStream bufferSize in $ctx must be non-negative, got $it"
+                    )
+                },
                 overflowPolicy = obj.optionalOverflowPolicy("overflowPolicy", ctx),
                 consumerMode = obj.optionalConsumerMode("consumerMode", ctx),
                 source = obj.optionalRef("source", ctx, resolve),

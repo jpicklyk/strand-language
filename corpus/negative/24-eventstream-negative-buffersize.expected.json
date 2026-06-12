@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "An EventStream declaring bufferSize -3. The canonical encoding carries bufferSize as a CBOR uint, so a negative value is unencodable (and meaningless as a channel capacity); ingest rejects it. Found by the fuzzer's perturb-integer operator on corpus 57 as a raw IllegalArgumentException escaping the encoder's encodeUint."
+}

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "shared": {
+      "type": "IntLit",
+      "value": 123
+    },
+    "orphanRef": {
+      "type": "NodeRef",
+      "target": "shared"
+    },
+    "main": {
+      "type": "IntLit",
+      "value": 7
+    }
+  }
+}

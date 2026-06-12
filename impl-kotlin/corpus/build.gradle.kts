@@ -46,4 +46,10 @@ tasks.test {
         "strand.regenerateGoldenHashes",
         System.getProperty("strand.regenerateGoldenHashes") ?: "false",
     )
+    // Forward the Q-066 fuzz iteration count (CorpusMutationFuzzTest).
+    // Unset means the test's default (25 mutants per corpus program);
+    // deeper local campaigns run e.g. -Dstrand.fuzzIterations=500.
+    System.getProperty("strand.fuzzIterations")?.let {
+        systemProperty("strand.fuzzIterations", it)
+    }
 }

@@ -967,6 +967,17 @@ class Interpreter(
                     target = callable.node.target,
                     detail = e.message ?: "builtin contract violation",
                 ))
+            } catch (e: ClassCastException) {
+                // Q-066: the declared foreignType is graph-supplied and is
+                // not checked against the builtin's actual JVM contract, so
+                // a hostile graph can hand a builtin type-confused argument
+                // values. The cast failure is a contract violation, not an
+                // implementation crash.
+                throw InterpretException(InterpretError.BuiltinContractViolation(
+                    at = id,
+                    target = callable.node.target,
+                    detail = e.message ?: "builtin argument type confusion",
+                ))
             }
         }
         is Value.FixpointFn -> {
@@ -1114,6 +1125,12 @@ class Interpreter(
                     target = fn.node.target,
                     detail = e.message ?: "builtin contract violation",
                 ))
+            } catch (e: ClassCastException) {
+                throw InterpretException(InterpretError.BuiltinContractViolation(
+                    at = id,
+                    target = fn.node.target,
+                    detail = e.message ?: "builtin argument type confusion",
+                ))
             }
         }
         val builtin = Builtins.lookup(fn.node.target)
@@ -1144,6 +1161,18 @@ class Interpreter(
                 at = id,
                 target = fn.node.target,
                 detail = e.message ?: "builtin contract violation",
+            ))
+        } catch (e: ClassCastException) {
+            // Q-066: builtins cast their argument Values to the shapes the
+            // real builtin contract expects, but the declared foreignType is
+            // graph-supplied and nothing checks it against that contract —
+            // a graph declaring Int.Add at (String, String) -> Int verifies
+            // and hands the builtin StringV arguments. The cast failure is
+            // a structured contract violation, not an implementation crash.
+            throw InterpretException(InterpretError.BuiltinContractViolation(
+                at = id,
+                target = fn.node.target,
+                detail = e.message ?: "builtin argument type confusion",
             ))
         }
     }
@@ -1234,6 +1263,12 @@ class Interpreter(
                         at = id,
                         target = callable.node.target,
                         detail = e.message ?: "builtin contract violation",
+                    ))
+                } catch (e: ClassCastException) {
+                    throw InterpretException(InterpretError.BuiltinContractViolation(
+                        at = id,
+                        target = callable.node.target,
+                        detail = e.message ?: "builtin argument type confusion",
                     ))
                 }
             }

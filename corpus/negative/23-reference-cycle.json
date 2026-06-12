@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "root": "loop",
+  "nodes": {
+    "loop": {
+      "type": "Let",
+      "name": "x",
+      "value": "loop",
+      "body": "lit"
+    },
+    "lit": {
+      "type": "IntLit",
+      "value": 1
+    }
+  }
+}

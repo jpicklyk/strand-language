@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "A Let whose value edge points back at the Let itself. A cyclic document can never be content-addressed (children appear by hash; ADR-003 forbids self-referential hashes), so ingest pass 2.6 rejects the cycle structurally. Preserved from the fuzzer's introduce-reference-cycle operator development, where the cycle crashed Hasher.finalize with a raw StackOverflowError."
+}
