@@ -117,7 +117,7 @@ change — and rerun the test without the flag to assert the fresh file.
 ## Prelude module manifest
 
 [`prelude-manifest.json`](prelude-manifest.json) pins the generated prelude module (Q-063,
-[`proposals/prelude-as-module.md`](../proposals/prelude-as-module.md)): the
+[`proposals/implemented/prelude-as-module.md`](../proposals/implemented/prelude-as-module.md)): the
 N-046 ModuleManifest hash, per-export hashes (the ForeignNode entries the manifest exports), and
 per-node hashes for every reserved name in the Layer A implicit prelude. The module itself is the
 bundled dag-json snapshot at

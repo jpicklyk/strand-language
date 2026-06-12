@@ -48,3 +48,7 @@ evaluation/dynamic/runs/*/
 !evaluation/dynamic/runs/2026-05-28-run7-kotlin/
 !evaluation/dynamic/runs/strand-*/
 !evaluation/dynamic/runs/python-*/
+
+# Python bytecode caches (evaluation/ tooling: strand-eval harness, conformance encoder)
+__pycache__/
+*.pyc

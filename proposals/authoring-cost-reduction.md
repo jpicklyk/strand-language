@@ -48,7 +48,7 @@ Two grammar-level slices, both surface-only — the canonical encoding and all e
 
 **Slice b — opt-in effect-declaration synthesis.** An `@auto` marker in an Application's effect-instances slot directs the Elaborator to synthesize the EffectDecl list from the callee's declared effects and projections. Opt-in only: explicit declarations remain the default, and the interaction between synthesized declarations and Handler interception must be pinned by test before the marker is documented agent-facing.
 
-A third candidate — replacing prelude names with short content-hash references — is deferred: it saves little, costs agent legibility, and is superseded by [`prelude-as-module.md`](prelude-as-module.md) making the prelude addressable properly.
+A third candidate — replacing prelude names with short content-hash references — is deferred: it saves little, costs agent legibility, and is superseded by [`implemented/prelude-as-module.md`](implemented/prelude-as-module.md) making the prelude addressable properly.
 
 **Gate:** every density-v5 fixture compiles to a canonical graph byte-identical to its explicit-form counterpart; corpus golden hashes unchanged.
 
@@ -105,7 +105,7 @@ Sequenced effects on the Run 7 baseline (byte-proxy arithmetic, to be re-grounde
 - [`02-core-thesis.md`](../02-core-thesis.md) — the bounded-cost constraint made operational here
 - [`proposals/model-api-integration.md`](model-api-integration.md) — the harness this extends
 - [`proposals/familiar-surface-lowering.md`](familiar-surface-lowering.md) — the strategic alternative track
-- [`proposals/prelude-as-module.md`](prelude-as-module.md) — supersedes the hash-indexing candidate
+- [`proposals/implemented/prelude-as-module.md`](implemented/prelude-as-module.md) — supersedes the hash-indexing candidate
 - [`open-questions.md`](../open-questions.md) — Q-021, Q-034, Q-056, Q-057
 
 **Incoming references:**

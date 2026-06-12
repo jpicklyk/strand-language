@@ -1,16 +1,28 @@
 # Prelude as a Content-Addressed Module
 
-**Document:** `proposals/prelude-as-module.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/prelude-as-module.md`
+**Status:** Implemented (landed 2026-06-12 in the Kotlin/JVM reference implementation; see the Implementation note)
 **Date:** 2026-06-11
-**Concerns:** [Q-034](../open-questions.md#Q-034) (the implicit prelude), [Q-043](../open-questions.md#Q-043) (ModuleManifest and federation), [Q-052](../open-questions.md#Q-052) (second-implementation conformance), [Q-057](../open-questions.md#Q-057) (authoring parity), [`design/node-algebra.md`](../design/node-algebra.md) N-046, [`proposals/cross-store-federation.md`](cross-store-federation.md)
+**Concerns:** [Q-034](../../open-questions.md#Q-034) (the implicit prelude), [Q-043](../../open-questions.md#Q-043) (ModuleManifest and federation), [Q-052](../../open-questions.md#Q-052) (second-implementation conformance), [Q-057](../../open-questions.md#Q-057) (authoring parity), [`design/node-algebra.md`](../../design/node-algebra.md) N-046, [`proposals/cross-store-federation.md`](../cross-store-federation.md)
 **Scope:** medium
 
 This proposal materializes the implicit prelude — the reserved names the Layer A elaborator synthesizes on demand — as a real, content-addressed ModuleManifest admitted to the store. The reserved names stop being a private convention between one elaborator and one system prompt and become a verifiable artifact any implementation, agent, or peer store can fetch by hash.
 
+## Implementation note (2026-06-12)
+
+Implemented in the Kotlin/JVM reference implementation in three commits following the § 8 order of work (generator and pinned golden; resolution replacing synthesis behind the equivalence suite; registry residency and federation fetch). Full suite after the slice: 2026 tests, 0 failures (1586 baseline plus 440 new across the conformance, equivalence, residency, and certification suites). All eight § 6 test scenarios ship: `PreludeModuleConformanceTest` (scenario 1, with the `-Dstrand.regeneratePreludeModule=true` regeneration flag following the golden-hashes pattern), `PreludeResolutionEquivalenceTest` plus `PreludeResolutionDensityEquivalenceTest` (scenario 2 — byte-identity held for all 284 reserved names and all 14 density fixtures, zero divergences), `CorpusGoldenHashTest` with no golden regenerated (scenario 3), the registry-consistency test rewritten against the generated module's canonical store (scenario 4), and `CliPreludeResidencyTest` plus `PreludeModuleGeneratorTest` (scenarios 5–8). Five recorded deviations:
+
+1. **Manifest exports are the ForeignNode entries only (§ 2).** The proposal's "wraps the exports in an N-046 ModuleManifest" left the export set implicit. N-046 certification infers each export target as an expression, and type-level reserved entries (PrimitiveType, FunctionType, ProductType, ProductTypeField) and EffectCategory entries are not expressions — exporting them would fail admission with `CategoryMismatch`, and § 4 commits to no new verifier rules. The manifest therefore exports the 129 ForeignNode entries (the prelude's callable surface) with `declaredEffects` equal to each ForeignNode's effect surface; the 155 type and effect-category entries ship in the same snapshot as the exports' dependencies and are individually hash-pinned in `corpus/prelude-manifest.json` (a superset of the proposal's "manifest hash and per-export hashes"), so every reserved name still resolves by name and by hash.
+2. **Seven reserved nodes are hashed standalone.** The four StateMachine effect categories (`receiveFx`, `sendFx`, `spawnFx`, `terminateFx`) and the N-047 ErrorPayload type trio (`errPayloadT`, `errKindField`, `errDetailField`) are referenced by no export and are therefore unreachable from the manifest root, which `Hasher.finalize`'s reachability walk does not hash. They are hashed via a standalone `hashReachable` walk — the canonical encoding is context-independent, so the standalone hash equals the hash in any reachable position (asserted by the per-name equivalence suite).
+3. **Resolution lives in the emitter, not the elaborator (§ 8).** The sketch lists `Elaborator.kt` among the changed files, but per-program synthesis only ever happened in `DagJsonEmitter`; the elaborator reads the reserved table for type inference, which this slice deliberately leaves on the in-memory table (the table remains the single source of truth per § 7's deferred inversion). The emitter resolves reserved names through `PreludeModule` (the loaded bundled snapshot, exports resolved displayName → target through the manifest) with the legacy synthesis path retained behind `-Dstrand.prelude.legacySynthesis=true` after the equivalence suite passed.
+4. **Bootstrap representation (§ 7) resolved as dag-json re-admission.** The bundled snapshot is a classpath resource ingested and finalized once per JVM at first use — the safe default the proposal named, pending Q-058's persistent store.
+5. **The system-prompt catalog reduction (§ 8's `strand-system.md` row) is not in this slice.** It is handed to the Q-060 M-2 minimal-core prompt work, which runs after this proposal and owns the prompt-size A/B gate; the prelude section of `evaluation/dynamic/prompts/strand-system.md` is unchanged here.
+
+The registry-residency semantics are: `strand registry resolve` and `list` consult built-in prelude defaults (`prelude` → manifest hash plus every reserved name → node hash, derived from the bundled snapshot) beneath the registry file's entries, file entries win on name collision, `put` writes only file entries, and a missing registry file is no longer an error for resolve/list.
+
 ## 1. Problem statement
 
-The prelude is the de facto standard library and it exists nowhere in the language. Its reserved specifications — the primitive type names, the monomorphic builtin FunctionTypes and ForeignNodes with their Q-039 projections, the effect categories — live as a hardcoded table inside the Layer A grammar, synthesized into canonical nodes at compile time and documented only in the agent-facing system prompt. The design corpus does not list them; [`design/node-algebra.md`](../design/node-algebra.md) gives no hint that `intT` or `fsWrite` exist. The consequences compound: a second implementation must reverse-engineer the table to pass conformance (Q-052's validation debt); a model without the Strand system prompt cannot discover the names at all; the 2026-06-11 prelude-projection defect class — grammar table drifting from the documented form, caught only when authored programs finally went end-to-end — is structural, because the table has no authoritative artifact to drift from; and the prompt must carry the whole catalog inline, one of the larger sections the authoring-cost program (Q-060) wants out of the always-loaded core.
+The prelude is the de facto standard library and it exists nowhere in the language. Its reserved specifications — the primitive type names, the monomorphic builtin FunctionTypes and ForeignNodes with their Q-039 projections, the effect categories — live as a hardcoded table inside the Layer A grammar, synthesized into canonical nodes at compile time and documented only in the agent-facing system prompt. The design corpus does not list them; [`design/node-algebra.md`](../../design/node-algebra.md) gives no hint that `intT` or `fsWrite` exist. The consequences compound: a second implementation must reverse-engineer the table to pass conformance (Q-052's validation debt); a model without the Strand system prompt cannot discover the names at all; the 2026-06-11 prelude-projection defect class — grammar table drifting from the documented form, caught only when authored programs finally went end-to-end — is structural, because the table has no authoritative artifact to drift from; and the prompt must carry the whole catalog inline, one of the larger sections the authoring-cost program (Q-060) wants out of the always-loaded core.
 
 Meanwhile the mechanism this needs already shipped: N-046 ModuleManifest bundles exports with verifier-certified effect declarations, the federation runtime resolves hashes across stores, and `strand registry` maps names to hashes. The prelude is the obvious first real module, and not making it one leaves the federation machinery with no permanent resident.
 
@@ -80,13 +92,13 @@ None new. Resolved prelude nodes evaluate exactly as their synthesized twins do 
 ## References
 
 **Outgoing references:**
-- [`design/node-algebra.md`](../design/node-algebra.md) — N-046 ModuleManifest
-- [`proposals/cross-store-federation.md`](cross-store-federation.md) — the resolution and registry machinery reused here
-- [`proposals/authoring-cost-reduction.md`](authoring-cost-reduction.md) — the prompt-diet measure this feeds
-- [`open-questions.md`](../open-questions.md) — Q-034, Q-043, Q-052, Q-057
+- [`design/node-algebra.md`](../../design/node-algebra.md) — N-046 ModuleManifest
+- [`proposals/cross-store-federation.md`](../cross-store-federation.md) — the resolution and registry machinery reused here
+- [`proposals/authoring-cost-reduction.md`](../authoring-cost-reduction.md) — the prompt-diet measure this feeds
+- [`open-questions.md`](../../open-questions.md) — Q-034, Q-043, Q-052, Q-057
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-063 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
-- [`ROADMAP.md`](../ROADMAP.md) — Tier 3.5
+- [`open-questions.md`](../../open-questions.md) — Q-063 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section
+- [`ROADMAP.md`](../../ROADMAP.md) — Tier 3.5
