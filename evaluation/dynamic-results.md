@@ -6,19 +6,51 @@ the static framework measures bytes-per-emission, this framework measures
 
 ## Token-count methodology
 
-All token figures in this document are byte-proxy estimates. Unless a
-run's artifacts carry explicit provider token counts
-(`response-metadata.json`), the harness computes
-`tokens = (chars + 3) / 4` over the message text
-(`strand_eval/step.py`). No run recorded to date supplies provider
-counts, so every per-cell and headline number below — including the
-cross-language ratios and dollar figures — inherits this approximation.
-Tokenizer behavior is content-dependent: dense symbolic Layer A, Python,
-and Kotlin do not tokenize at equal characters-per-token rates, so the
-cross-language ratios carry an unquantified and possibly directional
-error. Re-deriving the counts from the persisted artifacts with real
-tokenizers is an open follow-up under
-[`proposals/model-api-integration.md`](proposals/model-api-integration.md).
+All token figures in this document (Runs 1–7) are byte-proxy
+estimates: `tokens = (chars + 3) / 4` over the message text
+(`strand_eval/step.py`). Tokenizer behavior is content-dependent:
+dense symbolic Layer A, Python, and Kotlin do not tokenize at equal
+characters-per-token rates, so the cross-language ratios in Runs 1–7
+carry an unquantified and possibly directional error.
+
+As of 2026-06-11 the harness labels every token figure with its source
+(`strand_eval/tokens.py`): `api` for real tokenizer counts from the
+Anthropic count_tokens endpoint (used automatically when
+`ANTHROPIC_API_KEY` is set; the endpoint is free), `byte-proxy` for
+the legacy estimate, `caller` for explicit `response-metadata.json`
+counts. Cell summaries, fixtures, and report tables carry the label,
+and aggregates over mixed sources render as `mixed(...)`. All
+pre-labeling artifacts in this document are byte-proxy and surface as
+`unknown` when re-aggregated; future runs should report like-labeled
+numbers only. See `evaluation/dynamic/README.md` § Token counting
+modes.
+
+## Task suite — 22 tasks as of 2026-06-11
+
+Tasks 16–22 are semantic-error probes added 2026-06-11, engineered
+around the Run 6 finding that probes 11/14/15 converged first-pass:
+their descriptions state behavior only (never the rule or the error
+name), and each trap sits where the Elaborator has no auto-fill
+(explicit effect rows, CAP capability lists, two-self-field recursive
+products, explicit EffectDecls at projected call sites). Wrong-variant
+predictions were validated against the verifier before commit. Per-task
+probe documentation (target family, validated error output, Python-
+baseline failure shape) lives in `tasks/<id>/probe.md`, which the
+harness never sends to the agent.
+
+| ID | Task | Target error family |
+|----|------|---------------------|
+| 16 | `audit-log-effects` | `UncoveredEffects` — explicit partial effect row |
+| 17 | `handler-config-read` | `HandlerSignatureMismatch` — Bytes vs String handle |
+| 18 | `schema-username-truncate` | runtime `SchemaInvariantViolation` on a dynamic value (Q-047) |
+| 19 | `tree-sum-leaves` | `UnboundRecursiveSelf` — two-self-field product defeats auto-Outer-PRD |
+| 20 | `connect-effect-decl` | `ProjectionMismatch` / `EffectDecl*` — Q-039 node-identity discipline |
+| 21 | `capability-scoped-write` | `CapabilityScopeUnsatisfiable` — CAP narrowed below body closure |
+| 22 | `list-append-sum` | `UnboundRecursiveSelf` — construction inside a Fixpoint body |
+
+No measurement run has exercised tasks 16–22 yet; the next sweep
+(Run 8, N=5 per cell via `strand-eval aggregate`) is specified in
+`evaluation/dynamic/README.md` § Multi-sample runs.
 
 ## Task suite — 15 tasks as of 2026-05-28
 

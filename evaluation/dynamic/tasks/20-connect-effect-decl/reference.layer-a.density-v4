@@ -1,0 +1,13 @@
+# Task 20 — netConnect with explicit EffectDecl (density v4).
+# The EffectDecl must bind the same host/port nodes the application
+# consumes (Q-039 projection: ArgRef(0)/ArgRef(1)). Probes
+# ProjectionMismatch / EffectDeclParameterTypeMismatch /
+# EffectDeclArityMismatch.
+@v=1 root=outer
+host STR "db.internal"
+port ILT 5432
+cd EFD connectFx [host port]
+callConnect APP netConnect [host port] [] [cd]
+addOne APP add [callConnect 1]
+handleLam LAM [h:stringT p:intT] 7
+outer H connectFx handleLam addOne

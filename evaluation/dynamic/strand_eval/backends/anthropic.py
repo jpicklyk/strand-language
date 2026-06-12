@@ -129,6 +129,8 @@ class AnthropicBackend(EmissionBackend):
             raw_response=raw,
             cache_read_input_tokens=cache_read_input_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
+            # Counts come from the API usage block: real tokenizer counts.
+            token_source="api",
         )
 
     @staticmethod

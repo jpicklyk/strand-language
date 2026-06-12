@@ -1,0 +1,28 @@
+# Layer A form: ShortName schema (strLen <= 8) over a runtime-built
+# username. concat("strand", "_agent") is 12 chars; the program keeps
+# the first 8 (subStr 0 8) before flowing the value into the
+# ShortName-typed identity parameter, then returns strLen = 8.
+# The concat result is not statically evaluable, so the verifier
+# defers the obligation (SchemaInvariantDeferred) and `strand run`
+# enforces it — flowing the untruncated value in raises the runtime
+# SchemaInvariantViolation. Uses prelude stringT/strLen/le/concat/
+# subStr; schema scaffolding is explicit.
+@v=1 root=app
+s PRC "s" stringT
+sv VAR s
+lenOf APP strLen [sv]
+eight ILT 8
+lenOk APP le [lenOf eight]
+lenLam LAM [s] lenOk
+nameInv INV "max-8-chars" shortName lenLam
+shortName SCH "ShortName" stringT [nameInv]
+prefix STR "strand"
+suffix STR "_agent"
+full APP concat [prefix suffix]
+zero ILT 0
+trimmed APP subStr [full zero eight]
+p PRC "p" shortName
+pv VAR p
+idLam LAM [p] pv
+flowed APP idLam [trimmed]
+app APP strLen [flowed]

@@ -1,0 +1,21 @@
+# Layer A form: netConnect("db.internal", 5432) with an explicit
+# EffectDecl at the call site, under a Handler intercepting connectFx
+# that returns handle 7; program adds 1 -> 8. The prelude netConnect
+# carries Q-039 projections (host -> ArgRef(0), port -> ArgRef(1)),
+# so the EffectDecl must reference the SAME host/port nodes the
+# application consumes, in category parameter order. Uses the prelude
+# netConnect/connectFx (required for the projection semantics) and
+# prelude stringT/intT/add; literals and the handle lambda are
+# explicit.
+@v=1 root=outer
+host STR "db.internal"
+port ILT 5432
+cd EFD connectFx [host port]
+callConnect APP netConnect [host port] [] [cd]
+one ILT 1
+addOne APP add [callConnect one]
+h PRC "h" stringT
+p PRC "p" intT
+seven ILT 7
+handleLam LAM [h p] seven
+outer H connectFx handleLam addOne

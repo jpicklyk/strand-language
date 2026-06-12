@@ -1,0 +1,16 @@
+# Layer A form: Handler intercepts Filesystem.Read and supplies the
+# fixed config text as Bytes; program returns bytesLen = 10. The
+# handle lambda must be (String) -> Bytes to match fsRead. Probes
+# HandlerSignatureMismatch on a zero-arg or String-returning handle.
+# Uses the prelude fsRead/readFx (the prelude entry carries the
+# Q-039 projection) plus prelude stringT/fromUtf8/bytesLen; the
+# remaining nodes are written in explicit (non-sugared) form.
+@v=1 root=outer
+cfgPath STR "/etc/app.conf"
+readCall APP fsRead [cfgPath]
+bodyLen APP bytesLen [readCall]
+cfgText STR "debug=true"
+cfgBytes APP fromUtf8 [cfgText]
+p PRC "p" stringT
+handleLam LAM [p] cfgBytes
+outer H readFx handleLam bodyLen

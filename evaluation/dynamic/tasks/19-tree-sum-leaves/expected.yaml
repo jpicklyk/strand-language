@@ -1,0 +1,12 @@
+check: pure-value
+description: |
+  Sum of the leaves of Node(Leaf(3), Node(Leaf(4), Leaf(5))) = 12.
+  Probes `UnboundRecursiveSelf`: with two RecursiveSelf fields in the
+  Node product, the natural single-product emission (no inner/outer
+  split) is not rescued by auto-Outer-PRD synthesis and fails at
+  every top-level construction or pattern site.
+value:
+  type: int
+  representation:
+    python: "12"
+    strand: "IntV(v=12)"

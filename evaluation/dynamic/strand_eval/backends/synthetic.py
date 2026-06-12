@@ -33,6 +33,7 @@ class SyntheticBackend(EmissionBackend):
                         model="synthetic",
                         latency_ms=0,
                         finish_reason="stop",
+                        token_source="synthetic",
                     )
                 )
             else:
@@ -62,5 +63,6 @@ class SyntheticBackend(EmissionBackend):
                 latency_ms=result.latency_ms,
                 finish_reason=result.finish_reason,
                 raw_response=result.raw_response,
+                token_source=result.token_source,
             )
         return result

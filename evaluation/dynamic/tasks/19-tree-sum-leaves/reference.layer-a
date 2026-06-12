@@ -1,0 +1,58 @@
+# Layer A form: sum the leaves of Node(Leaf(3), Node(Leaf(4),
+# Leaf(5))) -> 12. The Node product has TWO RecursiveSelf fields, so
+# the inner/outer PRD split is mandatory: the inner product (left/
+# right -> RS) appears only inside the RT body; the outer product
+# (left/right -> the RT itself) is used at pattern types and value
+# construction. A single shared product trips UnboundRecursiveSelf.
+@v=1 root=main
+intT PRM Int
+leftFieldInner PRF "left" treeSelf
+rightFieldInner PRF "right" treeSelf
+nodeProductInner PRD [leftFieldInner rightFieldInner]
+treeSelf RS
+leafCase SCS "Leaf" intT
+nodeCase SCS "Node" nodeProductInner
+treeBody SUM [leafCase nodeCase]
+treeT RT treeBody
+leftFieldOuter PRF "left" treeT
+rightFieldOuter PRF "right" treeT
+nodeProductOuter PRD [leftFieldOuter rightFieldOuter]
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+sumFnT FNT [treeT] intT
+nVar PVR intT "n"
+patLeaf PCN treeT "Leaf" nVar
+leafBody VAR nVar
+caseLeaf MC patLeaf leafBody
+pVar PVR nodeProductOuter "p"
+patNode PCN treeT "Node" pVar
+pRef VAR pVar
+leftGet PFG pRef "left"
+rightGet PFG pRef "right"
+recurse PRC "recurse" sumFnT
+t PRC "t" treeT
+recurseV1 VAR recurse
+recurseV2 VAR recurse
+sumLeft APP recurseV1 [leftGet]
+sumRight APP recurseV2 [rightGet]
+nodeBody APP add [sumLeft sumRight]
+caseNode MC patNode nodeBody
+tv VAR t
+matchBody MAT tv [caseLeaf caseNode]
+bodyLam LAM [recurse t] matchBody
+sumLeaves FIX sumFnT bodyLam
+three ILT 3
+four ILT 4
+five ILT 5
+leaf3 SV treeT "Leaf" three
+leaf4 SV treeT "Leaf" four
+leaf5 SV treeT "Leaf" five
+pv45l PFV "left" leaf4
+pv45r PFV "right" leaf5
+prod45 PV nodeProductOuter [pv45l pv45r]
+node45 SV treeT "Node" prod45
+pvTl PFV "left" leaf3
+pvTr PFV "right" node45
+prodT PV nodeProductOuter [pvTl pvTr]
+tree SV treeT "Node" prodT
+main APP sumLeaves [tree]

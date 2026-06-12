@@ -1,0 +1,10 @@
+# Task 16 — audited doubling helper (density v4, prelude names).
+# The helper body exercises {nowFx, logFx}; the explicit effect row
+# must carry both. Probes UncoveredEffects on a partial row.
+@v=1 root=app
+ts APP intToStr [(APP now [])]
+msg APP concat [(STR "audit:") ts]
+logCall APP logInfo [msg]
+helperBody LET "ignore" logCall (APP mul [x 2])
+auditedDouble LAM [x:intT] helperBody [nowFx logFx]
+app APP auditedDouble [21]

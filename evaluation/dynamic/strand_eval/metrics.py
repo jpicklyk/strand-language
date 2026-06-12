@@ -17,15 +17,17 @@ are 10% of input price; ephemeral 5-minute writes are 1.25x input price.
 A model missing from CACHE_PRICING falls back to its non-cached rate,
 which still produces a correct (just less favorable) cost number.
 
-Multi-sample aggregation uses scipy.stats.bootstrap to compute 95% CIs
-for tokens, cost, and convergence rate per (task, config) cell. With
-N=1 the CI degenerates to the sample value itself and the report
-collapses to a single number.
+Multi-sample aggregation computes 95% percentile-bootstrap CIs for
+tokens, cost, and convergence rate per (task, config) cell, using only
+the standard library (random.Random resampling — no scipy, per the
+stock-Python toolchain constraint). With N=1 the CI degenerates to the
+sample value itself and the report collapses to a single number.
 """
 
 from __future__ import annotations
 
 import math
+import random
 from collections import defaultdict
 from dataclasses import dataclass
 from statistics import median
@@ -232,44 +234,54 @@ class CellStat:
         return f"{fmt.format(self.mean)} [{fmt.format(self.ci_lo)}, {fmt.format(self.ci_hi)}]"
 
 
+def _percentile(sorted_values: Sequence[float], q: float) -> float:
+    """Linear-interpolation percentile over an ascending-sorted sequence.
+
+    ``q`` is in [0, 1]. Matches numpy's default ("linear") method so the
+    stdlib implementation reproduces the scipy-era numbers.
+    """
+    n = len(sorted_values)
+    if n == 1:
+        return float(sorted_values[0])
+    pos = q * (n - 1)
+    lo_idx = int(math.floor(pos))
+    hi_idx = int(math.ceil(pos))
+    if lo_idx == hi_idx:
+        return float(sorted_values[lo_idx])
+    frac = pos - lo_idx
+    return float(sorted_values[lo_idx] * (1.0 - frac) + sorted_values[hi_idx] * frac)
+
+
 def _bootstrap_mean_ci(
     values: Sequence[float],
     confidence: float = 0.95,
     n_resamples: int = 1000,
     seed: int = 0,
 ) -> tuple[float, float, float]:
-    """Return (mean, ci_lo, ci_hi) using scipy.stats.bootstrap.
+    """Return (mean, ci_lo, ci_hi) via percentile bootstrap. Stdlib only.
 
-    With N<=1 the CI collapses to the mean itself. With N==2 scipy can
-    still produce a percentile CI but it will be very wide. We use the
-    percentile method (the scipy default) for interpretability.
+    Resamples ``values`` with replacement (random.Random(seed).choices)
+    ``n_resamples`` times, takes the mean of each resample, and reads
+    the CI bounds off the percentiles of the resampled means. With N<=1
+    the CI collapses to the mean itself; with N==2 the interval is wide
+    but well-defined. Deterministic for a fixed seed.
     """
     if not values:
         return 0.0, 0.0, 0.0
     if len(values) == 1:
         v = float(values[0])
         return v, v, v
-    mean = float(sum(values) / len(values))
-    # scipy import is local so import-time cost is only paid when CIs run.
-    try:
-        from scipy.stats import bootstrap  # noqa: WPS433
-        import numpy as np  # noqa: WPS433
-
-        rng = np.random.default_rng(seed)
-        data = (np.asarray(values, dtype=float),)
-        res = bootstrap(
-            data,
-            statistic=np.mean,
-            confidence_level=confidence,
-            n_resamples=n_resamples,
-            method="percentile",
-            random_state=rng,
-            vectorized=True,
-        )
-        return mean, float(res.confidence_interval.low), float(res.confidence_interval.high)
-    except Exception:
-        # Fall back to mean if scipy hiccups for any reason.
-        return mean, mean, mean
+    vals = [float(v) for v in values]
+    mean = math.fsum(vals) / len(vals)
+    rng = random.Random(seed)
+    k = len(vals)
+    resampled_means = sorted(
+        math.fsum(rng.choices(vals, k=k)) / k for _ in range(n_resamples)
+    )
+    alpha = (1.0 - confidence) / 2.0
+    lo = _percentile(resampled_means, alpha)
+    hi = _percentile(resampled_means, 1.0 - alpha)
+    return mean, lo, hi
 
 
 def cell_stat(
@@ -294,6 +306,17 @@ def cell_stat(
     return CellStat(n=len(vals), mean=mean, ci_lo=lo, ci_hi=hi)
 
 
+def _combine_cell_sources(samples: list[TaskMetrics]) -> str:
+    """Aggregate the token-source labels for a group of samples.
+
+    Delegates to strand_eval.tokens.combine_sources; imported lazily to
+    keep metrics importable in isolation.
+    """
+    from strand_eval.tokens import combine_sources
+
+    return combine_sources([s.token_source for s in samples])
+
+
 def per_task_table(
     task_id: str,
     config_metrics: dict[str, list[TaskMetrics]],
@@ -302,8 +325,11 @@ def per_task_table(
     """Render a Markdown table for one task across configurations.
 
     Columns: Configuration | Convergence | Tokens/success (mean [CI]) |
-    Cost/success | x vs baseline. The CI brackets only appear when N>1
-    for that cell; with N=1 the column collapses to a single value.
+    Token source | Cost/success | x vs baseline. The CI brackets only
+    appear when N>1 for that cell; with N=1 the column collapses to a
+    single value. The token-source column labels each cell's counting
+    provenance ("api" / "byte-proxy" / ...) so figures from different
+    scales are never presented as comparable without saying so.
     """
     baseline_samples = [tm for tm in config_metrics.get(baseline_config, []) if tm.task_id == task_id]
     baseline_stat = cell_stat(baseline_samples, _cell_tokens_value)
@@ -312,8 +338,8 @@ def per_task_table(
     lines: list[str] = [
         f"## {task_id}",
         "",
-        f"| Configuration | Convergence | Tokens/success | Cost/success (USD) | x vs {baseline_config} |",
-        "|---------------|-------------|----------------|--------------------|------------------------|",
+        f"| Configuration | Convergence | Tokens/success | Token source | Cost/success (USD) | x vs {baseline_config} |",
+        "|---------------|-------------|----------------|--------------|--------------------|------------------------|",
     ]
     for config_name, samples in sorted(config_metrics.items()):
         task_samples = [tm for tm in samples if tm.task_id == task_id]
@@ -323,12 +349,15 @@ def per_task_table(
         tok_stat = cell_stat(task_samples, _cell_tokens_value)
         cost_stat = cell_stat(task_samples, lambda s: s.total_cost_usd)
         tokens_str = tok_stat.render() if tok_stat is not None else "n/a"
+        source_str = _combine_cell_sources(task_samples)
         cost_str = cost_stat.render(fmt="${:.4f}") if cost_stat is not None else "n/a"
         if tok_stat is not None and baseline_mean and baseline_mean > 0:
             ratio_str = f"{tok_stat.mean / baseline_mean:.2f}"
         else:
             ratio_str = "n/a"
-        lines.append(f"| {config_name} | {conv} | {tokens_str} | {cost_str} | {ratio_str} |")
+        lines.append(
+            f"| {config_name} | {conv} | {tokens_str} | {source_str} | {cost_str} | {ratio_str} |"
+        )
     return "\n".join(lines)
 
 
@@ -369,6 +398,7 @@ def aggregate_table(
         f"Geomean x vs {baseline_config}",
         "Convergence (all tasks)",
         "Total cost (USD)",
+        "Token source",
     ]
     if show_cache:
         header_cols.append("Cache hit rate")
@@ -395,6 +425,7 @@ def aggregate_table(
             gm_str,
             f"{conv}/{total}",
             f"${total_cost:.4f}",
+            _combine_cell_sources(samples),
         ]
         if show_cache:
             cache_in = sum(s.total_cache_read_tokens for s in samples)

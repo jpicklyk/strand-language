@@ -1,0 +1,10 @@
+# Task 17 — Handler supplies config bytes (density v4, prelude names).
+# handle must be (String) -> Bytes to match fsRead's signature.
+# Probes HandlerSignatureMismatch on the natural String-returning or
+# zero-arg handle.
+@v=1 root=outer
+cfgPath STR "/etc/app.conf"
+readCall APP fsRead [cfgPath]
+bodyLen APP bytesLen [readCall]
+handleLam LAM [p:stringT] (APP fromUtf8 [(STR "debug=true")])
+outer H readFx handleLam bodyLen

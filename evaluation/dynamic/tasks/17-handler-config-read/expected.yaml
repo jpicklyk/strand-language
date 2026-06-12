@@ -1,0 +1,11 @@
+check: pure-value
+description: |
+  Handler intercepts Filesystem.Read and supplies b"debug=true"; the
+  program returns its byte length, 10. Probes
+  `HandlerSignatureMismatch` when the handle lambda is zero-arg or
+  returns String instead of matching fsRead's (String) -> Bytes.
+value:
+  type: int
+  representation:
+    python: "10"
+    strand: "IntV(v=10)"

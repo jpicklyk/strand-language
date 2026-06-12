@@ -1,0 +1,13 @@
+check: pure-value
+description: |
+  netConnect("db.internal", 5432) under a Handler returning handle 7;
+  program adds 1, producing 8. Probes the Q-039 projection family:
+  `ProjectionMismatch` when the explicit EffectDecl's parameters are
+  fresh value-equal literals instead of the argument nodes,
+  `EffectDeclParameterTypeMismatch` on swapped order, and
+  `EffectDeclArityMismatch` on a missing parameter.
+value:
+  type: int
+  representation:
+    python: "8"
+    strand: "IntV(v=8)"

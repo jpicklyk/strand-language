@@ -1,0 +1,87 @@
+# Layer A form: sum(append(Cons(1, Cons(2, Nil)), Cons(3, Nil))) ->
+# 6. append rebuilds Cons cells INSIDE its Fixpoint body, so the
+# outer PRD is needed at a construction site within the Match body —
+# the shape that trips UnboundRecursiveSelf when the inner PRD is
+# used everywhere. Two Fixpoints share one inner/outer PRD pair.
+@v=1 root=main
+intT PRM Int
+headFieldInner PRF "head" intT
+tailFieldInner PRF "tail" listSelf
+consProductInner PRD [headFieldInner tailFieldInner]
+listSelf RS
+consCase SCS "Cons" consProductInner
+nilCase SCS "Nil" _
+listBody SUM [consCase nilCase]
+listT RT listBody
+headFieldOuter PRF "head" intT
+tailFieldOuter PRF "tail" listT
+consProductOuter PRD [headFieldOuter tailFieldOuter]
+addT FNT [intT intT] intT
+add FN "strand-builtin:Int.Add" addT
+
+# append: (List, List) -> List via Fixpoint.
+appendFnT FNT [listT listT] listT
+appendRec PRC "appendRec" appendFnT
+xs PRC "xs" listT
+ys PRC "ys" listT
+apVar PVR consProductOuter "ap"
+apPatCons PCN listT "Cons" apVar
+apRef VAR apVar
+apHead PFG apRef "head"
+apTail PFG apRef "tail"
+appendRecV VAR appendRec
+ysV1 VAR ys
+apRest APP appendRecV [apTail ysV1]
+apHeadField PFV "head" apHead
+apTailField PFV "tail" apRest
+apConsProd PV consProductOuter [apHeadField apTailField]
+apConsBody SV listT "Cons" apConsProd
+apCaseCons MC apPatCons apConsBody
+apPatNil PCN listT "Nil" _
+ysV2 VAR ys
+apCaseNil MC apPatNil ysV2
+xsV VAR xs
+apMatch MAT xsV [apCaseCons apCaseNil]
+apLam LAM [appendRec xs ys] apMatch
+appendFn FIX appendFnT apLam
+
+# sum: List -> Int via Fixpoint.
+sumFnT FNT [listT] intT
+sumRec PRC "sumRec" sumFnT
+zs PRC "zs" listT
+sVar PVR consProductOuter "sp"
+sPatCons PCN listT "Cons" sVar
+sRef VAR sVar
+sHead PFG sRef "head"
+sTail PFG sRef "tail"
+sumRecV VAR sumRec
+sRest APP sumRecV [sTail]
+sConsBody APP add [sHead sRest]
+sCaseCons MC sPatCons sConsBody
+sPatNil PCN listT "Nil" _
+zero ILT 0
+sCaseNil MC sPatNil zero
+zsV VAR zs
+sMatch MAT zsV [sCaseCons sCaseNil]
+sLam LAM [sumRec zs] sMatch
+sumFn FIX sumFnT sLam
+
+# Input lists and the program result.
+nilVal SV listT "Nil" _
+one ILT 1
+two ILT 2
+three ILT 3
+n2head PFV "head" two
+n2tail PFV "tail" nilVal
+n2prod PV consProductOuter [n2head n2tail]
+node2 SV listT "Cons" n2prod
+l12head PFV "head" one
+l12tail PFV "tail" node2
+l12prod PV consProductOuter [l12head l12tail]
+list12 SV listT "Cons" l12prod
+l3head PFV "head" three
+l3tail PFV "tail" nilVal
+l3prod PV consProductOuter [l3head l3tail]
+list3 SV listT "Cons" l3prod
+joined APP appendFn [list12 list3]
+main APP sumFn [joined]

@@ -1,0 +1,50 @@
+# Task 22 — append two lists then sum (density v4). append rebuilds
+# Cons cells inside its Fixpoint body (outer PRD at a construction
+# site within the Match body). Probes UnboundRecursiveSelf on the
+# single-PRD emission.
+@v=1 root=main
+headFieldInner PRF "head" intT
+tailFieldInner PRF "tail" listSelf
+consProductInner PRD [headFieldInner tailFieldInner]
+listSelf RS
+consCase SCS "Cons" consProductInner
+nilCase SCS "Nil" _
+listBody SUM [consCase nilCase]
+listT RT listBody
+headFieldOuter PRF "head" intT
+tailFieldOuter PRF "tail" listT
+consProductOuter PRD [headFieldOuter tailFieldOuter]
+appendFnT FNT [listT listT] listT
+apVar PVR consProductOuter "ap"
+apPatCons PCN listT "Cons" apVar
+apRef VAR apVar
+apHead PFG apRef "head"
+apTail PFG apRef "tail"
+apRest APP appendRec [apTail ys]
+apConsBody SV listT "Cons" (PV consProductOuter [head= apHead tail= apRest])
+apCaseCons MC apPatCons apConsBody
+apPatNil PCN listT "Nil" _
+apCaseNil MC apPatNil ys
+apMatch MAT xs [apCaseCons apCaseNil]
+apLam LAM [appendRec:appendFnT xs:listT ys:listT] apMatch
+appendFn FIX appendFnT apLam
+sumFnT FNT [listT] intT
+sVar PVR consProductOuter "sp"
+sPatCons PCN listT "Cons" sVar
+sRef VAR sVar
+sHead PFG sRef "head"
+sTail PFG sRef "tail"
+sRest APP sumRec [sTail]
+sConsBody APP add [sHead sRest]
+sCaseCons MC sPatCons sConsBody
+sPatNil PCN listT "Nil" _
+sCaseNil MC sPatNil 0
+sMatch MAT zs [sCaseCons sCaseNil]
+sLam LAM [sumRec:sumFnT zs:listT] sMatch
+sumFn FIX sumFnT sLam
+nilVal SV listT "Nil" _
+node2 SV listT "Cons" (PV consProductOuter [head= 2 tail= nilVal])
+list12 SV listT "Cons" (PV consProductOuter [head= 1 tail= node2])
+list3 SV listT "Cons" (PV consProductOuter [head= 3 tail= nilVal])
+joined APP appendFn [list12 list3]
+main APP sumFn [joined]

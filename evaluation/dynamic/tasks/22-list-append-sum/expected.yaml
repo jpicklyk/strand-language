@@ -1,0 +1,11 @@
+check: pure-value
+description: |
+  sum(append(Cons(1, Cons(2, Nil)), Cons(3, Nil))) = 6. Probes
+  `UnboundRecursiveSelf` at recursive-value CONSTRUCTION inside the
+  Fixpoint body (append rebuilds Cons cells), the shape that
+  exhausted retries on tasks 05/08 before auto-Outer-PRD synthesis.
+value:
+  type: int
+  representation:
+    python: "6"
+    strand: "IntV(v=6)"

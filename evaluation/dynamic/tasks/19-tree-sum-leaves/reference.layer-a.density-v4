@@ -1,0 +1,39 @@
+# Task 19 — sum the leaves of a binary tree (density v4).
+# Node has TWO RecursiveSelf fields: the inner/outer PRD split is
+# mandatory (auto-Outer-PRD synthesis does not cover multi-field
+# recursion). Probes UnboundRecursiveSelf on the single-PRD emission.
+@v=1 root=main
+leftFieldInner PRF "left" treeSelf
+rightFieldInner PRF "right" treeSelf
+nodeProductInner PRD [leftFieldInner rightFieldInner]
+treeSelf RS
+leafCase SCS "Leaf" intT
+nodeCase SCS "Node" nodeProductInner
+treeBody SUM [leafCase nodeCase]
+treeT RT treeBody
+leftFieldOuter PRF "left" treeT
+rightFieldOuter PRF "right" treeT
+nodeProductOuter PRD [leftFieldOuter rightFieldOuter]
+sumFnT FNT [treeT] intT
+nVar PVR intT "n"
+patLeaf PCN treeT "Leaf" nVar
+leafBody VAR nVar
+caseLeaf MC patLeaf leafBody
+pVar PVR nodeProductOuter "p"
+patNode PCN treeT "Node" pVar
+pRef VAR pVar
+leftGet PFG pRef "left"
+rightGet PFG pRef "right"
+sumLeft APP recurse [leftGet]
+sumRight APP recurse [rightGet]
+nodeBody APP add [sumLeft sumRight]
+caseNode MC patNode nodeBody
+matchBody MAT t [caseLeaf caseNode]
+bodyLam LAM [recurse:sumFnT t:treeT] matchBody
+sumLeaves FIX sumFnT bodyLam
+leaf3 SV treeT "Leaf" 3
+leaf4 SV treeT "Leaf" 4
+leaf5 SV treeT "Leaf" 5
+node45 SV treeT "Node" (PV nodeProductOuter [left= leaf4 right= leaf5])
+tree SV treeT "Node" (PV nodeProductOuter [left= leaf3 right= node45])
+main APP sumLeaves [tree]
