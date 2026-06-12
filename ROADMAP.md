@@ -28,7 +28,6 @@ The tier order follows the thesis outcome-priority in [`02-core-thesis.md`](02-c
 Structural safety, the first lead claim, is measured ([Q-044](open-questions.md#Q-044)). First-pass correctness, the second, is not. Both ride the same harness, so this is the highest-leverage remaining work.
 
 - **Dynamic measurement of first-pass correctness and bounded cost.** Defined by [Q-021](open-questions.md#Q-021), [Q-034](open-questions.md#Q-034) (dynamic half), and [`proposals/model-api-integration.md`](proposals/model-api-integration.md). Real model-API integration drives an agent through the verifier-feedback loop and reports first-pass verification rate (the lead-claim metric), tokens-per-successful-task (the bounded constraint), and the Q-044 intent-visibility follow-up. The harness, two backends, a Python adapter, twenty-two tasks (seven semantic-error probes added 2026-06-11), real tokenizer counting, and N>1 bootstrap aggregation have shipped; remaining are executing the multi-sample sweep, the prompt-caching measurement, and the four other baselines (Kotlin Coroutines, Rust, TypeScript-strict, SimPy).
-- **Adversarial verification corpus.** Defined by [Q-066](open-questions.md#Q-066). The verifier is the admission boundary the measured structural-safety lead claim rests on, and no adversarial input has ever exercised it. A fuzzing harness, a curated negative corpus, and a minimal independent encoder recomputing the Q-052 golden hashes are cheap, high-leverage hardening of the already-measured lead claim.
 
 ## Tier 1.5 — Authoring economics
 
