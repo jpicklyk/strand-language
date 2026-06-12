@@ -61,6 +61,7 @@ internal class MachineActor(
     /** The main actor loop. Runs until all input channels close or [MachineInstance.halted] becomes true. */
     suspend fun run() {
         val openChannels = instance.inputChannels.toMutableMap()
+        var eventIndex = -1
         try {
             while (openChannels.isNotEmpty() && !instance.halted) {
                 val pick = selectNext(openChannels)
@@ -75,6 +76,7 @@ internal class MachineActor(
                 }
                 val payload = channelResult.getOrThrow()
                 instance.counters.recordEventReceived()
+                eventIndex++
                 val event = wrapEvent(streamId, payload)
                 instance.recorder?.record(event)
                 try {
@@ -86,6 +88,19 @@ internal class MachineActor(
                     // breaks out of its event loop and the `finally` block
                     // closes outputs through the bus producer-halt counter.
                     if (e.error is InterpretError.ResourceExhaustion) {
+                        instance.halted = true
+                        break
+                    }
+                    // Q-064: a capability/refinement denial halts THIS
+                    // actor the same way, recording the structured report
+                    // (instance id, zero-based event index, phase
+                    // `transition`) on the instance for the host to read
+                    // via MachineInstanceHandle.denialReport. The denial
+                    // remains terminal for this machine; nothing becomes
+                    // observable to the evaluating graph.
+                    val denial = denialReportOf(e.error)
+                    if (denial != null) {
+                        instance.denialHalt = denial.atTransition(instance.instanceId, eventIndex)
                         instance.halted = true
                         break
                     }

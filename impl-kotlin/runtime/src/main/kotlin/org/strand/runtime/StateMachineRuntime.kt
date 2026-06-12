@@ -122,7 +122,7 @@ class StateMachineRuntime(
         // so the per-event applyCallable invocations share state — the
         // proposal's § 4.5 contract.
         val counters = Interpreter.EvalCounters()
-        var resourceHalt: HaltReason.ResourceExhaustion? = null
+        var abnormalHalt: HaltReason? = null
         var eventIndex = 0
         while (queue.isNotEmpty() && !instance.halted) {
             val event = queue.removeFirst()
@@ -131,7 +131,17 @@ class StateMachineRuntime(
             } catch (e: InterpretException) {
                 val err = e.error
                 if (err is InterpretError.ResourceExhaustion) {
-                    resourceHalt = HaltReason.ResourceExhaustion(err.kind, eventIndex)
+                    abnormalHalt = HaltReason.ResourceExhaustion(err.kind, eventIndex)
+                    break
+                }
+                // Q-064: a capability/refinement denial halts the fold with
+                // the structured report on the halt reason, enriched with
+                // the instance id, event index, and phase `transition`.
+                val denial = denialReportOf(err)
+                if (denial != null) {
+                    abnormalHalt = HaltReason.CapabilityDenial(
+                        denial.atTransition(instance.instanceId, eventIndex)
+                    )
                     break
                 }
                 throw e
@@ -140,7 +150,7 @@ class StateMachineRuntime(
         }
         val halt = TraceStep.Halt(
             finalState = instance.currentState,
-            reason = resourceHalt ?: HaltReason.EventsExhausted,
+            reason = abnormalHalt ?: HaltReason.EventsExhausted,
         )
         // inputStreamId is unused at this point; kept assigned to silence
         // the destructuring "val unused" complaint. The variable exists to
@@ -290,7 +300,10 @@ class StateMachineRuntime(
             }
         }
         for (machineId in group.machines) {
-            context.spawn(machineId)
+            // Q-064: a capability/refinement denial while evaluating an
+            // initial instance's transitionFn / initialState fires before
+            // any actor processes an event — re-tag phase `group-start`.
+            attachingGroupStartPhase { context.spawn(machineId) }
         }
 
         // Pass 2b (slice 3.6): launch one pump coroutine per Broadcast bus.
@@ -321,7 +334,10 @@ class StateMachineRuntime(
         } else {
             val openInterpreter = Interpreter(group.store, group.hashToNodeId, resolveTarget = resolveTarget)
             sourceBound.map { (streamId, sourceId) ->
-                val handleValue = openInterpreter.eval(sourceId, group.capabilities, limits)
+                // Q-064: opener denials are group-startup denials too.
+                val handleValue = attachingGroupStartPhase {
+                    openInterpreter.eval(sourceId, group.capabilities, limits)
+                }
                 val handle = handleValue as? Value.Resource
                     ?: error(
                         "Q-046: source opener at $sourceId did not return a Resource handle, " +
@@ -465,7 +481,7 @@ class StateMachineRuntime(
         // resume receives a fresh budget; counter state is NOT persisted
         // in Snapshot in slice 3.3).
         val counters = Interpreter.EvalCounters()
-        var resourceHalt: HaltReason.ResourceExhaustion? = null
+        var abnormalHalt: HaltReason? = null
         var eventIndex = 0
         while (queue.isNotEmpty() && !instance.halted) {
             val event = queue.removeFirst()
@@ -474,7 +490,15 @@ class StateMachineRuntime(
             } catch (e: InterpretException) {
                 val err = e.error
                 if (err is InterpretError.ResourceExhaustion) {
-                    resourceHalt = HaltReason.ResourceExhaustion(err.kind, eventIndex)
+                    abnormalHalt = HaltReason.ResourceExhaustion(err.kind, eventIndex)
+                    break
+                }
+                // Q-064: denial-caused halt — same translation as runMachine.
+                val denial = denialReportOf(err)
+                if (denial != null) {
+                    abnormalHalt = HaltReason.CapabilityDenial(
+                        denial.atTransition(instance.instanceId, eventIndex)
+                    )
                     break
                 }
                 throw e
@@ -485,7 +509,7 @@ class StateMachineRuntime(
             steps = steps,
             final = TraceStep.Halt(
                 finalState = instance.currentState,
-                reason = resourceHalt ?: HaltReason.EventsExhausted,
+                reason = abnormalHalt ?: HaltReason.EventsExhausted,
             ),
         )
     }

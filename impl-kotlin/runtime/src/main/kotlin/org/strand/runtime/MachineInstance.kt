@@ -109,6 +109,15 @@ internal class MachineInstance(
     val recorder: EventRecorder? = null,
     var halted: Boolean = false,
     /**
+     * Q-064: set when this instance halted because a per-event transition
+     * invocation hit a capability or refinement denial. Carries the
+     * structured [org.strand.interpreter.DenialReport] with instance id,
+     * event index, and phase `transition` attached at halt translation.
+     * Null for every other halt cause. Surfaced read-only through
+     * [MachineInstanceHandle.denialReport].
+     */
+    var denialHalt: org.strand.interpreter.DenialReport? = null,
+    /**
      * Per-instance counter cells for Layer 6 step 3 slice 3.4 metrics. Updated
      * by [MachineActor] on every event dequeued and on every completed
      * transition; snapshot read by [MachineGroupHandle.metrics]. Always non-null

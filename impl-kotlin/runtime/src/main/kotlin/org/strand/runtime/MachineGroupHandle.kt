@@ -237,6 +237,16 @@ class MachineInstanceHandle internal constructor(
     val machineId: NodeId get() = instance.node.transitionFn  // for diagnostics; not the StateMachine id itself
     val currentState: Value get() = instance.currentState
     val halted: Boolean get() = instance.halted
+
+    /**
+     * Q-064: the structured denial report when this instance halted on a
+     * capability or refinement denial during a transition (instance id,
+     * zero-based event index, and phase `transition` attached at halt
+     * translation); null for every other halt cause. The async analogue
+     * of the sync fold's [HaltReason.CapabilityDenial].
+     */
+    val denialReport: org.strand.interpreter.DenialReport? get() = instance.denialHalt
+
     fun recordedEvents(): List<Value>? = instance.recorder?.snapshot()
 
     /**

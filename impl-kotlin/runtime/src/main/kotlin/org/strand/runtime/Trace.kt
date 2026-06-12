@@ -1,6 +1,7 @@
 package org.strand.runtime
 
 import org.strand.core.ExhaustionKind
+import org.strand.interpreter.DenialReport
 import org.strand.interpreter.Value
 
 /**
@@ -63,6 +64,25 @@ sealed class HaltReason {
     data class ResourceExhaustion(
         val kind: ExhaustionKind,
         val atEventIndex: Int,
+    ) : HaltReason()
+
+    /**
+     * Q-064: a per-event transition invocation hit a capability or
+     * refinement denial. The denial still terminates this machine's
+     * evaluation — the halt is the termination — but the already-decided
+     * outcome is exposed structurally to the orchestrating principal on
+     * [report], with the machine instance id, the zero-based event index
+     * of the denying event, and phase `transition` attached at translation.
+     * The denying event does not produce a [TraceStep.Step] (the closure
+     * call threw before the step could complete), matching the
+     * [ResourceExhaustion] shape.
+     *
+     * Nothing here is observable from inside the graph: the transition
+     * function saw an ordinary uncatchable termination, and no Value
+     * carries the report.
+     */
+    data class CapabilityDenial(
+        val report: DenialReport,
     ) : HaltReason()
 }
 

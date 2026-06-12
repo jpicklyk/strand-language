@@ -47,6 +47,16 @@ internal class NodeRefAnnotator(
     private val nameById: Map<Int, String> =
         nameMap.entries.associate { (name, id) -> id.value to name }
 
+    /**
+     * Q-064: the author id for [id] when the ingest name map knows it, else
+     * null. Used by the `strand:denial` JSON line, which carries the author
+     * id as its own field rather than the inline `#N 'name'` annotation.
+     */
+    fun authorIdOf(id: NodeId): String? = nameById[id.value]
+
+    /** Q-064: the 1-based Layer A source line for [id]'s author id, when known. */
+    fun sourceLineOf(id: NodeId): Int? = nameById[id.value]?.let { sourceLines[it] }
+
     /** Annotate every recognized `#N` reference in [message]. */
     fun annotate(message: String): String = NODE_REF.replace(message) { match ->
         val id = match.groupValues[1].toIntOrNull() ?: return@replace match.value

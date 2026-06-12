@@ -453,6 +453,10 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                         println("value: $value")
                     }
                 } catch (e: InterpretException) {
+                    // Q-064: one machine-readable strand:denial line on a
+                    // denial-caused termination, alongside the human
+                    // rendering below. No line for non-denial errors.
+                    DenialLine.emitIfDenial(e.error, annotator)
                     System.err.println("interpretation failed: ${annotator.annotate(e.error.toString())}")
                     exitProcess(1)
                 }
@@ -553,8 +557,19 @@ private fun runMachine(args: Array<String>) {
                     val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
                     val trace = runtime.runMachine(root, events, caps, limits)
                     printTrace(trace)
+                    // Q-064: a denial-caused halt is a denial-caused
+                    // termination — the trace above is the human rendering;
+                    // emit the one machine-readable line and exit non-zero.
+                    val haltReason = trace.final.reason
+                    if (haltReason is org.strand.runtime.HaltReason.CapabilityDenial) {
+                        DenialLine.emitReport(haltReason.report, annotator)
+                        exitProcess(1)
+                    }
                 }
             } catch (e: InterpretException) {
+                // Q-064: denials thrown outside the per-event fold (e.g.
+                // transitionFn construction) surface here as exceptions.
+                DenialLine.emitIfDenial(e.error, annotator)
                 System.err.println("machine evaluation failed: ${annotator.annotate(e.error.toString())}")
                 exitProcess(1)
             }
@@ -730,9 +745,31 @@ private fun runGroup(args: Array<String>) {
                 }
                 handle.await()
                 if (emitMetrics) printMetrics(handle.metrics(), nameByNodeId)
+                // Q-064: an actor that halted on a capability/refinement
+                // denial is a denial-caused termination of the run. Emit
+                // exactly one strand:denial line (the first denial in
+                // deterministic instance-id order — one line per run, even
+                // if several actors denied), a human-readable summary, and
+                // exit non-zero.
+                val denied = handle.allInstances.values
+                    .mapNotNull { it.denialReport }
+                    .sortedBy { it.instanceId }
+                if (denied.isNotEmpty()) {
+                    val report = denied.first()
+                    DenialLine.emitReport(report, annotator)
+                    System.err.println(
+                        "group evaluation halted on capability denial: " +
+                            "category ${report.category}, instance ${report.instanceId}, " +
+                            "event ${report.eventIndex}"
+                    )
+                    exitProcess(1)
+                }
             }
         }
     } catch (e: InterpretException) {
+        // Q-064: group-start denials (initial spawn, source openers) and
+        // any denial outside an actor's per-event loop surface here.
+        DenialLine.emitIfDenial(e.error, annotator)
         System.err.println("group evaluation failed: ${annotator.annotate(e.error.toString())}")
         exitProcess(1)
     }
