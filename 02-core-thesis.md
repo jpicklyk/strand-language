@@ -10,11 +10,13 @@ Strand is organized around five integrated design claims. Each claim is independ
 
 ## Claim 1: Programs are graphs, not text {#claim-graph-native}
 
-A Strand program is a directed graph of typed, content-addressed nodes. There is no textual source representation. There is no parser, no concrete syntax, no lexer, and no file format that contains program source as character data. Programs are constructed by graph operations: creating nodes, attaching typed edges, and verifying well-formedness.
+A Strand program is a directed graph of typed, content-addressed nodes, and the graph is the canonical form: it is what is stored, what is verified, what is hashed, and what executes. No text form carries program identity. There is no canonical concrete syntax and no character-stream serialization that the language treats as source. Programs are constructed by graph operations: creating nodes, attaching typed edges, and verifying well-formedness.
+
+The claim concerns the artifact of record, not the absence of characters from the toolchain. The implemented authoring stack has agents emit Layer A, a compact line-oriented text projection compiled to canonical dag-json before any node reaches the verifier ([Q-034](open-questions.md#Q-034)). Authoring surfaces of this kind are disposable projections with no canonical status: no hash is computed over them, verification never operates on them, and they may change or be replaced without affecting the identity of any program. The distinctive property this claim asserts is that the verified graph is the program; every downstream guarantee (Claims 3 through 5) attaches to the graph and to nothing upstream of it.
 
 This claim has several immediate consequences:
 
-- Syntactic errors do not exist as a category. A graph operation either succeeds, producing a well-formed addition to the graph, or fails with a structural reason.
+- Syntactic errors do not exist as a category of the canonical form. A graph operation either succeeds, producing a well-formed addition to the graph, or fails with a structural reason. An authoring projection may fail to parse, but that failure is a failure to produce a graph; nothing syntactically malformed can be stored, addressed, or verified.
 - Source ordering does not exist. Definitions, references, and types form a graph; the concept of "what comes before what in the source" does not apply.
 - Names are not primary. Nodes are identified by content hash; human-meaningful names, where present, are metadata edges attached to nodes for tooling purposes, not part of program identity.
 
@@ -23,6 +25,8 @@ The claim is examined in [`ADR-001-graph-not-text.md`](decisions/ADR-001-graph-n
 ## Claim 2: Programs are not designed for human reading {#claim-no-projection}
 
 Strand does not provide a canonical projection from graph form to text. Programs are read by humans through analysis tools — graph queries, dependency visualizations, structured diffs — rather than by inspecting a textual rendering. The decision is not that graphs cannot be projected to text, but that providing such a projection as a primary interface is not a design goal and the engineering effort to do so well is not undertaken.
+
+The claim is about canonical status and audience, not about whether text appears in the toolchain. The Layer A authoring projection of Claim 1 exists for agent emission and agent reading, not for human review, and it holds no privileged position: no rendering of a program — Layer A included — is authoritative, none participates in verification or identity, and any of them can be regenerated from the graph or discarded. What Strand omits is a projection designed and maintained as a primary interface for human reading.
 
 This claim is independent of Claim 1. A graph-native language could provide high-quality human projection; Unison does. Strand's decision to omit projection is a scope choice. It is foundational because it determines the size of the project: omitting projection makes Strand a tractable research project; providing it would make Strand a multi-year engineering effort comparable to building a new IDE.
 

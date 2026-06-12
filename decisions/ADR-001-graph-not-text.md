@@ -3,6 +3,7 @@
 **Document:** `decisions/ADR-001-graph-not-text.md`
 **Status:** Accepted
 **Date:** 2026-05-23
+**Last revised:** 2026-06-11 (Clarifying paragraph in the Decision section: the decision fixes the canonical form, not the absence of text from the toolchain — the Q-034 Layer A authoring projection carries no canonical status and does not amend the decision. One sentence of the Decision reworded to match. The decision itself is unchanged.)
 **Supersedes:** none
 **Superseded by:** none
 
@@ -20,9 +21,11 @@ A choice is therefore required between accepting the costs of text representatio
 
 Strand programs are directed graphs of typed, content-addressed nodes. The graph is the source representation. There is no concrete text syntax, no parser, no lexer, and no canonical character-stream serialization of program source.
 
-Programs are constructed by graph operations: creating typed nodes, attaching typed edges, and verifying well-formedness. Each operation either succeeds, producing a well-formed addition to the program, or fails with a structural reason. Agents generating Strand programs emit graph operations directly; they do not emit text that is later parsed.
+Programs are constructed by graph operations: creating typed nodes, attaching typed edges, and verifying well-formedness. Each operation either succeeds, producing a well-formed addition to the program, or fails with a structural reason. Agents generating Strand programs target graph construction; any text an agent's emission passes through is an authoring surface compiled to the graph before anything enters the store, never a source form the language treats as authoritative.
 
 The graph is canonical. Any human-facing rendering, any on-disk storage format, any wire encoding is a view or projection of the underlying graph; none of these is privileged over the others, and none is the "real" source. The graph itself is identified by the content hashes of its nodes (see [ADR-003](ADR-003-content-addressing.md)).
+
+The scope of the decision is canonical status. The implemented authoring stack ([Q-034](../open-questions.md#Q-034)) has agents emit Layer A, a compact line-oriented text projection that an elaborator compiles to canonical dag-json before any node reaches the verifier. Layer A occupies the role the bootstrap-expedient alternative below anticipates, constrained so that it cannot become authoritative in practice: no hash is computed over Layer A text, verification never operates on it, it is not stored as program source, and it may change or be replaced without affecting the identity of any program. The decision's content is that the artifact of record is the verified graph — not that an agent's emission never passes through characters.
 
 This decision determines the shape of subsequent decisions. The absence of a parser eliminates a class of failure modes but creates engineering work, since no off-the-shelf editor, syntax highlighter, or diff tool applies. The absence of source ordering forces the language to express all relationships as edges (see [ADR-004](ADR-004-effects-as-edges.md)). The absence of name binding for identity admits content-addressing (see [ADR-003](ADR-003-content-addressing.md)).
 
@@ -66,7 +69,7 @@ The node algebra becomes load-bearing. Because the graph is the source represent
 - [`ADR-003-content-addressing.md`](ADR-003-content-addressing.md) — identity scheme
 - [`ADR-004-effects-as-edges.md`](ADR-004-effects-as-edges.md) — edges as the relationship mechanism
 - [`design/node-algebra.md`](../design/node-algebra.md) — formal algebra of nodes and edges
-- [`open-questions.md`](../open-questions.md) — Q-001, Q-020, Q-023
+- [`open-questions.md`](../open-questions.md) — Q-001, Q-020, Q-023, Q-034
 
 **Incoming references:**
 - [`02-core-thesis.md`](../02-core-thesis.md) — cites this ADR from Claim 1

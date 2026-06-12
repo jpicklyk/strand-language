@@ -2,7 +2,7 @@
 
 **Document:** `00-motivation.md`
 **Status:** Stable
-**Last revised:** Initial draft
+**Last revised:** 2026-06-11
 
 ## Summary
 
@@ -38,7 +38,7 @@ Beyond the costs of text representation, conventional languages lack properties 
 
 Strand's central hypothesis is that a programming language combining:
 
-1. Graph-structured source representation (no concrete text syntax)
+1. Graph-structured canonical representation (no canonical text syntax; authoring projections carry no program identity)
 2. Mandatory effect declarations as typed edges
 3. Content-addressed node identity
 4. Capability-based execution
@@ -68,7 +68,7 @@ A clean-slate design accepts the cost of starting without a code corpus in excha
 
 ## Why human readability is not a goal {#no-human-readability}
 
-A foundational decision is that Strand programs are not designed for human reading. There is no concrete text syntax, no canonical projection from graph to text, and no expectation that a human will inspect a Strand program directly during normal development.
+A foundational decision is that Strand programs are not designed for human reading. There is no canonical text syntax, no canonical projection from graph to text, and no expectation that a human will inspect a Strand program directly during normal development. Authoring projections that serve agent emission carry no program identity and no canonical status; the stored, verified form is the graph.
 
 This choice is examined in [`ADR-002-no-human-projection.md`](decisions/ADR-002-no-human-projection.md). It is foundational because it determines the size and shape of the project: building a graph-native language without a projection layer is a tractable research project; building one with a high-quality human projection is a multi-year engineering effort. The research framing — testing the hypothesis above — does not require human-readable code, only verifiable, executable, distributable code that AI agents can generate and humans can audit through analysis tooling rather than reading.
 
