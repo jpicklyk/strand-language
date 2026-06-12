@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "IntLit.value carries a string where an integer is required. Exercises the requireLong shape check."
+}

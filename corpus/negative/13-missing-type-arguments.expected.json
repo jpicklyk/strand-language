@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "TypeArgumentArityMismatch",
+  "notes": "Corpus 02's polymorphic identity application with the typeArguments list emptied. Explicit instantiation requires exactly one type argument here."
+}

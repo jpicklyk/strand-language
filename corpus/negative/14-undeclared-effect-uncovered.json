@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "root": "f",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "timeFx": {
+      "type": "EffectCategory",
+      "categoryName": "Time.Now"
+    },
+    "nowT": {
+      "type": "FunctionType",
+      "parameters": [],
+      "result": "intT"
+    },
+    "now": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Time.Now",
+      "foreignType": "nowT",
+      "effects": [
+        "timeFx"
+      ]
+    },
+    "callNow": {
+      "type": "Application",
+      "function": "now",
+      "arguments": []
+    },
+    "u": {
+      "type": "ParameterDecl",
+      "name": "u",
+      "paramType": "intT"
+    },
+    "f": {
+      "type": "Lambda",
+      "parameters": [
+        "u"
+      ],
+      "body": "callNow",
+      "effects": []
+    }
+  }
+}

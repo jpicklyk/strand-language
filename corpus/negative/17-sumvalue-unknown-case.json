@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "root": "someValue",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "someCase": {
+      "type": "SumTypeCase",
+      "name": "Some",
+      "caseType": "intT"
+    },
+    "noneCase": {
+      "type": "SumTypeCase",
+      "name": "None",
+      "caseType": null
+    },
+    "optionT": {
+      "type": "SumType",
+      "cases": [
+        "someCase",
+        "noneCase"
+      ]
+    },
+    "lit42": {
+      "type": "IntLit",
+      "value": 42
+    },
+    "someValue": {
+      "type": "SumValue",
+      "ofType": "optionT",
+      "caseName": "Sume",
+      "payload": "lit42"
+    }
+  }
+}

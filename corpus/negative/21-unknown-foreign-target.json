@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "fnT": {
+      "type": "FunctionType",
+      "parameters": [
+        "intT"
+      ],
+      "result": "intT"
+    },
+    "mystery": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:No.Such.Builtin",
+      "foreignType": "fnT"
+    },
+    "seven": {
+      "type": "IntLit",
+      "value": 7
+    },
+    "app": {
+      "type": "Application",
+      "function": "mystery",
+      "arguments": [
+        "seven"
+      ]
+    }
+  }
+}

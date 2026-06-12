@@ -1,0 +1,5 @@
+{
+  "stage": "evaluate",
+  "family": "UnknownForeignTarget",
+  "notes": "A pure ForeignNode whose target names no registered builtin. Foreign targets are bound at dispatch time, so the graph verifies and the runtime reports the missing binding as a structured error."
+}

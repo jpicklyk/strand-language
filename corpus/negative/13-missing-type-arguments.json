@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "T_a": {
+      "type": "TypeParameter",
+      "name": "a"
+    },
+    "x": {
+      "type": "ParameterDecl",
+      "name": "x",
+      "paramType": "T_a"
+    },
+    "xUse": {
+      "type": "VarRef",
+      "binder": "x"
+    },
+    "idInner": {
+      "type": "Lambda",
+      "parameters": [
+        "x"
+      ],
+      "body": "xUse"
+    },
+    "id": {
+      "type": "TypeAbstraction",
+      "typeParameters": [
+        "T_a"
+      ],
+      "body": "idInner"
+    },
+    "arg": {
+      "type": "IntLit",
+      "value": 42
+    },
+    "app": {
+      "type": "Application",
+      "function": "id",
+      "arguments": [
+        "arg"
+      ],
+      "typeArguments": []
+    }
+  }
+}

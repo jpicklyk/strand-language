@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "Node category 'Quux' is not in the node algebra."
+}

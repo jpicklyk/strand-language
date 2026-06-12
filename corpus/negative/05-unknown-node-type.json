@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "main": {
+      "type": "Quux"
+    }
+  }
+}

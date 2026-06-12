@@ -1,0 +1,6 @@
+{
+  "stage": "ingest",
+  "family": "ResourceExhaustion",
+  "exhaustionKind": "JsonDepth",
+  "notes": "600 nested arrays exceed the Q-040 maxJsonDepth cap (512) while staying far inside the byte cap. The linear depth pre-scan rejects before the recursive JSON parser can overflow the stack."
+}

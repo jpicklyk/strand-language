@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "ParameterTypeMismatch",
+  "notes": "An (Int) -> Int identity applied to a Bool literal. Structural equality, no coercion."
+}

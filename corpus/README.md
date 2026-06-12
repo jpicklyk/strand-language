@@ -114,6 +114,16 @@ To regenerate after a legitimate corpus or encoding change, run from `impl-kotli
 then diff `corpus/golden-hashes.json` — every changed hash must be explainable by an intentional
 change — and rerun the test without the flag to assert the fresh file.
 
+## Negative corpus
+
+[`negative/`](negative/README.md) holds the Q-066 adversarial battery's curated near-miss
+documents: each `NN-name.json` is paired with an `NN-name.expected.json` recording the structured
+error family the pipeline must produce and the stage (ingest, verify, or evaluate) at which it
+must produce it. Entries are defined by their rejection, so they carry no golden hashes and are
+excluded from `golden-hashes.json` and from the positive-corpus drivers. `CorpusNegativeTest`
+(`impl-kotlin/corpus`) asserts every pair; fuzzer-discovered triggers from `CorpusMutationFuzzTest`
+are preserved there as permanent regressions.
+
 The `layer-a/` subdirectory holds Layer A authoring-projection forms (Q-034 step 1) for a representative subset of the corpus — currently 14 programs covering all major features: literals/types/binding (01-04), effects + foreign (12, 15), match patterns (18), fixpoint + recursive types (21, 31), product/sum values (23, 25), handlers (36), state machines (41), schemas (50). Each `<basename>.layer-a` is a compact-text projection of the corresponding `<basename>.json`; the round-trip property (Layer A → `Authoring.compileToDagJson` → canonical store hashes equal to the canonical JSON's canonical store) is asserted in `LayerARoundTripTest`. **Measured byte compression: 3.39× total across the 14-program subset** (per-program range 2.82×–4.40×), within the proposal's projection-only estimate. The canonical JSON files remain the authoritative form; Layer A is an additional projection of the same graph. Adding a new pair requires (a) the Layer A file, (b) a new entry in `LayerARoundTripTest.pairs`. The Layer A grammar (42 codes in `LayerAGrammar.codes`) covers all currently-implemented node categories except N-030 Name and N-031 Provenance (metadata-only; no current usage); extending coverage to those two is a small grammar addition when a corpus program needs it.
 
 Two TypeParameter nodes are the same type variable when they are the same

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "seven": {
+      "type": "IntLit",
+      "value": 7
+    },
+    "app": {
+      "type": "Application",
+      "function": "ghost",
+      "arguments": [
+        "seven"
+      ]
+    }
+  }
+}

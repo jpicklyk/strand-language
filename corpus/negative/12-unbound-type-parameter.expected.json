@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "UnboundTypeParameter",
+  "notes": "A parameter typed by a TypeParameter with no enclosing TypeAbstraction or ForallType binder. Lambda alone does not bind type parameters."
+}

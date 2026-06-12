@@ -75,7 +75,9 @@ object GoldenHashes {
      * forward slashes (e.g. `01-int-literal.json`,
      * `76-multi-store-composition/app.json`). Covers flat JSON files in
      * `corpus/` plus JSON files one level inside its subdirectories, excluding
-     * `layer-a/` (covered by [enumerateLayerAFiles]) and the golden file.
+     * `layer-a/` (covered by [enumerateLayerAFiles]), `negative/` (Q-066:
+     * negative-corpus entries are defined by their rejection and carry no
+     * golden hashes — driven by [CorpusNegativeTest]), and the golden file.
      * Non-program JSON (no `root` + `nodes` keys) is excluded by structure.
      */
     fun enumerateProgramFiles(corpusDir: Path): List<String> {
@@ -89,7 +91,7 @@ object GoldenHashes {
                 ) {
                     out += name
                 }
-            } else if (Files.isDirectory(entry) && name != "layer-a") {
+            } else if (Files.isDirectory(entry) && name != "layer-a" && name != "negative") {
                 val inner = Files.list(entry).use { it.toList() }.sorted()
                 for (file in inner) {
                     val innerName = file.fileName.toString()
@@ -201,7 +203,8 @@ object GoldenHashes {
                 JsonPrimitive(
                     "A corpus JSON file is a program iff its top-level object has both 'root' and 'nodes' " +
                         "keys. Event-input files (*.events.json), the name registry " +
-                        "(77-name-registry-resolution/registry.json), and this file are excluded by that rule. " +
+                        "(77-name-registry-resolution/registry.json), the negative corpus (negative/, whose " +
+                        "entries are defined by their rejection), and this file are excluded by that rule. " +
                         "Programs that cannot be hashed standalone carry an explicit " +
                         "'unhashable-standalone: <reason>' marker instead of a hash."
                 )

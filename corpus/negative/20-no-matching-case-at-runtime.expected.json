@@ -1,0 +1,5 @@
+{
+  "stage": "evaluate",
+  "family": "NoMatchingCase",
+  "notes": "Top-level coverage is exhaustive (Some and None both appear), so the verifier admits; but the Some pattern's nested literal payload only matches 0 and the scrutinee is Some(1). Nested-payload totality is deliberately outside the exhaustiveness check, so this dies at runtime with a structured NoMatchingCase."
+}

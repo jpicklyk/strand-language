@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "timeFx": {
+      "type": "EffectCategory",
+      "categoryName": "Time.Now"
+    },
+    "nowT": {
+      "type": "FunctionType",
+      "parameters": [],
+      "result": "intT"
+    },
+    "now": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Time.Now",
+      "foreignType": "nowT",
+      "effects": [
+        "timeFx"
+      ]
+    },
+    "app": {
+      "type": "Application",
+      "function": "now",
+      "arguments": []
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "x": {
+      "type": "ParameterDecl",
+      "name": "x",
+      "paramType": "intT"
+    },
+    "xUse": {
+      "type": "VarRef",
+      "binder": "x"
+    },
+    "id": {
+      "type": "Lambda",
+      "parameters": [
+        "x"
+      ],
+      "body": "xUse"
+    },
+    "flag": {
+      "type": "BoolLit",
+      "value": true
+    },
+    "app": {
+      "type": "Application",
+      "function": "id",
+      "arguments": [
+        "flag"
+      ]
+    }
+  }
+}

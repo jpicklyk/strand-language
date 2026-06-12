@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "root": "someValue",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "lit42": {
+      "type": "IntLit",
+      "value": 42
+    },
+    "someValue": {
+      "type": "SumValue",
+      "ofType": "intT",
+      "caseName": "Some",
+      "payload": "lit42"
+    }
+  }
+}

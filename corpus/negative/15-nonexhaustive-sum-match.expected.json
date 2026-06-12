@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "NonExhaustiveMatch",
+  "notes": "Corpus 25's Option match with the None case deleted and no catch-all. Top-level constructor coverage of the sum is incomplete."
+}

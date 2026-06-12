@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "Lambda.parameters lists an IntLit where a ParameterDecl is required. The canonical encoding's positional binder scheme cannot encode such a graph at all, so ingest rejects it (Q-066 pass 2.5) before the hash walk; found by negative-corpus authoring as a raw IllegalStateException escaping Hasher.finalize."
+}

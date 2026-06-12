@@ -1,7 +1,7 @@
 {
   "description": "Golden root content hashes for every corpus program and Layer A fixture. Language-independent conformance vectors: any Strand implementation must reproduce these hashes from the same inputs. Regenerate via the command in corpus/README.md when the corpus legitimately changes.",
   "hashFormat": "BLAKE3-256 multihash over the canonical node encoding (design/canonical-encoding.md): one 0x1e prefix byte + 32 digest bytes, rendered as lowercase hex (66 hex chars).",
-  "exclusionRule": "A corpus JSON file is a program iff its top-level object has both 'root' and 'nodes' keys. Event-input files (*.events.json), the name registry (77-name-registry-resolution/registry.json), and this file are excluded by that rule. Programs that cannot be hashed standalone carry an explicit 'unhashable-standalone: <reason>' marker instead of a hash.",
+  "exclusionRule": "A corpus JSON file is a program iff its top-level object has both 'root' and 'nodes' keys. Event-input files (*.events.json), the name registry (77-name-registry-resolution/registry.json), the negative corpus (negative/, whose entries are defined by their rejection), and this file are excluded by that rule. Programs that cannot be hashed standalone carry an explicit 'unhashable-standalone: <reason>' marker instead of a hash.",
   "programs": {
     "01-int-literal.json": "1e6970ba0a8f8e82923c82d5b40927ba0ba9d0dcfc526c3308e509a28e9f16caad",
     "02-identity-applied.json": "1e1d975efae6cd28680ecd0c0a21954532aaf273981e9ccbab2b8c39d45c56aeb6",

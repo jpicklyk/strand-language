@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "UnknownSumCase",
+  "notes": "SumValue constructs case 'Sume' (a one-character corruption of 'Some'), which the SumType does not declare."
+}

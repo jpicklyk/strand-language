@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "UncoveredEffects",
+  "notes": "The Lambda body calls the Time.Now builtin but the Lambda declares no effects. Mandatory effect declarations are the admission boundary's core guarantee."
+}

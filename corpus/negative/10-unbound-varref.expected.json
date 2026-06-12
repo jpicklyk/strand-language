@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "UnboundVariable",
+  "notes": "The Lambda body's VarRef points at ParameterDecl 'y', which no enclosing Lambda binds. Scope is by NodeId, and 'y' is never in scope."
+}

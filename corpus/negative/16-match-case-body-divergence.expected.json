@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "MatchCaseBodyTypeDivergence",
+  "notes": "The Some case body is Int, the None case body is Bool. A Match has no common result type when its case bodies diverge."
+}

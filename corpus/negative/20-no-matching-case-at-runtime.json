@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "root": "result",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "someCase": {
+      "type": "SumTypeCase",
+      "name": "Some",
+      "caseType": "intT"
+    },
+    "noneCase": {
+      "type": "SumTypeCase",
+      "name": "None",
+      "caseType": null
+    },
+    "optionT": {
+      "type": "SumType",
+      "cases": [
+        "someCase",
+        "noneCase"
+      ]
+    },
+    "lit1": {
+      "type": "IntLit",
+      "value": 1
+    },
+    "someValue": {
+      "type": "SumValue",
+      "ofType": "optionT",
+      "caseName": "Some",
+      "payload": "lit1"
+    },
+    "lit0": {
+      "type": "IntLit",
+      "value": 0
+    },
+    "patZero": {
+      "type": "Pattern",
+      "kind": "literal",
+      "patternType": "intT",
+      "literal": "lit0"
+    },
+    "patSomeZero": {
+      "type": "Pattern",
+      "kind": "constructor",
+      "patternType": "optionT",
+      "caseName": "Some",
+      "payloadPattern": "patZero"
+    },
+    "lit100": {
+      "type": "IntLit",
+      "value": 100
+    },
+    "caseSomeZero": {
+      "type": "MatchCase",
+      "pattern": "patSomeZero",
+      "body": "lit100"
+    },
+    "patNone": {
+      "type": "Pattern",
+      "kind": "constructor",
+      "patternType": "optionT",
+      "caseName": "None"
+    },
+    "lit200": {
+      "type": "IntLit",
+      "value": 200
+    },
+    "caseNone": {
+      "type": "MatchCase",
+      "pattern": "patNone",
+      "body": "lit200"
+    },
+    "result": {
+      "type": "Match",
+      "scrutinee": "someValue",
+      "cases": [
+        "caseSomeZero",
+        "caseNone"
+      ]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "stage": "evaluate",
+  "family": "CapabilityViolation",
+  "notes": "Corpus 16's Time.Now call evaluated under an EMPTY capability context. The graph verifies (effects are declared honestly); the runtime denies the call because no granted capability covers Time.Now."
+}

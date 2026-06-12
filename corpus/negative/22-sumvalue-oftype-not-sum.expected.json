@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "CategoryMismatch",
+  "notes": "SumValue.ofType references a PrimitiveType Int rather than a SumType. The graph encodes and hashes fine (ofType is an ordinary child edge), so the rejection correctly lands at the verifier's category check."
+}

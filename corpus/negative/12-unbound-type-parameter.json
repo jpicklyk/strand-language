@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "root": "f",
+  "nodes": {
+    "T_a": {
+      "type": "TypeParameter",
+      "name": "a"
+    },
+    "x": {
+      "type": "ParameterDecl",
+      "name": "x",
+      "paramType": "T_a"
+    },
+    "xUse": {
+      "type": "VarRef",
+      "binder": "x"
+    },
+    "f": {
+      "type": "Lambda",
+      "parameters": [
+        "x"
+      ],
+      "body": "xUse"
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "IntLit.value carries a JSON object where a scalar is required. kotlinx's jsonPrimitive accessor raises a raw IllegalArgumentException; the ingest boundary translates it to IngestError.Malformed (Q-066 hardening)."
+}

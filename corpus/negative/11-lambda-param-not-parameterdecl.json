@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "root": "f",
+  "nodes": {
+    "seven": {
+      "type": "IntLit",
+      "value": 7
+    },
+    "eight": {
+      "type": "IntLit",
+      "value": 8
+    },
+    "f": {
+      "type": "Lambda",
+      "parameters": [
+        "seven"
+      ],
+      "body": "eight"
+    }
+  }
+}

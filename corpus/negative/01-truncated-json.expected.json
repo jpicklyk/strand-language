@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "Document text cut off mid-field. kotlinx parse failure is translated to IngestError.Malformed at the ingest boundary (Q-066 hardening); the raw SerializationException must not escape."
+}

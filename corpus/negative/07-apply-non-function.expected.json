@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "NotAFunction",
+  "notes": "Application whose function expression is an IntLit. Ingests cleanly; the verifier rejects the Int-typed callee."
+}

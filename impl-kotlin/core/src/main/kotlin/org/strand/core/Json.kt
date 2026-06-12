@@ -145,16 +145,47 @@ object JsonIngest {
             )
         }
         validateJsonDepth(text, limits.maxJsonDepth)
-        return parse(parser.parseToJsonElement(text), limits)
+        // Q-066 ingest-boundary hardening: a syntactically invalid document
+        // (truncated text, stray bytes, unbalanced quotes) must surface as a
+        // structured [IngestError.Malformed], not as kotlinx-serialization's
+        // raw SerializationException.
+        val element = try {
+            parser.parseToJsonElement(text)
+        } catch (e: kotlinx.serialization.SerializationException) {
+            throw IngestError.Malformed(
+                "Invalid JSON: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}"
+            )
+        }
+        return parse(element, limits)
     }
 
     fun parse(element: JsonElement): IngestResult = parse(element, EvaluationLimits.DEFAULTS)
 
-    fun parse(element: JsonElement, limits: EvaluationLimits): IngestResult {
+    /**
+     * Q-066 ingest-boundary hardening: kotlinx-serialization's tree
+     * accessors (`jsonPrimitive`, `jsonArray`) raise raw
+     * `IllegalArgumentException` when a field has the wrong JSON shape
+     * (e.g. an object where a scalar is expected). At the ingest boundary
+     * a wrong-shaped field is a malformed document, so every escaping
+     * `IllegalArgumentException` is translated to [IngestError.Malformed].
+     * Internal-invariant failures use `check`/`error`
+     * (`IllegalStateException`) and deliberately stay loud.
+     */
+    fun parse(element: JsonElement, limits: EvaluationLimits): IngestResult = try {
+        parseValidated(element, limits)
+    } catch (e: IllegalArgumentException) {
+        throw IngestError.Malformed(
+            "Malformed document: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}"
+        )
+    }
+
+    private fun parseValidated(element: JsonElement, limits: EvaluationLimits): IngestResult {
         val obj = element.requireObject("root document")
 
         val version = obj["version"]?.jsonPrimitive?.intOrNull
-        require(version == 1) { "Unsupported or missing schema version (expected 1, got $version)" }
+        if (version != 1) {
+            throw IngestError.Malformed("Unsupported or missing schema version (expected 1, got $version)")
+        }
 
         val rootName = obj["root"]?.jsonPrimitive?.contentOrNull
             ?: throw IngestError.Malformed("Missing 'root' field")
@@ -205,6 +236,17 @@ object JsonIngest {
             slots[nameToId.getValue(name)] = IngestSlot.Resolved(stored)
         }
 
+        // Pass 2.5 (Q-066): binder-position category invariants. The
+        // canonical encoder's positional (de Bruijn) binder encoding
+        // requires that Lambda.parameters reference ParameterDecl nodes and
+        // that TypeAbstraction.typeParameters / ForallType.typeParameters
+        // reference TypeParameter nodes. A document violating these cannot
+        // be canonically encoded at all, so it is rejected here as
+        // malformed input rather than crashing the hash walk downstream.
+        // (The verifier's CategoryMismatch rule still guards the same
+        // invariant for programmatically-built stores.)
+        validateBinderCategories(orderedEntries.map { it.key }, nameToId, slots)
+
         // Pass 3: commit to the raw store. Every slot must be Resolved; an
         // unresolved slot would indicate an ingest bug, not a malformed
         // document, because pass 2 visits every entry.
@@ -234,6 +276,56 @@ object JsonIngest {
     private sealed class IngestSlot {
         object Pending : IngestSlot()
         data class Resolved(val stored: StoredNode) : IngestSlot()
+    }
+
+    /**
+     * Q-066 pass 2.5: enforce the binder-position category invariants that
+     * the canonical encoding's positional binder scheme depends on. Runs
+     * after pass 2 (so forward references are resolved) and before pass 3.
+     * Violations raise [IngestError.Malformed] naming the offending node,
+     * field, and actual category.
+     */
+    private fun validateBinderCategories(
+        orderedNames: List<String>,
+        nameToId: Map<String, NodeId>,
+        slots: Map<NodeId, IngestSlot>,
+    ) {
+        val idToName = nameToId.entries.associate { (n, i) -> i to n }
+        fun categoryOf(id: NodeId): String = when (val slot = slots.getValue(id)) {
+            is IngestSlot.Resolved -> when (val stored = slot.stored) {
+                is StoredNode.Canonical -> stored.node::class.simpleName ?: "?"
+                is StoredNode.RawNodeRef -> "NodeRef"
+                is StoredNode.RawModuleManifest -> "ModuleManifest"
+            }
+            IngestSlot.Pending -> "?"
+        }
+        fun nodeAt(id: NodeId): Node? =
+            ((slots.getValue(id) as? IngestSlot.Resolved)?.stored as? StoredNode.Canonical)?.node
+
+        fun requireBinder(owner: String, field: String, ids: List<NodeId>, expected: String) {
+            for ((i, childId) in ids.withIndex()) {
+                val actual = categoryOf(childId)
+                if (actual != expected) {
+                    throw IngestError.Malformed(
+                        "Node '$owner' field $field[$i] references " +
+                            "'${idToName[childId] ?: childId}' ($actual); " +
+                            "$field entries must be $expected nodes"
+                    )
+                }
+            }
+        }
+
+        for (name in orderedNames) {
+            when (val node = nodeAt(nameToId.getValue(name))) {
+                is Node.Lambda ->
+                    requireBinder(name, "Lambda.parameters", node.parameters, "ParameterDecl")
+                is Node.TypeAbstraction ->
+                    requireBinder(name, "TypeAbstraction.typeParameters", node.typeParameters, "TypeParameter")
+                is Node.ForallType ->
+                    requireBinder(name, "ForallType.typeParameters", node.typeParameters, "TypeParameter")
+                else -> {}
+            }
+        }
     }
 
     private fun buildStored(

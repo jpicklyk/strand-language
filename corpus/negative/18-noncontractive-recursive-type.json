@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "root": "f",
+  "nodes": {
+    "recSelf": {
+      "type": "RecursiveSelf"
+    },
+    "badT": {
+      "type": "RecursiveType",
+      "body": "recSelf"
+    },
+    "x": {
+      "type": "ParameterDecl",
+      "name": "x",
+      "paramType": "badT"
+    },
+    "xUse": {
+      "type": "VarRef",
+      "binder": "x"
+    },
+    "f": {
+      "type": "Lambda",
+      "parameters": [
+        "x"
+      ],
+      "body": "xUse"
+    }
+  }
+}

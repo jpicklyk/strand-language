@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "ArityMismatch",
+  "notes": "A one-parameter identity Lambda applied to two arguments."
+}
