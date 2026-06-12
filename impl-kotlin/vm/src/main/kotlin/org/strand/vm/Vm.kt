@@ -168,6 +168,16 @@ class Vm(private val table: ChunkTable) {
                             target = closure.target,
                             detail = e.message ?: "builtin contract violation",
                         ))
+                    } catch (e: ClassCastException) {
+                        // Q-066: graph-supplied foreignType is unchecked
+                        // against the builtin's real argument contract; a
+                        // type-confused argument list is a contract
+                        // violation, not an implementation crash.
+                        throw InterpretException(InterpretError.BuiltinContractViolation(
+                            at = null,
+                            target = closure.target,
+                            detail = e.message ?: "builtin argument type confusion",
+                        ))
                     }
                 }
                 else -> error("applyClosure: $closure is not callable (got ${closure::class.simpleName})")
@@ -709,6 +719,14 @@ class Vm(private val table: ChunkTable) {
                         at = null,
                         target = fn.target,
                         detail = e.message ?: "builtin contract violation",
+                    ))
+                } catch (e: ClassCastException) {
+                    // Q-066: type-confused builtin arguments (see the
+                    // interpreter's parallel catch) surface structured.
+                    throw InterpretException(InterpretError.BuiltinContractViolation(
+                        at = null,
+                        target = fn.target,
+                        detail = e.message ?: "builtin argument type confusion",
                     ))
                 }
                 current.stack.add(result)
