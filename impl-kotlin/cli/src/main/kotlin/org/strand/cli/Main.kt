@@ -12,6 +12,7 @@ import org.strand.authoring.Authoring
 import org.strand.authoring.AuthoringException
 import org.strand.authoring.ConstraintGrammar
 import org.strand.authoring.LayerAGrammar
+import org.strand.authoring.PreludeModule
 import org.strand.core.ErrorVerbosity
 import org.strand.core.EvaluationLimits
 import org.strand.core.Hash
@@ -914,11 +915,30 @@ private fun runTranslate(args: Array<String>) {
 private const val DEFAULT_REGISTRY_FILE = "strand-registry.json"
 
 /**
+ * Q-063: the default registry resident — the prelude. The bundled prelude
+ * module ([PreludeModule]) supplies `prelude` → manifest hash plus every
+ * reserved name → its admitted node's content hash, so
+ * `strand registry resolve fsWrite` answers from a clean checkout with no
+ * registry file. User registry-file entries overlay these defaults (a file
+ * entry with the same name wins); `put` writes only file entries, never
+ * the built-ins.
+ */
+private val preludeRegistryDefaults: NameRegistry by lazy {
+    val entries = LinkedHashMap<String, Hash>()
+    entries[PreludeModule.REGISTRY_NAME] = PreludeModule.loaded.manifestHash
+    entries.putAll(PreludeModule.loaded.nodeHashes)
+    NameRegistry(entries)
+}
+
+/**
  * Q-043 § 4.6 off-graph name-registry tooling. `strand registry` reads and
  * writes a flat name→hash JSON file (default [DEFAULT_REGISTRY_FILE], overridden
  * with `--registry <file>`). The registry is *not* part of any canonical graph —
  * it is a pure tooling affordance for discovering published hashes by a human
- * name, exactly the role [NameRegistry] documents. Subcommands:
+ * name, exactly the role [NameRegistry] documents. Q-063: resolution and
+ * listing consult the built-in prelude defaults ([preludeRegistryDefaults])
+ * beneath the file's entries, so the prelude's names answer with no file
+ * present. Subcommands:
  *
  *   strand registry resolve <name> [--registry <file>]    print the bound hash (exit 1 if unknown)
  *   strand registry put <name> <hash> [--registry <file>] add/update an entry, rewrite the file
@@ -937,10 +957,12 @@ private fun runRegistry(args: Array<String>) {
                 System.err.println("usage: strand registry resolve <name> [--registry <file>]")
                 exitProcess(2)
             }
-            val registry = loadRegistry(file, requireExists = true)
+            val registry = effectiveRegistry(file)
             val hash = registry.resolve(rest[0])
             if (hash == null) {
-                System.err.println("registry: no entry for '${rest[0]}' in ${file.path}")
+                System.err.println(
+                    "registry: no entry for '${rest[0]}' in ${file.path} or the built-in prelude defaults"
+                )
                 exitProcess(1)
             }
             println(hash)
@@ -957,7 +979,7 @@ private fun runRegistry(args: Array<String>) {
                 System.err.println("registry: invalid hash '$hashHex': ${e.message}")
                 exitProcess(2)
             }
-            val updated = loadRegistry(file, requireExists = false).put(name, hash)
+            val updated = loadRegistryFile(file).put(name, hash)
             file.writeText(NameRegistry.toJson(updated))
             println("registry: $name -> $hash  (${file.path})")
         }
@@ -966,7 +988,7 @@ private fun runRegistry(args: Array<String>) {
                 System.err.println("usage: strand registry list [--registry <file>]")
                 exitProcess(2)
             }
-            val registry = loadRegistry(file, requireExists = true)
+            val registry = effectiveRegistry(file)
             if (registry.entries.isEmpty()) {
                 println("(registry ${file.path} is empty)")
             } else {
@@ -1005,18 +1027,12 @@ private fun extractRegistryPath(flags: List<String>): Pair<String?, List<String>
 }
 
 /**
- * Load a [NameRegistry] from [file]. When [requireExists] is false (the `put`
- * path) a missing file yields [NameRegistry.EMPTY] so the first `put` creates
- * the file; otherwise a missing or malformed file is a hard error.
+ * Load a [NameRegistry] from [file]'s entries alone. A missing file yields
+ * [NameRegistry.EMPTY] (so the first `put` creates the file); a malformed
+ * file is a hard error.
  */
-private fun loadRegistry(file: File, requireExists: Boolean): NameRegistry {
-    if (!file.exists()) {
-        if (requireExists) {
-            System.err.println("registry: file not found: ${file.path}")
-            exitProcess(1)
-        }
-        return NameRegistry.EMPTY
-    }
+private fun loadRegistryFile(file: File): NameRegistry {
+    if (!file.exists()) return NameRegistry.EMPTY
     return try {
         NameRegistry.fromJson(file.readText())
     } catch (e: IllegalArgumentException) {
@@ -1024,6 +1040,15 @@ private fun loadRegistry(file: File, requireExists: Boolean): NameRegistry {
         exitProcess(1)
     }
 }
+
+/**
+ * Q-063: the registry view `resolve` and `list` consult — the built-in
+ * prelude defaults with [file]'s entries overlaid (file entries win on
+ * name collision). A missing file is no longer an error: the prelude
+ * answers from a clean checkout.
+ */
+private fun effectiveRegistry(file: File): NameRegistry =
+    NameRegistry(preludeRegistryDefaults.entries + loadRegistryFile(file).entries)
 
 private fun usage() {
     System.err.println("usage:")
@@ -1046,6 +1071,9 @@ private fun usage() {
     System.err.println("  --strict-integrity: explicit-declaration flag only — the per-target Merkle root")
     System.err.println("               re-hash that rejects a lying resolver is always on for federated runs.")
     System.err.println("  --registry <file>: name registry for `strand registry` (default $DEFAULT_REGISTRY_FILE).")
+    System.err.println("               resolve/list consult the built-in prelude defaults beneath the file's")
+    System.err.println("               entries ('prelude' -> manifest hash, every reserved name -> node hash),")
+    System.err.println("               so prelude names answer with no registry file present (Q-063).")
     System.err.println("  --grant-all: auto-grant wildcard capabilities for every EffectCategory")
     System.err.println("               in the verified store (demo / dev-mode convenience; not for")
     System.err.println("               production use).")
