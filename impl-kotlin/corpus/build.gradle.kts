@@ -46,6 +46,19 @@ tasks.test {
         "strand.regenerateGoldenHashes",
         System.getProperty("strand.regenerateGoldenHashes") ?: "false",
     )
+    // Forward the Q-063 prelude-module regeneration flag (PreludeModuleConformanceTest).
+    // When true, the test rewrites corpus/prelude-manifest.json and the bundled
+    // authoring snapshot from the live reserved-spec table; see corpus/README.md.
+    systemProperty(
+        "strand.regeneratePreludeModule",
+        System.getProperty("strand.regeneratePreludeModule") ?: "false",
+    )
+    // Forward the Q-063 legacy prelude-synthesis flag (equivalence-suite escape
+    // hatch): when true, the Layer A emitter synthesizes reserved nodes from the
+    // in-memory table instead of resolving them through the bundled module.
+    System.getProperty("strand.prelude.legacySynthesis")?.let {
+        systemProperty("strand.prelude.legacySynthesis", it)
+    }
     // Forward the Q-066 fuzz iteration count (CorpusMutationFuzzTest).
     // Unset means the test's default (25 mutants per corpus program);
     // deeper local campaigns run e.g. -Dstrand.fuzzIterations=500.

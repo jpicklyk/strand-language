@@ -294,46 +294,15 @@ object DagJsonEmitter {
         return LayerAGrammar.reservedNodes.keys.filter { it in needed }
     }
 
-    private fun synthesizeReserved(id: String): JsonObject {
-        val spec = LayerAGrammar.reservedNodes.getValue(id)
-        val fields = mutableMapOf<String, JsonElement>()
-        fields["type"] = JsonPrimitive(spec.jsonType)
-        for ((k, v) in spec.stringFields) {
-            fields[k] = JsonPrimitive(v)
-        }
-        for ((k, v) in spec.refFields) {
-            fields[k] = JsonPrimitive(v)
-        }
-        for ((k, v) in spec.refListFields) {
-            fields[k] = JsonArray(v.map { JsonPrimitive(it) })
-        }
-        // Q-039: emit effectProjections when non-empty. Each projection
-        // is an object with `category` and `sources`; each source is
-        // either {kind:"ArgRef", index:N} or {kind:"LiteralNode", target:"<id>"}.
-        // Matches the schema in [JsonIngest.optionalEffectProjections].
-        if (spec.effectProjections.isNotEmpty()) {
-            val projections = spec.effectProjections.map { proj ->
-                val sources = proj.sources.map { src ->
-                    when (src) {
-                        is LayerAGrammar.ReservedProjectionSource.ArgRef -> JsonObject(mapOf(
-                            "kind" to JsonPrimitive("ArgRef"),
-                            "index" to JsonPrimitive(src.index),
-                        ))
-                        is LayerAGrammar.ReservedProjectionSource.LiteralNode -> JsonObject(mapOf(
-                            "kind" to JsonPrimitive("LiteralNode"),
-                            "target" to JsonPrimitive(src.target),
-                        ))
-                    }
-                }
-                JsonObject(mapOf(
-                    "category" to JsonPrimitive(proj.category),
-                    "sources" to JsonArray(sources),
-                ))
-            }
-            fields["effectProjections"] = JsonArray(projections)
-        }
-        return JsonObject(fields)
-    }
+    /**
+     * Q-063: the legacy per-program synthesis path — build the reserved
+     * node's dag-json object directly from the in-memory spec table. The
+     * JSON-shaping lives in [PreludeModuleGenerator.reservedNodeJson] (the
+     * same code that generated the bundled prelude module snapshot), which
+     * is what guarantees the resolution path's nodes are byte-identical.
+     */
+    private fun synthesizeReserved(id: String): JsonObject =
+        PreludeModuleGenerator.reservedNodeJson(LayerAGrammar.reservedNodes.getValue(id))
 
     private fun emitNode(
         node: NodeDecl,

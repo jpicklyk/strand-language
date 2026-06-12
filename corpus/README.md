@@ -114,6 +114,27 @@ To regenerate after a legitimate corpus or encoding change, run from `impl-kotli
 then diff `corpus/golden-hashes.json` — every changed hash must be explainable by an intentional
 change — and rerun the test without the flag to assert the fresh file.
 
+## Prelude module manifest
+
+[`prelude-manifest.json`](prelude-manifest.json) pins the generated prelude module (Q-063,
+[`proposals/prelude-as-module.md`](../proposals/prelude-as-module.md)): the
+N-046 ModuleManifest hash, per-export hashes (the ForeignNode entries the manifest exports), and
+per-node hashes for every reserved name in the Layer A implicit prelude. The module itself is the
+bundled dag-json snapshot at
+`impl-kotlin/authoring/src/main/resources/org/strand/authoring/prelude-module.json`, generated from
+the reserved-spec table by `PreludeModuleGenerator`; `PreludeModuleConformanceTest`
+(`impl-kotlin/corpus`) asserts that regeneration reproduces both artifacts, so the table cannot
+drift from the published module silently. Like the corpus-77 registry, this file is not a program
+(no `root`/`nodes` document keys) and is excluded from `golden-hashes.json` structurally.
+
+To regenerate after a legitimate reserved-table change, run from `impl-kotlin/`:
+
+```
+.\gradlew.bat :corpus:test --tests "org.strand.corpus.PreludeModuleConformanceTest" -Dstrand.regeneratePreludeModule=true
+```
+
+then diff both artifacts and rerun the test without the flag to assert the fresh files.
+
 ## Negative corpus
 
 [`negative/`](negative/README.md) holds the Q-066 adversarial battery's curated near-miss

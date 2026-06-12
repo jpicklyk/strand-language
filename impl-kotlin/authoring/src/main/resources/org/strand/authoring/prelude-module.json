@@ -1,0 +1,2650 @@
+{
+  "version": 1,
+  "root": "__preludeManifest",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "floatT": {
+      "type": "PrimitiveType",
+      "kind": "Float"
+    },
+    "stringT": {
+      "type": "PrimitiveType",
+      "kind": "String"
+    },
+    "boolT": {
+      "type": "PrimitiveType",
+      "kind": "Bool"
+    },
+    "unitT": {
+      "type": "PrimitiveType",
+      "kind": "Unit"
+    },
+    "bytesT": {
+      "type": "PrimitiveType",
+      "kind": "Bytes"
+    },
+    "addT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "subT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "mulT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "divT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "modT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "negT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "eqIntT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "ltT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "leT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "gtT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "geT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "notT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "boolT"
+      ]
+    },
+    "andT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "boolT",
+        "boolT"
+      ]
+    },
+    "orT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "boolT",
+        "boolT"
+      ]
+    },
+    "concatT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "eqStrT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "nowT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": []
+    },
+    "add": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Add",
+      "foreignType": "addT"
+    },
+    "sub": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Sub",
+      "foreignType": "subT"
+    },
+    "mul": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Mul",
+      "foreignType": "mulT"
+    },
+    "div": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Div",
+      "foreignType": "divT"
+    },
+    "mod": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Mod",
+      "foreignType": "modT"
+    },
+    "neg": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Neg",
+      "foreignType": "negT"
+    },
+    "eqInt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Eq",
+      "foreignType": "eqIntT"
+    },
+    "lt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Lt",
+      "foreignType": "ltT"
+    },
+    "le": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Le",
+      "foreignType": "leT"
+    },
+    "gt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Gt",
+      "foreignType": "gtT"
+    },
+    "ge": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Ge",
+      "foreignType": "geT"
+    },
+    "not": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bool.Not",
+      "foreignType": "notT"
+    },
+    "and": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bool.And",
+      "foreignType": "andT"
+    },
+    "or": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bool.Or",
+      "foreignType": "orT"
+    },
+    "concat": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Concat",
+      "foreignType": "concatT"
+    },
+    "eqStr": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Eq",
+      "foreignType": "eqStrT"
+    },
+    "now": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Time.Now",
+      "foreignType": "nowT",
+      "effects": [
+        "nowFx"
+      ]
+    },
+    "receiveFx": {
+      "type": "EffectCategory",
+      "categoryName": "StateMachine.Receive"
+    },
+    "sendFx": {
+      "type": "EffectCategory",
+      "categoryName": "StateMachine.Send"
+    },
+    "spawnFx": {
+      "type": "EffectCategory",
+      "categoryName": "StateMachine.Spawn"
+    },
+    "terminateFx": {
+      "type": "EffectCategory",
+      "categoryName": "StateMachine.Terminate"
+    },
+    "nowFx": {
+      "type": "EffectCategory",
+      "categoryName": "Time.Now"
+    },
+    "writeFx": {
+      "type": "EffectCategory",
+      "categoryName": "Filesystem.Write",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "connectFx": {
+      "type": "EffectCategory",
+      "categoryName": "Network.Connect",
+      "parameters": [
+        "stringT",
+        "intT"
+      ]
+    },
+    "cryptoFx": {
+      "type": "EffectCategory",
+      "categoryName": "Crypto.RandomBytes"
+    },
+    "readFx": {
+      "type": "EffectCategory",
+      "categoryName": "Filesystem.Read",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "netSendFx": {
+      "type": "EffectCategory",
+      "categoryName": "Network.Send"
+    },
+    "netRecvFx": {
+      "type": "EffectCategory",
+      "categoryName": "Network.Receive"
+    },
+    "procWaitFx": {
+      "type": "EffectCategory",
+      "categoryName": "Process.Wait"
+    },
+    "sleepFx": {
+      "type": "EffectCategory",
+      "categoryName": "Time.Sleep"
+    },
+    "logFx": {
+      "type": "EffectCategory",
+      "categoryName": "Log.Write"
+    },
+    "osReadFx": {
+      "type": "EffectCategory",
+      "categoryName": "OS.Read"
+    },
+    "exitFx": {
+      "type": "EffectCategory",
+      "categoryName": "System.Exit"
+    },
+    "absT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "signT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "minT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "maxT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "mmodT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "floorT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "ceilT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "roundT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "sqrtT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "powT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "lnT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "expT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "sinT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "cosT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "tanT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "toFloatT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "toIntTruncT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "blake3T": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "sha256T": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "md5T": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "randIntT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "randFloatT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": []
+    },
+    "randBytesT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "hexOfT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "abs": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Abs",
+      "foreignType": "absT"
+    },
+    "sign": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Sign",
+      "foreignType": "signT"
+    },
+    "min": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Min",
+      "foreignType": "minT"
+    },
+    "max": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Max",
+      "foreignType": "maxT"
+    },
+    "mmod": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Mod",
+      "foreignType": "mmodT"
+    },
+    "floor": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Floor",
+      "foreignType": "floorT"
+    },
+    "ceil": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Ceil",
+      "foreignType": "ceilT"
+    },
+    "round": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Round",
+      "foreignType": "roundT"
+    },
+    "sqrt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Sqrt",
+      "foreignType": "sqrtT"
+    },
+    "pow": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Pow",
+      "foreignType": "powT"
+    },
+    "ln": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Log",
+      "foreignType": "lnT"
+    },
+    "exp": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Exp",
+      "foreignType": "expT"
+    },
+    "sin": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Sin",
+      "foreignType": "sinT"
+    },
+    "cos": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Cos",
+      "foreignType": "cosT"
+    },
+    "tan": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Math.Tan",
+      "foreignType": "tanT"
+    },
+    "toFloat": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.FromInt",
+      "foreignType": "toFloatT"
+    },
+    "toIntTrunc": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.FromFloatTrunc",
+      "foreignType": "toIntTruncT"
+    },
+    "blake3": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Hash.Blake3",
+      "foreignType": "blake3T"
+    },
+    "sha256": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Hash.Sha256",
+      "foreignType": "sha256T"
+    },
+    "md5": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Hash.Md5",
+      "foreignType": "md5T"
+    },
+    "randInt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Random.Int",
+      "foreignType": "randIntT",
+      "effects": [
+        "cryptoFx"
+      ]
+    },
+    "randFloat": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Random.Float",
+      "foreignType": "randFloatT",
+      "effects": [
+        "cryptoFx"
+      ]
+    },
+    "randBytes": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Random.Bytes",
+      "foreignType": "randBytesT",
+      "effects": [
+        "cryptoFx"
+      ]
+    },
+    "hexOf": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bytes.FormatHex",
+      "foreignType": "hexOfT"
+    },
+    "fsReadT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "fsWriteT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "stringT",
+        "bytesT"
+      ]
+    },
+    "fsAppendT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "stringT",
+        "bytesT"
+      ]
+    },
+    "fsExistsT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "fsDeleteT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "netConnectT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "stringT",
+        "intT"
+      ]
+    },
+    "netSendT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "netRecvT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "netCloseT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "llmStreamCloseT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "httpRespStatusField": {
+      "type": "ProductTypeField",
+      "name": "status",
+      "fieldType": "intT"
+    },
+    "httpRespBodyField": {
+      "type": "ProductTypeField",
+      "name": "body",
+      "fieldType": "bytesT"
+    },
+    "httpRespT": {
+      "type": "ProductType",
+      "fields": [
+        "httpRespStatusField",
+        "httpRespBodyField"
+      ]
+    },
+    "httpReqT": {
+      "type": "FunctionType",
+      "result": "httpRespT",
+      "parameters": [
+        "stringT",
+        "stringT",
+        "bytesT"
+      ]
+    },
+    "errKindField": {
+      "type": "ProductTypeField",
+      "name": "kind",
+      "fieldType": "stringT"
+    },
+    "errDetailField": {
+      "type": "ProductTypeField",
+      "name": "detail",
+      "fieldType": "stringT"
+    },
+    "errPayloadT": {
+      "type": "ProductType",
+      "fields": [
+        "errKindField",
+        "errDetailField"
+      ]
+    },
+    "procWaitT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "sleepT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "strLenT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "subStrT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "intT",
+        "intT"
+      ]
+    },
+    "indexOfT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "containsT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "replaceT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "stringT",
+        "stringT"
+      ]
+    },
+    "upperT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "lowerT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "trimT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "intToStrT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "floatToStrT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "boolToStrT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "boolT"
+      ]
+    },
+    "bytesLenT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "bytesSliceT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT",
+        "intT",
+        "intT"
+      ]
+    },
+    "bytesCatT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT",
+        "bytesT"
+      ]
+    },
+    "fromUtf8T": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "b64OfT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "fsRead": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Fs.Read",
+      "foreignType": "fsReadT",
+      "effects": [
+        "readFx"
+      ],
+      "effectProjections": [
+        {
+          "category": "readFx",
+          "sources": [
+            {
+              "kind": "ArgRef",
+              "index": 0
+            }
+          ]
+        }
+      ]
+    },
+    "fsWrite": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Fs.Write",
+      "foreignType": "fsWriteT",
+      "effects": [
+        "writeFx"
+      ],
+      "effectProjections": [
+        {
+          "category": "writeFx",
+          "sources": [
+            {
+              "kind": "ArgRef",
+              "index": 0
+            }
+          ]
+        }
+      ]
+    },
+    "fsAppend": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Fs.Append",
+      "foreignType": "fsAppendT",
+      "effects": [
+        "writeFx"
+      ],
+      "effectProjections": [
+        {
+          "category": "writeFx",
+          "sources": [
+            {
+              "kind": "ArgRef",
+              "index": 0
+            }
+          ]
+        }
+      ]
+    },
+    "fsExists": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Fs.Exists",
+      "foreignType": "fsExistsT",
+      "effects": [
+        "readFx"
+      ],
+      "effectProjections": [
+        {
+          "category": "readFx",
+          "sources": [
+            {
+              "kind": "ArgRef",
+              "index": 0
+            }
+          ]
+        }
+      ]
+    },
+    "fsDelete": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Fs.Delete",
+      "foreignType": "fsDeleteT",
+      "effects": [
+        "writeFx"
+      ],
+      "effectProjections": [
+        {
+          "category": "writeFx",
+          "sources": [
+            {
+              "kind": "ArgRef",
+              "index": 0
+            }
+          ]
+        }
+      ]
+    },
+    "netConnect": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Net.Connect",
+      "foreignType": "netConnectT",
+      "effects": [
+        "connectFx"
+      ],
+      "effectProjections": [
+        {
+          "category": "connectFx",
+          "sources": [
+            {
+              "kind": "ArgRef",
+              "index": 0
+            },
+            {
+              "kind": "ArgRef",
+              "index": 1
+            }
+          ]
+        }
+      ]
+    },
+    "netSend": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Net.Send",
+      "foreignType": "netSendT",
+      "effects": [
+        "netSendFx"
+      ]
+    },
+    "netRecv": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Net.Receive",
+      "foreignType": "netRecvT",
+      "effects": [
+        "netRecvFx"
+      ]
+    },
+    "netClose": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Net.Close",
+      "foreignType": "netCloseT"
+    },
+    "llmStreamClose": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:LLM.Stream.Close",
+      "foreignType": "llmStreamCloseT"
+    },
+    "httpReq": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Http.RequestFromUrl",
+      "foreignType": "httpReqT",
+      "effects": [
+        "connectFx",
+        "netSendFx",
+        "netRecvFx"
+      ]
+    },
+    "procWait": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Process.Wait",
+      "foreignType": "procWaitT",
+      "effects": [
+        "procWaitFx"
+      ]
+    },
+    "sleep": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Time.Sleep",
+      "foreignType": "sleepT",
+      "effects": [
+        "sleepFx"
+      ]
+    },
+    "strLen": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Length",
+      "foreignType": "strLenT"
+    },
+    "subStr": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Substring",
+      "foreignType": "subStrT"
+    },
+    "indexOf": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.IndexOf",
+      "foreignType": "indexOfT"
+    },
+    "contains": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Contains",
+      "foreignType": "containsT"
+    },
+    "replace": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Replace",
+      "foreignType": "replaceT"
+    },
+    "upper": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.ToUpper",
+      "foreignType": "upperT"
+    },
+    "lower": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.ToLower",
+      "foreignType": "lowerT"
+    },
+    "trim": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Trim",
+      "foreignType": "trimT"
+    },
+    "intToStr": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.FromInt",
+      "foreignType": "intToStrT"
+    },
+    "floatToStr": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.FromFloat",
+      "foreignType": "floatToStrT"
+    },
+    "boolToStr": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.FromBool",
+      "foreignType": "boolToStrT"
+    },
+    "bytesLen": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bytes.Length",
+      "foreignType": "bytesLenT"
+    },
+    "bytesSlice": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bytes.Slice",
+      "foreignType": "bytesSliceT"
+    },
+    "bytesCat": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bytes.Concat",
+      "foreignType": "bytesCatT"
+    },
+    "fromUtf8": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bytes.FromUtf8",
+      "foreignType": "fromUtf8T"
+    },
+    "b64Of": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bytes.FormatBase64",
+      "foreignType": "b64OfT"
+    },
+    "logT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "hostT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": []
+    },
+    "platT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": []
+    },
+    "cwdT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": []
+    },
+    "exitT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "logInfo": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Log.Info",
+      "foreignType": "logT",
+      "effects": [
+        "logFx"
+      ]
+    },
+    "logWarn": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Log.Warn",
+      "foreignType": "logT",
+      "effects": [
+        "logFx"
+      ]
+    },
+    "logError": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Log.Error",
+      "foreignType": "logT",
+      "effects": [
+        "logFx"
+      ]
+    },
+    "hostname": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:OS.Hostname",
+      "foreignType": "hostT",
+      "effects": [
+        "osReadFx"
+      ]
+    },
+    "platform": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:OS.Platform",
+      "foreignType": "platT",
+      "effects": [
+        "osReadFx"
+      ]
+    },
+    "cwd": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:OS.Cwd",
+      "foreignType": "cwdT",
+      "effects": [
+        "osReadFx"
+      ]
+    },
+    "exit": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:System.Exit",
+      "foreignType": "exitT",
+      "effects": [
+        "exitFx"
+      ]
+    },
+    "reReplaceT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "stringT",
+        "stringT"
+      ]
+    },
+    "reReplace": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Regex.Replace",
+      "foreignType": "reReplaceT"
+    },
+    "llmGenerateFx": {
+      "type": "EffectCategory",
+      "categoryName": "LLM.Generate",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "llmEmbedFx": {
+      "type": "EffectCategory",
+      "categoryName": "LLM.Embed",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "llmGenerateT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "llmEmbedT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "anthropicGenerate": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Anthropic.Messages.Create",
+      "foreignType": "llmGenerateT",
+      "effects": [
+        "llmGenerateFx"
+      ]
+    },
+    "anthropicEmbed": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Anthropic.Embeddings.Create",
+      "foreignType": "llmEmbedT",
+      "effects": [
+        "llmEmbedFx"
+      ]
+    },
+    "openaiGenerate": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:OpenAI.Chat.Completions",
+      "foreignType": "llmGenerateT",
+      "effects": [
+        "llmGenerateFx"
+      ]
+    },
+    "openaiEmbed": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:OpenAI.Embeddings.Create",
+      "foreignType": "llmEmbedT",
+      "effects": [
+        "llmEmbedFx"
+      ]
+    },
+    "geminiGenerate": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Gemini.GenerateContent",
+      "foreignType": "llmGenerateT",
+      "effects": [
+        "llmGenerateFx"
+      ]
+    },
+    "geminiEmbed": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Gemini.EmbedContent",
+      "foreignType": "llmEmbedT",
+      "effects": [
+        "llmEmbedFx"
+      ]
+    },
+    "vectorReadFx": {
+      "type": "EffectCategory",
+      "categoryName": "Vector.Read",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "vectorWriteFx": {
+      "type": "EffectCategory",
+      "categoryName": "Vector.Write",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "pineconeOpenT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "pineconeCloseT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "pineconeUpsertT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "pineconeQueryT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "pineconeDeleteT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "pineconeFetchT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "pineconeOpen": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Pinecone.Index.Open",
+      "foreignType": "pineconeOpenT",
+      "effects": [
+        "vectorReadFx",
+        "vectorWriteFx"
+      ]
+    },
+    "pineconeClose": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Pinecone.Index.Close",
+      "foreignType": "pineconeCloseT"
+    },
+    "pineconeUpsert": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Pinecone.Index.Upsert",
+      "foreignType": "pineconeUpsertT",
+      "effects": [
+        "vectorWriteFx"
+      ]
+    },
+    "pineconeQuery": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Pinecone.Index.Query",
+      "foreignType": "pineconeQueryT",
+      "effects": [
+        "vectorReadFx"
+      ]
+    },
+    "pineconeDelete": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Pinecone.Index.Delete",
+      "foreignType": "pineconeDeleteT",
+      "effects": [
+        "vectorWriteFx"
+      ]
+    },
+    "pineconeFetch": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Pinecone.Index.Fetch",
+      "foreignType": "pineconeFetchT",
+      "effects": [
+        "vectorReadFx"
+      ]
+    },
+    "chromaOpenT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "chromaCloseT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "chromaAddT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "chromaQueryT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "chromaDeleteT": {
+      "type": "FunctionType",
+      "result": "unitT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "chromaGetT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "intT",
+        "bytesT"
+      ]
+    },
+    "chromaOpen": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Chroma.Collection.Open",
+      "foreignType": "chromaOpenT",
+      "effects": [
+        "vectorReadFx",
+        "vectorWriteFx"
+      ]
+    },
+    "chromaClose": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Chroma.Collection.Close",
+      "foreignType": "chromaCloseT"
+    },
+    "chromaAdd": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Chroma.Collection.Add",
+      "foreignType": "chromaAddT",
+      "effects": [
+        "vectorWriteFx"
+      ]
+    },
+    "chromaQuery": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Chroma.Collection.Query",
+      "foreignType": "chromaQueryT",
+      "effects": [
+        "vectorReadFx"
+      ]
+    },
+    "chromaDelete": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Chroma.Collection.Delete",
+      "foreignType": "chromaDeleteT",
+      "effects": [
+        "vectorWriteFx"
+      ]
+    },
+    "chromaGet": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Chroma.Collection.Get",
+      "foreignType": "chromaGetT",
+      "effects": [
+        "vectorReadFx"
+      ]
+    },
+    "fAddT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fSubT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fMulT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fDivT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fNegT": {
+      "type": "FunctionType",
+      "result": "floatT",
+      "parameters": [
+        "floatT"
+      ]
+    },
+    "fEqT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fLtT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fLeT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fGtT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fGeT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "floatT",
+        "floatT"
+      ]
+    },
+    "fAdd": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Add",
+      "foreignType": "fAddT"
+    },
+    "fSub": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Sub",
+      "foreignType": "fSubT"
+    },
+    "fMul": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Mul",
+      "foreignType": "fMulT"
+    },
+    "fDiv": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Div",
+      "foreignType": "fDivT"
+    },
+    "fNeg": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Neg",
+      "foreignType": "fNegT"
+    },
+    "fEq": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Eq",
+      "foreignType": "fEqT"
+    },
+    "fLt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Lt",
+      "foreignType": "fLtT"
+    },
+    "fLe": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Le",
+      "foreignType": "fLeT"
+    },
+    "fGt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Gt",
+      "foreignType": "fGtT"
+    },
+    "fGe": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Float.Ge",
+      "foreignType": "fGeT"
+    },
+    "eqBoolT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "boolT",
+        "boolT"
+      ]
+    },
+    "eqBytesT": {
+      "type": "FunctionType",
+      "result": "boolT",
+      "parameters": [
+        "bytesT",
+        "bytesT"
+      ]
+    },
+    "eqBool": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bool.Eq",
+      "foreignType": "eqBoolT"
+    },
+    "eqBytes": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bytes.Eq",
+      "foreignType": "eqBytesT"
+    },
+    "pathJoinT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "stringT"
+      ]
+    },
+    "pathBaseT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "pathDirT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "pathExtT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "pathNormT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "pathJoin": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Path.Join",
+      "foreignType": "pathJoinT"
+    },
+    "pathBase": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Path.Basename",
+      "foreignType": "pathBaseT"
+    },
+    "pathDir": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Path.Dirname",
+      "foreignType": "pathDirT"
+    },
+    "pathExt": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Path.Extension",
+      "foreignType": "pathExtT"
+    },
+    "pathNorm": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Path.Normalize",
+      "foreignType": "pathNormT"
+    },
+    "dtFormatIsoT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "dtYearT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "dtMonthT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "dtDayT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "dtHourT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "dtMinuteT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "dtSecondT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT"
+      ]
+    },
+    "dtAddDaysT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "dtAddHoursT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "dtAddMinutesT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "dtAddSecondsT": {
+      "type": "FunctionType",
+      "result": "intT",
+      "parameters": [
+        "intT",
+        "intT"
+      ]
+    },
+    "dtFormatIso": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.FormatIso",
+      "foreignType": "dtFormatIsoT"
+    },
+    "dtYear": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.Year",
+      "foreignType": "dtYearT"
+    },
+    "dtMonth": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.Month",
+      "foreignType": "dtMonthT"
+    },
+    "dtDay": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.Day",
+      "foreignType": "dtDayT"
+    },
+    "dtHour": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.Hour",
+      "foreignType": "dtHourT"
+    },
+    "dtMinute": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.Minute",
+      "foreignType": "dtMinuteT"
+    },
+    "dtSecond": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.Second",
+      "foreignType": "dtSecondT"
+    },
+    "dtAddDays": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.AddDays",
+      "foreignType": "dtAddDaysT"
+    },
+    "dtAddHours": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.AddHours",
+      "foreignType": "dtAddHoursT"
+    },
+    "dtAddMinutes": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.AddMinutes",
+      "foreignType": "dtAddMinutesT"
+    },
+    "dtAddSeconds": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:DateTime.AddSeconds",
+      "foreignType": "dtAddSecondsT"
+    },
+    "padLeftT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "intT",
+        "stringT"
+      ]
+    },
+    "padRightT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "intT",
+        "stringT"
+      ]
+    },
+    "strRepeatT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT",
+        "intT"
+      ]
+    },
+    "padLeft": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.PadLeft",
+      "foreignType": "padLeftT"
+    },
+    "padRight": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.PadRight",
+      "foreignType": "padRightT"
+    },
+    "strRepeat": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:String.Repeat",
+      "foreignType": "strRepeatT"
+    },
+    "urlEncodeT": {
+      "type": "FunctionType",
+      "result": "stringT",
+      "parameters": [
+        "stringT"
+      ]
+    },
+    "urlEncode": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Url.QueryEncode",
+      "foreignType": "urlEncodeT"
+    },
+    "gzipT": {
+      "type": "FunctionType",
+      "result": "bytesT",
+      "parameters": [
+        "bytesT"
+      ]
+    },
+    "gzip": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Compress.Gzip",
+      "foreignType": "gzipT"
+    },
+    "__preludeManifest": {
+      "type": "ModuleManifest",
+      "exports": [
+        {
+          "target": "add",
+          "declaredEffects": [],
+          "displayName": "add"
+        },
+        {
+          "target": "sub",
+          "declaredEffects": [],
+          "displayName": "sub"
+        },
+        {
+          "target": "mul",
+          "declaredEffects": [],
+          "displayName": "mul"
+        },
+        {
+          "target": "div",
+          "declaredEffects": [],
+          "displayName": "div"
+        },
+        {
+          "target": "mod",
+          "declaredEffects": [],
+          "displayName": "mod"
+        },
+        {
+          "target": "neg",
+          "declaredEffects": [],
+          "displayName": "neg"
+        },
+        {
+          "target": "eqInt",
+          "declaredEffects": [],
+          "displayName": "eqInt"
+        },
+        {
+          "target": "lt",
+          "declaredEffects": [],
+          "displayName": "lt"
+        },
+        {
+          "target": "le",
+          "declaredEffects": [],
+          "displayName": "le"
+        },
+        {
+          "target": "gt",
+          "declaredEffects": [],
+          "displayName": "gt"
+        },
+        {
+          "target": "ge",
+          "declaredEffects": [],
+          "displayName": "ge"
+        },
+        {
+          "target": "not",
+          "declaredEffects": [],
+          "displayName": "not"
+        },
+        {
+          "target": "and",
+          "declaredEffects": [],
+          "displayName": "and"
+        },
+        {
+          "target": "or",
+          "declaredEffects": [],
+          "displayName": "or"
+        },
+        {
+          "target": "concat",
+          "declaredEffects": [],
+          "displayName": "concat"
+        },
+        {
+          "target": "eqStr",
+          "declaredEffects": [],
+          "displayName": "eqStr"
+        },
+        {
+          "target": "now",
+          "declaredEffects": [
+            "nowFx"
+          ],
+          "displayName": "now"
+        },
+        {
+          "target": "abs",
+          "declaredEffects": [],
+          "displayName": "abs"
+        },
+        {
+          "target": "sign",
+          "declaredEffects": [],
+          "displayName": "sign"
+        },
+        {
+          "target": "min",
+          "declaredEffects": [],
+          "displayName": "min"
+        },
+        {
+          "target": "max",
+          "declaredEffects": [],
+          "displayName": "max"
+        },
+        {
+          "target": "mmod",
+          "declaredEffects": [],
+          "displayName": "mmod"
+        },
+        {
+          "target": "floor",
+          "declaredEffects": [],
+          "displayName": "floor"
+        },
+        {
+          "target": "ceil",
+          "declaredEffects": [],
+          "displayName": "ceil"
+        },
+        {
+          "target": "round",
+          "declaredEffects": [],
+          "displayName": "round"
+        },
+        {
+          "target": "sqrt",
+          "declaredEffects": [],
+          "displayName": "sqrt"
+        },
+        {
+          "target": "pow",
+          "declaredEffects": [],
+          "displayName": "pow"
+        },
+        {
+          "target": "ln",
+          "declaredEffects": [],
+          "displayName": "ln"
+        },
+        {
+          "target": "exp",
+          "declaredEffects": [],
+          "displayName": "exp"
+        },
+        {
+          "target": "sin",
+          "declaredEffects": [],
+          "displayName": "sin"
+        },
+        {
+          "target": "cos",
+          "declaredEffects": [],
+          "displayName": "cos"
+        },
+        {
+          "target": "tan",
+          "declaredEffects": [],
+          "displayName": "tan"
+        },
+        {
+          "target": "toFloat",
+          "declaredEffects": [],
+          "displayName": "toFloat"
+        },
+        {
+          "target": "toIntTrunc",
+          "declaredEffects": [],
+          "displayName": "toIntTrunc"
+        },
+        {
+          "target": "blake3",
+          "declaredEffects": [],
+          "displayName": "blake3"
+        },
+        {
+          "target": "sha256",
+          "declaredEffects": [],
+          "displayName": "sha256"
+        },
+        {
+          "target": "md5",
+          "declaredEffects": [],
+          "displayName": "md5"
+        },
+        {
+          "target": "randInt",
+          "declaredEffects": [
+            "cryptoFx"
+          ],
+          "displayName": "randInt"
+        },
+        {
+          "target": "randFloat",
+          "declaredEffects": [
+            "cryptoFx"
+          ],
+          "displayName": "randFloat"
+        },
+        {
+          "target": "randBytes",
+          "declaredEffects": [
+            "cryptoFx"
+          ],
+          "displayName": "randBytes"
+        },
+        {
+          "target": "hexOf",
+          "declaredEffects": [],
+          "displayName": "hexOf"
+        },
+        {
+          "target": "fsRead",
+          "declaredEffects": [
+            "readFx"
+          ],
+          "displayName": "fsRead"
+        },
+        {
+          "target": "fsWrite",
+          "declaredEffects": [
+            "writeFx"
+          ],
+          "displayName": "fsWrite"
+        },
+        {
+          "target": "fsAppend",
+          "declaredEffects": [
+            "writeFx"
+          ],
+          "displayName": "fsAppend"
+        },
+        {
+          "target": "fsExists",
+          "declaredEffects": [
+            "readFx"
+          ],
+          "displayName": "fsExists"
+        },
+        {
+          "target": "fsDelete",
+          "declaredEffects": [
+            "writeFx"
+          ],
+          "displayName": "fsDelete"
+        },
+        {
+          "target": "netConnect",
+          "declaredEffects": [
+            "connectFx"
+          ],
+          "displayName": "netConnect"
+        },
+        {
+          "target": "netSend",
+          "declaredEffects": [
+            "netSendFx"
+          ],
+          "displayName": "netSend"
+        },
+        {
+          "target": "netRecv",
+          "declaredEffects": [
+            "netRecvFx"
+          ],
+          "displayName": "netRecv"
+        },
+        {
+          "target": "netClose",
+          "declaredEffects": [],
+          "displayName": "netClose"
+        },
+        {
+          "target": "llmStreamClose",
+          "declaredEffects": [],
+          "displayName": "llmStreamClose"
+        },
+        {
+          "target": "httpReq",
+          "declaredEffects": [
+            "connectFx",
+            "netSendFx",
+            "netRecvFx"
+          ],
+          "displayName": "httpReq"
+        },
+        {
+          "target": "procWait",
+          "declaredEffects": [
+            "procWaitFx"
+          ],
+          "displayName": "procWait"
+        },
+        {
+          "target": "sleep",
+          "declaredEffects": [
+            "sleepFx"
+          ],
+          "displayName": "sleep"
+        },
+        {
+          "target": "strLen",
+          "declaredEffects": [],
+          "displayName": "strLen"
+        },
+        {
+          "target": "subStr",
+          "declaredEffects": [],
+          "displayName": "subStr"
+        },
+        {
+          "target": "indexOf",
+          "declaredEffects": [],
+          "displayName": "indexOf"
+        },
+        {
+          "target": "contains",
+          "declaredEffects": [],
+          "displayName": "contains"
+        },
+        {
+          "target": "replace",
+          "declaredEffects": [],
+          "displayName": "replace"
+        },
+        {
+          "target": "upper",
+          "declaredEffects": [],
+          "displayName": "upper"
+        },
+        {
+          "target": "lower",
+          "declaredEffects": [],
+          "displayName": "lower"
+        },
+        {
+          "target": "trim",
+          "declaredEffects": [],
+          "displayName": "trim"
+        },
+        {
+          "target": "intToStr",
+          "declaredEffects": [],
+          "displayName": "intToStr"
+        },
+        {
+          "target": "floatToStr",
+          "declaredEffects": [],
+          "displayName": "floatToStr"
+        },
+        {
+          "target": "boolToStr",
+          "declaredEffects": [],
+          "displayName": "boolToStr"
+        },
+        {
+          "target": "bytesLen",
+          "declaredEffects": [],
+          "displayName": "bytesLen"
+        },
+        {
+          "target": "bytesSlice",
+          "declaredEffects": [],
+          "displayName": "bytesSlice"
+        },
+        {
+          "target": "bytesCat",
+          "declaredEffects": [],
+          "displayName": "bytesCat"
+        },
+        {
+          "target": "fromUtf8",
+          "declaredEffects": [],
+          "displayName": "fromUtf8"
+        },
+        {
+          "target": "b64Of",
+          "declaredEffects": [],
+          "displayName": "b64Of"
+        },
+        {
+          "target": "logInfo",
+          "declaredEffects": [
+            "logFx"
+          ],
+          "displayName": "logInfo"
+        },
+        {
+          "target": "logWarn",
+          "declaredEffects": [
+            "logFx"
+          ],
+          "displayName": "logWarn"
+        },
+        {
+          "target": "logError",
+          "declaredEffects": [
+            "logFx"
+          ],
+          "displayName": "logError"
+        },
+        {
+          "target": "hostname",
+          "declaredEffects": [
+            "osReadFx"
+          ],
+          "displayName": "hostname"
+        },
+        {
+          "target": "platform",
+          "declaredEffects": [
+            "osReadFx"
+          ],
+          "displayName": "platform"
+        },
+        {
+          "target": "cwd",
+          "declaredEffects": [
+            "osReadFx"
+          ],
+          "displayName": "cwd"
+        },
+        {
+          "target": "exit",
+          "declaredEffects": [
+            "exitFx"
+          ],
+          "displayName": "exit"
+        },
+        {
+          "target": "reReplace",
+          "declaredEffects": [],
+          "displayName": "reReplace"
+        },
+        {
+          "target": "anthropicGenerate",
+          "declaredEffects": [
+            "llmGenerateFx"
+          ],
+          "displayName": "anthropicGenerate"
+        },
+        {
+          "target": "anthropicEmbed",
+          "declaredEffects": [
+            "llmEmbedFx"
+          ],
+          "displayName": "anthropicEmbed"
+        },
+        {
+          "target": "openaiGenerate",
+          "declaredEffects": [
+            "llmGenerateFx"
+          ],
+          "displayName": "openaiGenerate"
+        },
+        {
+          "target": "openaiEmbed",
+          "declaredEffects": [
+            "llmEmbedFx"
+          ],
+          "displayName": "openaiEmbed"
+        },
+        {
+          "target": "geminiGenerate",
+          "declaredEffects": [
+            "llmGenerateFx"
+          ],
+          "displayName": "geminiGenerate"
+        },
+        {
+          "target": "geminiEmbed",
+          "declaredEffects": [
+            "llmEmbedFx"
+          ],
+          "displayName": "geminiEmbed"
+        },
+        {
+          "target": "pineconeOpen",
+          "declaredEffects": [
+            "vectorReadFx",
+            "vectorWriteFx"
+          ],
+          "displayName": "pineconeOpen"
+        },
+        {
+          "target": "pineconeClose",
+          "declaredEffects": [],
+          "displayName": "pineconeClose"
+        },
+        {
+          "target": "pineconeUpsert",
+          "declaredEffects": [
+            "vectorWriteFx"
+          ],
+          "displayName": "pineconeUpsert"
+        },
+        {
+          "target": "pineconeQuery",
+          "declaredEffects": [
+            "vectorReadFx"
+          ],
+          "displayName": "pineconeQuery"
+        },
+        {
+          "target": "pineconeDelete",
+          "declaredEffects": [
+            "vectorWriteFx"
+          ],
+          "displayName": "pineconeDelete"
+        },
+        {
+          "target": "pineconeFetch",
+          "declaredEffects": [
+            "vectorReadFx"
+          ],
+          "displayName": "pineconeFetch"
+        },
+        {
+          "target": "chromaOpen",
+          "declaredEffects": [
+            "vectorReadFx",
+            "vectorWriteFx"
+          ],
+          "displayName": "chromaOpen"
+        },
+        {
+          "target": "chromaClose",
+          "declaredEffects": [],
+          "displayName": "chromaClose"
+        },
+        {
+          "target": "chromaAdd",
+          "declaredEffects": [
+            "vectorWriteFx"
+          ],
+          "displayName": "chromaAdd"
+        },
+        {
+          "target": "chromaQuery",
+          "declaredEffects": [
+            "vectorReadFx"
+          ],
+          "displayName": "chromaQuery"
+        },
+        {
+          "target": "chromaDelete",
+          "declaredEffects": [
+            "vectorWriteFx"
+          ],
+          "displayName": "chromaDelete"
+        },
+        {
+          "target": "chromaGet",
+          "declaredEffects": [
+            "vectorReadFx"
+          ],
+          "displayName": "chromaGet"
+        },
+        {
+          "target": "fAdd",
+          "declaredEffects": [],
+          "displayName": "fAdd"
+        },
+        {
+          "target": "fSub",
+          "declaredEffects": [],
+          "displayName": "fSub"
+        },
+        {
+          "target": "fMul",
+          "declaredEffects": [],
+          "displayName": "fMul"
+        },
+        {
+          "target": "fDiv",
+          "declaredEffects": [],
+          "displayName": "fDiv"
+        },
+        {
+          "target": "fNeg",
+          "declaredEffects": [],
+          "displayName": "fNeg"
+        },
+        {
+          "target": "fEq",
+          "declaredEffects": [],
+          "displayName": "fEq"
+        },
+        {
+          "target": "fLt",
+          "declaredEffects": [],
+          "displayName": "fLt"
+        },
+        {
+          "target": "fLe",
+          "declaredEffects": [],
+          "displayName": "fLe"
+        },
+        {
+          "target": "fGt",
+          "declaredEffects": [],
+          "displayName": "fGt"
+        },
+        {
+          "target": "fGe",
+          "declaredEffects": [],
+          "displayName": "fGe"
+        },
+        {
+          "target": "eqBool",
+          "declaredEffects": [],
+          "displayName": "eqBool"
+        },
+        {
+          "target": "eqBytes",
+          "declaredEffects": [],
+          "displayName": "eqBytes"
+        },
+        {
+          "target": "pathJoin",
+          "declaredEffects": [],
+          "displayName": "pathJoin"
+        },
+        {
+          "target": "pathBase",
+          "declaredEffects": [],
+          "displayName": "pathBase"
+        },
+        {
+          "target": "pathDir",
+          "declaredEffects": [],
+          "displayName": "pathDir"
+        },
+        {
+          "target": "pathExt",
+          "declaredEffects": [],
+          "displayName": "pathExt"
+        },
+        {
+          "target": "pathNorm",
+          "declaredEffects": [],
+          "displayName": "pathNorm"
+        },
+        {
+          "target": "dtFormatIso",
+          "declaredEffects": [],
+          "displayName": "dtFormatIso"
+        },
+        {
+          "target": "dtYear",
+          "declaredEffects": [],
+          "displayName": "dtYear"
+        },
+        {
+          "target": "dtMonth",
+          "declaredEffects": [],
+          "displayName": "dtMonth"
+        },
+        {
+          "target": "dtDay",
+          "declaredEffects": [],
+          "displayName": "dtDay"
+        },
+        {
+          "target": "dtHour",
+          "declaredEffects": [],
+          "displayName": "dtHour"
+        },
+        {
+          "target": "dtMinute",
+          "declaredEffects": [],
+          "displayName": "dtMinute"
+        },
+        {
+          "target": "dtSecond",
+          "declaredEffects": [],
+          "displayName": "dtSecond"
+        },
+        {
+          "target": "dtAddDays",
+          "declaredEffects": [],
+          "displayName": "dtAddDays"
+        },
+        {
+          "target": "dtAddHours",
+          "declaredEffects": [],
+          "displayName": "dtAddHours"
+        },
+        {
+          "target": "dtAddMinutes",
+          "declaredEffects": [],
+          "displayName": "dtAddMinutes"
+        },
+        {
+          "target": "dtAddSeconds",
+          "declaredEffects": [],
+          "displayName": "dtAddSeconds"
+        },
+        {
+          "target": "padLeft",
+          "declaredEffects": [],
+          "displayName": "padLeft"
+        },
+        {
+          "target": "padRight",
+          "declaredEffects": [],
+          "displayName": "padRight"
+        },
+        {
+          "target": "strRepeat",
+          "declaredEffects": [],
+          "displayName": "strRepeat"
+        },
+        {
+          "target": "urlEncode",
+          "declaredEffects": [],
+          "displayName": "urlEncode"
+        },
+        {
+          "target": "gzip",
+          "declaredEffects": [],
+          "displayName": "gzip"
+        }
+      ]
+    }
+  }
+}
