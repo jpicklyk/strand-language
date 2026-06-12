@@ -62,6 +62,108 @@ object Builtins {
     }
 
     /**
+     * Q-065: the behavioral determinism contract of a registry entry.
+     * Purity is structural (the absence of effect edges on the graph-side
+     * ForeignNode); determinism is behavioral (same arguments, same
+     * result, always). Replay, snapshot recovery, and invariant
+     * re-evaluation all assume the two coincide for effect-free builtins;
+     * this field records the position explicitly so the assumption is a
+     * checked contract rather than an inspection-time observation.
+     *
+     * The field is registry metadata only — it appears in no node, no
+     * canonical encoding, and no hash.
+     */
+    enum class Determinism {
+        /** Same arguments, same result, always (same-process contract). */
+        Deterministic,
+
+        /**
+         * Result depends on host state or the world. Every builtin that
+         * declares an effect category lands here mechanically unless it
+         * declares [Nondeterministic].
+         */
+        Stateful,
+
+        /**
+         * Random or scheduling-dependent. Today only the `Random.*`
+         * family (which also declares E-024 Crypto.RandomBytes).
+         */
+        Nondeterministic,
+    }
+
+    /**
+     * A resolved registry entry: the callable plus its Q-065 metadata.
+     * Constructed only through [resolveRegistration] (shipping
+     * registries) or [installTestBuiltin] (test overlay), so every entry
+     * has taken an explicit determinism position.
+     */
+    class Entry<F : Any> internal constructor(
+        val fn: F,
+        /** Whether the builtin's graph-side ForeignNode declares effect categories. */
+        val effectful: Boolean,
+        val determinism: Determinism,
+    )
+
+    /**
+     * A pre-resolution registration. [declared] may be null; resolution
+     * via [resolveRegistration] enforces the Q-065 audit shape:
+     *
+     *  - an effect-free registration MUST declare
+     *    [Determinism.Deterministic] explicitly — there is no default, so
+     *    adding a structurally pure builtin forces its author to take a
+     *    position (omission is a construction-time failure);
+     *  - an effect-declaring registration defaults to
+     *    [Determinism.Stateful].
+     *
+     * The shipping registries are built through the [det] / [fx] /
+     * [nondet] (and [detH] / [fxH]) helpers, which fix the three legal
+     * combinations at the registration site.
+     */
+    class Registration<F : Any>(
+        val fn: F,
+        val effectful: Boolean = false,
+        val declared: Determinism? = null,
+    )
+
+    /** Resolve one [Registration], enforcing the Q-065 registration constraint. */
+    internal fun <F : Any> resolveRegistration(target: String, reg: Registration<F>): Entry<F> {
+        val determinism = reg.declared
+            ?: if (reg.effectful) Determinism.Stateful
+            else throw IllegalStateException(
+                "$target declares no effect category and must explicitly declare " +
+                    "Determinism.Deterministic (Q-065: effect-free builtins have no " +
+                    "determinism default — take a position or declare the effect)"
+            )
+        return Entry(reg.fn, reg.effectful, determinism)
+    }
+
+    /** Build a resolved registry from registrations, failing construction on any omission. */
+    internal fun <F : Any> buildRegistry(
+        registrations: Map<String, Registration<F>>,
+    ): Map<String, Entry<F>> =
+        registrations.mapValues { (target, reg) -> resolveRegistration(target, reg) }
+
+    /** Registration helper: effect-free, explicitly Deterministic. */
+    private fun det(fn: Fn): Registration<Fn> =
+        Registration(fn, effectful = false, declared = Determinism.Deterministic)
+
+    /** Registration helper: effect-declaring, defaults Stateful. */
+    private fun fx(fn: Fn): Registration<Fn> =
+        Registration(fn, effectful = true)
+
+    /** Registration helper: effect-declaring and Nondeterministic (the Random.* family). */
+    private fun nondet(fn: Fn): Registration<Fn> =
+        Registration(fn, effectful = true, declared = Determinism.Nondeterministic)
+
+    /** Registration helper: effect-free higher-order, explicitly Deterministic. */
+    private fun detH(fn: FnH): Registration<FnH> =
+        Registration(fn, effectful = false, declared = Determinism.Deterministic)
+
+    /** Registration helper: effect-declaring higher-order, defaults Stateful. */
+    private fun fxH(fn: FnH): Registration<FnH> =
+        Registration(fn, effectful = true)
+
+    /**
      * Pluggable clock for the `Time.*` builtins. Default is [SystemClock]
      * (real wall-clock time and real sleep). Tests that need
      * deterministic timestamps install [FixedClock] in setup and reset
@@ -318,90 +420,90 @@ object Builtins {
     @Volatile
     var nameResolver: NameResolver = SystemNameResolver
 
-    private val registry: Map<String, Fn> = mapOf(
+    private val registry: Map<String, Entry<Fn>> = buildRegistry(mapOf(
         // Pure arithmetic (no declared effects expected).
-        "strand-builtin:Int.Add" to Fn { args ->
+        "strand-builtin:Int.Add" to det { args ->
             require(args.size == 2) { "Int.Add expects 2 args, got ${args.size}" }
             val a = (args[0] as Value.IntV).v
             val b = (args[1] as Value.IntV).v
             Value.IntV(a + b)
         },
-        "strand-builtin:Int.Sub" to Fn { args ->
+        "strand-builtin:Int.Sub" to det { args ->
             require(args.size == 2) { "Int.Sub expects 2 args, got ${args.size}" }
             val a = (args[0] as Value.IntV).v
             val b = (args[1] as Value.IntV).v
             Value.IntV(a - b)
         },
-        "strand-builtin:Int.Mul" to Fn { args ->
+        "strand-builtin:Int.Mul" to det { args ->
             require(args.size == 2) { "Int.Mul expects 2 args, got ${args.size}" }
             val a = (args[0] as Value.IntV).v
             val b = (args[1] as Value.IntV).v
             Value.IntV(a * b)
         },
-        "strand-builtin:Int.Div" to Fn { args ->
+        "strand-builtin:Int.Div" to det { args ->
             require(args.size == 2) { "Int.Div expects 2 args, got ${args.size}" }
             val a = (args[0] as Value.IntV).v
             val b = (args[1] as Value.IntV).v
             require(b != 0L) { "Int.Div division by zero" }
             Value.IntV(a / b)
         },
-        "strand-builtin:Int.Mod" to Fn { args ->
+        "strand-builtin:Int.Mod" to det { args ->
             require(args.size == 2) { "Int.Mod expects 2 args, got ${args.size}" }
             val a = (args[0] as Value.IntV).v
             val b = (args[1] as Value.IntV).v
             require(b != 0L) { "Int.Mod division by zero" }
             Value.IntV(a % b)
         },
-        "strand-builtin:Int.Neg" to Fn { args ->
+        "strand-builtin:Int.Neg" to det { args ->
             require(args.size == 1) { "Int.Neg expects 1 arg, got ${args.size}" }
             Value.IntV(-(args[0] as Value.IntV).v)
         },
-        "strand-builtin:Bool.Not" to Fn { args ->
+        "strand-builtin:Bool.Not" to det { args ->
             require(args.size == 1) { "Bool.Not expects 1 arg, got ${args.size}" }
             Value.BoolV(!(args[0] as Value.BoolV).v)
         },
-        "strand-builtin:Bool.And" to Fn { args ->
+        "strand-builtin:Bool.And" to det { args ->
             require(args.size == 2) { "Bool.And expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.BoolV).v && (args[1] as Value.BoolV).v)
         },
-        "strand-builtin:Bool.Or" to Fn { args ->
+        "strand-builtin:Bool.Or" to det { args ->
             require(args.size == 2) { "Bool.Or expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.BoolV).v || (args[1] as Value.BoolV).v)
         },
-        "strand-builtin:Bool.Eq" to Fn { args ->
+        "strand-builtin:Bool.Eq" to det { args ->
             require(args.size == 2) { "Bool.Eq expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.BoolV).v == (args[1] as Value.BoolV).v)
         },
 
         // Pure Int comparisons: pair with Match on a BoolLit pattern to give
         // conditional logic.
-        "strand-builtin:Int.Eq" to Fn { args ->
+        "strand-builtin:Int.Eq" to det { args ->
             require(args.size == 2) { "Int.Eq expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.IntV).v == (args[1] as Value.IntV).v)
         },
-        "strand-builtin:Int.Lt" to Fn { args ->
+        "strand-builtin:Int.Lt" to det { args ->
             require(args.size == 2) { "Int.Lt expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.IntV).v < (args[1] as Value.IntV).v)
         },
-        "strand-builtin:Int.Le" to Fn { args ->
+        "strand-builtin:Int.Le" to det { args ->
             require(args.size == 2) { "Int.Le expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.IntV).v <= (args[1] as Value.IntV).v)
         },
-        "strand-builtin:Int.Gt" to Fn { args ->
+        "strand-builtin:Int.Gt" to det { args ->
             require(args.size == 2) { "Int.Gt expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.IntV).v > (args[1] as Value.IntV).v)
         },
-        "strand-builtin:Int.Ge" to Fn { args ->
+        "strand-builtin:Int.Ge" to det { args ->
             require(args.size == 2) { "Int.Ge expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.IntV).v >= (args[1] as Value.IntV).v)
         },
 
         // String operations.
-        "strand-builtin:String.Concat" to Fn { args ->
+        "strand-builtin:String.Concat" to det { args ->
             require(args.size == 2) { "String.Concat expects 2 args, got ${args.size}" }
             Value.StringV((args[0] as Value.StringV).v + (args[1] as Value.StringV).v)
         },
-        "strand-builtin:String.Eq" to Fn { args ->
+        "strand-builtin:String.Eq" to det { args ->
             require(args.size == 2) { "String.Eq expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.StringV).v == (args[1] as Value.StringV).v)
         },
@@ -411,7 +513,7 @@ object Builtins {
         // [FixedClock] to get deterministic timestamps; the existing
         // FIXED_REPLAY_TIMESTAMP constant remains as the canonical
         // fixed value for tests that compare against a known Now.
-        "strand-builtin:Time.Now" to Fn { args ->
+        "strand-builtin:Time.Now" to fx { args ->
             require(args.isEmpty()) { "Time.Now expects 0 args, got ${args.size}" }
             Value.IntV(clock.nowMillis())
         },
@@ -420,7 +522,7 @@ object Builtins {
         // the requested duration via [clock.sleep]. Default SystemClock
         // calls Thread.sleep; FixedClock is a no-op so tests don't
         // actually wait. Returns UnitV.
-        "strand-builtin:Time.Sleep" to Fn { args ->
+        "strand-builtin:Time.Sleep" to fx { args ->
             require(args.size == 1) { "Time.Sleep expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
             require(millis >= 0) { "Time.Sleep millis must be non-negative, got $millis" }
@@ -434,7 +536,7 @@ object Builtins {
         // Real filesystem writes use the `strand-builtin:Fs.Write`
         // target (Layer 4 step 2 — see below). A future cleanup pass
         // may unify the namespaces once the corpus is updated.
-        "strand-builtin:Filesystem.Write" to Fn { args ->
+        "strand-builtin:Filesystem.Write" to fx { args ->
             require(args.size == 1) { "Filesystem.Write expects 1 arg (path: String), got ${args.size}" }
             require(args[0] is Value.StringV) {
                 "Filesystem.Write expects a StringV path argument, got ${args[0]::class.simpleName}"
@@ -460,7 +562,7 @@ object Builtins {
         // [SandboxViolation] which the interpreter translates to
         // [InterpretError.SandboxViolation] at the call site.
 
-        "strand-builtin:Fs.Write" to Fn { args ->
+        "strand-builtin:Fs.Write" to fx { args ->
             require(args.size == 2) {
                 "Fs.Write expects 2 args (path: String, bytes: Bytes), got ${args.size}"
             }
@@ -479,7 +581,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Fs.Read" to Fn { args ->
+        "strand-builtin:Fs.Read" to fx { args ->
             require(args.size == 1) {
                 "Fs.Read expects 1 arg (path: String), got ${args.size}"
             }
@@ -497,7 +599,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Fs.Append" to Fn { args ->
+        "strand-builtin:Fs.Append" to fx { args ->
             require(args.size == 2) {
                 "Fs.Append expects 2 args (path: String, bytes: Bytes), got ${args.size}"
             }
@@ -521,7 +623,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Fs.Exists" to Fn { args ->
+        "strand-builtin:Fs.Exists" to fx { args ->
             require(args.size == 1) {
                 "Fs.Exists expects 1 arg (path: String), got ${args.size}"
             }
@@ -531,7 +633,7 @@ object Builtins {
             Value.BoolV(java.nio.file.Files.exists(resolved))
         },
 
-        "strand-builtin:Fs.Delete" to Fn { args ->
+        "strand-builtin:Fs.Delete" to fx { args ->
             require(args.size == 1) {
                 "Fs.Delete expects 1 arg (path: String), got ${args.size}"
             }
@@ -545,7 +647,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Fs.List" to Fn { args ->
+        "strand-builtin:Fs.List" to fx { args ->
             require(args.size == 1) {
                 "Fs.List expects 1 arg (dir: String), got ${args.size}"
             }
@@ -577,7 +679,7 @@ object Builtins {
         // Legacy stub kept for backwards-compat with the seed corpus
         // (programs 33, 34 and test fixtures). Real network sockets use
         // the `strand-builtin:Net.*` target namespace (Phase 2 #5).
-        "strand-builtin:Network.Connect" to Fn { args ->
+        "strand-builtin:Network.Connect" to fx { args ->
             require(args.size == 2) {
                 "Network.Connect expects 2 args (host: String, port: Int), got ${args.size}"
             }
@@ -597,7 +699,7 @@ object Builtins {
         // Network.Receive. Net.Close has no specific effect (closing
         // an opened resource is the dual of opening it).
 
-        "strand-builtin:Net.Connect" to Fn { args ->
+        "strand-builtin:Net.Connect" to fx { args ->
             // (host: String, port: Int) -> SocketHandle
             // Q-041: NetSandbox.checkConnect resolves the host once and
             // refuses connect when the resolved IP lies in any blocked
@@ -630,7 +732,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Net.Send" to Fn { args ->
+        "strand-builtin:Net.Send" to fx { args ->
             // (handle: SocketHandle, bytes: Bytes) -> Int (bytes written)
             require(args.size == 2) {
                 "Net.Send expects 2 args (handle: SocketHandle, bytes: Bytes), got ${args.size}"
@@ -649,7 +751,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Net.Receive" to Fn { args ->
+        "strand-builtin:Net.Receive" to fx { args ->
             // (handle: SocketHandle, maxBytes: Int) -> Bytes
             // Reads up to maxBytes; returns empty Bytes on EOF.
             require(args.size == 2) {
@@ -671,7 +773,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Net.Close" to Fn { args ->
+        "strand-builtin:Net.Close" to det { args ->
             // (handle: SocketHandle) -> Unit
             require(args.size == 1) {
                 "Net.Close expects 1 arg (handle: SocketHandle), got ${args.size}"
@@ -693,7 +795,7 @@ object Builtins {
         // does. The legacy Net.Receive is retained unchanged for hash
         // stability; new programs are steered here via the system-prompt
         // docs. Net.Close serves as the stream's close.
-        "strand-builtin:Net.Stream.Receive" to Fn { args ->
+        "strand-builtin:Net.Stream.Receive" to fx { args ->
             // (handle: SocketHandle, maxBytes: Int) -> Option<Bytes>
             require(args.size == 2) {
                 "Net.Stream.Receive expects 2 args (handle: SocketHandle, maxBytes: Int), got ${args.size}"
@@ -726,26 +828,26 @@ object Builtins {
         // use site, exactly as the blocking *.Create variants do; the
         // drain (LLM.Stream.Receive) declares the transport effect E-004
         // Network.Receive. Both surface in the program's effect closure.
-        "strand-builtin:Anthropic.Messages.CreateStream" to Fn { args ->
+        "strand-builtin:Anthropic.Messages.CreateStream" to fx { args ->
             require(args.size == 1) {
                 "Anthropic.Messages.CreateStream expects 1 arg (GenerateRequest), got ${args.size}"
             }
             openLlmStream(args[0] as Value.ProductV, "anthropic", AnthropicProvider::generateStreamOpen)
         },
-        "strand-builtin:OpenAI.Chat.CompletionsStream" to Fn { args ->
+        "strand-builtin:OpenAI.Chat.CompletionsStream" to fx { args ->
             require(args.size == 1) {
                 "OpenAI.Chat.CompletionsStream expects 1 arg (GenerateRequest), got ${args.size}"
             }
             openLlmStream(args[0] as Value.ProductV, "openai", OpenAIProvider::generateStreamOpen)
         },
-        "strand-builtin:Gemini.GenerateContentStream" to Fn { args ->
+        "strand-builtin:Gemini.GenerateContentStream" to fx { args ->
             require(args.size == 1) {
                 "Gemini.GenerateContentStream expects 1 arg (GenerateRequest), got ${args.size}"
             }
             openLlmStream(args[0] as Value.ProductV, "gemini", GeminiProvider::generateStreamOpen)
         },
 
-        "strand-builtin:LLM.Stream.Receive" to Fn { args ->
+        "strand-builtin:LLM.Stream.Receive" to fx { args ->
             // (handle: Int, maxBytes: Int) -> Option<Bytes>
             require(args.size == 2) {
                 "LLM.Stream.Receive expects 2 args (handle: Int, maxBytes: Int), got ${args.size}"
@@ -774,7 +876,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:LLM.Stream.Close" to Fn { args ->
+        "strand-builtin:LLM.Stream.Close" to det { args ->
             // (handle: Int) -> Unit. Idempotent: a second close, or close
             // of an unknown id, is a no-op.
             require(args.size == 1) {
@@ -815,7 +917,7 @@ object Builtins {
         // used by Fs.List / String.Split / Process.Spawn arg lists.
         // The result includes the same shape for response headers.
 
-        "strand-builtin:Http.Request" to Fn { args ->
+        "strand-builtin:Http.Request" to fx { args ->
             // (host: String, port: Int, scheme: String, path: String,
             //  method: String, headers: List<Header>, body: Bytes)
             //   -> {status: Int, body: Bytes, headers: List<Header>}
@@ -955,7 +1057,7 @@ object Builtins {
         // — so the sandbox check fires uniformly. Returns the
         // pre-Q-041 product shape {status: Int, body: Bytes} (no
         // headers) so callers can drop in without changes.
-        "strand-builtin:Http.RequestFromUrl" to Fn { args ->
+        "strand-builtin:Http.RequestFromUrl" to fx { args ->
             // (method: String, url: String, body: Bytes) -> {status: Int, body: Bytes}
             require(args.size == 3) {
                 "Http.RequestFromUrl expects 3 args (method: String, url: String, body: Bytes), got ${args.size}"
@@ -1017,7 +1119,7 @@ object Builtins {
         // stderr go to the runtime's stdout/stderr). Captured output
         // (via Process.SpawnCapture returning Bytes) is a follow-up.
 
-        "strand-builtin:Process.Spawn" to Fn { args ->
+        "strand-builtin:Process.Spawn" to fx { args ->
             // (cmd: String, args: List<String>) -> ProcessHandle
             // The args parameter is a SumV-encoded Cons/Nil chain of
             // StringV — matches the convention used by Fs.List.
@@ -1050,7 +1152,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Process.Wait" to Fn { args ->
+        "strand-builtin:Process.Wait" to fx { args ->
             // (handle: ProcessHandle) -> Int (exit code)
             require(args.size == 1) {
                 "Process.Wait expects 1 arg (handle: ProcessHandle), got ${args.size}"
@@ -1068,7 +1170,7 @@ object Builtins {
             Value.IntV(exitCode.toLong())
         },
 
-        "strand-builtin:Process.EnvVar" to Fn { args ->
+        "strand-builtin:Process.EnvVar" to fx { args ->
             // (name: String) -> Option<String>
             // Returns SumV "Some" payload=StringV when set, SumV "None"
             // payload=null when missing. Standard Option convention.
@@ -1086,12 +1188,12 @@ object Builtins {
         // effects). All UTF-8 semantics; ParseInt/ParseFloat return
         // the standard Option<T> sum encoding (SumV "Some" / "None").
 
-        "strand-builtin:String.Length" to Fn { args ->
+        "strand-builtin:String.Length" to det { args ->
             require(args.size == 1) { "String.Length expects 1 arg, got ${args.size}" }
             Value.IntV((args[0] as Value.StringV).v.length.toLong())
         },
 
-        "strand-builtin:String.Substring" to Fn { args ->
+        "strand-builtin:String.Substring" to det { args ->
             // (s: String, start: Int, end: Int) -> String
             // start inclusive, end exclusive. Clamped to [0, length].
             require(args.size == 3) { "String.Substring expects 3 args (s, start, end), got ${args.size}" }
@@ -1101,7 +1203,7 @@ object Builtins {
             Value.StringV(s.substring(start, end))
         },
 
-        "strand-builtin:String.IndexOf" to Fn { args ->
+        "strand-builtin:String.IndexOf" to det { args ->
             // (haystack: String, needle: String) -> Int (-1 if not found)
             require(args.size == 2) { "String.IndexOf expects 2 args, got ${args.size}" }
             val haystack = (args[0] as Value.StringV).v
@@ -1109,19 +1211,19 @@ object Builtins {
             Value.IntV(haystack.indexOf(needle).toLong())
         },
 
-        "strand-builtin:String.Contains" to Fn { args ->
+        "strand-builtin:String.Contains" to det { args ->
             require(args.size == 2) { "String.Contains expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.StringV).v.contains((args[1] as Value.StringV).v))
         },
 
-        "strand-builtin:String.Replace" to Fn { args ->
+        "strand-builtin:String.Replace" to det { args ->
             // (s: String, find: String, replace: String) -> String. Literal, not regex.
             require(args.size == 3) { "String.Replace expects 3 args, got ${args.size}" }
             Value.StringV((args[0] as Value.StringV).v
                 .replace((args[1] as Value.StringV).v, (args[2] as Value.StringV).v))
         },
 
-        "strand-builtin:String.Split" to Fn { args ->
+        "strand-builtin:String.Split" to det { args ->
             // (s: String, sep: String) -> List<String>
             // Returns the SumV-encoded Cons/Nil list. Empty separator
             // is rejected (would otherwise loop indefinitely).
@@ -1139,7 +1241,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:String.Join" to Fn { args ->
+        "strand-builtin:String.Join" to det { args ->
             // (parts: List<String>, sep: String) -> String
             require(args.size == 2) { "String.Join expects 2 args, got ${args.size}" }
             val sep = (args[1] as Value.StringV).v
@@ -1155,22 +1257,22 @@ object Builtins {
             Value.StringV(parts.joinToString(sep))
         },
 
-        "strand-builtin:String.ToUpper" to Fn { args ->
+        "strand-builtin:String.ToUpper" to det { args ->
             require(args.size == 1) { "String.ToUpper expects 1 arg, got ${args.size}" }
             Value.StringV((args[0] as Value.StringV).v.uppercase())
         },
 
-        "strand-builtin:String.ToLower" to Fn { args ->
+        "strand-builtin:String.ToLower" to det { args ->
             require(args.size == 1) { "String.ToLower expects 1 arg, got ${args.size}" }
             Value.StringV((args[0] as Value.StringV).v.lowercase())
         },
 
-        "strand-builtin:String.Trim" to Fn { args ->
+        "strand-builtin:String.Trim" to det { args ->
             require(args.size == 1) { "String.Trim expects 1 arg, got ${args.size}" }
             Value.StringV((args[0] as Value.StringV).v.trim())
         },
 
-        "strand-builtin:String.ParseInt" to Fn { args ->
+        "strand-builtin:String.ParseInt" to det { args ->
             // (s: String) -> Option<Int>
             require(args.size == 1) { "String.ParseInt expects 1 arg, got ${args.size}" }
             val n = (args[0] as Value.StringV).v.toLongOrNull()
@@ -1178,7 +1280,7 @@ object Builtins {
             else Value.SumV("None", null)
         },
 
-        "strand-builtin:String.ParseFloat" to Fn { args ->
+        "strand-builtin:String.ParseFloat" to det { args ->
             // (s: String) -> Option<Float>
             require(args.size == 1) { "String.ParseFloat expects 1 arg, got ${args.size}" }
             val n = (args[0] as Value.StringV).v.toDoubleOrNull()
@@ -1186,18 +1288,18 @@ object Builtins {
             else Value.SumV("None", null)
         },
 
-        "strand-builtin:String.FromInt" to Fn { args ->
+        "strand-builtin:String.FromInt" to det { args ->
             // (n: Int) -> String. Convenience for formatting.
             require(args.size == 1) { "String.FromInt expects 1 arg, got ${args.size}" }
             Value.StringV((args[0] as Value.IntV).v.toString())
         },
 
-        "strand-builtin:String.FromFloat" to Fn { args ->
+        "strand-builtin:String.FromFloat" to det { args ->
             require(args.size == 1) { "String.FromFloat expects 1 arg, got ${args.size}" }
             Value.StringV((args[0] as Value.FloatV).v.toString())
         },
 
-        "strand-builtin:String.FromBool" to Fn { args ->
+        "strand-builtin:String.FromBool" to det { args ->
             require(args.size == 1) { "String.FromBool expects 1 arg, got ${args.size}" }
             Value.StringV(if ((args[0] as Value.BoolV).v) "true" else "false")
         },
@@ -1210,7 +1312,7 @@ object Builtins {
         // returning. PadLeft / PadRight / Repeat are monomorphic and
         // preludable.
 
-        "strand-builtin:String.Format" to Fn { args ->
+        "strand-builtin:String.Format" to det { args ->
             // (template: String, args: List<String>) -> String.
             // Template uses {0}, {1}, {2} positional placeholders.
             // Out-of-range or non-numeric placeholders are left
@@ -1255,7 +1357,7 @@ object Builtins {
             Value.StringV(out.toString())
         },
 
-        "strand-builtin:String.PadLeft" to Fn { args ->
+        "strand-builtin:String.PadLeft" to det { args ->
             // (s: String, n: Int, pad: String) -> String.
             // Pads s on the left with `pad` (must be non-empty) until
             // length >= n. If s is already >= n chars, returns s
@@ -1265,7 +1367,7 @@ object Builtins {
             val s = (args[0] as Value.StringV).v
             val n = (args[1] as Value.IntV).v.toInt()
             val pad = (args[2] as Value.StringV).v
-            if (s.length >= n) return@Fn Value.StringV(s)
+            if (s.length >= n) return@det Value.StringV(s)
             require(pad.isNotEmpty()) { "String.PadLeft pad must be non-empty" }
             val needed = n - s.length
             val out = StringBuilder()
@@ -1273,12 +1375,12 @@ object Builtins {
             Value.StringV(out.substring(0, needed) + s)
         },
 
-        "strand-builtin:String.PadRight" to Fn { args ->
+        "strand-builtin:String.PadRight" to det { args ->
             require(args.size == 3) { "String.PadRight expects 3 args (s, n, pad), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
             val n = (args[1] as Value.IntV).v.toInt()
             val pad = (args[2] as Value.StringV).v
-            if (s.length >= n) return@Fn Value.StringV(s)
+            if (s.length >= n) return@det Value.StringV(s)
             require(pad.isNotEmpty()) { "String.PadRight pad must be non-empty" }
             val needed = n - s.length
             val out = StringBuilder()
@@ -1286,7 +1388,7 @@ object Builtins {
             Value.StringV(s + out.substring(0, needed))
         },
 
-        "strand-builtin:String.Repeat" to Fn { args ->
+        "strand-builtin:String.Repeat" to det { args ->
             // (s: String, n: Int) -> String. Non-negative n only;
             // n=0 yields "". The repeated output capacity is bounded
             // by Q-040's allocated-values limit indirectly (one
@@ -1299,7 +1401,7 @@ object Builtins {
             Value.StringV(s.repeat(n))
         },
 
-        "strand-builtin:String.Lines" to Fn { args ->
+        "strand-builtin:String.Lines" to det { args ->
             // (s: String) -> List<String>. Splits on `\n`. A trailing
             // newline produces an empty-string entry. `\r\n` splits
             // on the `\n` (the `\r` stays on the preceding line) —
@@ -1319,7 +1421,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:String.Chars" to Fn { args ->
+        "strand-builtin:String.Chars" to det { args ->
             // (s: String) -> List<String>. One single-char String per
             // UTF-16 code unit. Surrogate pairs split into two
             // entries (matches Java's `String.length` granularity).
@@ -1336,7 +1438,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:String.CharAt" to Fn { args ->
+        "strand-builtin:String.CharAt" to det { args ->
             // (s: String, i: Int) -> Option<String>. Single-char
             // String at index i (UTF-16 granularity), None for
             // negative or out-of-range index.
@@ -1352,12 +1454,12 @@ object Builtins {
         // serialization tasks (length, slice, concat, UTF-8 round-trip,
         // base64).
 
-        "strand-builtin:Bytes.Length" to Fn { args ->
+        "strand-builtin:Bytes.Length" to det { args ->
             require(args.size == 1) { "Bytes.Length expects 1 arg, got ${args.size}" }
             Value.IntV((args[0] as Value.BytesV).v.size.toLong())
         },
 
-        "strand-builtin:Bytes.Slice" to Fn { args ->
+        "strand-builtin:Bytes.Slice" to det { args ->
             // (b: Bytes, start: Int, end: Int) -> Bytes
             require(args.size == 3) { "Bytes.Slice expects 3 args, got ${args.size}" }
             val b = (args[0] as Value.BytesV).v
@@ -1366,21 +1468,21 @@ object Builtins {
             Value.BytesV(b.copyOfRange(start, end))
         },
 
-        "strand-builtin:Bytes.Concat" to Fn { args ->
+        "strand-builtin:Bytes.Concat" to det { args ->
             require(args.size == 2) { "Bytes.Concat expects 2 args, got ${args.size}" }
             val a = (args[0] as Value.BytesV).v
             val b = (args[1] as Value.BytesV).v
             Value.BytesV(a + b)
         },
 
-        "strand-builtin:Bytes.Eq" to Fn { args ->
+        "strand-builtin:Bytes.Eq" to det { args ->
             // Content equality (Kotlin `==` on ByteArray is reference
             // equality; use contentEquals for value-equal semantics).
             require(args.size == 2) { "Bytes.Eq expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.BytesV).v.contentEquals((args[1] as Value.BytesV).v))
         },
 
-        "strand-builtin:Bytes.ParseUtf8" to Fn { args ->
+        "strand-builtin:Bytes.ParseUtf8" to det { args ->
             // (b: Bytes) -> Option<String>. None on invalid UTF-8.
             require(args.size == 1) { "Bytes.ParseUtf8 expects 1 arg, got ${args.size}" }
             val bytes = (args[0] as Value.BytesV).v
@@ -1393,18 +1495,18 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Bytes.FromUtf8" to Fn { args ->
+        "strand-builtin:Bytes.FromUtf8" to det { args ->
             // (s: String) -> Bytes. UTF-8 encoding always succeeds.
             require(args.size == 1) { "Bytes.FromUtf8 expects 1 arg, got ${args.size}" }
             Value.BytesV((args[0] as Value.StringV).v.toByteArray(Charsets.UTF_8))
         },
 
-        "strand-builtin:Bytes.FormatBase64" to Fn { args ->
+        "strand-builtin:Bytes.FormatBase64" to det { args ->
             require(args.size == 1) { "Bytes.FormatBase64 expects 1 arg, got ${args.size}" }
             Value.StringV(java.util.Base64.getEncoder().encodeToString((args[0] as Value.BytesV).v))
         },
 
-        "strand-builtin:Bytes.ParseBase64" to Fn { args ->
+        "strand-builtin:Bytes.ParseBase64" to det { args ->
             // (s: String) -> Option<Bytes>. None on invalid base64.
             require(args.size == 1) { "Bytes.ParseBase64 expects 1 arg, got ${args.size}" }
             try {
@@ -1431,7 +1533,7 @@ object Builtins {
         // Returns Option<JsonValue>: Some on any valid JSON,
         // None on malformed input.
 
-        "strand-builtin:Json.Parse" to Fn { args ->
+        "strand-builtin:Json.Parse" to det { args ->
             require(args.size == 1) { "Json.Parse expects 1 arg (s: String), got ${args.size}" }
             val s = (args[0] as Value.StringV).v.trim()
             try {
@@ -1455,7 +1557,7 @@ object Builtins {
         // wrap the entire input as a single Paragraph block. Programs
         // that need real parsing should use a proper markdown lib via
         // a future blessed-library binding.
-        "strand-builtin:Markdown.Parse" to Fn { args ->
+        "strand-builtin:Markdown.Parse" to det { args ->
             require(args.size == 1) { "Markdown.Parse expects 1 arg (s: String), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
             // Build: Cons(Paragraph(s), Nil) as the document list.
@@ -1486,7 +1588,7 @@ object Builtins {
         // NOT in the prelude (agent-typed payload — the agent picks
         // the exact MarkdownDocument shape; no single monomorphic
         // FNT fits). Use an explicit FN + FNT at the call site.
-        "strand-builtin:Markdown.Stringify" to Fn { args ->
+        "strand-builtin:Markdown.Stringify" to det { args ->
             require(args.size == 1) { "Markdown.Stringify expects 1 arg (doc: MarkdownDocument), got ${args.size}" }
             val out = StringBuilder()
             var cur: Value = args[0]
@@ -1553,12 +1655,12 @@ object Builtins {
         // mathematical modulo, distinct from Int.Mod (which follows
         // JVM `%` sign-of-dividend semantics).
 
-        "strand-builtin:Math.Abs" to Fn { args ->
+        "strand-builtin:Math.Abs" to det { args ->
             require(args.size == 1) { "Math.Abs expects 1 arg (n: Int), got ${args.size}" }
             Value.IntV(kotlin.math.abs((args[0] as Value.IntV).v))
         },
 
-        "strand-builtin:Math.Sign" to Fn { args ->
+        "strand-builtin:Math.Sign" to det { args ->
             // -1, 0, or 1 depending on the sign of the input.
             require(args.size == 1) { "Math.Sign expects 1 arg (n: Int), got ${args.size}" }
             val n = (args[0] as Value.IntV).v
@@ -1569,17 +1671,17 @@ object Builtins {
             })
         },
 
-        "strand-builtin:Math.Min" to Fn { args ->
+        "strand-builtin:Math.Min" to det { args ->
             require(args.size == 2) { "Math.Min expects 2 args (a, b: Int), got ${args.size}" }
             Value.IntV(kotlin.math.min((args[0] as Value.IntV).v, (args[1] as Value.IntV).v))
         },
 
-        "strand-builtin:Math.Max" to Fn { args ->
+        "strand-builtin:Math.Max" to det { args ->
             require(args.size == 2) { "Math.Max expects 2 args (a, b: Int), got ${args.size}" }
             Value.IntV(kotlin.math.max((args[0] as Value.IntV).v, (args[1] as Value.IntV).v))
         },
 
-        "strand-builtin:Math.Mod" to Fn { args ->
+        "strand-builtin:Math.Mod" to det { args ->
             // True mathematical modulo: result has the sign of the
             // divisor (always non-negative for positive divisors).
             // Distinct from Int.Mod, which follows JVM `%` semantics.
@@ -1590,60 +1692,60 @@ object Builtins {
             Value.IntV(((a % b) + b) % b)
         },
 
-        "strand-builtin:Math.Floor" to Fn { args ->
+        "strand-builtin:Math.Floor" to det { args ->
             // (f: Float) -> Int. Largest Int <= f.
             require(args.size == 1) { "Math.Floor expects 1 arg (f: Float), got ${args.size}" }
             Value.IntV(kotlin.math.floor((args[0] as Value.FloatV).v).toLong())
         },
 
-        "strand-builtin:Math.Ceil" to Fn { args ->
+        "strand-builtin:Math.Ceil" to det { args ->
             // (f: Float) -> Int. Smallest Int >= f.
             require(args.size == 1) { "Math.Ceil expects 1 arg (f: Float), got ${args.size}" }
             Value.IntV(kotlin.math.ceil((args[0] as Value.FloatV).v).toLong())
         },
 
-        "strand-builtin:Math.Round" to Fn { args ->
+        "strand-builtin:Math.Round" to det { args ->
             // (f: Float) -> Int. Banker's rounding (round-half-to-even)
             // to avoid the asymmetric bias of round-half-up.
             require(args.size == 1) { "Math.Round expects 1 arg (f: Float), got ${args.size}" }
             Value.IntV(kotlin.math.round((args[0] as Value.FloatV).v).toLong())
         },
 
-        "strand-builtin:Math.Sqrt" to Fn { args ->
+        "strand-builtin:Math.Sqrt" to det { args ->
             // (f: Float) -> Float. NaN for negative inputs (matches IEEE 754).
             require(args.size == 1) { "Math.Sqrt expects 1 arg (f: Float), got ${args.size}" }
             Value.FloatV(kotlin.math.sqrt((args[0] as Value.FloatV).v))
         },
 
-        "strand-builtin:Math.Pow" to Fn { args ->
+        "strand-builtin:Math.Pow" to det { args ->
             // (base: Float, exp: Float) -> Float.
             require(args.size == 2) { "Math.Pow expects 2 args (base, exp: Float), got ${args.size}" }
             Value.FloatV((args[0] as Value.FloatV).v.pow((args[1] as Value.FloatV).v))
         },
 
-        "strand-builtin:Math.Log" to Fn { args ->
+        "strand-builtin:Math.Log" to det { args ->
             // (f: Float) -> Float. Natural log. NaN for non-positive inputs.
             require(args.size == 1) { "Math.Log expects 1 arg (f: Float), got ${args.size}" }
             Value.FloatV(kotlin.math.ln((args[0] as Value.FloatV).v))
         },
 
-        "strand-builtin:Math.Exp" to Fn { args ->
+        "strand-builtin:Math.Exp" to det { args ->
             // (f: Float) -> Float. e^f.
             require(args.size == 1) { "Math.Exp expects 1 arg (f: Float), got ${args.size}" }
             Value.FloatV(kotlin.math.exp((args[0] as Value.FloatV).v))
         },
 
-        "strand-builtin:Math.Sin" to Fn { args ->
+        "strand-builtin:Math.Sin" to det { args ->
             require(args.size == 1) { "Math.Sin expects 1 arg (f: Float), got ${args.size}" }
             Value.FloatV(kotlin.math.sin((args[0] as Value.FloatV).v))
         },
 
-        "strand-builtin:Math.Cos" to Fn { args ->
+        "strand-builtin:Math.Cos" to det { args ->
             require(args.size == 1) { "Math.Cos expects 1 arg (f: Float), got ${args.size}" }
             Value.FloatV(kotlin.math.cos((args[0] as Value.FloatV).v))
         },
 
-        "strand-builtin:Math.Tan" to Fn { args ->
+        "strand-builtin:Math.Tan" to det { args ->
             require(args.size == 1) { "Math.Tan expects 1 arg (f: Float), got ${args.size}" }
             Value.FloatV(kotlin.math.tan((args[0] as Value.FloatV).v))
         },
@@ -1651,12 +1753,12 @@ object Builtins {
         // Int <-> Float coercion helpers. Strand has no implicit
         // numeric coercion; these make Math.Sqrt(Float.FromInt(n))
         // ergonomic without round-tripping through String.
-        "strand-builtin:Float.FromInt" to Fn { args ->
+        "strand-builtin:Float.FromInt" to det { args ->
             require(args.size == 1) { "Float.FromInt expects 1 arg (n: Int), got ${args.size}" }
             Value.FloatV((args[0] as Value.IntV).v.toDouble())
         },
 
-        "strand-builtin:Int.FromFloatTrunc" to Fn { args ->
+        "strand-builtin:Int.FromFloatTrunc" to det { args ->
             // Truncation toward zero (drops the fractional part).
             // Distinct from Math.Floor (which rounds toward -infinity).
             require(args.size == 1) { "Int.FromFloatTrunc expects 1 arg (f: Float), got ${args.size}" }
@@ -1673,43 +1775,43 @@ object Builtins {
         // for Eq. Agents that need NaN-aware checks should use
         // Math-style sentinels or wrap.
 
-        "strand-builtin:Float.Add" to Fn { args ->
+        "strand-builtin:Float.Add" to det { args ->
             require(args.size == 2) { "Float.Add expects 2 args, got ${args.size}" }
             Value.FloatV((args[0] as Value.FloatV).v + (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Sub" to Fn { args ->
+        "strand-builtin:Float.Sub" to det { args ->
             require(args.size == 2) { "Float.Sub expects 2 args, got ${args.size}" }
             Value.FloatV((args[0] as Value.FloatV).v - (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Mul" to Fn { args ->
+        "strand-builtin:Float.Mul" to det { args ->
             require(args.size == 2) { "Float.Mul expects 2 args, got ${args.size}" }
             Value.FloatV((args[0] as Value.FloatV).v * (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Div" to Fn { args ->
+        "strand-builtin:Float.Div" to det { args ->
             require(args.size == 2) { "Float.Div expects 2 args, got ${args.size}" }
             Value.FloatV((args[0] as Value.FloatV).v / (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Neg" to Fn { args ->
+        "strand-builtin:Float.Neg" to det { args ->
             require(args.size == 1) { "Float.Neg expects 1 arg, got ${args.size}" }
             Value.FloatV(-(args[0] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Eq" to Fn { args ->
+        "strand-builtin:Float.Eq" to det { args ->
             require(args.size == 2) { "Float.Eq expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.FloatV).v == (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Lt" to Fn { args ->
+        "strand-builtin:Float.Lt" to det { args ->
             require(args.size == 2) { "Float.Lt expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.FloatV).v < (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Le" to Fn { args ->
+        "strand-builtin:Float.Le" to det { args ->
             require(args.size == 2) { "Float.Le expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.FloatV).v <= (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Gt" to Fn { args ->
+        "strand-builtin:Float.Gt" to det { args ->
             require(args.size == 2) { "Float.Gt expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.FloatV).v > (args[1] as Value.FloatV).v)
         },
-        "strand-builtin:Float.Ge" to Fn { args ->
+        "strand-builtin:Float.Ge" to det { args ->
             require(args.size == 2) { "Float.Ge expects 2 args, got ${args.size}" }
             Value.BoolV((args[0] as Value.FloatV).v >= (args[1] as Value.FloatV).v)
         },
@@ -1720,7 +1822,7 @@ object Builtins {
         // and prefix-free output as the project's content-addressing
         // hasher; Sha256 and Md5 use java.security.MessageDigest.
 
-        "strand-builtin:Hash.Blake3" to Fn { args ->
+        "strand-builtin:Hash.Blake3" to det { args ->
             // (b: Bytes) -> Bytes (32-byte BLAKE3 digest, no multi-hash prefix)
             require(args.size == 1) { "Hash.Blake3 expects 1 arg (b: Bytes), got ${args.size}" }
             val hasher = io.github.rctcwyvrn.blake3.Blake3.newInstance()
@@ -1728,14 +1830,14 @@ object Builtins {
             Value.BytesV(hasher.digest())
         },
 
-        "strand-builtin:Hash.Sha256" to Fn { args ->
+        "strand-builtin:Hash.Sha256" to det { args ->
             // (b: Bytes) -> Bytes (32-byte SHA-256 digest)
             require(args.size == 1) { "Hash.Sha256 expects 1 arg (b: Bytes), got ${args.size}" }
             val md = java.security.MessageDigest.getInstance("SHA-256")
             Value.BytesV(md.digest((args[0] as Value.BytesV).v))
         },
 
-        "strand-builtin:Hash.Md5" to Fn { args ->
+        "strand-builtin:Hash.Md5" to det { args ->
             // (b: Bytes) -> Bytes (16-byte MD5 digest). Not cryptographically
             // secure — included for integrity/identity use cases where SHA-256
             // is overkill (cache keys, content fingerprinting on trusted input).
@@ -1757,17 +1859,17 @@ object Builtins {
         // are deferred to round 3, which needs the interpreter-callback
         // infrastructure for builtins to invoke Strand lambdas.
 
-        "strand-builtin:List.Empty" to Fn { args ->
+        "strand-builtin:List.Empty" to det { args ->
             require(args.isEmpty()) { "List.Empty expects 0 args, got ${args.size}" }
             Value.SumV("Nil", null)
         },
 
-        "strand-builtin:List.IsEmpty" to Fn { args ->
+        "strand-builtin:List.IsEmpty" to det { args ->
             require(args.size == 1) { "List.IsEmpty expects 1 arg (list), got ${args.size}" }
             Value.BoolV(args[0] is Value.SumV && (args[0] as Value.SumV).case == "Nil")
         },
 
-        "strand-builtin:List.Length" to Fn { args ->
+        "strand-builtin:List.Length" to det { args ->
             require(args.size == 1) { "List.Length expects 1 arg (list), got ${args.size}" }
             var n = 0L
             var cur: Value = args[0]
@@ -1780,7 +1882,7 @@ object Builtins {
             Value.IntV(n)
         },
 
-        "strand-builtin:List.Reverse" to Fn { args ->
+        "strand-builtin:List.Reverse" to det { args ->
             require(args.size == 1) { "List.Reverse expects 1 arg (list), got ${args.size}" }
             var result: Value = Value.SumV("Nil", null)
             var cur: Value = args[0]
@@ -1795,12 +1897,12 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Take" to Fn { args ->
+        "strand-builtin:List.Take" to det { args ->
             // (list, n: Int) -> list. Negative or zero n yields Nil.
             // n larger than list length yields the whole list.
             require(args.size == 2) { "List.Take expects 2 args (list, n: Int), got ${args.size}" }
             val take = (args[1] as Value.IntV).v
-            if (take <= 0) return@Fn Value.SumV("Nil", null)
+            if (take <= 0) return@det Value.SumV("Nil", null)
             val heads = mutableListOf<Value>()
             var cur: Value = args[0]
             var remaining = take
@@ -1819,7 +1921,7 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Drop" to Fn { args ->
+        "strand-builtin:List.Drop" to det { args ->
             // (list, n: Int) -> list. Negative or zero n yields the
             // original list. n larger than list length yields Nil.
             require(args.size == 2) { "List.Drop expects 2 args (list, n: Int), got ${args.size}" }
@@ -1834,7 +1936,7 @@ object Builtins {
             cur
         },
 
-        "strand-builtin:List.Concat" to Fn { args ->
+        "strand-builtin:List.Concat" to det { args ->
             // (a, b) -> list. Append b to the end of a.
             require(args.size == 2) { "List.Concat expects 2 args (a, b), got ${args.size}" }
             val heads = mutableListOf<Value>()
@@ -1853,19 +1955,19 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Nth" to Fn { args ->
+        "strand-builtin:List.Nth" to det { args ->
             // (list, i: Int) -> Option<T>. Some(elem) for in-range
             // 0-based index, None otherwise.
             require(args.size == 2) { "List.Nth expects 2 args (list, i: Int), got ${args.size}" }
             var i = (args[1] as Value.IntV).v
-            if (i < 0) return@Fn Value.SumV("None", null)
+            if (i < 0) return@det Value.SumV("None", null)
             var cur: Value = args[0]
             while (true) {
                 val sumV = cur as? Value.SumV ?: break
                 if (sumV.case != "Cons") break
                 val payload = sumV.payload as Value.ProductV
                 if (i == 0L) {
-                    return@Fn Value.SumV("Some", payload.fields.getValue("head"))
+                    return@det Value.SumV("Some", payload.fields.getValue("head"))
                 }
                 cur = payload.fields.getValue("tail")
                 i--
@@ -1881,7 +1983,7 @@ object Builtins {
         // ops (Range/Zip/Unzip/Distinct) cover gaps in the round-2
         // primitives.
 
-        "strand-builtin:List.Range" to Fn { args ->
+        "strand-builtin:List.Range" to det { args ->
             // (start: Int, end: Int) -> List<Int>
             // Inclusive start, exclusive end. Empty if start >= end.
             require(args.size == 2) { "List.Range expects 2 args (start, end: Int), got ${args.size}" }
@@ -1898,7 +2000,7 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Zip" to Fn { args ->
+        "strand-builtin:List.Zip" to det { args ->
             // (a: List<A>, b: List<B>) -> List<{first: A, second: B}>
             // Stops at the shorter list's end.
             require(args.size == 2) { "List.Zip expects 2 args (a, b), got ${args.size}" }
@@ -1925,7 +2027,7 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Unzip" to Fn { args ->
+        "strand-builtin:List.Unzip" to det { args ->
             // (pairs: List<{first, second}>) -> {first: List<A>, second: List<B>}
             // Inverse of List.Zip.
             require(args.size == 1) { "List.Unzip expects 1 arg (pairs), got ${args.size}" }
@@ -1952,7 +2054,7 @@ object Builtins {
             Value.ProductV(mapOf("first" to firstList, "second" to secondList))
         },
 
-        "strand-builtin:List.Distinct" to Fn { args ->
+        "strand-builtin:List.Distinct" to det { args ->
             // (list: List<A>) -> List<A>
             // Preserves first occurrence; uses Value structural equality
             // (Kotlin data class equals walks the structure).
@@ -1973,7 +2075,7 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Sum" to Fn { args ->
+        "strand-builtin:List.Sum" to det { args ->
             // (list: List<Int>) -> Int. Empty list returns 0.
             require(args.size == 1) { "List.Sum expects 1 arg (list: List<Int>), got ${args.size}" }
             var sum = 0L
@@ -1988,7 +2090,7 @@ object Builtins {
             Value.IntV(sum)
         },
 
-        "strand-builtin:List.Product" to Fn { args ->
+        "strand-builtin:List.Product" to det { args ->
             // (list: List<Int>) -> Int. Empty list returns 1.
             require(args.size == 1) { "List.Product expects 1 arg (list: List<Int>), got ${args.size}" }
             var product = 1L
@@ -2003,7 +2105,7 @@ object Builtins {
             Value.IntV(product)
         },
 
-        "strand-builtin:List.Min" to Fn { args ->
+        "strand-builtin:List.Min" to det { args ->
             // (list: List<Int>) -> Option<Int>. None for empty list.
             require(args.size == 1) { "List.Min expects 1 arg (list: List<Int>), got ${args.size}" }
             var minOpt: Long? = null
@@ -2020,7 +2122,7 @@ object Builtins {
             else Value.SumV("Some", Value.IntV(minOpt))
         },
 
-        "strand-builtin:List.Max" to Fn { args ->
+        "strand-builtin:List.Max" to det { args ->
             // (list: List<Int>) -> Option<Int>. None for empty list.
             require(args.size == 1) { "List.Max expects 1 arg (list: List<Int>), got ${args.size}" }
             var maxOpt: Long? = null
@@ -2043,7 +2145,7 @@ object Builtins {
         // nested-μ JsonValue). Recurses through Cons/Nil chains
         // inside array/object payloads.
 
-        "strand-builtin:Json.Stringify" to Fn { args ->
+        "strand-builtin:Json.Stringify" to det { args ->
             require(args.size == 1) { "Json.Stringify expects 1 arg (json: JsonValue), got ${args.size}" }
             Value.StringV(jsonValueToText(args[0] as Value.SumV))
         },
@@ -2053,22 +2155,22 @@ object Builtins {
         // hex on output; case-insensitive on input. Round-trips byte
         // arrays of any length.
 
-        "strand-builtin:Bytes.FormatHex" to Fn { args ->
+        "strand-builtin:Bytes.FormatHex" to det { args ->
             require(args.size == 1) { "Bytes.FormatHex expects 1 arg (b: Bytes), got ${args.size}" }
             val bytes = (args[0] as Value.BytesV).v
             Value.StringV(bytes.joinToString("") { "%02x".format(it) })
         },
 
-        "strand-builtin:Bytes.ParseHex" to Fn { args ->
+        "strand-builtin:Bytes.ParseHex" to det { args ->
             // (s: String) -> Option<Bytes>. None on odd length or non-hex.
             require(args.size == 1) { "Bytes.ParseHex expects 1 arg (s: String), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
-            if (s.length % 2 != 0) return@Fn Value.SumV("None", null)
+            if (s.length % 2 != 0) return@det Value.SumV("None", null)
             val out = ByteArray(s.length / 2)
             for (i in out.indices) {
                 val hi = Character.digit(s[i * 2], 16)
                 val lo = Character.digit(s[i * 2 + 1], 16)
-                if (hi < 0 || lo < 0) return@Fn Value.SumV("None", null)
+                if (hi < 0 || lo < 0) return@det Value.SumV("None", null)
                 out[i] = ((hi shl 4) or lo).toByte()
             }
             Value.SumV("Some", Value.BytesV(out))
@@ -2079,7 +2181,7 @@ object Builtins {
         // site. Reads from the active [random] (default SecureRandom).
         // Tests install a seeded java.util.Random for reproducibility.
 
-        "strand-builtin:Random.Int" to Fn { args ->
+        "strand-builtin:Random.Int" to nondet { args ->
             // (min: Int, max: Int) -> Int. Inclusive min, exclusive max.
             // Returns a uniformly-distributed Long in [min, max).
             require(args.size == 2) {
@@ -2102,13 +2204,13 @@ object Builtins {
             Value.IntV(min + sample)
         },
 
-        "strand-builtin:Random.Float" to Fn { args ->
+        "strand-builtin:Random.Float" to nondet { args ->
             // () -> Float. Uniformly distributed in [0.0, 1.0).
             require(args.isEmpty()) { "Random.Float expects 0 args, got ${args.size}" }
             Value.FloatV(random.nextDouble())
         },
 
-        "strand-builtin:Random.Bytes" to Fn { args ->
+        "strand-builtin:Random.Bytes" to nondet { args ->
             // (n: Int) -> Bytes. Exactly n random bytes.
             require(args.size == 1) { "Random.Bytes expects 1 arg (n: Int), got ${args.size}" }
             val n = (args[0] as Value.IntV).v.toInt()
@@ -2143,7 +2245,7 @@ object Builtins {
         // sequential accept/respond protocol; concurrency is the
         // host's problem.
 
-        "strand-builtin:Http.Listen" to Fn { args ->
+        "strand-builtin:Http.Listen" to fx { args ->
             // (port: Int) -> serverHandle (Int)
             require(args.size == 1) { "Http.Listen expects 1 arg (port: Int), got ${args.size}" }
             val port = (args[0] as Value.IntV).v.toInt()
@@ -2171,7 +2273,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Http.Accept" to Fn { args ->
+        "strand-builtin:Http.Accept" to fx { args ->
             // (server: serverHandle) -> {method, path, body, responder}
             // Blocks until a request arrives.
             require(args.size == 1) { "Http.Accept expects 1 arg (server: serverHandle), got ${args.size}" }
@@ -2199,7 +2301,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Http.Respond" to Fn { args ->
+        "strand-builtin:Http.Respond" to fx { args ->
             // (responder: responderHandle, status: Int, body: Bytes) -> Unit
             // Writes the response and releases the handler thread.
             require(args.size == 3) {
@@ -2224,7 +2326,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Http.ServerClose" to Fn { args ->
+        "strand-builtin:Http.ServerClose" to det { args ->
             // (server: serverHandle) -> Unit. Idempotent.
             require(args.size == 1) { "Http.ServerClose expects 1 arg (server: serverHandle), got ${args.size}" }
             val handle = args[0] as? Value.Resource
@@ -2254,12 +2356,12 @@ object Builtins {
         // All operations are pure: PersistentMap's put/remove return
         // new instances via path-copy. No effect category required.
 
-        "strand-builtin:Map.Empty" to Fn { args ->
+        "strand-builtin:Map.Empty" to det { args ->
             require(args.isEmpty()) { "Map.Empty expects 0 args, got ${args.size}" }
             Value.MapV(kotlinx.collections.immutable.persistentMapOf())
         },
 
-        "strand-builtin:Map.Get" to Fn { args ->
+        "strand-builtin:Map.Get" to det { args ->
             // (map, key) -> Option<V>. Some(v) on hit, None on miss.
             require(args.size == 2) { "Map.Get expects 2 args (map, key), got ${args.size}" }
             val map = (args[0] as Value.MapV).entries
@@ -2267,7 +2369,7 @@ object Builtins {
             if (v != null) Value.SumV("Some", v) else Value.SumV("None", null)
         },
 
-        "strand-builtin:Map.Put" to Fn { args ->
+        "strand-builtin:Map.Put" to det { args ->
             // (map, key, value) -> Map. Replaces the prior binding for
             // key if any; returns a new MapV (path-copy persistence).
             require(args.size == 3) { "Map.Put expects 3 args (map, key, value), got ${args.size}" }
@@ -2275,26 +2377,26 @@ object Builtins {
             Value.MapV(map.put(args[1], args[2]))
         },
 
-        "strand-builtin:Map.Remove" to Fn { args ->
+        "strand-builtin:Map.Remove" to det { args ->
             // (map, key) -> Map. No-op if key is absent.
             require(args.size == 2) { "Map.Remove expects 2 args (map, key), got ${args.size}" }
             val map = (args[0] as Value.MapV).entries
             Value.MapV(map.remove(args[1]))
         },
 
-        "strand-builtin:Map.Has" to Fn { args ->
+        "strand-builtin:Map.Has" to det { args ->
             // (map, key) -> Bool.
             require(args.size == 2) { "Map.Has expects 2 args (map, key), got ${args.size}" }
             Value.BoolV((args[0] as Value.MapV).entries.containsKey(args[1]))
         },
 
-        "strand-builtin:Map.Size" to Fn { args ->
+        "strand-builtin:Map.Size" to det { args ->
             // (map) -> Int.
             require(args.size == 1) { "Map.Size expects 1 arg (map), got ${args.size}" }
             Value.IntV((args[0] as Value.MapV).entries.size.toLong())
         },
 
-        "strand-builtin:Map.Keys" to Fn { args ->
+        "strand-builtin:Map.Keys" to det { args ->
             // (map) -> List<K>. Order is insertion-order under
             // PersistentMap (deterministic for replay).
             require(args.size == 1) { "Map.Keys expects 1 arg (map), got ${args.size}" }
@@ -2308,7 +2410,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:Map.Values" to Fn { args ->
+        "strand-builtin:Map.Values" to det { args ->
             // (map) -> List<V>. Order matches Map.Keys.
             require(args.size == 1) { "Map.Values expects 1 arg (map), got ${args.size}" }
             val map = (args[0] as Value.MapV).entries
@@ -2321,7 +2423,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:Map.Entries" to Fn { args ->
+        "strand-builtin:Map.Entries" to det { args ->
             // (map) -> List<{key, value}>. The canonical serializable
             // form — round-trips back to a Map via repeated Map.Put.
             require(args.size == 1) { "Map.Entries expects 1 arg (map), got ${args.size}" }
@@ -2349,7 +2451,7 @@ object Builtins {
         // work. Named groups are not exposed in this slice (would need
         // a richer return type than Option<String>).
 
-        "strand-builtin:Regex.Match" to Fn { args ->
+        "strand-builtin:Regex.Match" to det { args ->
             // (pattern: String, input: String) -> Option<String>
             // Returns the first full-match substring, or None if no match.
             require(args.size == 2) { "Regex.Match expects 2 args (pattern, input), got ${args.size}" }
@@ -2364,7 +2466,7 @@ object Builtins {
             else Value.SumV("None", null)
         },
 
-        "strand-builtin:Regex.FindAll" to Fn { args ->
+        "strand-builtin:Regex.FindAll" to det { args ->
             // (pattern: String, input: String) -> List<String>
             // Returns every non-overlapping match as a Cons/Nil chain.
             require(args.size == 2) { "Regex.FindAll expects 2 args (pattern, input), got ${args.size}" }
@@ -2384,7 +2486,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:Regex.Replace" to Fn { args ->
+        "strand-builtin:Regex.Replace" to det { args ->
             // (pattern: String, input: String, replacement: String) -> String
             // Replaces every non-overlapping match. The replacement
             // string supports $1/$2/etc. backreferences for capture
@@ -2400,7 +2502,7 @@ object Builtins {
             Value.StringV(regex.replace(input, replacement))
         },
 
-        "strand-builtin:Regex.Split" to Fn { args ->
+        "strand-builtin:Regex.Split" to det { args ->
             // (pattern: String, input: String) -> List<String>
             // Splits on every non-overlapping match. Adjacent matches
             // produce empty-string entries (matches Kotlin's split).
@@ -2430,17 +2532,17 @@ object Builtins {
         // System.err so log lines don't tangle with stdout-bound
         // program output; tests install a captured StringBuilder
         // via the injectable [logSink] for assertion.
-        "strand-builtin:Log.Info" to Fn { args ->
+        "strand-builtin:Log.Info" to fx { args ->
             require(args.size == 1) { "Log.Info expects 1 arg (msg: String), got ${args.size}" }
             logSink.println("[INFO] " + (args[0] as Value.StringV).v)
             Value.UnitV
         },
-        "strand-builtin:Log.Warn" to Fn { args ->
+        "strand-builtin:Log.Warn" to fx { args ->
             require(args.size == 1) { "Log.Warn expects 1 arg (msg: String), got ${args.size}" }
             logSink.println("[WARN] " + (args[0] as Value.StringV).v)
             Value.UnitV
         },
-        "strand-builtin:Log.Error" to Fn { args ->
+        "strand-builtin:Log.Error" to fx { args ->
             require(args.size == 1) { "Log.Error expects 1 arg (msg: String), got ${args.size}" }
             logSink.println("[ERROR] " + (args[0] as Value.StringV).v)
             Value.UnitV
@@ -2448,15 +2550,15 @@ object Builtins {
 
         // OS.* observes stable host-environment state. All return
         // String; injectable [osEnv] lets tests pin values.
-        "strand-builtin:OS.Hostname" to Fn { args ->
+        "strand-builtin:OS.Hostname" to fx { args ->
             require(args.isEmpty()) { "OS.Hostname expects 0 args, got ${args.size}" }
             Value.StringV(osEnv.hostname())
         },
-        "strand-builtin:OS.Platform" to Fn { args ->
+        "strand-builtin:OS.Platform" to fx { args ->
             require(args.isEmpty()) { "OS.Platform expects 0 args, got ${args.size}" }
             Value.StringV(osEnv.platform())
         },
-        "strand-builtin:OS.Cwd" to Fn { args ->
+        "strand-builtin:OS.Cwd" to fx { args ->
             require(args.isEmpty()) { "OS.Cwd expects 0 args, got ${args.size}" }
             Value.StringV(osEnv.cwd())
         },
@@ -2466,7 +2568,7 @@ object Builtins {
         // tests install a captured handler that records the code
         // and throws SystemExitInvoked so the test framework sees it
         // without actually terminating the JVM.
-        "strand-builtin:System.Exit" to Fn { args ->
+        "strand-builtin:System.Exit" to fx { args ->
             require(args.size == 1) { "System.Exit expects 1 arg (code: Int), got ${args.size}" }
             val code = (args[0] as Value.IntV).v.toInt()
             exitHandler.exit(code)
@@ -2482,7 +2584,7 @@ object Builtins {
         // the effect-handler / capability machinery without touching
         // real IO. Not for production use. Target name reserved under
         // `strand-builtin:Test.*`.
-        "strand-builtin:Test.EffectfulNoOp" to Fn { args ->
+        "strand-builtin:Test.EffectfulNoOp" to fx { args ->
             require(args.size == 1) { "Test.EffectfulNoOp expects 1 arg, got ${args.size}" }
             require(args[0] is Value.StringV) {
                 "Test.EffectfulNoOp expects a StringV argument, got ${args[0]::class.simpleName}"
@@ -2504,7 +2606,7 @@ object Builtins {
         // subsequent operations look up by handle. Close is
         // idempotent.
 
-        "strand-builtin:Pinecone.Index.Open" to Fn { args ->
+        "strand-builtin:Pinecone.Index.Open" to fx { args ->
             // (config: PineconeIndexConfig) -> pineconeHandle
             // Declares BOTH Vector.Read and Vector.Write (the
             // returned handle supports both directions).
@@ -2515,7 +2617,7 @@ object Builtins {
             PineconeProvider.open(config)
         },
 
-        "strand-builtin:Pinecone.Index.Close" to Fn { args ->
+        "strand-builtin:Pinecone.Index.Close" to det { args ->
             // (handle: pineconeHandle) -> Unit. Idempotent.
             require(args.size == 1) {
                 "Pinecone.Index.Close expects 1 arg (handle: pineconeHandle), got ${args.size}"
@@ -2526,7 +2628,7 @@ object Builtins {
             PineconeProvider.close(handle)
         },
 
-        "strand-builtin:Pinecone.Index.Upsert" to Fn { args ->
+        "strand-builtin:Pinecone.Index.Upsert" to fx { args ->
             // (handle: pineconeHandle, items: List<UpsertItem>) -> Unit
             // Declares Vector.Write{provider: "pinecone", store: <index>}.
             require(args.size == 2) {
@@ -2540,7 +2642,7 @@ object Builtins {
             Value.UnitV
         },
 
-        "strand-builtin:Pinecone.Index.Query" to Fn { args ->
+        "strand-builtin:Pinecone.Index.Query" to fx { args ->
             // (handle: pineconeHandle, request: QueryRequest) -> List<QueryHit>
             // Declares Vector.Read{provider: "pinecone", store: <index>}.
             require(args.size == 2) {
@@ -2553,7 +2655,7 @@ object Builtins {
             VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request))
         },
 
-        "strand-builtin:Pinecone.Index.Delete" to Fn { args ->
+        "strand-builtin:Pinecone.Index.Delete" to fx { args ->
             // (handle: pineconeHandle, ids: List<String>) -> Unit
             // Declares Vector.Write{provider: "pinecone", store: <index>}.
             require(args.size == 2) {
@@ -2567,7 +2669,7 @@ object Builtins {
             Value.UnitV
         },
 
-        "strand-builtin:Pinecone.Index.Fetch" to Fn { args ->
+        "strand-builtin:Pinecone.Index.Fetch" to fx { args ->
             // (handle: pineconeHandle, ids: List<String>) -> List<QueryHit>
             // Declares Vector.Read{provider: "pinecone", store: <index>}.
             require(args.size == 2) {
@@ -2585,7 +2687,7 @@ object Builtins {
         // (`/api/v1/collections/<id>/{upsert,query,get,delete}`).
         // Effect declarations use provider="chroma".
 
-        "strand-builtin:Chroma.Collection.Open" to Fn { args ->
+        "strand-builtin:Chroma.Collection.Open" to fx { args ->
             // (config: ChromaCollectionConfig) -> chromaHandle
             // Resolves the collection id via GET /api/v1/collections/<name>
             // at open time and caches it for subsequent operations.
@@ -2596,7 +2698,7 @@ object Builtins {
             ChromaProvider.open(config)
         },
 
-        "strand-builtin:Chroma.Collection.Close" to Fn { args ->
+        "strand-builtin:Chroma.Collection.Close" to det { args ->
             // (handle: chromaHandle) -> Unit. Idempotent.
             require(args.size == 1) {
                 "Chroma.Collection.Close expects 1 arg (handle: chromaHandle), got ${args.size}"
@@ -2607,7 +2709,7 @@ object Builtins {
             ChromaProvider.close(handle)
         },
 
-        "strand-builtin:Chroma.Collection.Add" to Fn { args ->
+        "strand-builtin:Chroma.Collection.Add" to fx { args ->
             // (handle: chromaHandle, items: List<UpsertItem>) -> Unit
             // Bulk upsert. Declares Vector.Write{provider: "chroma", store: <collection>}.
             require(args.size == 2) {
@@ -2621,7 +2723,7 @@ object Builtins {
             Value.UnitV
         },
 
-        "strand-builtin:Chroma.Collection.Query" to Fn { args ->
+        "strand-builtin:Chroma.Collection.Query" to fx { args ->
             // (handle: chromaHandle, request: QueryRequest) -> List<QueryHit>
             // Declares Vector.Read{provider: "chroma", store: <collection>}.
             require(args.size == 2) {
@@ -2634,7 +2736,7 @@ object Builtins {
             VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request))
         },
 
-        "strand-builtin:Chroma.Collection.Delete" to Fn { args ->
+        "strand-builtin:Chroma.Collection.Delete" to fx { args ->
             // (handle: chromaHandle, ids: List<String>) -> Unit
             // Declares Vector.Write{provider: "chroma", store: <collection>}.
             require(args.size == 2) {
@@ -2648,7 +2750,7 @@ object Builtins {
             Value.UnitV
         },
 
-        "strand-builtin:Chroma.Collection.Get" to Fn { args ->
+        "strand-builtin:Chroma.Collection.Get" to fx { args ->
             // (handle: chromaHandle, ids: List<String>) -> List<QueryHit>
             // Id-based fetch (no similarity search).
             // Declares Vector.Read{provider: "chroma", store: <collection>}.
@@ -2671,7 +2773,7 @@ object Builtins {
         // the actual filesystem; resolving symlinks needs Fs.* under
         // capability.
 
-        "strand-builtin:Path.Join" to Fn { args ->
+        "strand-builtin:Path.Join" to det { args ->
             // (a: String, b: String) -> String. Joins two path
             // segments with the platform separator. If b is absolute,
             // it replaces a (matches Paths.get + resolve semantics).
@@ -2681,7 +2783,7 @@ object Builtins {
             Value.StringV(java.nio.file.Paths.get(a).resolve(b).toString())
         },
 
-        "strand-builtin:Path.Basename" to Fn { args ->
+        "strand-builtin:Path.Basename" to det { args ->
             // (path: String) -> String. Last component. Empty for "/"
             // or empty input (java.nio.file.Path.fileName returns null
             // for root paths; we coerce to "").
@@ -2691,7 +2793,7 @@ object Builtins {
             Value.StringV(name)
         },
 
-        "strand-builtin:Path.Dirname" to Fn { args ->
+        "strand-builtin:Path.Dirname" to det { args ->
             // (path: String) -> String. Parent directory. Empty for
             // bare names (no separator). Mirrors POSIX dirname's
             // "no parent" behavior.
@@ -2701,7 +2803,7 @@ object Builtins {
             Value.StringV(parent)
         },
 
-        "strand-builtin:Path.Extension" to Fn { args ->
+        "strand-builtin:Path.Extension" to det { args ->
             // (path: String) -> String. File extension without the
             // leading dot ("txt" for "foo.txt"). Empty for paths
             // without a dotted suffix in the last component. A leading
@@ -2715,7 +2817,7 @@ object Builtins {
             Value.StringV(ext)
         },
 
-        "strand-builtin:Path.Normalize" to Fn { args ->
+        "strand-builtin:Path.Normalize" to det { args ->
             // (path: String) -> String. Lexical normalization: collapses
             // . and .. segments, removes duplicate separators. Does NOT
             // resolve symlinks or check the filesystem.
@@ -2737,7 +2839,7 @@ object Builtins {
         // is 1-31, Hour is 0-23, Minute is 0-59, Second is 0-59.
         // *.Add* arithmetic returns new Int millis.
 
-        "strand-builtin:DateTime.FormatIso" to Fn { args ->
+        "strand-builtin:DateTime.FormatIso" to det { args ->
             // (millis: Int) -> String. ISO 8601 UTC, millisecond precision.
             require(args.size == 1) { "DateTime.FormatIso expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
@@ -2745,7 +2847,7 @@ object Builtins {
             Value.StringV(java.time.format.DateTimeFormatter.ISO_INSTANT.format(instant))
         },
 
-        "strand-builtin:DateTime.ParseIso" to Fn { args ->
+        "strand-builtin:DateTime.ParseIso" to det { args ->
             // (s: String) -> Option<Int>. Some(millis) on success, None
             // on parse failure. Accepts any ISO 8601 instant the JVM
             // parser handles (with or without fractional seconds).
@@ -2759,7 +2861,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:DateTime.Year" to Fn { args ->
+        "strand-builtin:DateTime.Year" to det { args ->
             require(args.size == 1) { "DateTime.Year expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
             val zdt = java.time.ZonedDateTime.ofInstant(
@@ -2767,7 +2869,7 @@ object Builtins {
             )
             Value.IntV(zdt.year.toLong())
         },
-        "strand-builtin:DateTime.Month" to Fn { args ->
+        "strand-builtin:DateTime.Month" to det { args ->
             // 1-12 (matches ISO 8601 / calendar convention, not Java's
             // 0-based Calendar.MONTH).
             require(args.size == 1) { "DateTime.Month expects 1 arg (millis: Int), got ${args.size}" }
@@ -2777,7 +2879,7 @@ object Builtins {
             )
             Value.IntV(zdt.monthValue.toLong())
         },
-        "strand-builtin:DateTime.Day" to Fn { args ->
+        "strand-builtin:DateTime.Day" to det { args ->
             // 1-31 (day-of-month).
             require(args.size == 1) { "DateTime.Day expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
@@ -2786,7 +2888,7 @@ object Builtins {
             )
             Value.IntV(zdt.dayOfMonth.toLong())
         },
-        "strand-builtin:DateTime.Hour" to Fn { args ->
+        "strand-builtin:DateTime.Hour" to det { args ->
             // 0-23.
             require(args.size == 1) { "DateTime.Hour expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
@@ -2795,7 +2897,7 @@ object Builtins {
             )
             Value.IntV(zdt.hour.toLong())
         },
-        "strand-builtin:DateTime.Minute" to Fn { args ->
+        "strand-builtin:DateTime.Minute" to det { args ->
             // 0-59.
             require(args.size == 1) { "DateTime.Minute expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
@@ -2804,7 +2906,7 @@ object Builtins {
             )
             Value.IntV(zdt.minute.toLong())
         },
-        "strand-builtin:DateTime.Second" to Fn { args ->
+        "strand-builtin:DateTime.Second" to det { args ->
             // 0-59 (leap seconds clamp to 59 per java.time semantics).
             require(args.size == 1) { "DateTime.Second expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
@@ -2814,7 +2916,7 @@ object Builtins {
             Value.IntV(zdt.second.toLong())
         },
 
-        "strand-builtin:DateTime.AddDays" to Fn { args ->
+        "strand-builtin:DateTime.AddDays" to det { args ->
             // (millis: Int, days: Int) -> Int. Calendar-aware day
             // addition (handles month/year boundaries, leap days).
             require(args.size == 2) { "DateTime.AddDays expects 2 args (millis, days: Int), got ${args.size}" }
@@ -2823,21 +2925,21 @@ object Builtins {
             val instant = java.time.Instant.ofEpochMilli(millis).plus(days, java.time.temporal.ChronoUnit.DAYS)
             Value.IntV(instant.toEpochMilli())
         },
-        "strand-builtin:DateTime.AddHours" to Fn { args ->
+        "strand-builtin:DateTime.AddHours" to det { args ->
             require(args.size == 2) { "DateTime.AddHours expects 2 args (millis, hours: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
             val hours = (args[1] as Value.IntV).v
             val instant = java.time.Instant.ofEpochMilli(millis).plus(hours, java.time.temporal.ChronoUnit.HOURS)
             Value.IntV(instant.toEpochMilli())
         },
-        "strand-builtin:DateTime.AddMinutes" to Fn { args ->
+        "strand-builtin:DateTime.AddMinutes" to det { args ->
             require(args.size == 2) { "DateTime.AddMinutes expects 2 args (millis, minutes: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
             val minutes = (args[1] as Value.IntV).v
             val instant = java.time.Instant.ofEpochMilli(millis).plus(minutes, java.time.temporal.ChronoUnit.MINUTES)
             Value.IntV(instant.toEpochMilli())
         },
-        "strand-builtin:DateTime.AddSeconds" to Fn { args ->
+        "strand-builtin:DateTime.AddSeconds" to det { args ->
             require(args.size == 2) { "DateTime.AddSeconds expects 2 args (millis, seconds: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
             val seconds = (args[1] as Value.IntV).v
@@ -2860,12 +2962,12 @@ object Builtins {
         // Set.Fold is higher-order and lives in `higherOrderRegistry`
         // below.
 
-        "strand-builtin:Set.Empty" to Fn { args ->
+        "strand-builtin:Set.Empty" to det { args ->
             require(args.isEmpty()) { "Set.Empty expects 0 args, got ${args.size}" }
             Value.SetV(kotlinx.collections.immutable.persistentSetOf())
         },
 
-        "strand-builtin:Set.Add" to Fn { args ->
+        "strand-builtin:Set.Add" to det { args ->
             // (set, val) -> Set. Idempotent — adding an existing
             // element returns an equal Set.
             require(args.size == 2) { "Set.Add expects 2 args (set, val), got ${args.size}" }
@@ -2873,24 +2975,24 @@ object Builtins {
             Value.SetV(set.add(args[1]))
         },
 
-        "strand-builtin:Set.Remove" to Fn { args ->
+        "strand-builtin:Set.Remove" to det { args ->
             // (set, val) -> Set. No-op if val is absent.
             require(args.size == 2) { "Set.Remove expects 2 args (set, val), got ${args.size}" }
             val set = (args[0] as Value.SetV).entries
             Value.SetV(set.remove(args[1]))
         },
 
-        "strand-builtin:Set.Has" to Fn { args ->
+        "strand-builtin:Set.Has" to det { args ->
             require(args.size == 2) { "Set.Has expects 2 args (set, val), got ${args.size}" }
             Value.BoolV((args[0] as Value.SetV).entries.contains(args[1]))
         },
 
-        "strand-builtin:Set.Size" to Fn { args ->
+        "strand-builtin:Set.Size" to det { args ->
             require(args.size == 1) { "Set.Size expects 1 arg (set), got ${args.size}" }
             Value.IntV((args[0] as Value.SetV).entries.size.toLong())
         },
 
-        "strand-builtin:Set.Union" to Fn { args ->
+        "strand-builtin:Set.Union" to det { args ->
             // (a, b) -> Set. All elements that appear in either.
             require(args.size == 2) { "Set.Union expects 2 args (a, b), got ${args.size}" }
             val a = (args[0] as Value.SetV).entries
@@ -2898,7 +3000,7 @@ object Builtins {
             Value.SetV(a.addAll(b))
         },
 
-        "strand-builtin:Set.Intersect" to Fn { args ->
+        "strand-builtin:Set.Intersect" to det { args ->
             // (a, b) -> Set. Elements that appear in both.
             require(args.size == 2) { "Set.Intersect expects 2 args (a, b), got ${args.size}" }
             val a = (args[0] as Value.SetV).entries
@@ -2906,7 +3008,7 @@ object Builtins {
             Value.SetV(a.retainAll(b))
         },
 
-        "strand-builtin:Set.Difference" to Fn { args ->
+        "strand-builtin:Set.Difference" to det { args ->
             // (a, b) -> Set. Elements of a that are NOT in b.
             require(args.size == 2) { "Set.Difference expects 2 args (a, b), got ${args.size}" }
             val a = (args[0] as Value.SetV).entries
@@ -2914,7 +3016,7 @@ object Builtins {
             Value.SetV(a.removeAll(b))
         },
 
-        "strand-builtin:Set.ToList" to Fn { args ->
+        "strand-builtin:Set.ToList" to det { args ->
             // (set) -> List<T>. Insertion order (PersistentSet is
             // ordered-hash). Deterministic across runs for replay.
             require(args.size == 1) { "Set.ToList expects 1 arg (set), got ${args.size}" }
@@ -2928,7 +3030,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:Set.FromList" to Fn { args ->
+        "strand-builtin:Set.FromList" to det { args ->
             // (list) -> Set. Duplicates collapse to single entries.
             // Insertion order matches the input list's first-occurrence
             // order.
@@ -2960,7 +3062,7 @@ object Builtins {
         // preludable. Csv.* / Tsv.* never throw — malformed input
         // is parsed best-effort with the parser's recovery rules.
 
-        "strand-builtin:Csv.Parse" to Fn { args ->
+        "strand-builtin:Csv.Parse" to det { args ->
             // (s: String) -> List<List<String>>
             require(args.size == 1) { "Csv.Parse expects 1 arg (s: String), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
@@ -2968,7 +3070,7 @@ object Builtins {
             buildRowList(rows)
         },
 
-        "strand-builtin:Csv.Stringify" to Fn { args ->
+        "strand-builtin:Csv.Stringify" to det { args ->
             // (rows: List<List<String>>) -> String.
             // Quotes any cell containing `,`, `"`, or newline; doubles
             // embedded quotes per RFC 4180. Rows separated by CRLF
@@ -2992,7 +3094,7 @@ object Builtins {
             Value.StringV(out.toString())
         },
 
-        "strand-builtin:Tsv.Parse" to Fn { args ->
+        "strand-builtin:Tsv.Parse" to det { args ->
             // (s: String) -> List<List<String>>. Tab cells; LF/CRLF
             // row separators. No quoting — tabs and newlines inside
             // cells are not supported by the TSV convention.
@@ -3009,7 +3111,7 @@ object Builtins {
             buildRowList(rows)
         },
 
-        "strand-builtin:Tsv.Stringify" to Fn { args ->
+        "strand-builtin:Tsv.Stringify" to det { args ->
             // (rows: List<List<String>>) -> String. Tab-separated
             // cells, LF row separators. Cells containing `\t` or
             // newline pass through verbatim (TSV has no escape
@@ -3023,7 +3125,7 @@ object Builtins {
         // URL parsing + query-string codec via java.net.URI and
         // java.net.URLEncoder/URLDecoder.
 
-        "strand-builtin:Url.Parse" to Fn { args ->
+        "strand-builtin:Url.Parse" to det { args ->
             // (s: String) -> Option<{scheme, host, port, path, query, fragment}>
             // Returns Some on a syntactically-valid URL with at least
             // a scheme; None otherwise. `port` is the explicit port
@@ -3033,7 +3135,7 @@ object Builtins {
             val s = (args[0] as Value.StringV).v
             try {
                 val uri = java.net.URI(s)
-                if (uri.scheme == null) return@Fn Value.SumV("None", null)
+                if (uri.scheme == null) return@det Value.SumV("None", null)
                 val product = Value.ProductV(mapOf(
                     "scheme" to Value.StringV(uri.scheme ?: ""),
                     "host" to Value.StringV(uri.host ?: ""),
@@ -3048,7 +3150,7 @@ object Builtins {
             }
         },
 
-        "strand-builtin:Url.QueryEncode" to Fn { args ->
+        "strand-builtin:Url.QueryEncode" to det { args ->
             // (s: String) -> String. application/x-www-form-urlencoded
             // (RFC 3986 + form encoding — spaces become `+`).
             require(args.size == 1) { "Url.QueryEncode expects 1 arg (s: String), got ${args.size}" }
@@ -3056,7 +3158,7 @@ object Builtins {
             Value.StringV(java.net.URLEncoder.encode(s, Charsets.UTF_8))
         },
 
-        "strand-builtin:Url.QueryDecode" to Fn { args ->
+        "strand-builtin:Url.QueryDecode" to det { args ->
             // (s: String) -> Option<String>. None on malformed
             // percent-encoding (URLDecoder throws IllegalArgumentException).
             require(args.size == 1) { "Url.QueryDecode expects 1 arg (s: String), got ${args.size}" }
@@ -3074,7 +3176,7 @@ object Builtins {
         // adding the `com.github.luben:zstd-jni` dependency, which is
         // a load-bearing decision better left to a separate slice.
 
-        "strand-builtin:Compress.Gzip" to Fn { args ->
+        "strand-builtin:Compress.Gzip" to det { args ->
             // (b: Bytes) -> Bytes. Default compression level.
             require(args.size == 1) { "Compress.Gzip expects 1 arg (b: Bytes), got ${args.size}" }
             val bytes = (args[0] as Value.BytesV).v
@@ -3083,7 +3185,7 @@ object Builtins {
             Value.BytesV(sink.toByteArray())
         },
 
-        "strand-builtin:Compress.Gunzip" to Fn { args ->
+        "strand-builtin:Compress.Gunzip" to det { args ->
             // (b: Bytes) -> Option<Bytes>. None on malformed gzip
             // (truncated header / CRC mismatch / etc.).
             require(args.size == 1) { "Compress.Gunzip expects 1 arg (b: Bytes), got ${args.size}" }
@@ -3099,7 +3201,7 @@ object Builtins {
                 Value.SumV("None", null)
             }
         },
-    )
+    ))
 
     /**
      * Higher-order builtins. Separate registry from the standard
@@ -3111,7 +3213,7 @@ object Builtins {
      * Populated by Slice 2 of stdlib expansion round 2 (List.Map,
      * List.Filter, List.Fold, List.Find, List.Any, List.All).
      */
-    private val higherOrderRegistry: Map<String, FnH> = mapOf(
+    private val higherOrderRegistry: Map<String, Entry<FnH>> = buildRegistry(mapOf(
         // Stdlib expansion round 2, Slice 2.2 — higher-order List ops.
         // Each takes the canonical Cons/Nil SumV-encoded list as the
         // first arg and a callable (Closure / FixpointFn / ForeignFn)
@@ -3121,7 +3223,7 @@ object Builtins {
         // [ApplyFn] callback closes over the surrounding capability
         // context, so lambdas inherit the caller's effects.
 
-        "strand-builtin:List.Map" to FnH { args, apply ->
+        "strand-builtin:List.Map" to detH { args, apply ->
             // (list, fn: A -> B) -> List<B>
             require(args.size == 2) { "List.Map expects 2 args (list, fn), got ${args.size}" }
             val fn = args[1]
@@ -3141,7 +3243,7 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Filter" to FnH { args, apply ->
+        "strand-builtin:List.Filter" to detH { args, apply ->
             // (list, predicate: A -> Bool) -> List<A>
             require(args.size == 2) { "List.Filter expects 2 args (list, predicate), got ${args.size}" }
             val pred = args[1]
@@ -3163,7 +3265,7 @@ object Builtins {
             result
         },
 
-        "strand-builtin:List.Fold" to FnH { args, apply ->
+        "strand-builtin:List.Fold" to detH { args, apply ->
             // (list, init, fn: (acc, elem) -> acc) -> acc
             require(args.size == 3) { "List.Fold expects 3 args (list, init, fn), got ${args.size}" }
             val fn = args[2]
@@ -3180,7 +3282,7 @@ object Builtins {
             acc
         },
 
-        "strand-builtin:List.Find" to FnH { args, apply ->
+        "strand-builtin:List.Find" to detH { args, apply ->
             // (list, predicate: A -> Bool) -> Option<A>
             require(args.size == 2) { "List.Find expects 2 args (list, predicate), got ${args.size}" }
             val pred = args[1]
@@ -3191,13 +3293,13 @@ object Builtins {
                 val payload = sumV.payload as Value.ProductV
                 val head = payload.fields.getValue("head")
                 val match = apply.apply(pred, listOf(head)) as Value.BoolV
-                if (match.v) return@FnH Value.SumV("Some", head)
+                if (match.v) return@detH Value.SumV("Some", head)
                 cur = payload.fields.getValue("tail")
             }
             Value.SumV("None", null)
         },
 
-        "strand-builtin:List.Any" to FnH { args, apply ->
+        "strand-builtin:List.Any" to detH { args, apply ->
             // (list, predicate: A -> Bool) -> Bool. Short-circuits on first true.
             require(args.size == 2) { "List.Any expects 2 args (list, predicate), got ${args.size}" }
             val pred = args[1]
@@ -3207,14 +3309,14 @@ object Builtins {
                 if (sumV.case != "Cons") break
                 val payload = sumV.payload as Value.ProductV
                 if ((apply.apply(pred, listOf(payload.fields.getValue("head"))) as Value.BoolV).v) {
-                    return@FnH Value.BoolV(true)
+                    return@detH Value.BoolV(true)
                 }
                 cur = payload.fields.getValue("tail")
             }
             Value.BoolV(false)
         },
 
-        "strand-builtin:List.All" to FnH { args, apply ->
+        "strand-builtin:List.All" to detH { args, apply ->
             // (list, predicate: A -> Bool) -> Bool. Short-circuits on first false.
             require(args.size == 2) { "List.All expects 2 args (list, predicate), got ${args.size}" }
             val pred = args[1]
@@ -3224,7 +3326,7 @@ object Builtins {
                 if (sumV.case != "Cons") break
                 val payload = sumV.payload as Value.ProductV
                 if (!(apply.apply(pred, listOf(payload.fields.getValue("head"))) as Value.BoolV).v) {
-                    return@FnH Value.BoolV(false)
+                    return@detH Value.BoolV(false)
                 }
                 cur = payload.fields.getValue("tail")
             }
@@ -3242,7 +3344,7 @@ object Builtins {
         // sortWith using a Comparator that calls apply.apply, then
         // rebuilds Cons/Nil. The Java mergeSort under sortWith is
         // stable so equal elements retain their original order.
-        "strand-builtin:List.Sort" to FnH { args, apply ->
+        "strand-builtin:List.Sort" to detH { args, apply ->
             require(args.size == 2) { "List.Sort expects 2 args (list, comparator), got ${args.size}" }
             val lessThan = args[1]
             val elements = mutableListOf<Value>()
@@ -3272,7 +3374,7 @@ object Builtins {
         // The non-higher-order Map.* builtins are in the standard
         // registry above; Map.Fold lives here because it takes a
         // user-supplied 3-arg fn `(acc, key, value) -> acc`.
-        "strand-builtin:Map.Fold" to FnH { args, apply ->
+        "strand-builtin:Map.Fold" to detH { args, apply ->
             // (map, init, fn: (acc, key, value) -> acc) -> acc
             // Iterates entries in insertion order (deterministic).
             require(args.size == 3) { "Map.Fold expects 3 args (map, init, fn), got ${args.size}" }
@@ -3287,7 +3389,7 @@ object Builtins {
 
         // ===== Stdlib expansion round 5 — Set.Fold + Map extensions =====
 
-        "strand-builtin:Set.Fold" to FnH { args, apply ->
+        "strand-builtin:Set.Fold" to detH { args, apply ->
             // (set, init, fn: (acc, elem) -> acc) -> acc.
             // Iterates entries in insertion order (deterministic).
             require(args.size == 3) { "Set.Fold expects 3 args (set, init, fn), got ${args.size}" }
@@ -3300,7 +3402,7 @@ object Builtins {
             acc
         },
 
-        "strand-builtin:Map.Map" to FnH { args, apply ->
+        "strand-builtin:Map.Map" to detH { args, apply ->
             // (map, fn: V -> W) -> Map<K, W>. Transforms each value
             // while preserving keys + insertion order.
             require(args.size == 2) { "Map.Map expects 2 args (map, fn), got ${args.size}" }
@@ -3314,7 +3416,7 @@ object Builtins {
             Value.MapV(result)
         },
 
-        "strand-builtin:Map.Merge" to FnH { args, apply ->
+        "strand-builtin:Map.Merge" to detH { args, apply ->
             // (a: Map<K, V>, b: Map<K, V>, conflict: (V, V) -> V) -> Map<K, V>
             // Keys present only in a or only in b carry through unchanged;
             // keys in both invoke `conflict(a_value, b_value)` to pick the
@@ -3343,7 +3445,7 @@ object Builtins {
             Value.MapV(result)
         },
 
-        "strand-builtin:Map.Filter" to FnH { args, apply ->
+        "strand-builtin:Map.Filter" to detH { args, apply ->
             // (map, fn: (K, V) -> Bool) -> Map<K, V>. Keep only entries
             // where fn returns true. Order preserved.
             require(args.size == 2) { "Map.Filter expects 2 args (map, fn), got ${args.size}" }
@@ -3381,14 +3483,14 @@ object Builtins {
         // to a ProductV. Conversion helpers live below as private
         // funs in this companion (productField / parseStrandMessages / ...).
 
-        "strand-builtin:Anthropic.Messages.Create" to FnH { args, apply ->
+        "strand-builtin:Anthropic.Messages.Create" to fxH { args, apply ->
             require(args.size == 1) {
                 "Anthropic.Messages.Create expects 1 arg (GenerateRequest), got ${args.size}"
             }
             runGenerateLoop(args[0] as Value.ProductV, AnthropicProvider::generate, apply)
         },
 
-        "strand-builtin:Anthropic.Embeddings.Create" to FnH { args, _ ->
+        "strand-builtin:Anthropic.Embeddings.Create" to fxH { args, _ ->
             require(args.size == 1) {
                 "Anthropic.Embeddings.Create expects 1 arg (EmbedRequest), got ${args.size}"
             }
@@ -3403,14 +3505,14 @@ object Builtins {
             }
         },
 
-        "strand-builtin:OpenAI.Chat.Completions" to FnH { args, apply ->
+        "strand-builtin:OpenAI.Chat.Completions" to fxH { args, apply ->
             require(args.size == 1) {
                 "OpenAI.Chat.Completions expects 1 arg (GenerateRequest), got ${args.size}"
             }
             runGenerateLoop(args[0] as Value.ProductV, OpenAIProvider::generate, apply)
         },
 
-        "strand-builtin:OpenAI.Embeddings.Create" to FnH { args, _ ->
+        "strand-builtin:OpenAI.Embeddings.Create" to fxH { args, _ ->
             require(args.size == 1) {
                 "OpenAI.Embeddings.Create expects 1 arg (EmbedRequest), got ${args.size}"
             }
@@ -3421,14 +3523,14 @@ object Builtins {
             ))
         },
 
-        "strand-builtin:Gemini.GenerateContent" to FnH { args, apply ->
+        "strand-builtin:Gemini.GenerateContent" to fxH { args, apply ->
             require(args.size == 1) {
                 "Gemini.GenerateContent expects 1 arg (GenerateRequest), got ${args.size}"
             }
             runGenerateLoop(args[0] as Value.ProductV, GeminiProvider::generate, apply)
         },
 
-        "strand-builtin:Gemini.EmbedContent" to FnH { args, _ ->
+        "strand-builtin:Gemini.EmbedContent" to fxH { args, _ ->
             require(args.size == 1) {
                 "Gemini.EmbedContent expects 1 arg (EmbedRequest), got ${args.size}"
             }
@@ -3438,7 +3540,7 @@ object Builtins {
                 credentialProvider,
             ))
         },
-    )
+    ))
 
     /**
      * Convert a kotlinx-serialization [kotlinx.serialization.json.JsonElement]
@@ -4167,14 +4269,65 @@ object Builtins {
         else -> v.toString().toByteArray(Charsets.UTF_8)
     }
 
+    /**
+     * Q-065 test-injection seam, mirroring the [clock] / [random] /
+     * [sandboxPolicy] pattern: a transient overlay of extra registry
+     * entries visible to [lookup] and [determinismOf]. Entries are
+     * constructed directly (NOT through [resolveRegistration]), so a test
+     * can force-mark an effect-free builtin [Determinism.Nondeterministic]
+     * — the "first lock loosened" configuration the verifier's
+     * `NondeterministicInReplayContext` warning exists to catch. Tests
+     * that install entries must call [clearTestBuiltins] in teardown and
+     * must not run in parallel with other registry-reading tests.
+     */
+    @Volatile
+    private var testOverlay: Map<String, Entry<Fn>> = emptyMap()
+
+    /** Install a test-only builtin into the overlay, bypassing the registration constraint. */
+    fun installTestBuiltin(target: String, effectful: Boolean, determinism: Determinism, fn: Fn) {
+        testOverlay = testOverlay + (target to Entry(fn, effectful, determinism))
+    }
+
+    /** Remove every overlay entry installed by [installTestBuiltin]. */
+    fun clearTestBuiltins() {
+        testOverlay = emptyMap()
+    }
+
     /** Look up a builtin by its target identifier; null if unknown. */
-    fun lookup(target: String): Fn? = registry[target]
+    fun lookup(target: String): Fn? =
+        testOverlay[target]?.fn ?: registry[target]?.fn
 
     /** Look up a higher-order builtin by target identifier; null if unknown. */
-    fun lookupHigherOrder(target: String): FnH? = higherOrderRegistry[target]
+    fun lookupHigherOrder(target: String): FnH? = higherOrderRegistry[target]?.fn
 
     /** Snapshot of all registered target identifiers across both registries. */
     fun registeredTargets(): Set<String> = registry.keys + higherOrderRegistry.keys
+
+    /**
+     * Q-065: the determinism position of the registry entry for [target],
+     * or null when the target is not registered. Consults the test
+     * overlay first, then both shipping registries.
+     */
+    fun determinismOf(target: String): Determinism? =
+        testOverlay[target]?.determinism
+            ?: registry[target]?.determinism
+            ?: higherOrderRegistry[target]?.determinism
+
+    /** Q-065: one registry entry's metadata, for registry-wide sweeps. */
+    data class EntryMeta(
+        val target: String,
+        val higherOrder: Boolean,
+        val effectful: Boolean,
+        val determinism: Determinism,
+    )
+
+    /** Q-065: metadata for every shipping registry entry (overlay excluded). */
+    fun entryMetadata(): List<EntryMeta> =
+        registry.map { (target, e) ->
+            EntryMeta(target, higherOrder = false, effectful = e.effectful, determinism = e.determinism)
+        } + higherOrderRegistry.map { (target, e) ->
+            EntryMeta(target, higherOrder = true, effectful = e.effectful, determinism = e.determinism)
+        }
 
     /**
      * A fixed Unix-millis timestamp returned by `strand-builtin:Time.Now`.
