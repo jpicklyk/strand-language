@@ -21,6 +21,7 @@ evaluation/dynamic/
     metrics.py            pricing, geomean, stdlib bootstrap CIs, report tables
     tokens.py             labeled token counting (api / byte-proxy fallback)
     recording.py          fixture record/replay, summary.json writer
+    reference_lookup.py   strand:need resolver over prompts/references/
     cli.py                argparse CLI entry point
     backends/
       base.py             EmissionBackend ABC
@@ -32,7 +33,9 @@ evaluation/dynamic/
       strand.py           Strand adapter (owned by agent P2)
       python.py           Python adapter (owned by agent P3)
   configs/                per-configuration YAML (P2/P3)
-  prompts/                system prompt templates (P2/P3)
+  prompts/                system prompt templates; strand-system.md is the
+                          minimal core, strand-system-full.md the monolith,
+                          references/ the on-demand sections (Q-060 M-2)
   tasks/                  per-task description + expected (P2/P3)
   fixtures/               recorded API responses for mocked mode
   runs/                   timestamped per-run artifacts
@@ -125,12 +128,18 @@ per-cell transcripts.
   `summary.json` from a previous run as the Markdown tables that land
   in `dynamic-results.md`.
 - `strand-eval step --session <dir> [--init --task <id> --config <name>
-  --sample <i>]` - file-IPC step mode for sub-agent dispatch (the
-  primary measurement methodology; see below).
+  --sample <i> --max-reference-turns N]` - file-IPC step mode for
+  sub-agent dispatch (the primary measurement methodology; see below).
 - `strand-eval aggregate --sessions <roots> [--baseline <config>]
   [--out report.md]` - roll up step-mode per-cell `summary.json` files
   into per-task and aggregate tables, with percentile-bootstrap CIs
   when a (task, config) cell has more than one sample.
+- `strand-eval lookup <name>... [--references-dir <dir>]` - resolve
+  reference topics, builtin signatures, or prelude reserved names
+  against `prompts/references/` outside the harness — the same lookup
+  the step-mode `strand:need` channel serves (see below). Exit 1 on
+  any miss; misses print nearest-match suggestions, never a fabricated
+  signature. Also available as `python -m strand_eval lookup <name>`.
 
 ## Token counting modes
 
@@ -216,6 +225,81 @@ the chars/4 proxy can observe cache behavior, and the harness never
 fabricates cache figures — so byte-proxy reports simply omit the cache
 columns.
 
+## Minimal-core prompt and the reference-query channel (Q-060 M-2)
+
+The agent-facing Strand prompt is split in two. `prompts/strand-system.md`
+is the minimal always-loaded core (~3,900 byte-proxy token-equivalents):
+the grammar shape, the highest-frequency codes and prelude names, every
+density sugar in one line each (including the v5 forms), three worked
+examples, the error-recovery guide, the Q-063 prelude-manifest hash, and
+an index of the on-demand reference sections. Everything else lives in
+nine named sections under `prompts/references/` (grammar-codes,
+density-sugars, prelude, builtins, effects, llm-vector, formats,
+state-machines, errors). The pre-split monolith is retained verbatim as
+`prompts/strand-system-full.md` (~21,500 token-equivalents) — it is the
+authority document for per-builtin signature text and the full-prompt
+arm of the A/B.
+
+**A/B invocation (core vs full prompt).** Two configs select the arms:
+`strand-layer-a-density-v4` loads the core, `strand-layer-a-full-prompt`
+loads the monolith. The section 2.2 gate of
+`proposals/implemented/authoring-cost-reduction.md` is an N=5 step-mode
+sweep over both, aggregated with bootstrap CIs:
+
+```
+for CFG in strand-layer-a-density-v4 strand-layer-a-full-prompt; do
+  for S in 0 1 2 3 4; do
+    python -m strand_eval.cli step \
+        --session runs/<run-dir>/$CFG-<task>-s$S \
+        --init --task <task> --config $CFG --sample $S \
+        --model claude-sonnet-4-7 --max-retries 5
+  done
+done
+# ... dispatch + advance per cell as in the Run 8 recipe below ...
+python -m strand_eval.cli aggregate --sessions runs/<run-dir> \
+    --baseline strand-layer-a-full-prompt
+```
+
+The API-backed equivalent is `strand-eval run --config
+strand-layer-a-density-v4,strand-layer-a-full-prompt ... --samples 5`.
+
+**Reference-turn protocol.** Under the core prompt, an agent that needs
+a catalog section or an exact builtin signature replies — instead of a
+program — with a single line as the first non-blank line of the
+response, no code fence:
+
+```
+strand:need <topic-or-builtin> [<topic-or-builtin> ...]
+```
+
+The harness advances the turn by appending a user message containing
+only the requested text: a topic name serves the reference section, a
+dotted builtin name (`List.Map`, `strand-builtin:Fs.Write`) serves the
+signature block verbatim from the reference sections, and a prelude
+reserved name (`fsWrite`, `writeFx`) serves its catalog line. An
+unknown name is answered with a nearest-match suggestion — never
+silence, never a fabricated signature. A response that contains a
+fenced code block is always treated as a program, so an emission
+mentioning the literal string cannot be swallowed.
+
+Reference turns do not consume emission attempts (`converged_at_attempt`
+counts emissions only, so first-pass still means "the first emitted
+program verified") but are capped per cell — default 3, set by
+`--max-reference-turns` on `step --init` or a `max_reference_turns` key
+in the config YAML. Requests past the cap are answered with a
+budget-exhausted notice and DO consume an emission attempt, so a
+looping agent still terminates through `max_retries`.
+
+**Token attribution.** Every turn lands in the summary's `attempts`
+array under a `turn_type` label (`emission` / `reference-request`), and
+each served reply's appended text is counted under its own source label
+in `reference_requests` (`{turn, requested, served, missed,
+appended_tokens, token_source}`). The served text becomes ordinary
+conversation input from the next turn on, so the round-trip cost of the
+channel is visible in the same totals the A/B gate compares. Summaries
+additionally carry `emission_attempts`, `reference_turns`, and
+`max_reference_turns` alongside the existing fields.
+
 ## Multi-sample runs and bootstrap CIs (step mode)
 
 Every cell in Runs 1-7 was N=1. The N>1 machinery is now end-to-end:
@@ -280,6 +364,10 @@ description: Strand Layer A density v4 (recommended target)
 The initial configurations (per proposal sec 5.1) are
 `strand-canonical`, `strand-layer-a`, `strand-layer-a-density-v4`, and
 `python-type-hints`. Their YAML files are owned by P2 and P3.
+`strand-layer-a-full-prompt` (Q-060 M-2) selects the pre-split
+monolithic prompt as the full-prompt A/B arm; an optional
+`max_reference_turns` key caps `strand:need` turns per cell
+(default 3).
 
 ## Tasks
 

@@ -140,6 +140,6 @@ This proposal does not relitigate ADR-001 or ADR-002. The canonical form remains
 **Incoming references:**
 - [`open-questions.md`](../open-questions.md) — Q-061 points at this proposal
 - [`proposals/README.md`](README.md)
-- [`proposals/authoring-cost-reduction.md`](authoring-cost-reduction.md) — the near-term track inside Layer A
+- [`proposals/implemented/authoring-cost-reduction.md`](implemented/authoring-cost-reduction.md) — the near-term track inside Layer A (implemented 2026-06-12; measurement gates pending under Q-021 Run 8)
 - [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
 - [`ROADMAP.md`](../ROADMAP.md) — Tier 1.5

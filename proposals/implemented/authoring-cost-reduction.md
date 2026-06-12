@@ -1,18 +1,18 @@
 # Authoring-Cost Reduction Program
 
-**Document:** `proposals/authoring-cost-reduction.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/authoring-cost-reduction.md`
+**Status:** Implemented (all four measures landed 2026-06-11 through 2026-06-12; see the Implementation note — the gating measurement runs remain to be executed under Q-021 Run 8)
 **Date:** 2026-06-11
-**Concerns:** [Q-021](../open-questions.md#Q-021) (dynamic cost), [Q-034](../open-questions.md#Q-034) (authoring layer), [Q-056](../open-questions.md#Q-056) (hand-declared builtin signatures), [Q-057](../open-questions.md#Q-057) (grammar parity), [`02-core-thesis.md`](../02-core-thesis.md) § outcome-priority, [`evaluation/dynamic-results.md`](../evaluation/dynamic-results.md)
+**Concerns:** [Q-021](../../open-questions.md#Q-021) (dynamic cost), [Q-034](../../open-questions.md#Q-034) (authoring layer), [Q-056](../../open-questions.md#Q-056) (hand-declared builtin signatures), [Q-057](../../open-questions.md#Q-057) (grammar parity), [`02-core-thesis.md`](../../02-core-thesis.md) § outcome-priority, [`evaluation/dynamic-results.md`](../../evaluation/dynamic-results.md)
 **Scope:** medium (four independent measures, individually small to medium)
 
-This proposal defines the near-term program for bringing Strand's tokens-per-successful-task within a practical multiple of conventional baselines, inside the existing Layer A surface. It is the engineering counterpart to the thesis position that inference cost is a constraint to be bounded, not a headline claim. The strategic alternative — replacing the agent-facing surface entirely — is the separate [`familiar-surface-lowering.md`](familiar-surface-lowering.md) (Q-061); the two tracks are independent and the measures here remain useful under either surface.
+This proposal defines the near-term program for bringing Strand's tokens-per-successful-task within a practical multiple of conventional baselines, inside the existing Layer A surface. It is the engineering counterpart to the thesis position that inference cost is a constraint to be bounded, not a headline claim. The strategic alternative — replacing the agent-facing surface entirely — is the separate [`familiar-surface-lowering.md`](../familiar-surface-lowering.md) (Q-061); the two tracks are independent and the measures here remain useful under either surface.
 
 ## 1. Problem statement
 
-Run 7 of the dynamic-cost measurement ([`evaluation/dynamic-results.md`](../evaluation/dynamic-results.md), all figures byte-proxy) puts Strand at 28,092 tokens per successful task against 1,792 for Python and 1,255 for Kotlin — a 15.7–22.4× multiple. The decomposition shows the cost is not in the language's emissions: per-emission output is already smaller than Python's, and the static measurement has Layer A density v4 at 0.81× Python. The cost concentrates in two places. First, the agent-facing system prompt (`evaluation/dynamic/prompts/strand-system.md`, 1,858 lines, ~86 KB, roughly 21,500 token-equivalents) is re-sent on every attempt; Python's equivalent is ~1,500 tokens because the model already knows Python. Second, retries re-send that prompt in full: in Run 6, four retry-affected cells accounted for roughly 83,000 tokens, and the dominant retry cause was a Layer A grammar slip, not a semantic error.
+Run 7 of the dynamic-cost measurement ([`evaluation/dynamic-results.md`](../../evaluation/dynamic-results.md), all figures byte-proxy) puts Strand at 28,092 tokens per successful task against 1,792 for Python and 1,255 for Kotlin — a 15.7–22.4× multiple. The decomposition shows the cost is not in the language's emissions: per-emission output is already smaller than Python's, and the static measurement has Layer A density v4 at 0.81× Python. The cost concentrates in two places. First, the agent-facing system prompt (`evaluation/dynamic/prompts/strand-system.md`, 1,858 lines, ~86 KB, roughly 21,500 token-equivalents) is re-sent on every attempt; Python's equivalent is ~1,500 tokens because the model already knows Python. Second, retries re-send that prompt in full: in Run 6, four retry-affected cells accounted for roughly 83,000 tokens, and the dominant retry cause was a Layer A grammar slip, not a semantic error.
 
-The bounded-cost constraint in [`02-core-thesis.md`](../02-core-thesis.md) § outcome-priority names prompt caching and skill-mediated emission as the bounding mechanisms; neither is implemented in the headline measurement path. This proposal makes the constraint operational.
+The bounded-cost constraint in [`02-core-thesis.md`](../../02-core-thesis.md) § outcome-priority names prompt caching and skill-mediated emission as the bounding mechanisms; neither is implemented in the headline measurement path. This proposal makes the constraint operational.
 
 ## 2. Measures
 
@@ -20,7 +20,7 @@ Four measures, ordered by leverage per unit of effort. Each carries an acceptanc
 
 ### 2.1 M-1: Prompt caching in the measurement harness
 
-Wrap the system prompt (and the static task preamble) in a provider cache block in the `strand-eval` Anthropic backend. Cache reads price at one tenth of uncached input; cache writes at 1.25×. At N=5 samples per cell the projected per-task input cost falls by roughly two thirds; across a 22-task run sharing one system prompt, total input cost falls by roughly 80 percent. The infrastructure was sketched in [`model-api-integration.md`](model-api-integration.md) and never wired into a headline run.
+Wrap the system prompt (and the static task preamble) in a provider cache block in the `strand-eval` Anthropic backend. Cache reads price at one tenth of uncached input; cache writes at 1.25×. At N=5 samples per cell the projected per-task input cost falls by roughly two thirds; across a 22-task run sharing one system prompt, total input cost falls by roughly 80 percent. The infrastructure was sketched in [`model-api-integration.md`](../model-api-integration.md) and never wired into a headline run.
 
 No language or prompt content changes. This measure alone closes the largest share of the cost gap and is a precondition for honest cost reporting on every later measure.
 
@@ -48,7 +48,7 @@ Two grammar-level slices, both surface-only — the canonical encoding and all e
 
 **Slice b — opt-in effect-declaration synthesis.** An `@auto` marker in an Application's effect-instances slot directs the Elaborator to synthesize the EffectDecl list from the callee's declared effects and projections. Opt-in only: explicit declarations remain the default, and the interaction between synthesized declarations and Handler interception must be pinned by test before the marker is documented agent-facing.
 
-A third candidate — replacing prelude names with short content-hash references — is deferred: it saves little, costs agent legibility, and is superseded by [`implemented/prelude-as-module.md`](implemented/prelude-as-module.md) making the prelude addressable properly.
+A third candidate — replacing prelude names with short content-hash references — is deferred: it saves little, costs agent legibility, and is superseded by [`implemented/prelude-as-module.md`](prelude-as-module.md) making the prelude addressable properly.
 
 **Gate:** every density-v5 fixture compiles to a canonical graph byte-identical to its explicit-form counterpart; corpus golden hashes unchanged.
 
@@ -73,7 +73,7 @@ Sequenced effects on the Run 7 baseline (byte-proxy arithmetic, to be re-grounde
 
 **Deferred intentionally:**
 
-- **Fine-tuning and tokenizer alignment** — Phase 4 per [`research-plan.md`](../research-plan.md) and Q-034 § 3.3; this program is the pre-fine-tuning bound.
+- **Fine-tuning and tokenizer alignment** — Phase 4 per [`research-plan.md`](../../research-plan.md) and Q-034 § 3.3; this program is the pre-fine-tuning bound.
 - **Hash-indexed prelude references** — superseded by Q-063.
 - **Hosted-API constrained decoding** — blocked on provider support; the grammar artifact is ready.
 
@@ -98,11 +98,13 @@ Sequenced effects on the Run 7 baseline (byte-proxy arithmetic, to be re-grounde
 
 **Not in this slice.** Surface replacement (Q-061), prelude materialization (Q-063), any canonical-encoding change.
 
-## Implementation progress
+## Implementation note (2026-06-12)
 
-Three of the four measures landed by 2026-06-12; the proposal remains a draft until M-2 completes and the Q-060 gates produce measured figures.
+All four measures are implemented: M-1 and M-3 landed 2026-06-11, M-4 and M-2 landed 2026-06-12, each as the per-measure record below. The implementation side of the program is complete; the section 2.1 and 2.2 **measurement gates remain to be executed** — the cached N=5 run and the core-versus-full-prompt A/B are the Q-021 Run 8 follow-up, with the exact invocations recorded in `evaluation/dynamic/README.md`. Until those runs produce figures, the section 3 projections remain planning numbers.
 
 **M-1 landed (commit "Q-060 M-1").** The `strand-eval` Anthropic backend sends two ephemeral `cache_control` breakpoints — the system prompt block and the static task preamble (first user message) — so retries within a cell reuse the full prompt prefix at cache-read rates and cells sharing one system prompt reuse the system prefix. Cache accounting flows end to end under distinct labels: the API usage fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are recorded per attempt in both summary.json writers (run mode and step mode, the latter via `response-metadata.json` relay), cell totals are carried separately from uncached input, and the `aggregate`/`report` tables surface cache reads and writes as their own columns plus a hit rate. Byte-proxy sessions record zeros — neither counting fallback can observe cache behavior, and the harness never fabricates cache figures. Cost estimation prices cache traffic at its own rates (0.1x read / 1.25x write). Validation was by mocked-client and fixture tests; the cached N=5 measurement run itself remains the section 2.1 gate to execute.
+
+**M-2 landed (commits "Q-060 M-2 prompt restructure" and "Q-060 M-2 reference-query channel").** The agent-facing prompt split per section 2.2: `evaluation/dynamic/prompts/strand-system.md` is now the minimal always-loaded core — 313 lines, 15.6 KB, 3,879 byte-proxy token-equivalents against the monolith's ~21,500 — carrying the grammar shape, roughly twenty-two highest-frequency codes, the most-used prelude names, a one-line-per-sugar density summary that documents the M-4 v5 forms agent-facing for the first time (bare dotted registry builtins, `@auto` effect synthesis, the FN projection-DSL string), the three worked examples, the error-recovery guide, the Q-063 prelude-manifest hash with a one-line lookup instruction (discharging the hand-off recorded in [`prelude-as-module.md`](prelude-as-module.md)), and an index of the reference sections. Everything else moved to nine named sections under `prompts/references/` (grammar-codes, density-sugars, prelude, builtins, effects, llm-vector, formats, state-machines, errors), with the per-builtin signature text preserved verbatim and the v4-era guidance updated where v5 superseded it; the builtins section records the v5 signature-table coverage (218 registry targets: 129 prelude, 83 table, 6 excluded with reasons). The pre-split monolith is retained byte-for-byte (plus a header note) as `prompts/strand-system-full.md` — the full-prompt A/B arm (config `strand-layer-a-full-prompt`) and the authority document for the signature text. The reference-query channel extends step mode: a response whose first non-blank line is `strand:need <topic-or-builtin> [...]` (no fenced code block — a program always wins) advances the turn by appending only the requested text; topics serve sections, dotted names serve signature blocks, prelude reserved names serve catalog lines, and unknown names get a stdlib-difflib nearest-match suggestion, never silence or a fabricated signature — the section 2.2 Q-056 service. Reference turns are capped per cell (default 3, `--max-reference-turns` / config `max_reference_turns`); requests past the cap consume emission attempts so a looping agent still exhausts. Token accounting labels every turn (`turn_type` in the summary attempts array), records each served reply's appended tokens under its own source label, and keeps `converged_at_attempt` an emission-attempt index so first-pass means the first emitted program verified — the reference round-trip cost lands in the token totals, which is where the gate measures it. The same lookup ships standalone as `python -m strand_eval lookup <name>`. Validation: 25 new pytest cases (lookup hits and misses, cap enforcement and termination, attribution labels, protocol edges, and a fixture-mode two-turn need-then-emit smoke), suite 127 passed against the 102 baseline, no API runs.
 
 **M-3 landed at the grammar-rejection-test level (commit "Q-060 M-3").** No hosted constrained-decode backend is available, so the section 2.3 gate ships as its documented fallback: `ConstraintGrammarSlipGateTest` in the `:authoring` module drives a minimal fully-backtracking GBNF matcher over the grammar `strand grammar` emits and proves the historical slip form (`APP fn args _` in either optional list slot, including the skip-middle variant) is not derivable, while the bracketed-list and omission forms are and `_` remains derivable at genuine nullable slots. A structural pin on the generated `node_APP`/`optional_APP` rules backs the matcher. One factual correction surfaced during implementation: the post-Run-6 parser change accepts the slip as sugar for `[]` rather than rejecting it, so the regression pin asserts sugar-equivalence (slip compiles byte-identically to the explicit-`[]` form) — the two layers together close the Run 6 retry driver from both sides. Hosted constrained decoding remains pending provider support; the grammar artifact is ready.
 
@@ -114,18 +116,27 @@ Three of the four measures landed by 2026-06-12; the proposal remains a draft un
 
 Section 2.4's gate is met by `LayerADensityTest.densityV5RoundTrip` over four new fixture pairs under `corpus/layer-a/density-v5/` (each density form against its explicit hand-declared counterpart: `List.Map` with annotation push, `String.Split`/`String.Join` tower reuse, the `@auto` file-write shape, and `Fs.List` combining both slices), plus per-family equivalence tests in `:authoring` covering `List.Fold`, `Set.Union`, `Json.Parse`, `Map.Merge`, `Http.Request`, and `Fs.List`. One deliberate judgment call to revisit if it grates: `Process.EnvVar` is table-typed under E-033 `OS.Read` (the round-3 host-environment category) rather than an undeclared `Process.*` name — the system prompt's "conventionally Process.*, registry doesn't enforce" note left this open, and reusing the reserved category keeps the bare name usable without inventing an unregistered E-NNN. The agent-facing documentation of the new forms is the M-2 pass's job and is intentionally not part of this slice.
 
+**Recorded deviations (M-2; M-1/M-3/M-4 deviations are inline in their records above):**
+
+1. **The lookup resolves more name kinds than section 2.2 specified.** Beyond named sections and builtin signatures, prelude reserved names and effect-category names (`fsWrite`, `writeFx`) resolve to their catalog lines — free given the prelude section's line format, and the shape agents actually misremember.
+2. **The reference-turn cap and its over-cap semantics are additions.** Section 2.2 did not bound the channel; the implementation caps reference turns per cell (default 3) and charges over-cap requests against the emission-retry budget, so termination is guaranteed by construction rather than by agent good behavior.
+3. **First-pass accounting excludes reference turns.** `converged_at_attempt` counts emission attempts only. The alternative (a reference round-trip voiding first-pass status) would structurally penalize the core arm on the gate's non-regression metric while double-counting a cost the token totals already carry; the section 5 round-trip-cost question is answered by the A/B's token column.
+4. **The full-prompt A/B arm predates density v5.** `strand-system-full.md` is the monolith byte-for-byte (plus a header note) — the v4-era teaching baseline Run 7 measured — so the A/B isolates prompt structure; the v5 forms are documented only in the core and reference sections. If a v5-taught monolith arm is ever wanted, it must be authored deliberately, not assumed.
+
+**Out of scope, recorded for a future pass:** the `.claude/skills/strand-author` skill carries its own per-cluster grammar references predating this split. The skill's references and `prompts/references/` should converge on a single source; that unification is intentionally not part of this slice.
+
 ## References
 
 **Outgoing references:**
-- [`evaluation/dynamic-results.md`](../evaluation/dynamic-results.md) — the Run 6/7 cost decomposition this program targets
-- [`02-core-thesis.md`](../02-core-thesis.md) — the bounded-cost constraint made operational here
-- [`proposals/model-api-integration.md`](model-api-integration.md) — the harness this extends
-- [`proposals/familiar-surface-lowering.md`](familiar-surface-lowering.md) — the strategic alternative track
-- [`proposals/implemented/prelude-as-module.md`](implemented/prelude-as-module.md) — supersedes the hash-indexing candidate
-- [`open-questions.md`](../open-questions.md) — Q-021, Q-034, Q-056, Q-057
+- [`evaluation/dynamic-results.md`](../../evaluation/dynamic-results.md) — the Run 6/7 cost decomposition this program targets
+- [`02-core-thesis.md`](../../02-core-thesis.md) — the bounded-cost constraint made operational here
+- [`proposals/model-api-integration.md`](../model-api-integration.md) — the harness this extends
+- [`proposals/familiar-surface-lowering.md`](../familiar-surface-lowering.md) — the strategic alternative track
+- [`proposals/implemented/prelude-as-module.md`](prelude-as-module.md) — supersedes the hash-indexing candidate
+- [`open-questions.md`](../../open-questions.md) — Q-021, Q-034, Q-056, Q-057
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-060 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
-- [`ROADMAP.md`](../ROADMAP.md) — Tier 1.5
+- [`open-questions.md`](../../open-questions.md) — Q-060 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section
+- [`ROADMAP.md`](../../ROADMAP.md) — Tier 1 (the remaining measurement sweep names the Q-060 gates)
