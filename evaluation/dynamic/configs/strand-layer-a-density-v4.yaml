@@ -3,7 +3,10 @@ system_prompt_path: prompts/strand-system.md
 feedback_format: prose
 max_retries: 5
 description: |
-  Strand Layer A density v4 — the recommended emission target.
-  System prompt teaches the full grammar including density sugars
-  (IF, WHEN, compact LAM params, nested expressions). Verifier
-  feedback in prose form.
+  Strand Layer A density v4/v5 — the recommended emission target.
+  System prompt is the Q-060 M-2 minimal core (~3,900 token-equivalents):
+  highest-frequency codes and prelude names, one-line density sugars
+  incl. v5 (bare dotted builtins, @auto), three worked examples, the
+  error-recovery guide, and an index of on-demand reference sections
+  served through the strand:need protocol. The full monolith is the
+  strand-layer-a-full-prompt config. Verifier feedback in prose form.

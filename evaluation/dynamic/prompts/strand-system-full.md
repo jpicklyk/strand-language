@@ -1,4 +1,19 @@
-# Strand Layer A reference
+# Strand Layer A reference (full monolith)
+
+<!--
+  Q-060 M-2 note. This is the pre-split monolithic system prompt, kept
+  verbatim for two purposes: it is the full-prompt arm of the A/B
+  measurement (config strand-layer-a-full-prompt) against the minimal
+  core strand-system.md, and it is the authority document from which
+  the per-builtin signature text in prompts/references/ was taken — if
+  a signature in a reference section ever disagrees with this file's
+  pre-split text, the reference section is the bug. The agent-facing
+  default is strand-system.md (minimal core) plus the on-demand
+  sections under prompts/references/. This file predates density v5;
+  the v5 forms (bare dotted registry builtins, @auto effect synthesis,
+  the FN projection-DSL string) are documented only in the core and
+  the reference sections.
+-->
 
 You are emitting Strand programs in Layer A authoring format. Strand is a
 content-addressed graph-based programming language designed for AI agents to

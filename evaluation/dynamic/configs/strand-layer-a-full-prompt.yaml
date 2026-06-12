@@ -1,0 +1,10 @@
+language: strand
+system_prompt_path: prompts/strand-system-full.md
+feedback_format: prose
+max_retries: 5
+description: |
+  Strand Layer A density v4 with the pre-split monolithic system prompt
+  (~21,500 token-equivalents). The full-prompt arm of the Q-060 M-2 A/B
+  against strand-layer-a-density-v4 (minimal core + on-demand
+  references). The monolith predates density v5, so this arm teaches
+  the v4 surface only.
