@@ -98,6 +98,14 @@ Sequenced effects on the Run 7 baseline (byte-proxy arithmetic, to be re-grounde
 
 **Not in this slice.** Surface replacement (Q-061), prelude materialization (Q-063), any canonical-encoding change.
 
+## Implementation progress
+
+Two of the four measures landed on 2026-06-12; the proposal remains a draft until M-2 and M-4 complete and the Q-060 gates produce measured figures.
+
+**M-1 landed (commit "Q-060 M-1").** The `strand-eval` Anthropic backend sends two ephemeral `cache_control` breakpoints — the system prompt block and the static task preamble (first user message) — so retries within a cell reuse the full prompt prefix at cache-read rates and cells sharing one system prompt reuse the system prefix. Cache accounting flows end to end under distinct labels: the API usage fields (`cache_read_input_tokens`, `cache_creation_input_tokens`) are recorded per attempt in both summary.json writers (run mode and step mode, the latter via `response-metadata.json` relay), cell totals are carried separately from uncached input, and the `aggregate`/`report` tables surface cache reads and writes as their own columns plus a hit rate. Byte-proxy sessions record zeros — neither counting fallback can observe cache behavior, and the harness never fabricates cache figures. Cost estimation prices cache traffic at its own rates (0.1x read / 1.25x write). Validation was by mocked-client and fixture tests; the cached N=5 measurement run itself remains the section 2.1 gate to execute.
+
+**M-3 landed at the grammar-rejection-test level (commit "Q-060 M-3").** No hosted constrained-decode backend is available, so the section 2.3 gate ships as its documented fallback: `ConstraintGrammarSlipGateTest` in the `:authoring` module drives a minimal fully-backtracking GBNF matcher over the grammar `strand grammar` emits and proves the historical slip form (`APP fn args _` in either optional list slot, including the skip-middle variant) is not derivable, while the bracketed-list and omission forms are and `_` remains derivable at genuine nullable slots. A structural pin on the generated `node_APP`/`optional_APP` rules backs the matcher. One factual correction surfaced during implementation: the post-Run-6 parser change accepts the slip as sugar for `[]` rather than rejecting it, so the regression pin asserts sugar-equivalence (slip compiles byte-identically to the explicit-`[]` form) — the two layers together close the Run 6 retry driver from both sides. Hosted constrained decoding remains pending provider support; the grammar artifact is ready.
+
 ## References
 
 **Outgoing references:**
