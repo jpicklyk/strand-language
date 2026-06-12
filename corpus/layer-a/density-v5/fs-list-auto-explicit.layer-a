@@ -1,0 +1,18 @@
+# Explicit-form counterpart of fs-list-auto.layer-a: the hand-declared
+# string-list tower, the FNT + FN pair with the effect list and the
+# Q-039 projection DSL, and the explicit EffectDecl. Byte-identical
+# canonical graph (LayerADensityTest densityV5RoundTrip).
+@v=1 root=entries
+sSelf RS
+sHeadInner PRF "head" stringT
+sTailInner PRF "tail" sSelf
+sConsInner PRD [sHeadInner sTailInner]
+sConsCase SCS "Cons" sConsInner
+sNilCase SCS "Nil" _
+sSum SUM [sConsCase sNilCase]
+strListT RT sSum
+listDirT FNT [stringT] strListT
+listDirFn FN "strand-builtin:Fs.List" listDirT [readFx] "readFx:0"
+dir STR "/safe"
+ld EFD readFx [dir]
+entries APP listDirFn [dir] [] [ld]

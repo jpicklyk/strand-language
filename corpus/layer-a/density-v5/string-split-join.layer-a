@@ -1,0 +1,11 @@
+# Layer A density v5 fixture (Q-060 M-4 slice a): List-returning
+# String builtins by bare name. `String.Split` and `String.Join` are
+# table-covered; their List<String> shapes are var-free, so the
+# instantiation synthesizes one shared canonical string-list tower
+# (the instantiation cache reuses it across both call sites).
+@v=1 root=joined
+input STR "a,b,c"
+comma STR ","
+dash STR "-"
+parts APP String.Split [input comma]
+joined APP String.Join [parts dash]

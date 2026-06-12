@@ -1,0 +1,21 @@
+# Explicit-form counterpart of string-split-join.layer-a: the
+# hand-declared string-list tower and FNT + FN pairs. Byte-identical
+# canonical graph (LayerADensityTest densityV5RoundTrip).
+@v=1 root=joined
+sSelf RS
+sHeadInner PRF "head" stringT
+sTailInner PRF "tail" sSelf
+sConsInner PRD [sHeadInner sTailInner]
+sConsCase SCS "Cons" sConsInner
+sNilCase SCS "Nil" _
+sSum SUM [sConsCase sNilCase]
+strListT RT sSum
+splitT FNT [stringT stringT] strListT
+splitFn FN "strand-builtin:String.Split" splitT
+joinT FNT [strListT stringT] stringT
+joinFn FN "strand-builtin:String.Join" joinT
+input STR "a,b,c"
+comma STR ","
+dash STR "-"
+parts APP splitFn [input comma]
+joined APP joinFn [parts dash]

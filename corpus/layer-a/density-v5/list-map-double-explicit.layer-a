@@ -1,0 +1,24 @@
+# Explicit-form counterpart of list-map-double.layer-a: the
+# hand-declared FNT + FN pair the implicit expansion synthesizes, with
+# the lambda parameter annotated by hand. Byte-identical canonical
+# graph (LayerADensityTest densityV5RoundTrip).
+@v=1 root=mapped
+selfRef RS
+headInner PRF "head" intT
+tailInner PRF "tail" selfRef
+consInner PRD [headInner tailInner]
+consCase SCS "Cons" consInner
+nilCase SCS "Nil" _
+listSum SUM [consCase nilCase]
+listT RT listSum
+headOuter PRF "head" intT
+tailOuter PRF "tail" listT
+consOuter PRD [headOuter tailOuter]
+nilV SV listT "Nil" _
+five SV listT "Cons" (PV consOuter [head=5 tail=nilV])
+list SV listT "Cons" (PV consOuter [head=3 tail=five])
+double LAM [x:intT] (APP mul [x 2])
+fnT FNT [intT] intT
+mapT FNT [listT fnT] listT
+mapFn FN "strand-builtin:List.Map" mapT
+mapped APP mapFn [list double]

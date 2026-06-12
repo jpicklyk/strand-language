@@ -64,6 +64,65 @@ class LayerADensityTest {
         Pair("density-v4", "54-json-value-primitives-v4") to "54-json-value-primitives",
     )
 
+    /**
+     * Layer A density v5 (Q-060 M-4) — registry-wide implicit builtins
+     * (slice a) and opt-in `@auto` effect synthesis (slice b). These
+     * fixtures have no canonical-JSON corpus counterpart; each pairs a
+     * density form against its explicit hand-declared Layer A
+     * counterpart in the same folder (`<base>.layer-a` vs
+     * `<base>-explicit.layer-a`), asserting byte-identical canonical
+     * graphs — the section 2.4 gate of
+     * `proposals/authoring-cost-reduction.md`.
+     */
+    private val v5Pairs = listOf(
+        "list-map-double",
+        "string-split-join",
+        "fs-write-auto",
+        "fs-list-auto",
+    )
+
+    @TestFactory
+    fun densityV5RoundTrip(): List<DynamicTest> = v5Pairs.map { base ->
+        DynamicTest.dynamicTest("density-v5/$base") {
+            val densityText = loadResource("/corpus/layer-a/density-v5/$base.layer-a")
+            val explicitText = loadResource("/corpus/layer-a/density-v5/$base-explicit.layer-a")
+
+            val densityFinal = run {
+                val ingest = JsonIngest.parse(Authoring.compileToDagJson(densityText))
+                Hasher(ingest.rawStore).finalize(ingest.root)
+            }
+            val explicitFinal = run {
+                val ingest = JsonIngest.parse(Authoring.compileToDagJson(explicitText))
+                Hasher(ingest.rawStore).finalize(ingest.root)
+            }
+            val densityRootHash = densityFinal.nodeIdToHash.getValue(densityFinal.root)
+            val explicitRootHash = explicitFinal.nodeIdToHash.getValue(explicitFinal.root)
+            assertEquals(
+                explicitRootHash,
+                densityRootHash,
+                "$base: explicit-form root hash $explicitRootHash differs from the density-v5 " +
+                    "compiled root hash $densityRootHash — implicit-builtin / @auto synthesis " +
+                    "broke the hash-stability invariant",
+            )
+
+            val densityVerify = Verifier(densityFinal.store, densityFinal.hashToNodeId)
+                .verify(densityFinal.root)
+            val explicitVerify = Verifier(explicitFinal.store, explicitFinal.hashToNodeId)
+                .verify(explicitFinal.root)
+            assertTrue(explicitVerify is VerifyResult.Ok) {
+                "$base: explicit form failed verification: $explicitVerify"
+            }
+            assertTrue(densityVerify is VerifyResult.Ok) {
+                "$base: density-v5 form failed verification: $densityVerify"
+            }
+            assertEquals(
+                (explicitVerify as VerifyResult.Ok).rootType,
+                (densityVerify as VerifyResult.Ok).rootType,
+                "$base: root types differ between explicit and density-v5 forms",
+            )
+        }
+    }
+
     @TestFactory
     fun densityRoundTrip(): List<DynamicTest> = pairs.map { (pair, canonicalBase) ->
         DynamicTest.dynamicTest("${pair.sliceFolder}/${pair.baseName}") {

@@ -1,0 +1,8 @@
+# Explicit-form counterpart of fs-write-auto.layer-a: the EffectDecl
+# written by hand, parameters matching fsWrite's ArgRef(0) projection.
+# Byte-identical canonical graph (LayerADensityTest densityV5RoundTrip).
+@v=1 root=w
+p STR "/safe/log"
+d BYT "64617461"
+wd EFD writeFx [p]
+w APP fsWrite [p d] [] [wd]

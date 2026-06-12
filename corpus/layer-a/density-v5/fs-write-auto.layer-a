@@ -1,0 +1,10 @@
+# Layer A density v5 fixture (Q-060 M-4 slice b): opt-in `@auto`
+# effect synthesis on the file-write shape. The `@auto` marker in the
+# effect-instances slot (here in the typeArguments position — the
+# tail-collapse spelling) directs the Elaborator to synthesize the
+# EffectDecl list from fsWrite's declared writeFx and its Q-039
+# ArgRef(0) projection. Round-trip hash equals fs-write-auto-explicit's.
+@v=1 root=w
+p STR "/safe/log"
+d BYT "64617461"
+w APP fsWrite [p d] @auto

@@ -105,6 +105,14 @@
     "layer-a/density-v4/21-fixpoint-factorial-v4.layer-a": "1e40d2797fc4598b64192a4dc468df0573559982c6d27e8b705399d62c17658c13",
     "layer-a/density-v4/25-option-some-unwrap-v4.layer-a": "1e626aad166665f30dba4f3e7ad58d3739b8786dd7afb6b2005aa30d1f9c658f6e",
     "layer-a/density-v4/41-toggle-machine-v4.layer-a": "1ea62e985ed9fe72b5b51aeb57ae471df823455501ae61709c5e04d69c0d560461",
-    "layer-a/density-v4/54-json-value-primitives-v4.layer-a": "1e6e0e5adc481dcfb44402549e19ca255f8ef25468344354a6dfa6944ae71d29ea"
+    "layer-a/density-v4/54-json-value-primitives-v4.layer-a": "1e6e0e5adc481dcfb44402549e19ca255f8ef25468344354a6dfa6944ae71d29ea",
+    "layer-a/density-v5/fs-list-auto-explicit.layer-a": "1ed2394c32e4fde58c7ad66cf146fe7296ce02327b979f449b8fedd5fa7a3a9418",
+    "layer-a/density-v5/fs-list-auto.layer-a": "1ed2394c32e4fde58c7ad66cf146fe7296ce02327b979f449b8fedd5fa7a3a9418",
+    "layer-a/density-v5/fs-write-auto-explicit.layer-a": "1e3c23033825b9f57dfc0b4f098e04b8476d15a45a6db3c4ca0e3b8b6b1a6f1520",
+    "layer-a/density-v5/fs-write-auto.layer-a": "1e3c23033825b9f57dfc0b4f098e04b8476d15a45a6db3c4ca0e3b8b6b1a6f1520",
+    "layer-a/density-v5/list-map-double-explicit.layer-a": "1e2720bb9439157567b83525f2ab5c9e977367f5774d287f0759b382214dc0e584",
+    "layer-a/density-v5/list-map-double.layer-a": "1e2720bb9439157567b83525f2ab5c9e977367f5774d287f0759b382214dc0e584",
+    "layer-a/density-v5/string-split-join-explicit.layer-a": "1ed041ad225040808b69a3d00d51e6f0291fc0b78fc98449dcb5e77031a64d45d4",
+    "layer-a/density-v5/string-split-join.layer-a": "1ed041ad225040808b69a3d00d51e6f0291fc0b78fc98449dcb5e77031a64d45d4"
   }
 }

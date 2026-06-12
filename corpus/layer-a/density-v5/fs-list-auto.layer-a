@@ -1,0 +1,8 @@
+# Layer A density v5 fixture (Q-060 M-4 slices a+b combined): a bare
+# dotted registry name (`Fs.List`, table-covered with readFx and the
+# ArgRef(0) projection) plus `@auto` effect synthesis consuming the
+# synthesized ForeignNode's projection in the same fixed-point loop.
+# Two lines of program for what the explicit form writes in twelve.
+@v=1 root=entries
+dir STR "/safe"
+entries APP Fs.List [dir] @auto

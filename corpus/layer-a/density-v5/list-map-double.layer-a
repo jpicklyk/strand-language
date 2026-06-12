@@ -1,0 +1,24 @@
+# Layer A density v5 fixture (Q-060 M-4 slice a): registry-wide
+# implicit builtins. `List.Map` is called by its bare dotted registry
+# name — no hand-declared FNT + FN pair. The Elaborator instantiates
+# the table signature (List<A>, (A) -> B) -> List<B> from the list
+# argument's type and pushes the lambda's parameter annotation
+# (`x:intT`) from the binding, then synthesizes the ForeignNode +
+# FunctionType. Round-trip hash equals list-map-double-explicit's.
+@v=1 root=mapped
+selfRef RS
+headInner PRF "head" intT
+tailInner PRF "tail" selfRef
+consInner PRD [headInner tailInner]
+consCase SCS "Cons" consInner
+nilCase SCS "Nil" _
+listSum SUM [consCase nilCase]
+listT RT listSum
+headOuter PRF "head" intT
+tailOuter PRF "tail" listT
+consOuter PRD [headOuter tailOuter]
+nilV SV listT "Nil" _
+five SV listT "Cons" (PV consOuter [head=5 tail=nilV])
+list SV listT "Cons" (PV consOuter [head=3 tail=five])
+double LAM [x] (APP mul [x 2])
+mapped APP List.Map [list double]
