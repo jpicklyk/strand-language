@@ -53,6 +53,12 @@ class EmissionResult:
     ``cache_read_input_tokens``; tokens written into the cache on the
     first call of a window appear under ``cache_creation_input_tokens``.
     Backends that don't support caching populate both as 0.
+
+    ``token_source`` labels where the counts came from (see
+    ``strand_eval.tokens``): "api" for real tokenizer counts,
+    "byte-proxy" for the chars/4 heuristic, "caller" for explicit
+    metadata, "fixture" / "synthetic" for replayed or scripted
+    backends. "unknown" marks legacy data recorded before labeling.
     """
 
     content: str
@@ -64,6 +70,7 @@ class EmissionResult:
     raw_response: Optional[dict[str, Any]] = None
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    token_source: str = "unknown"
 
 
 @dataclass
@@ -121,6 +128,10 @@ class TaskMetrics:
     and ``total_cache_creation_tokens`` track the prompt-cache token flow
     separately; the cost calculator in `metrics.py` prices them at their
     respective rates ($0.30/M read, $3.75/M write on Sonnet 4.7).
+
+    ``token_source`` is the aggregate provenance label over the cell's
+    emissions ("api", "byte-proxy", ... or "mixed(a+b)"); see
+    ``strand_eval.tokens.combine_sources``.
     """
 
     task_id: str
@@ -135,6 +146,7 @@ class TaskMetrics:
     total_cache_read_tokens: int = 0
     total_cache_creation_tokens: int = 0
     total_cost_usd: float = 0.0
+    token_source: str = "unknown"
     verify_results: list[VerifyResult] = field(default_factory=list)
     run_result: Optional[RunResult] = None
     transcript: list[Message] = field(default_factory=list)

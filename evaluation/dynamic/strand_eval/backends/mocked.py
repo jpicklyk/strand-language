@@ -142,4 +142,7 @@ class MockedBackend(EmissionBackend):
             raw_response=response,
             cache_read_input_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
             cache_creation_input_tokens=int(usage.get("cache_creation_input_tokens", 0) or 0),
+            # Counts are whatever the fixture recorded; fixtures written
+            # after source labeling carry their original provenance.
+            token_source=response.get("token_source", "fixture"),
         )

@@ -43,6 +43,7 @@ def _emission_to_dict(em: EmissionResult) -> dict[str, Any]:
         "model": em.model,
         "latency_ms": em.latency_ms,
         "stop_reason": em.finish_reason,
+        "token_source": em.token_source,
         "usage": {
             "input_tokens": em.input_tokens,
             "output_tokens": em.output_tokens,
@@ -131,6 +132,7 @@ def _serialize_task_metrics(tm: TaskMetrics) -> dict[str, Any]:
         "total_cache_read_tokens": tm.total_cache_read_tokens,
         "total_cache_creation_tokens": tm.total_cache_creation_tokens,
         "total_cost_usd": tm.total_cost_usd,
+        "token_source": tm.token_source,
         "verify_oks": [vr.ok for vr in tm.verify_results],
         "run_ok": tm.run_result.ok if tm.run_result else None,
     }

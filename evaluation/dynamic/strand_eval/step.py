@@ -50,6 +50,11 @@ from typing import Any, Optional
 
 from strand_eval.languages import Language, get_language
 from strand_eval.metrics import estimate_cost
+from strand_eval.tokens import (
+    SOURCE_CALLER,
+    combine_sources,
+    default_counter,
+)
 from strand_eval.types import (
     EmissionResult,
     FeedbackFormat,
@@ -84,6 +89,9 @@ class StepState:
     success: bool = False
     converged_at_attempt: Optional[int] = None
     status: str = "needs-response"  # needs-response | converged | exhausted
+    # Token counts for the static prompt components, recorded at init:
+    # {"system": {"tokens": N, "source": "api"|"byte-proxy"}, "task": {...}}
+    prompt_token_counts: dict = field(default_factory=dict)
 
     def save(self) -> None:
         Path(self.session_dir, "session.json").write_text(
@@ -123,6 +131,19 @@ def step_init(
         messages.append({"role": Role.SYSTEM.value, "content": system_prompt})
     messages.append({"role": Role.USER.value, "content": task_prompt})
 
+    # Count the static prompt components up front, labeled with their
+    # source ("api" when the count_tokens endpoint is reachable,
+    # "byte-proxy" otherwise). The per-emission input counts recorded at
+    # each advance subsume these; they are recorded separately so prompt
+    # overhead is attributable without re-deriving it from transcripts.
+    counter = default_counter()
+    system_count = counter.count_text(system_prompt, model)
+    task_count = counter.count_text(task_prompt, model)
+    prompt_token_counts = {
+        "system": {"tokens": system_count.tokens, "source": system_count.source},
+        "task": {"tokens": task_count.tokens, "source": task_count.source},
+    }
+
     state = StepState(
         session_dir=str(session_dir),
         task_id=task_id,
@@ -138,6 +159,7 @@ def step_init(
         messages=messages,
         attempt=0,
         status="needs-response",
+        prompt_token_counts=prompt_token_counts,
     )
 
     _write_prompt_for_turn(state)
@@ -168,20 +190,28 @@ def step_advance(session_dir: Path) -> StepState:
         )
     response_text = response_path.read_text(encoding="utf-8")
 
-    # Optional explicit token counts from the caller. If absent, estimate
-    # from byte counts using the static framework's bytes/4 heuristic.
+    # Token counts for the turn. Three sources, in precedence order:
+    # explicit caller metadata ("caller"), the Anthropic count_tokens
+    # endpoint ("api", when ANTHROPIC_API_KEY is available), or the
+    # legacy chars/4 estimate ("byte-proxy"). The source is recorded on
+    # the emission and aggregated into summary.json so reported figures
+    # are never silently mixed across scales.
     metadata_path = turn_dir / "response-metadata.json"
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         input_tokens = int(metadata.get("input_tokens", 0))
         output_tokens = int(metadata.get("output_tokens", 0))
         latency_ms = int(metadata.get("latency_ms", 0))
+        token_source = str(metadata.get("token_source", SOURCE_CALLER))
     else:
-        # Estimate. Input ~= every message in the stack so far. Output ~= response.
-        input_chars = sum(len(m["content"]) for m in state.messages)
-        input_tokens = (input_chars + 3) // 4
-        output_tokens = (len(response_text) + 3) // 4
+        counter = default_counter()
+        # Input ~= every message in the stack so far. Output ~= response.
+        input_count = counter.count_messages(state.messages, state.model)
+        output_count = counter.count_text(response_text, state.model)
+        input_tokens = input_count.tokens
+        output_tokens = output_count.tokens
         latency_ms = 0
+        token_source = combine_sources([input_count.source, output_count.source])
 
     emission = EmissionResult(
         content=response_text,
@@ -190,6 +220,7 @@ def step_advance(session_dir: Path) -> StepState:
         model=state.model,
         latency_ms=latency_ms,
         finish_reason="end_turn",
+        token_source=token_source,
     )
 
     # Append the assistant turn.
@@ -303,6 +334,7 @@ def _write_summary(state: StepState) -> None:
     verify_results = [_verify_from_dict(d) for d in state.verify_results]
     run_result = _run_from_dict(state.run_result) if state.run_result else None
 
+    token_source = combine_sources([e.token_source for e in emissions])
     metrics = TaskMetrics(
         task_id=state.task_id,
         config=state.config_name,
@@ -315,6 +347,7 @@ def _write_summary(state: StepState) -> None:
         total_output_tokens=sum(e.output_tokens for e in emissions),
         verify_results=verify_results,
         run_result=run_result,
+        token_source=token_source,
     )
     metrics.total_cost_usd = estimate_cost(metrics, state.model)
 
@@ -330,6 +363,8 @@ def _write_summary(state: StepState) -> None:
         "total_input_tokens": metrics.total_input_tokens,
         "total_output_tokens": metrics.total_output_tokens,
         "total_cost_usd": metrics.total_cost_usd,
+        "token_source": token_source,
+        "prompt_token_counts": state.prompt_token_counts,
         "timestamp": int(time.time()),
     }
     (Path(state.session_dir) / "summary.json").write_text(
@@ -360,6 +395,7 @@ def _emission_to_dict(e: EmissionResult) -> dict:
         "model": e.model,
         "latency_ms": e.latency_ms,
         "finish_reason": e.finish_reason,
+        "token_source": e.token_source,
     }
 
 
@@ -371,6 +407,9 @@ def _emission_from_dict(d: dict) -> EmissionResult:
         model=d["model"],
         latency_ms=d.get("latency_ms", 0),
         finish_reason=d.get("finish_reason", "end_turn"),
+        # Pre-labeling step sessions estimated with chars/4, so the
+        # honest backfill for legacy data is "byte-proxy".
+        token_source=d.get("token_source", "byte-proxy"),
     )
 
 

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from strand_eval.backends.base import EmissionBackend
 from strand_eval.metrics import estimate_cost
+from strand_eval.tokens import combine_sources
 from strand_eval.types import (
     FeedbackFormat,
     Message,
@@ -159,6 +160,10 @@ def run_task(
         break
 
     # Finalize cost estimate (rough; the metrics module's table-formatter
-    # uses the same MODEL_PRICING table for the per-task report).
+    # uses the same MODEL_PRICING table for the per-task report) and the
+    # aggregate token-source label over this cell's emissions.
+    metrics.token_source = combine_sources(
+        [e.token_source for e in metrics.emissions]
+    )
     metrics.total_cost_usd = estimate_cost(metrics, model)
     return metrics

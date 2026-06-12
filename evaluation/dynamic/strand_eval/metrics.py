@@ -294,6 +294,17 @@ def cell_stat(
     return CellStat(n=len(vals), mean=mean, ci_lo=lo, ci_hi=hi)
 
 
+def _combine_cell_sources(samples: list[TaskMetrics]) -> str:
+    """Aggregate the token-source labels for a group of samples.
+
+    Delegates to strand_eval.tokens.combine_sources; imported lazily to
+    keep metrics importable in isolation.
+    """
+    from strand_eval.tokens import combine_sources
+
+    return combine_sources([s.token_source for s in samples])
+
+
 def per_task_table(
     task_id: str,
     config_metrics: dict[str, list[TaskMetrics]],
@@ -302,8 +313,11 @@ def per_task_table(
     """Render a Markdown table for one task across configurations.
 
     Columns: Configuration | Convergence | Tokens/success (mean [CI]) |
-    Cost/success | x vs baseline. The CI brackets only appear when N>1
-    for that cell; with N=1 the column collapses to a single value.
+    Token source | Cost/success | x vs baseline. The CI brackets only
+    appear when N>1 for that cell; with N=1 the column collapses to a
+    single value. The token-source column labels each cell's counting
+    provenance ("api" / "byte-proxy" / ...) so figures from different
+    scales are never presented as comparable without saying so.
     """
     baseline_samples = [tm for tm in config_metrics.get(baseline_config, []) if tm.task_id == task_id]
     baseline_stat = cell_stat(baseline_samples, _cell_tokens_value)
@@ -312,8 +326,8 @@ def per_task_table(
     lines: list[str] = [
         f"## {task_id}",
         "",
-        f"| Configuration | Convergence | Tokens/success | Cost/success (USD) | x vs {baseline_config} |",
-        "|---------------|-------------|----------------|--------------------|------------------------|",
+        f"| Configuration | Convergence | Tokens/success | Token source | Cost/success (USD) | x vs {baseline_config} |",
+        "|---------------|-------------|----------------|--------------|--------------------|------------------------|",
     ]
     for config_name, samples in sorted(config_metrics.items()):
         task_samples = [tm for tm in samples if tm.task_id == task_id]
@@ -323,12 +337,15 @@ def per_task_table(
         tok_stat = cell_stat(task_samples, _cell_tokens_value)
         cost_stat = cell_stat(task_samples, lambda s: s.total_cost_usd)
         tokens_str = tok_stat.render() if tok_stat is not None else "n/a"
+        source_str = _combine_cell_sources(task_samples)
         cost_str = cost_stat.render(fmt="${:.4f}") if cost_stat is not None else "n/a"
         if tok_stat is not None and baseline_mean and baseline_mean > 0:
             ratio_str = f"{tok_stat.mean / baseline_mean:.2f}"
         else:
             ratio_str = "n/a"
-        lines.append(f"| {config_name} | {conv} | {tokens_str} | {cost_str} | {ratio_str} |")
+        lines.append(
+            f"| {config_name} | {conv} | {tokens_str} | {source_str} | {cost_str} | {ratio_str} |"
+        )
     return "\n".join(lines)
 
 
@@ -369,6 +386,7 @@ def aggregate_table(
         f"Geomean x vs {baseline_config}",
         "Convergence (all tasks)",
         "Total cost (USD)",
+        "Token source",
     ]
     if show_cache:
         header_cols.append("Cache hit rate")
@@ -395,6 +413,7 @@ def aggregate_table(
             gm_str,
             f"{conv}/{total}",
             f"${total_cost:.4f}",
+            _combine_cell_sources(samples),
         ]
         if show_cache:
             cache_in = sum(s.total_cache_read_tokens for s in samples)
