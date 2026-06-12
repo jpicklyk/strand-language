@@ -110,10 +110,24 @@ class AttemptVmTest {
     fun `CapabilityViolation inside TRY propagates uncaught in the VM`() {
         val l = load(fsReadAttemptJson)
         val table = Lowerer(l.store, l.hashToNodeId).lower(l.root)
-        // No capabilities granted: the effectful call is denied. The VM raises
-        // VmCapabilityViolation which is uncatchable — it must escape TRY.
-        org.junit.jupiter.api.assertThrows<VmCapabilityViolation> {
+        // No capabilities granted: the effectful call is denied. Q-064
+        // unified the VM's denial shape with the interpreter's at the
+        // InterpretError boundary; the error is uncatchable and must
+        // escape TRY.
+        val ex = org.junit.jupiter.api.assertThrows<InterpretException> {
             Vm(table).run(initialCaps = emptySet())
         }
+        val err = ex.error as InterpretError.CapabilityViolation
+        val readFx = l.names.getValue("readFx")
+        assertEquals(setOf(readFx), err.missing)
+        // The VM-side DenialReport is honest about its coarseness: the
+        // category renders as the NodeId (no store to resolve the name),
+        // requested is null (category-only checking — no refinement
+        // parameters fabricated), held is empty, no denying NodeId.
+        assertEquals(readFx.toString(), err.report.category)
+        assertEquals(null, err.report.requested)
+        assertEquals(emptyList<String>(), err.report.held)
+        assertEquals(null, err.report.node)
+        assertEquals(org.strand.interpreter.DenialPhase.Expression, err.report.phase)
     }
 }

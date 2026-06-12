@@ -74,13 +74,22 @@ sealed class InterpretError {
      * arguments (the policy granted *something* but not for these
      * resources). The split tells the policy author which kind of denial
      * happened.
+     *
+     * Q-064: [report] is the structured denial outcome for the
+     * orchestrating principal — see [DenialReport]. [at] follows the
+     * [ResourceExhaustion] precedent: non-null when the tree-walking
+     * interpreter raises, null when the bytecode VM raises (opcodes carry
+     * no NodeIds in slice 1; the VM's category-only check is the same
+     * denial decision, unified at this InterpretError boundary).
      */
     data class CapabilityViolation(
-        override val at: NodeId,
-        val missing: Set<NodeId>
+        override val at: NodeId?,
+        val missing: Set<NodeId>,
+        val report: DenialReport,
     ) : InterpretError() {
         // Host policy: observable denial would turn the capability context
         // into a probeable oracle (proposals/error-recovery.md § 4.3).
+        // Q-064's report surfaces at the host boundary only.
         override val isCatchable: Boolean get() = false
     }
 
@@ -95,12 +104,17 @@ sealed class InterpretError {
      * `path: "/etc/passwd"` through the logger; the runtime denies the
      * write at the call site because no granted pattern covers the
      * requirement.
+     *
+     * Q-064: [report] is the structured denial outcome for the
+     * orchestrating principal — the rendered, scrubbed view of
+     * [requirement] versus [available]. See [DenialReport].
      */
     data class RefinementViolation(
         override val at: NodeId,
         val category: NodeId,
         val requirement: List<Value>,
         val available: List<CapabilityPattern>,
+        val report: DenialReport,
     ) : InterpretError() {
         // Host policy: the refinement lattice is the finer-grained half of
         // the capability-denial surface (proposals/error-recovery.md § 4.3).

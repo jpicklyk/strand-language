@@ -935,7 +935,7 @@ class Interpreter(
             // handler-internal effects would require the handler to carry
             // its own EffectDecls, which the no-continuation form does
             // not.)
-            checkCapabilities(id, callable.lambda.effects, emptyMap(), context)
+            checkCapabilities(id, callable.lambda.effects, emptyMap(), context, limits)
             var callEnv = callable.env
             for ((paramId, value) in callable.lambda.parameters.zip(args)) {
                 callEnv = callEnv + (paramId to value)
@@ -943,7 +943,7 @@ class Interpreter(
             eval(callable.lambda.body, callEnv, context, handlers, counters, limits)
         }
         is Value.ForeignFn -> {
-            checkCapabilities(id, callable.node.effects, emptyMap(), context)
+            checkCapabilities(id, callable.node.effects, emptyMap(), context, limits)
             try {
                 foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
             } catch (io: IoFailure) {
@@ -987,7 +987,7 @@ class Interpreter(
                     at = id, expected = userArity, actual = args.size
                 ))
             }
-            checkCapabilities(id, callable.bodyLambda.effects, emptyMap(), context)
+            checkCapabilities(id, callable.bodyLambda.effects, emptyMap(), context, limits)
             var callEnv = callable.env + (callable.bodyLambda.parameters[0] to callable)
             for ((i, paramId) in callable.bodyLambda.parameters.drop(1).withIndex()) {
                 callEnv = callEnv + (paramId to args[i])
@@ -1024,7 +1024,7 @@ class Interpreter(
         // Capability check uses the body Lambda's declared effects (which
         // by verifier construction equal the recursionType's effects).
         val instances = evalEffectInstances(env, context, handlers, app, counters, limits)
-        checkCapabilities(id, fn.bodyLambda.effects, instances, context)
+        checkCapabilities(id, fn.bodyLambda.effects, instances, context, limits)
         val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
         // Build the call env: capture-time env + (self → this FixpointFn) +
         // (each remaining parameter → corresponding argument).
@@ -1051,7 +1051,7 @@ class Interpreter(
             ))
         }
         val instances = evalEffectInstances(env, context, handlers, app, counters, limits)
-        checkCapabilities(id, fn.lambda.effects, instances, context)
+        checkCapabilities(id, fn.lambda.effects, instances, context, limits)
         val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
         var callEnv = fn.env
         for ((paramId, value) in fn.lambda.parameters.zip(args)) {
@@ -1098,7 +1098,7 @@ class Interpreter(
         } else {
             evalEffectInstances(env, context, handlers, app, counters, limits)
         }
-        checkCapabilities(id, fn.node.effects, instances, context)
+        checkCapabilities(id, fn.node.effects, instances, context, limits)
         try {
             foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
         } catch (io: IoFailure) {
@@ -1392,13 +1392,32 @@ class Interpreter(
         declared: List<NodeId>,
         instances: Map<NodeId, List<Value>>,
         context: CapabilitySet,
+        limits: EvaluationLimits,
     ) {
         // First pass: surface every category that is entirely absent in
         // one error. Mirrors the pre-Q-031 CapabilityViolation shape so
         // existing tests that inspect `missing` keep working.
         val missing = declared.toSet().filter { it !in context.grants }.toSet()
         if (missing.isNotEmpty()) {
-            throw InterpretException(InterpretError.CapabilityViolation(at = at, missing = missing))
+            // Q-064: assemble the denial report from values already in
+            // scope. Category names in the callee's declaration order;
+            // requested parameters are whatever EffectDecls the call site
+            // supplied for the missing categories; held is empty — the
+            // category is absent, the context holds nothing for it.
+            val missingInOrder = declared.filter { it in missing }.distinct()
+            val requestedValues = missingInOrder.flatMap { instances[it].orEmpty() }
+            throw InterpretException(InterpretError.CapabilityViolation(
+                at = at,
+                missing = missing,
+                report = buildDenialReport(
+                    at = at,
+                    categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
+                    requested = requestedValues,
+                    held = emptyList(),
+                    heldCategoryName = "",
+                    limits = limits,
+                ),
+            ))
         }
         // Second pass: per-category refinement check. Only fires when the
         // call site supplied an EffectDecl for the category — categories
@@ -1409,13 +1428,59 @@ class Interpreter(
             val grants = context.grants[category]!! // non-null: first pass filtered missing
             val matched = grants.any { covers(it, requirement) }
             if (!matched) {
+                val name = categoryNameOf(category)
                 throw InterpretException(InterpretError.RefinementViolation(
                     at = at,
                     category = category,
                     requirement = requirement,
                     available = grants,
+                    report = buildDenialReport(
+                        at = at,
+                        categoryName = name,
+                        requested = requirement,
+                        held = grants,
+                        heldCategoryName = name,
+                        limits = limits,
+                    ),
                 ))
             }
         }
+    }
+
+    /** The EffectCategory's declared name, falling back to the `#N` NodeId rendering. */
+    private fun categoryNameOf(id: NodeId): String =
+        (store.getOrNull(id) as? Node.EffectCategory)?.categoryName ?: id.toString()
+
+    /**
+     * Q-064: construct the [DenialReport] at the denial site. Parameter
+     * values are rendered and scrubbed by [DenialReport.renderParameter];
+     * under [org.strand.core.ErrorVerbosity.RedactedWithKindOnly] both the
+     * requested and held value lists are withheld entirely (the report
+     * carries category and node only). The phase is [DenialPhase.Invariant]
+     * when the denial fired inside an invariant-body evaluation (the
+     * [inInvariant] guard is set), [DenialPhase.Expression] otherwise; the
+     * state-machine runtime re-tags transition / group-start denials at
+     * halt translation. The `NodeId(-1)` sentinel used by [applyCallable]'s
+     * runtime boundary carries no graph site and reports a null node.
+     */
+    private fun buildDenialReport(
+        at: NodeId,
+        categoryName: String,
+        requested: List<Value>,
+        held: List<CapabilityPattern>,
+        heldCategoryName: String,
+        limits: EvaluationLimits,
+    ): DenialReport {
+        val kindOnly =
+            limits.errorVerbosity == org.strand.core.ErrorVerbosity.RedactedWithKindOnly
+        return DenialReport(
+            category = categoryName,
+            requested = if (kindOnly) null else requested.map { DenialReport.renderParameter(it) },
+            held = if (kindOnly) null else held.map { DenialReport.renderGrant(heldCategoryName, it) },
+            node = at.takeIf { it.value != -1 },
+            instanceId = null,
+            eventIndex = null,
+            phase = if (inInvariant) DenialPhase.Invariant else DenialPhase.Expression,
+        )
     }
 }

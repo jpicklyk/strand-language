@@ -8,6 +8,8 @@ import org.strand.core.EvaluationLimits
 import org.strand.core.ExhaustionKind
 import org.strand.core.NodeId
 import org.strand.interpreter.Builtins
+import org.strand.interpreter.DenialPhase
+import org.strand.interpreter.DenialReport
 import org.strand.interpreter.InterpretError
 import org.strand.interpreter.InterpretException
 import org.strand.interpreter.IoFailure
@@ -61,8 +63,8 @@ class Vm(private val table: ChunkTable) {
      * [initialCaps] grants the listed EffectCategory NodeId .values at
      * program entry. Defaults to empty (pure-only execution; any
      * effectful call without a matching active handler throws
-     * [VmCapabilityViolation], matching the interpreter's `Interpreter.eval`
-     * default).
+     * [InterpretException] carrying [InterpretError.CapabilityViolation],
+     * matching the interpreter's `Interpreter.eval` default).
      */
     fun run(initialCaps: Set<Int> = emptySet()): Value =
         run(initialCaps, EvaluationLimits.DEFAULTS)
@@ -513,10 +515,15 @@ class Vm(private val table: ChunkTable) {
                     }
                     // Capability check: every declared effect must be in
                     // the current capability set. Effects not in the set
-                    // trigger VmCapabilityViolation.
+                    // raise the shared InterpretError.CapabilityViolation —
+                    // unified at the InterpretError boundary the way
+                    // VmResourceExhaustion is (Q-064). The error is
+                    // uncatchable, so the per-opcode InterpretException
+                    // catch declines to unwind to any attempt marker and
+                    // the denial escapes TRY exactly as before.
                     for (effId in effects) {
                         if (effId !in currentCaps) {
-                            throw VmCapabilityViolation(effId)
+                            throw InterpretException(vmCapabilityDenial(effId, limits))
                         }
                     }
                     invokeCallable(fn, args, frames, current)
@@ -651,6 +658,39 @@ class Vm(private val table: ChunkTable) {
     }
 
     /**
+     * Q-064: build the shared [InterpretError.CapabilityViolation] for a
+     * CALL-site category denial, unifying the VM's denial shape with the
+     * interpreter's at the InterpretError boundary (the
+     * [VmResourceExhaustion] precedent). The VM checks category presence
+     * only and holds no [org.strand.core.NodeStore], so the
+     * [DenialReport] represents that coarseness honestly: the category
+     * renders as the `#N` NodeId (no name available), `requested` is null
+     * (the VM never sees refinement parameters — none are fabricated),
+     * `held` is empty (the category is absent from the capability set),
+     * and the denying node is null (opcodes carry no NodeIds in slice 1).
+     * Under [org.strand.core.ErrorVerbosity.RedactedWithKindOnly] the
+     * held list is withheld too, matching the interpreter.
+     */
+    private fun vmCapabilityDenial(effId: Int, limits: EvaluationLimits): InterpretError.CapabilityViolation {
+        val kindOnly =
+            limits.errorVerbosity == org.strand.core.ErrorVerbosity.RedactedWithKindOnly
+        val categoryId = NodeId(effId)
+        return InterpretError.CapabilityViolation(
+            at = null,
+            missing = setOf(categoryId),
+            report = DenialReport(
+                category = categoryId.toString(),
+                requested = null,
+                held = if (kindOnly) null else emptyList(),
+                node = null,
+                instanceId = null,
+                eventIndex = null,
+                phase = DenialPhase.Expression,
+            ),
+        )
+    }
+
+    /**
      * Run a sub-chunk as a standalone frame and push its result onto the
      * surrounding frame's stack. Used by LOAD_HASH for content-addressed
      * NodeRef target resolution.
@@ -771,13 +811,11 @@ internal data class AttemptMarker(
     val errPc: Int,
 )
 
-/**
- * Thrown when a CALL site's callee declares an effect that is not in
- * the current capability set AND no active handler intercepts it. The
- * VM-side counterpart to `InterpretError.CapabilityViolation`.
- */
-class VmCapabilityViolation(val missingEffectId: Int) :
-    RuntimeException("VM: capability violation — effect category #$missingEffectId not granted")
+// Q-064: the former `VmCapabilityViolation` exception is gone — a CALL-site
+// category denial now raises the shared `InterpretException` carrying
+// `InterpretError.CapabilityViolation` (with a coarse `DenialReport`), the
+// same unification at the InterpretError boundary that VmResourceExhaustion
+// receives in `runLoopMapped`. See `Vm.vmCapabilityDenial`.
 
 /**
  * Per-call frame state. Each frame owns its operand stack, its locals
