@@ -254,9 +254,37 @@ object LayerATranslator {
             else Arg.Bare(text)
         }
         LayerAGrammar.ArgKind.STRING -> {
-            val text = (json as? JsonPrimitive)?.contentOrNull
-            if (text == null) { typeError(spec, "string", json, authorId, errors); null }
-            else Arg.Str(text)
+            // Q-060 M-4: a ForeignNode's structured `effectProjections`
+            // array translates back to the compact [EffectProjectionDsl]
+            // string the FN code's optional slot carries.
+            if (spec.jsonField == "effectProjections" && json is JsonArray) {
+                val entries = json.mapNotNull { item ->
+                    val obj = item as? JsonObject ?: return@mapNotNull null
+                    val category = (obj["category"] as? JsonPrimitive)?.contentOrNull
+                        ?: return@mapNotNull null
+                    val sources = (obj["sources"] as? JsonArray)?.mapNotNull { src ->
+                        val srcObj = src as? JsonObject ?: return@mapNotNull null
+                        when ((srcObj["kind"] as? JsonPrimitive)?.contentOrNull) {
+                            "ArgRef" -> (srcObj["index"] as? JsonPrimitive)?.intOrNull
+                                ?.let { EffectProjectionDsl.Source.ArgIndex(it) }
+                            "LiteralNode" -> (srcObj["target"] as? JsonPrimitive)?.contentOrNull
+                                ?.let { EffectProjectionDsl.Source.Literal(it) }
+                            else -> null
+                        }
+                    } ?: emptyList()
+                    EffectProjectionDsl.Entry(category, sources)
+                }
+                if (entries.size != json.size) {
+                    typeError(spec, "effectProjections array", json, authorId, errors)
+                    null
+                } else {
+                    Arg.Str(EffectProjectionDsl.format(entries))
+                }
+            } else {
+                val text = (json as? JsonPrimitive)?.contentOrNull
+                if (text == null) { typeError(spec, "string", json, authorId, errors); null }
+                else Arg.Str(text)
+            }
         }
         LayerAGrammar.ArgKind.INT -> {
             val value = (json as? JsonPrimitive)?.longOrNull
@@ -274,6 +302,7 @@ object LayerATranslator {
             else Arg.BoolL(value)
         }
         LayerAGrammar.ArgKind.LIST_REF,
+        LayerAGrammar.ArgKind.EFFECT_LIST,
         LayerAGrammar.ArgKind.PARAM_LIST,
         LayerAGrammar.ArgKind.FIELD_LIST -> {
             // Step 1: emit legacy bare-ref lists for all three list-shaped
@@ -307,7 +336,8 @@ object LayerATranslator {
         authorId: String,
         errors: MutableList<AuthoringError>,
     ): Arg? = when (spec.kind) {
-        LayerAGrammar.ArgKind.LIST_REF -> Arg.Listing(emptyList())
+        LayerAGrammar.ArgKind.LIST_REF,
+        LayerAGrammar.ArgKind.EFFECT_LIST -> Arg.Listing(emptyList())
         LayerAGrammar.ArgKind.NULLABLE_REF -> Arg.Null
         else -> {
             errors += AuthoringError.HeaderError(

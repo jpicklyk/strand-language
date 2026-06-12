@@ -520,16 +520,20 @@ object LayerAParser {
 
     /**
      * Bare-identifier characters allow `=` to support header tokens like
-     * `@v=1` and `root=foo`, `@` for header tokens and Slice 7's `@last`
-     * reference, and `:` for Slice 5's compact Lambda param form
-     * (`name:typeRef`).
+     * `@v=1` and `root=foo`, `@` for header tokens, Slice 7's `@last`
+     * reference and density v5's `@auto` marker, `:` for Slice 5's
+     * compact Lambda param form (`name:typeRef`), and `.` for density
+     * v5's dotted registry-builtin names in callee position
+     * (`List.Map`, `Json.Parse`, ...). Author ids themselves cannot
+     * contain `.` ([isBareIdentifier] still rejects it), so a dotted
+     * bare token can never collide with a user declaration.
      *
-     * Per-slot semantics decide whether a colon-bearing or `@`-prefixed
-     * bare token is meaningful — the lexer is intentionally lenient and
-     * the per-code emitter enforces the actual rules.
+     * Per-slot semantics decide whether a colon-bearing, dot-bearing, or
+     * `@`-prefixed bare token is meaningful — the lexer is intentionally
+     * lenient and the per-code emitter enforces the actual rules.
      */
     private fun isBareChar(c: Char): Boolean =
-        c.isLetterOrDigit() || c == '_' || c == '@' || c == '=' || c == ':'
+        c.isLetterOrDigit() || c == '_' || c == '@' || c == '=' || c == ':' || c == '.'
 
     /** First-character predicate for bare tokens. Digits are excluded so numerics dispatch first. */
     private fun isBareStartChar(c: Char): Boolean =

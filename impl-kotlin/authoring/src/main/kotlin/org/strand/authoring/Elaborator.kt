@@ -177,10 +177,21 @@ object Elaborator {
             val afterCompactParams = inferCompactLambdaParamTypes(afterRecSlot)
             val afterFntSynthesis = synthesizeFunctionTypes(afterCompactParams)
             val afterScsInference = inferSumCaseTypes(afterFntSynthesis)
+            // v5 slice a — registry-wide implicit builtins: a bare dotted
+            // registry name in callee position (e.g. `APP List.Map [xs f]`)
+            // expands to a synthesized FNT + FN pair, with polymorphic
+            // signatures instantiated from the already-elaborated argument
+            // types (local instantiation only; Q-034 §6 boundary).
+            val afterImplicitBuiltins = ImplicitBuiltinExpansion.expand(afterScsInference)
+            // v5 slice b — opt-in `@auto` effect synthesis: an `@auto`
+            // marker in an Application's effect-instances slot synthesizes
+            // the EffectDecl list from the callee's declared effects and
+            // Q-039 projections.
+            val afterAutoEffects = AutoEffectSynthesis.expand(afterImplicitBuiltins)
             // v4 outer-product synthesis: rewrites inner-PRD references
             // at value-construction / function-param sites to a synthesized
             // outer-equivalent that the verifier can resolve at depth=0.
-            val afterOuterSynth = synthesizeOuterRecursiveProducts(afterScsInference)
+            val afterOuterSynth = synthesizeOuterRecursiveProducts(afterAutoEffects)
             // v1-v3 passes (extended to use the richer typeOfArg)
             val afterAllNodeRewrites = applyNodeRewrites(afterOuterSynth)
             if (afterAllNodeRewrites == current) return current
@@ -315,6 +326,18 @@ object Elaborator {
                 line = fix.line,
             )
         }
+
+        // Case 5 (v5 slice a): dotted registry-builtin callee still
+        // unexpanded — the implicit-builtin instantiation could not be
+        // fixed from the argument types, the name is excluded, or it is
+        // unknown. The diagnosis re-runs the (pure) matching phase to
+        // name the exact annotation needed.
+        gaps += ImplicitBuiltinExpansion.diagnose(doc)
+
+        // Case 6 (v5 slice b): `@auto` marker still unresolved — the
+        // callee's effect surface could not be determined or a projected
+        // category's parameters could not be synthesized.
+        gaps += AutoEffectSynthesis.diagnose(doc)
 
         return gaps
     }
@@ -1180,7 +1203,7 @@ object Elaborator {
      *    return its `paramType` arg.
      * Returns null on shapes the elaborator can't resolve.
      */
-    private fun resolveParamType(entry: Arg, byId: Map<String, NodeDecl>): String? {
+    internal fun resolveParamType(entry: Arg, byId: Map<String, NodeDecl>): String? {
         val text = (entry as? Arg.Bare)?.text ?: return null
         if (':' in text) {
             return text.substringAfter(':').takeIf { it.isNotEmpty() }
@@ -1477,7 +1500,7 @@ object Elaborator {
      * terminal) is reached. Used by [inferViaTransitiveCallSites] to
      * match call sites that go through wrappers.
      */
-    private fun resolveCalleeChain(
+    internal fun resolveCalleeChain(
         nodeId: String,
         byId: Map<String, NodeDecl>,
         visited: MutableSet<String>,
@@ -1600,6 +1623,10 @@ object Elaborator {
     ): NodeDecl {
         // APP positional schema: function, arguments, [typeArguments], [effectInstances].
         if (node.args.size !in 2..3) return node  // already has effectInstances or malformed
+        // v5 slice b: an `@auto` marker is consumed by AutoEffectSynthesis
+        // in the same fixed-point loop; never run the v1 effect-instances
+        // defaulting (or typeArguments inference) over the raw marker.
+        if (node.args.any { it is Arg.Bare && it.text == AutoEffectSynthesis.AUTO_MARKER }) return node
         val fnId = (node.args[0] as? Arg.Bare)?.text ?: return node  // malformed
 
         // Step 1: typeArguments inference.
@@ -1736,7 +1763,7 @@ object Elaborator {
      * Returns null for cases the elaborator can't resolve. The implicit
      * elaboration-gap policy applies — the LLM must annotate.
      */
-    private fun typeOfArg(
+    internal fun typeOfArg(
         nodeId: String,
         byId: Map<String, NodeDecl>,
         primTypeIdByKind: Map<String, String>,
@@ -1884,7 +1911,7 @@ object Elaborator {
      * elaborator can reason about compact-form parameters without
      * needing to materialize PRC nodes for them mid-pass.
      */
-    private fun compactLamParamType(
+    internal fun compactLamParamType(
         name: String,
         byId: Map<String, NodeDecl>,
     ): String? {
@@ -1983,7 +2010,7 @@ object Elaborator {
      * elaborator can find primitive types whether they're declared in
      * the source or supplied via Slice 1's implicit prelude.
      */
-    private fun buildPrimTypeMap(doc: LayerADocument): Map<String, String> {
+    internal fun buildPrimTypeMap(doc: LayerADocument): Map<String, String> {
         val declared = doc.nodes.asSequence()
             .filter { it.code == "PRM" }
             .mapNotNull { prm ->
@@ -2003,7 +2030,7 @@ object Elaborator {
     // Effects inference (cases 3, 4) — unchanged from v1.
     // ========================================================================
 
-    private fun effectsOfOrdered(
+    internal fun effectsOfOrdered(
         nodeId: String,
         byId: Map<String, NodeDecl>,
         visited: MutableSet<String>,

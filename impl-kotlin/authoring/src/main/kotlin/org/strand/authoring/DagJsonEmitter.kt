@@ -229,6 +229,25 @@ object DagJsonEmitter {
             }
         }
 
+        /**
+         * Run [block] with a multi-entry binder scope pushed onto
+         * [binderScopes]. Used when emitting a nested `(LAM ...)`
+         * expression: the lambda's parameter names must be resolvable
+         * (auto-VarRef) inside its own body, which [topLevelBinders]
+         * cannot see because the LAM is not a top-level NodeDecl.
+         * Q-060 M-4 follow-up; innermost scope wins, so a nested param
+         * shadowing an outer binder of the same name behaves lexically.
+         */
+        inline fun <R> withBinderScope(scope: Map<String, String>, block: () -> R): R {
+            if (scope.isEmpty()) return block()
+            binderScopes.addLast(scope)
+            try {
+                return block()
+            } finally {
+                binderScopes.removeLast()
+            }
+        }
+
         fun freshLitId(): String = "__lit${litCounter++}"
         fun freshVarRefId(): String = "__var${varRefCounter++}"
         fun freshIfPrefix(): String = "__if${ifCounter++}"
@@ -263,6 +282,17 @@ object DagJsonEmitter {
                     is JsonArray -> {
                         for (item in value) {
                             if (item is JsonPrimitive && item.isString) out += item.content
+                            // Q-060 M-4: a ForeignNode's structured
+                            // effectProjections array references its
+                            // categories and LiteralNode targets by id.
+                            if (key == "effectProjections" && item is JsonObject) {
+                                (item["category"] as? JsonPrimitive)
+                                    ?.takeIf { it.isString }?.let { out += it.content }
+                                (item["sources"] as? JsonArray)?.forEach { src ->
+                                    ((src as? JsonObject)?.get("target") as? JsonPrimitive)
+                                        ?.takeIf { it.isString }?.let { out += it.content }
+                                }
+                            }
                         }
                     }
                     else -> {}
@@ -386,6 +416,43 @@ object DagJsonEmitter {
             val arg = node.args[i]
             val value = argToJson(node.line, node.code, i, spec, arg, errors, ctx) ?: return null
             fields[spec.jsonField] = value
+        }
+
+        // Q-060 M-4: the FN code's optional `effectProjections` slot is a
+        // compact [EffectProjectionDsl] string in Layer A; the dag-json
+        // field is the structured Q-039 array. Parse and replace.
+        if (node.code == "FN") {
+            val dslField = fields["effectProjections"]
+            if (dslField is JsonPrimitive && dslField.isString) {
+                val parsed = EffectProjectionDsl.parse(dslField.content)
+                if (parsed == null) {
+                    errors += AuthoringError.ArgShapeMismatch(
+                        line = node.line, code = node.code,
+                        position = schema.required.size + 1,
+                        expectedKind = "effect-projection DSL string " +
+                            "(\"<categoryRef>:<idx>,...;...\" with `@litId` for literal sources)",
+                        actualKind = "string \"${dslField.content.take(40)}\"",
+                    )
+                    return null
+                }
+                fields["effectProjections"] = JsonArray(parsed.map { entry ->
+                    buildJsonObject {
+                        put("category", entry.category)
+                        put("sources", JsonArray(entry.sources.map { src ->
+                            when (src) {
+                                is EffectProjectionDsl.Source.ArgIndex -> buildJsonObject {
+                                    put("kind", "ArgRef")
+                                    put("index", src.index)
+                                }
+                                is EffectProjectionDsl.Source.Literal -> buildJsonObject {
+                                    put("kind", "LiteralNode")
+                                    put("target", src.target)
+                                }
+                            }
+                        }))
+                    }
+                })
+            }
         }
 
         return JsonObject(fields)
@@ -1215,7 +1282,21 @@ object DagJsonEmitter {
                 }
                 return JsonPrimitive(v)
             }
-            LayerAGrammar.ArgKind.LIST_REF -> {
+            LayerAGrammar.ArgKind.LIST_REF, LayerAGrammar.ArgKind.EFFECT_LIST -> {
+                // Q-060 M-4 slice b: an `@auto` marker that survives to
+                // emission means the Elaborator's effect synthesis could
+                // not resolve the callee's effect surface. Surface a
+                // targeted error (the ElaborationGap carries the cause).
+                if (spec.kind == LayerAGrammar.ArgKind.EFFECT_LIST &&
+                    arg is Arg.Bare && arg.text == "@auto"
+                ) {
+                    shapeMismatch(
+                        line, code, position,
+                        "[effectDecl ...] list (the @auto marker could not be resolved — see the elaboration notes)",
+                        arg, errors,
+                    )
+                    return null
+                }
                 // Slice (v4 follow-up): `_` at a LIST_REF slot means "no
                 // elements" — equivalent to `[]`. Agents naturally reach
                 // for `_` (the documented null-reference placeholder) when
@@ -1615,9 +1696,26 @@ object DagJsonEmitter {
         // dispatch (IF/WHEN), and slot-aware reference resolution all run
         // recursively — nested expressions reuse the same code paths as
         // top-level declarations.
+        //
+        // Q-060 M-4 follow-up: a nested `(LAM [a:intT b] body)` must make
+        // its own parameter names resolvable inside the body (the
+        // synthesized PRC's author id IS the parameter name, exactly like
+        // the top-level compact form). Push them as a binder scope around
+        // the child emission so auto-VarRef fires for `a` / `b` in `body`.
+        val lamBinders: Map<String, String> = if (arg.code == "LAM") {
+            (arg.args.firstOrNull() as? Arg.Listing)?.items.orEmpty()
+                .mapNotNull { (it as? Arg.Bare)?.text }
+                .filter { it != "_" }
+                .map { if (':' in it) it.substringBefore(':') else it }
+                .associateWith { it }
+        } else {
+            emptyMap()
+        }
         val id = ctx.freshExprId()
         val childDecl = NodeDecl(id = id, code = arg.code, args = arg.args, line = line)
-        val childJson = emitNode(childDecl, errors, ctx) ?: return null
+        val childJson = ctx.withBinderScope(lamBinders) {
+            emitNode(childDecl, errors, ctx)
+        } ?: return null
         ctx.synthesized[id] = childJson
         return id
     }
@@ -1665,6 +1763,11 @@ object DagJsonEmitter {
     private fun isValuePositionRefSlot(parentCode: String, jsonField: String): Boolean =
         when (parentCode) {
             "APP" -> jsonField == "function" || jsonField == "arguments"
+            // Q-060 M-4 slice b: EffectDecl parameters are expressions
+            // (the projection sources are the same nodes the Application
+            // passes as value arguments), so a binder reference here gets
+            // the same auto-VarRef wrapping the APP's arguments slot gets.
+            "EFD" -> jsonField == "parameters"
             "LET" -> jsonField == "value" || jsonField == "body"
             "MC" -> jsonField == "body"
             "MAT" -> jsonField == "scrutinee"

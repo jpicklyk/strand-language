@@ -135,6 +135,17 @@ object LayerAGrammar {
          * Implementation note.
          */
         FIELD_LIST,
+        /**
+         * Q-060 M-4 slice b (Layer A density v5) — an effect-instances
+         * list. Identical to [LIST_REF] at emit time, except the slot
+         * additionally admits the bare `@auto` marker, which the
+         * Elaborator ([AutoEffectSynthesis]) replaces with a synthesized
+         * EffectDecl list before emission. A leftover `@auto` (the
+         * synthesis could not resolve the callee's effect surface)
+         * surfaces a targeted [AuthoringError.ArgShapeMismatch] plus an
+         * [ElaborationGap]. Used only by APP's `effectInstances` slot.
+         */
+        EFFECT_LIST,
     }
 
     /**
@@ -2104,7 +2115,7 @@ object LayerAGrammar {
             ),
             optional = listOf(
                 FieldSpec("typeArguments", ArgKind.LIST_REF, "typeArguments"),
-                FieldSpec("effectInstances", ArgKind.LIST_REF, "effectInstances"),
+                FieldSpec("effectInstances", ArgKind.EFFECT_LIST, "effectInstances"),
             ),
             producesValue = true,
         ),
@@ -2170,14 +2181,23 @@ object LayerAGrammar {
             producesValue = true,
         ),
 
-        // Foreign function interface (Layer 4)
+        // Foreign function interface (Layer 4).
+        // The optional fourth slot (Q-060 M-4) is the Q-039
+        // effectProjections in the [EffectProjectionDsl] string form,
+        // e.g. "connectFx:0,1;netSendFx:;netRecvFx:" — one entry per
+        // declared effect, sources are argument indices or `@litId`.
+        // The emitter parses the DSL into the structured dag-json
+        // `effectProjections` array.
         "FN" to CodeSchema(
             jsonType = "ForeignNode",
             required = listOf(
                 FieldSpec("target", ArgKind.STRING, "target"),
                 FieldSpec("foreignType", ArgKind.REFERENCE, "foreignType", acceptsType = true),
             ),
-            optional = listOf(FieldSpec("effects", ArgKind.LIST_REF, "effects")),
+            optional = listOf(
+                FieldSpec("effects", ArgKind.LIST_REF, "effects"),
+                FieldSpec("effectProjections", ArgKind.STRING, "effectProjections"),
+            ),
             producesValue = true,
         ),
 

@@ -45,12 +45,20 @@ class ConstraintGrammarSlipGateTest {
         assertTrue(matcher.derives("identifier", "fn"))
         assertTrue(matcher.derives("identifier", "_x9"))
         assertFalse(matcher.derives("identifier", "9x"))
+        // Density v5: dotted registry-builtin names are derivable
+        // references (`List.Map` in callee position).
+        assertTrue(matcher.derives("identifier", "List.Map"))
         assertTrue(matcher.derives("int", "-42"))
         assertFalse(matcher.derives("int", "4.2"))
         assertTrue(matcher.derives("string", "\"hi there\""))
         assertTrue(matcher.derives("list_ref", "[]"))
         assertTrue(matcher.derives("list_ref", "[a b c]"))
         assertFalse(matcher.derives("list_ref", "[a b"))
+        // Density v5 slice b: the effect-instances slot admits an explicit
+        // list or the @auto synthesis marker — never the `_` slip.
+        assertTrue(matcher.derives("effect_instances", "[e]"))
+        assertTrue(matcher.derives("effect_instances", "@auto"))
+        assertFalse(matcher.derives("effect_instances", "_"))
     }
 
     @Test
@@ -83,6 +91,13 @@ class ConstraintGrammarSlipGateTest {
         assertTrue(matcher.derives("node", "m APP fn [a] [t]"))
         assertTrue(matcher.derives("node", "m APP fn [a] [t] [e]"))
         assertTrue(matcher.derives("node", "m APP fn []"))
+        // Density v5: dotted callee + @auto effect synthesis spellings.
+        assertTrue(matcher.derives("node", "m APP List.Map [xs f]"))
+        assertTrue(matcher.derives("node", "m APP fn [a] [] @auto"))
+        assertTrue(matcher.derives("node", "m APP fn [a] @auto"))
+        // The marker never derives at a non-effect slot's expense: `_`
+        // remains unrepresentable in both optional positions.
+        assertFalse(matcher.derives("node", "m APP fn [a] _ @auto"))
     }
 
     @Test
@@ -112,8 +127,13 @@ class ConstraintGrammarSlipGateTest {
             "node_APP ::= identifier \" \" \"APP\" \" \" identifier \" \" list_ref optional_APP?",
             nodeApp,
         )
+        // Density v5 slice b: the trailing slot is `effect_instances`
+        // (`list_ref | "@auto"`) and the truncated single-slot alternative
+        // widens to it so `APP fn args @auto` stays derivable. Neither
+        // alternative admits `nullable_ref`, so the `_` slip remains
+        // unrepresentable.
         assertEquals(
-            "optional_APP ::= \" \" list_ref | \" \" list_ref \" \" list_ref",
+            "optional_APP ::= \" \" effect_instances | \" \" list_ref \" \" effect_instances",
             optionalApp,
         )
         assertFalse(optionalApp.contains("nullable_ref")) {

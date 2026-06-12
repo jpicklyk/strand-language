@@ -87,9 +87,19 @@ object ConstraintGrammar {
                 // Each optional rule is "first" OR "first second" OR
                 // "first second third"... — a left-leaning chain of
                 // suffix alternatives.
+                //
+                // Density v5 slice b: when the LAST optional slot is the
+                // effect-instances slot (APP), the `@auto` marker may also
+                // stand directly in an earlier truncated alternative
+                // (`APP fn args @auto` == `APP fn args [] @auto`), so each
+                // truncated alternative's final slot widens to
+                // `effect_instances` (a strict superset of `list_ref`).
                 val parts = schema.optional.map { ruleNameFor(it.kind) }
+                val effectTail = parts.lastOrNull() == "effect_instances"
                 val alternatives = (1..parts.size).joinToString(" | ") { len ->
-                    parts.take(len).joinToString(" \" \" ", prefix = "\" \" ")
+                    val slice = parts.take(len).toMutableList()
+                    if (effectTail && len < parts.size) slice[len - 1] = "effect_instances"
+                    slice.joinToString(" \" \" ", prefix = "\" \" ")
                 }
                 sb.append("optional_$code ::= $alternatives\n")
             }
@@ -98,7 +108,12 @@ object ConstraintGrammar {
 
         // Lexical primitives.
         sb.append("# Lexical primitives\n")
-        sb.append("identifier ::= [A-Za-z_] [A-Za-z0-9_]*\n")
+        // Density v5: dotted registry-builtin names (`List.Map`) are legal
+        // bare references in callee position. The grammar overapproximates
+        // by admitting `.` in every identifier continuation (node ids
+        // reject dots parser-side; same documented overapproximation
+        // policy as PARAM_LIST / FIELD_LIST).
+        sb.append("identifier ::= [A-Za-z_] [A-Za-z0-9_.]*\n")
         sb.append("int ::= \"-\"? [0-9]+\n")
         sb.append("float ::= \"-\"? [0-9]+ \".\" [0-9]+\n")
         sb.append("bool ::= \"true\" | \"false\"\n")
@@ -106,6 +121,9 @@ object ConstraintGrammar {
         sb.append("string_char ::= [^\\\"\\\\] | \"\\\\\" [\\\"\\\\nt]\n")
         sb.append("list_ref ::= \"[\" (identifier (\" \" identifier)*)? \"]\"\n")
         sb.append("nullable_ref ::= identifier | \"_\"\n")
+        // Density v5 slice b: the effect-instances slot admits the @auto
+        // synthesis marker alongside an explicit list.
+        sb.append("effect_instances ::= list_ref | \"@auto\"\n")
         sb.append("keyword ::= identifier\n")
         sb.append("newline ::= \"\\n\"\n")
 
@@ -134,5 +152,7 @@ object ConstraintGrammar {
         LayerAGrammar.ArgKind.PARAM_LIST -> "list_ref"
         // Slice 8 (v2.5): same overapproximation for FIELD_LIST.
         LayerAGrammar.ArgKind.FIELD_LIST -> "list_ref"
+        // Q-060 M-4 slice b: explicit list OR the @auto synthesis marker.
+        LayerAGrammar.ArgKind.EFFECT_LIST -> "effect_instances"
     }
 }
