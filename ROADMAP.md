@@ -63,7 +63,6 @@ The 2026-06-10 independent review found the layer between the measurement instru
 - **Persistent local store and run-by-hash.** Defined by [Q-058](open-questions.md#Q-058). An on-disk hash-keyed store with admit-and-verify-once semantics, making content addressing operative across runs and completing the registry mechanism.
 - **Long-running machine groups.** Defined by [Q-059](open-questions.md#Q-059). A canonical `Value` codec, snapshot persistence, a non-batch group driver, and a limits model for long-lived processes — the single-process service story Tier 4's distribution work presumes.
 - **Capability-denial observability.** Defined by [Q-064](open-questions.md#Q-064). A structured host-boundary denial outcome (category, refinement parameters, node, instance) for orchestrating principals, preserving in-language uncatchability; likely lands on the Q-054 embedding API and the Q-055 audit-log record kinds.
-- **Determinism enforcement.** Defined by [Q-065](open-questions.md#Q-065). Per-builtin determinism markers and verifier checks on transition-function and invariant closures, closing the purity-versus-determinism gap beneath the replay and snapshot claims.
 
 ## Tier 4 — Long-horizon claims: production foundations
 

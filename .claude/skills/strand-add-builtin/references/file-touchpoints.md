@@ -6,10 +6,10 @@ Use these as starting points for each file touched in the three coordinated step
 
 ### Pure monomorphic (most common)
 
-Place near related entries (Math near Math, Hash near Hash, etc.). The body should be a pure expression of `kotlin.math.*` / `java.security.*` / plain Kotlin.
+Place near related entries (Math near Math, Hash near Hash, etc.). The body should be a pure expression of `kotlin.math.*` / `java.security.*` / plain Kotlin. Q-065: effect-free builtins register through `det { }` (the explicit Deterministic declaration — omitting it fails registry construction); effect-declaring builtins use `fx { }`; nondeterministic ones use `nondet { }`; higher-order variants are `detH { }` / `fxH { }`.
 
 ```kotlin
-"strand-builtin:Math.Sqrt" to Fn { args ->
+"strand-builtin:Math.Sqrt" to det { args ->
     require(args.size == 1) { "Math.Sqrt expects 1 arg (f: Float), got ${args.size}" }
     Value.FloatV(kotlin.math.sqrt((args[0] as Value.FloatV).v))
 },
@@ -24,7 +24,7 @@ Use an injectable `@Volatile var` on the `Builtins` object so tests can install 
 var random: java.util.Random = java.security.SecureRandom()
 
 // later in registry:
-"strand-builtin:Random.Int" to Fn { args ->
+"strand-builtin:Random.Int" to nondet { args ->
     require(args.size == 2) { "Random.Int expects 2 args (min, max: Int), got ${args.size}" }
     val min = (args[0] as Value.IntV).v
     val max = (args[1] as Value.IntV).v
@@ -45,7 +45,7 @@ Test setup pattern (mirrors `BuiltinsRandomTest`):
 Catch host exceptions and rethrow as `IoFailure(kind, detail)`. The interpreter's `applyForeign` translates these to `InterpretError.IoFailure(at, kind, detail)` carrying the call-site NodeId.
 
 ```kotlin
-"strand-builtin:Fs.Read" to Fn { args ->
+"strand-builtin:Fs.Read" to fx { args ->
     require(args.size == 1) { "Fs.Read expects 1 arg (path: String), got ${args.size}" }
     val path = (args[0] as Value.StringV).v
     try {
@@ -63,7 +63,7 @@ Catch host exceptions and rethrow as `IoFailure(kind, detail)`. The interpreter'
 Registered in the **separate** `higherOrderRegistry` (not `registry`). The `apply: ApplyFn` continuation lets the builtin invoke the user's callable.
 
 ```kotlin
-"strand-builtin:List.Map" to FnH { args, apply ->
+"strand-builtin:List.Map" to detH { args, apply ->
     require(args.size == 2) { "List.Map expects 2 args (list, fn), got ${args.size}" }
     val fn = args[1]
     val transformed = mutableListOf<Value>()

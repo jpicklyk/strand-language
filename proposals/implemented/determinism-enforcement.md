@@ -1,12 +1,24 @@
 # Determinism Enforcement for Replay-Relevant Evaluation
 
-**Document:** `proposals/determinism-enforcement.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/determinism-enforcement.md`
+**Status:** Implemented (landed 2026-06-12 in the Kotlin/JVM reference implementation; see the Implementation note)
 **Date:** 2026-06-12
-**Concerns:** [Q-065](../open-questions.md#Q-065), [`design/state-machines.md`](../design/state-machines.md) (replay and snapshot guarantees), [`design/node-algebra.md`](../design/node-algebra.md) (structural purity), [Q-047](../open-questions.md#Q-047) (invariant evaluation), [Q-050](../open-questions.md#Q-050) (the warning channel reused), the `Builtins` registry
+**Concerns:** [Q-065](../../open-questions.md#Q-065), [`design/state-machines.md`](../../design/state-machines.md) (replay and snapshot guarantees), [`design/node-algebra.md`](../../design/node-algebra.md) (structural purity), [Q-047](../../open-questions.md#Q-047) (invariant evaluation), [Q-050](../../open-questions.md#Q-050) (the warning channel reused), the `Builtins` registry
 **Scope:** small-medium
 
 Replay, snapshot recovery, and audit all assume that re-evaluating a pure expression yields the same value. Purity is structural — the absence of effect edges — while determinism is behavioral, and nothing in the implementation marks or checks the difference. This proposal closes the gap with registry metadata, a verifier guard on replay-relevant closures, and a registry-wide behavioral audit, with no graph surface and no hash impact.
+
+## Implementation note (2026-06-12)
+
+Implemented as proposed, in the proposed order (field and registration sweep; consistency test; audit harness; verifier warning), across three commits. Full suite after the slice: 2120 tests, 0 failures; zero golden-hash changes.
+
+**Registry metadata.** `Builtins.Determinism` (`Deterministic` / `Stateful` / `Nondeterministic`) lands on every entry of both registries via an `Entry<F>` wrapper resolved by `Builtins.resolveRegistration`: an effect-free registration without an explicit declaration is a construction-time `IllegalStateException` naming the target; effect-declaring registrations default `Stateful`. All 218 registrations were swept through the `det` / `fx` / `nondet` (and `detH` / `fxH`) helpers: 165 Deterministic (153 standard + 12 higher-order), 50 Stateful, 3 Nondeterministic (`Random.*`). The consistency sweep (`DeterminismRegistryConsistencyTest`, `:corpus`) additionally cross-checks each entry's registry-side effectful flag against the authoritative graph-side effect surfaces — the prelude `reservedNodes` and the `BuiltinSignatures` table — so the metadata cannot drift from what agents actually declare. New public surface: `Builtins.determinismOf(target)`, `Builtins.entryMetadata()`, and the `installTestBuiltin` / `clearTestBuiltins` overlay seam.
+
+**Behavioral audit.** `BuiltinDeterminismAuditTest` (`:corpus`) double-evaluates all 165 Deterministic entries and compares results bit-exactly (raw `doubleToRawLongBits` for Float results). Coverage is total by construction: 160 entries generate inputs from their signatures (the `BuiltinSignatures` `Sig` shapes for table-covered entries — including real Strand closures applied through `Interpreter.applyCallable` for the twelve higher-order entries, with a genuine `Int.Lt` comparator for `List.Sort`; the reserved prelude FunctionType primitive parameter lists for prelude-covered entries), and 5 carry fixtures — the resource-closing family (`Net.Close`, `LLM.Stream.Close`, `Http.ServerClose`, `Pinecone.Index.Close`, `Chroma.Collection.Close`), whose `Int` opaque-handle surface type hides the `Value.Resource` domain; close-of-unknown-handle is documented idempotent for all five. A Deterministic entry with neither derivable signature nor fixture fails the audit rather than skipping. No nondeterministic effect-free builtin surfaced, as § 2 predicted. Float edge semantics are pinned by `BuiltinsFloatEdgePinningTest` (`:interpreter`): `Float.Div(0,0)` is NaN, division by zero is signed infinity, NaN propagates through arithmetic, every NaN comparison including NaN = NaN is false, and re-evaluation is bit-identical on raw bits.
+
+**Verifier warning.** `VerifyWarning.NondeterministicInReplayContext(machineOrInvariant, builtin)` joins the Q-050 channel, computed by a store-wide pass over each StateMachine transition-function closure and each Invariant body. The verifier resolves registry metadata through a `ServiceLoader` seam (`BuiltinDeterminismOracle` + `ReplayDeterminism` in `:verifier`; the `Builtins`-backed provider in `:interpreter` under `META-INF/services`) because the module dependency direction (`interpreter → verifier`) forbids a direct reference; on a verifier-only classpath the oracle resolves to null and the warning never fires, which is the correct conservative reading. Tested both at the verifier level (fake oracle via the `ReplayDeterminism.override` seam) and end to end (`DeterminismWarningEndToEndTest`, `:corpus`, through the real ServiceLoader chain with an overlay-injected effect-free builtin force-marked Nondeterministic); `CorpusWarningSweepTest` confirms no corpus program or density fixture triggers it.
+
+**Deviations from the proposal text.** First, the warning's scope is the effect-free ForeignNodes only: § 4's "references a registry entry not marked `Deterministic`" read literally would flag effect-declaring ForeignNodes too, but a machine may legitimately declare an effect category and call its builtin inside the transition function (corpus 67 calls `Anthropic.Messages.Create` with `llmGenerateFx` declared on the machine), and such calls are already mediated by the effect and capability machinery — § 2's own rationale. The narrowed scope preserves the two live targets (a structurally-pure-but-nondeterministic builtin past a loosened registration lock, and a ForeignNode under-declaring its effects against a builtin the registry knows is Stateful or Nondeterministic) without double-reporting the effect closure. Second, the audit and consistency tests live in `:corpus` rather than `:interpreter` as § 8 sketched, because input generation reads `BuiltinSignatures` and the prelude table from `:authoring`, which the interpreter module does not depend on; the registration-constraint and Float-pinning tests live in `:interpreter` as sketched. Third, the cross-module oracle (the ServiceLoader seam) is implementation structure § 8 did not anticipate; it exists solely to respect the module dependency direction and carries no design weight.
 
 ## 1. Problem statement
 
@@ -69,12 +81,12 @@ None new.
 ## References
 
 **Outgoing references:**
-- [`design/state-machines.md`](../design/state-machines.md) — the replay guarantee this makes enforceable
-- [`design/node-algebra.md`](../design/node-algebra.md) — structural purity, the property this complements
-- [`open-questions.md`](../open-questions.md) — Q-047, Q-050, Q-065
+- [`design/state-machines.md`](../../design/state-machines.md) — the replay guarantee this makes enforceable
+- [`design/node-algebra.md`](../../design/node-algebra.md) — structural purity, the property this complements
+- [`open-questions.md`](../../open-questions.md) — Q-047, Q-050, Q-065
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-065 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
-- [`ROADMAP.md`](../ROADMAP.md) — Tier 3.5
+- [`open-questions.md`](../../open-questions.md) — Q-065 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section
+- [`ROADMAP.md`](../../ROADMAP.md) — Tier 3.5 (entry removed on resolution)

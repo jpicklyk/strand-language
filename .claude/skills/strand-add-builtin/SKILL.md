@@ -63,19 +63,21 @@ For exceptions, the commit message should say *why* the prelude entry is omitted
 
 Add the entry in the appropriate section of `Builtins.registry` (or `higherOrderRegistry` for builtins that take a Strand callable as one of their args — `List.Map` etc.).
 
-**Standard `Fn` pattern (first-order):**
+**Q-065 determinism position (mandatory).** Every registration wraps its lambda in one of the determinism helpers: `det { }` for an effect-free, replay-deterministic builtin; `fx { }` for an effect-declaring (stateful) builtin; `nondet { }` for nondeterministic ones (the `Random.*` family); `detH { }` / `fxH { }` for higher-order. An effect-free entry registered without `det` fails registry construction at class-init, the chosen helper must agree with the prelude/table effect declarations (`DeterminismRegistryConsistencyTest` in `:corpus`), and a `det` entry whose inputs the audit's signature generators cannot derive needs a fixture in `BuiltinDeterminismAuditTest` (`:corpus`) or the totality check fails.
+
+**Standard pattern (first-order, effect-free):**
 
 ```kotlin
-"strand-builtin:Math.Sqrt" to Fn { args ->
+"strand-builtin:Math.Sqrt" to det { args ->
     require(args.size == 1) { "Math.Sqrt expects 1 arg (f: Float), got ${args.size}" }
     Value.FloatV(kotlin.math.sqrt((args[0] as Value.FloatV).v))
 },
 ```
 
-**Higher-order `FnH` pattern (callback into Strand):**
+**Higher-order pattern (callback into Strand):**
 
 ```kotlin
-"strand-builtin:List.Map" to FnH { args, apply ->
+"strand-builtin:List.Map" to detH { args, apply ->
     require(args.size == 2) { "List.Map expects 2 args (list, fn), got ${args.size}" }
     val fn = args[1]
     // ... walk the Cons/Nil chain, calling apply.apply(fn, listOf(element)) per item ...
