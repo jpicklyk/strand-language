@@ -62,7 +62,6 @@ The 2026-06-10 independent review found the layer between the measurement instru
 - **Builtin signature verification.** Defined by [Q-056](open-questions.md#Q-056). Cross-check declared `foreignType` against the in-process registry's known shapes at admission and translate argument-shape failures into structured errors, closing the verified-then-crashes failure shape.
 - **Persistent local store and run-by-hash.** Defined by [Q-058](open-questions.md#Q-058). An on-disk hash-keyed store with admit-and-verify-once semantics, making content addressing operative across runs and completing the registry mechanism.
 - **Long-running machine groups.** Defined by [Q-059](open-questions.md#Q-059). A canonical `Value` codec, snapshot persistence, a non-batch group driver, and a limits model for long-lived processes — the single-process service story Tier 4's distribution work presumes.
-- **Capability-denial observability.** Defined by [Q-064](open-questions.md#Q-064). A structured host-boundary denial outcome (category, refinement parameters, node, instance) for orchestrating principals, preserving in-language uncatchability; likely lands on the Q-054 embedding API and the Q-055 audit-log record kinds.
 
 ## Tier 4 — Long-horizon claims: production foundations
 

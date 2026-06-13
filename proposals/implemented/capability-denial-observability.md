@@ -1,12 +1,28 @@
 # Capability-Denial Observability for Orchestrating Principals
 
-**Document:** `proposals/capability-denial-observability.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/capability-denial-observability.md`
+**Status:** Implemented (landed 2026-06-12 in the Kotlin/JVM reference implementation; see the Implementation note)
 **Date:** 2026-06-12
-**Concerns:** [Q-064](../open-questions.md#Q-064), [Q-048](../open-questions.md#Q-048) (the uncatchable taxonomy this preserves), [Q-051](../open-questions.md#Q-051) (node-id annotation reused), [Q-054](../open-questions.md#Q-054) (the embedding API this shapes), [Q-055](../open-questions.md#Q-055) (the audit-log record kind this shares), [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md), [`design/security-model.md`](../design/security-model.md)
+**Concerns:** [Q-064](../../open-questions.md#Q-064), [Q-048](../../open-questions.md#Q-048) (the uncatchable taxonomy this preserves), [Q-051](../../open-questions.md#Q-051) (node-id annotation reused), [Q-054](../../open-questions.md#Q-054) (the embedding API this shapes), [Q-055](../../open-questions.md#Q-055) (the audit-log record kind this shares), [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md), [`design/security-model.md`](../../design/security-model.md)
 **Scope:** small-medium
 
 A generated program that hits a capability or refinement denial terminates, uncatchably, by design. The principal that constructed the capability context — an orchestrating agent deciding whether to repair the program or re-scope the grant — currently learns about the denial only from rendered error text. This proposal gives that principal a structured denial outcome at the host boundary while changing nothing observable from inside the graph.
+
+## Implementation note (2026-06-12)
+
+Implemented as proposed, in the proposed order (report type and interpreter site; runtime attachment; CLI line; opacity re-assertion). Full suite after the slice: 2,139 tests, 0 failures (2,120 baseline + 19 new), zero golden-hash impact.
+
+**The record.** `interpreter/DenialReport.kt` carries `category`, `requested`, `held`, `node`, `instanceId`, `eventIndex`, and a `DenialPhase` discriminator (`expression` / `transition` / `invariant` / `group-start`). It is constructed inside `Interpreter.checkCapabilities` from values already in scope and carried as a `report` field on both `InterpretError.CapabilityViolation` and `InterpretError.RefinementViolation`. Parameter values pass through `CredentialScrubber.scrub` at construction; under `ErrorVerbosity.RedactedWithKindOnly` the `requested` and `held` lists are withheld entirely (category and node survive). The phase is `invariant` when the interpreter's `inInvariant` guard is set — unreachable on verified graphs (`SchemaInvariantBodyMustBePure`) but represented honestly on the trusting-interpreter path. Nothing became observable in-language: no new `Value`, no `isCatchable` change, and the uncatchability tests re-assert that an enclosing Attempt neither observes the denial nor changes the report.
+
+**Surface 1.** The error variants carry the report, and denial-caused state-machine halts expose it: the synchronous fold (`runMachine` / `resume`) translates a per-event denial into a new `HaltReason.CapabilityDenial(report)` — the `ResourceExhaustion` translation precedent — with instance id, zero-based event index, and phase `transition` attached at translation; the async actor halts cleanly on a denial (other actors keep running) and surfaces the same enriched report through `MachineInstanceHandle.denialReport`. Denials during `runGroup` startup (initial spawn evaluation, Q-046 source openers) rethrow with the report re-tagged phase `group-start`.
+
+**Surface 2.** On any denial-caused termination under `run`, `machine`, or `group`, the CLI emits exactly one `strand:denial {json}` stderr line alongside the existing human rendering, then exits 1. The JSON is the report field-for-field; the denying node renders as `#N` with the Q-051 author id and Layer A source line as separate `author` / `line` fields (two new `NodeRefAnnotator` accessors). Worked shape as shipped:
+
+```
+strand:denial {"category":"Filesystem.Write","requested":["/etc/passwd"],"held":["Filesystem.Write{/tmp/work/log.txt}"],"node":"#12","author":"writeCall","line":9,"instance":null,"eventIndex":null,"phase":"expression"}
+```
+
+**Deviations from the proposal text.** First, `requested` is a positional JSON array of rendered strings, not the § 3 worked example's name-keyed object — `EffectCategory.parameters` is a positional list of types with no parameter names in the node algebra, so the worked example implied names that do not exist; `held` entries render as `Category{slot, ...}` with `*` for wildcard slots. Second, the line carries `eventIndex` as its own field (the § 3 worked shape showed only `instance`). Third, the bytecode VM's denial was unified at the `InterpretError` boundary the way `VmResourceExhaustion` was: `VmCapabilityViolation` is removed, the CALL-site check throws the shared `InterpretException` carrying `CapabilityViolation` with an honestly coarse report — category rendered as the `#N` NodeId (the VM holds no store to resolve the name), `requested` null (category-only checking; no refinements fabricated), node null (no opcode source mapping in slice 1) — and `CapabilityViolation.at` became `NodeId?` for VM parity, following the `BuiltinContractViolation` precedent. Fourth, the sync `runMachine` previously rethrew denials out of the fold; converting them into `HaltReason.CapabilityDenial` is a behavior change to the programmatic surface (no existing test depended on the rethrow), and the group runtime no longer crashes the whole coroutine scope on one actor's denial. For group runs where several actors deny, the CLI emits the first report in instance-id order — one line per terminated run. Fifth, scenario 6's invariant-phase denial is exercised at the interpreter level (verified graphs cannot carry effectful invariant bodies), and the CLI scenarios drive the `DenialLine` helper that every `Main.kt` denial path routes through exactly once, because CLI failure paths call `exitProcess` (the `CliFederationTest` precedent of not driving erroring `main(...)` invocations in-JVM).
 
 ## 1. Problem statement
 
@@ -80,13 +96,13 @@ None new — the denial still terminates evaluation identically; only the report
 ## References
 
 **Outgoing references:**
-- [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md) — the capability check whose outcome is reported
-- [`design/security-model.md`](../design/security-model.md) — the threat framing distinguishing program from principal
-- [`proposals/implemented/error-recovery.md`](implemented/error-recovery.md) — the uncatchable taxonomy preserved
-- [`open-questions.md`](../open-questions.md) — Q-048, Q-051, Q-054, Q-055, Q-064
+- [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md) — the capability check whose outcome is reported
+- [`design/security-model.md`](../../design/security-model.md) — the threat framing distinguishing program from principal
+- [`proposals/implemented/error-recovery.md`](error-recovery.md) — the uncatchable taxonomy preserved
+- [`open-questions.md`](../../open-questions.md) — Q-048, Q-051, Q-054, Q-055, Q-064
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-064 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
-- [`ROADMAP.md`](../ROADMAP.md) — Tier 3.5
+- [`open-questions.md`](../../open-questions.md) — Q-064 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — implementation-state list
+- [`ROADMAP.md`](../../ROADMAP.md) — Tier 3.5 (item removed on resolution)
