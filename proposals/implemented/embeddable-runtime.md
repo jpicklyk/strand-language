@@ -1,12 +1,37 @@
 # Embeddable runtime and per-instance host policy
 
-**Document:** `proposals/embeddable-runtime.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/embeddable-runtime.md`
+**Status:** Implemented (2026-06-13, Kotlin/JVM reference implementation)
 **Date:** 2026-06-13
 **Concerns:** Q-054, Q-040 / Q-041 / Q-042 (the host-policy carriers consolidated here), Q-008 (the distributed runtime this is a prerequisite to), Q-017 step 2 (the Rust VM host API this shapes), Q-058 (run-by-hash, the natural follow-on entry point), Q-055 / Q-059 / Q-064 (siblings that compose on this surface), Kotlin/JVM reference implementation
 **Scope:** medium
 
-This proposal closes Q-054 (the embeddable-runtime item of ROADMAP Tier 3.5, single-process operational substrate). It introduces a published embedding surface — a `HostPolicy` value object and a `StrandRuntime` facade — so a JVM host can verify and run a Strand program in-process against an injected policy bundle, and so two graphs can run under different policies in one process. It does not change the node algebra, the canonical encoding, any hash, or the verifier's type-checking. It is a runtime-architecture refactor.
+## Implementation note
+
+Implemented at the facade level per the proposal's scope decision; full singleton removal is a documented follow-up under Q-054. Full suite 2223 tests green; zero golden-hash impact (this is a runtime-architecture refactor, not an algebra change).
+
+What shipped:
+
+- **`HostPolicy`** (`interpreter/HostPolicy.kt`) — an immutable data class bundling `limits` (which carries error verbosity and the stream-receive timeout — the single source of truth, not a separate field), `sandbox`, `clock`, `random`, `credentialProvider`, `nameResolver`, `llmHttpClient`, `vectorHttpTransport`, `logSink`, `osEnv`, `exitHandler`, `toolLoopLimit`. `OPEN` / `SECURE` companions mirror `SandboxPolicy.OPEN_DEFAULT` / `SECURE_DEFAULT`; `SECURE` is `OPEN.copy(sandbox = SECURE_DEFAULT)` so they differ only in the sandbox field (test-asserted).
+- **`Builtins.Snapshot` + `snapshot()` / `install(policy, verifierNodeTypes)` / `restore(snapshot)`** (`interpreter/Builtins.kt`) — the set of host-routed `@Volatile` fields that must be saved and restored around a run, defined once next to the fields. `install` reads the stream-receive timeout from `policy.limits`.
+- **`StrandRuntime`** (`runtime/StrandRuntime.kt`) — `verify` / `verifyAndCheckSchema` / `run` / `runMachine` / `runGroup`, constructed with a `HostPolicy`, threading it into the `Interpreter` / `StateMachineRuntime` / `SchemaChecker` it builds and into their `EvaluationLimits` arguments. The single internal `HostPolicy.withInstalled` extension owns the install/restore and subsumes the CLI's former `withProgramEvaluationContext`. Programs are supplied as a `runtime`-local `ProgramImage` (store + root + hashToNodeId + optional cross-store `resolveTarget`) rather than `:hashing`'s `FinalizedProgram`, so the facade needs no `:hashing` compile dependency; run-by-hash stays Q-058. Structured `RunOutcome` / `VerifyOutcome` results — the facade does not print or `exitProcess`. `:runtime` gained a `:schema` dependency (acyclic — `:schema` sits on the same `:interpreter` → `:verifier` → `:core` spine).
+- **CLI on the facade** — `run` / `machine` / `group` build a `HostPolicy` from the parsed flags (an `OPEN` base with the flag-derived sandbox and limits, preserving that the CLI only ever installed sandbox / stream-timeout / verifier node-types) and a `ProgramImage` from the resolved store, then drive evaluation through `StrandRuntime`; `withProgramEvaluationContext` was deleted. The `group` path uses `withGroupInstalled` to scope the install/restore around the asynchronous group lifecycle. Flags, output, federation, denial-line emission, and exit codes are unchanged (the CLI and corpus suites stay green).
+- **Tests** — `HostPolicyTest` (defaults + copy threading), `StrandRuntimeIsolationTest` (two-policy sandbox isolation with no order dependence, different-limits isolation, singleton restoration on the normal and thrown paths, verify-does-no-install, per-runtime credential provider), and `ProgramEvaluationContextTest` rewritten to pin the new `snapshot`/`install`/`restore` protocol the facade uses.
+
+The scope decision (the central tradeoff, stated in §3 and §8 and unchanged): the published surface is value-threaded, but the fields read by bare name inside builtin lambdas are still installed onto the `Builtins` singletons around each run and restored afterward — because the registry is a single immutable map of 218 fixed-signature lambdas built once at class-init, and threading a context into all of them is a large, fragile ripple. This makes the facade correct for sequential embedding and for the CLI, and centralizes the install/restore; true concurrent multi-tenant isolation in one JVM is gated on the follow-up below, of which this facade is the structural prerequisite.
+
+What remains as the documented follow-up (under Q-054):
+
+- Removing the singleton reads from the builtin lambdas (e.g. constructing the registry per-`HostPolicy`, so the lambdas close over a policy rather than reading `Builtins.clock` / `.random` / `.sandboxPolicy` / …). This is the change that makes two runs concurrently isolated in one JVM without the install serialization.
+- `CredentialScrubber` registry snapshot/restore (it is repopulated per run via `credentialProvider.resolve`, so cross-run accumulation only over-scrubs — benign for sequential runs, but part of the same singleton-removal class).
+- Per-machine / per-instance policy within one `runGroup` (gated on the above).
+- The Rust VM host API (Q-017 step 2), which should mirror this shape.
+
+Deviations from the literal plan: none of substance. The facade's `run` re-verifies and re-schema-checks internally (the proposal anticipated the caller passing an already-verified program); the CLI's existing verify/schema passes still produce the warning/diagnostic rendering and the static-violation exit, and the facade's re-check is redundant-but-harmless for the one-program-per-process CLI. `runGroup` does not restore on return (the group is still live); `withGroupInstalled` scopes the restore around the whole `runBlocking` body, and `runGroup`'s own `install` is an idempotent re-install of the same policy.
+
+---
+
+This proposal closed Q-054 (the embeddable-runtime item of ROADMAP Tier 3.5, single-process operational substrate). It introduced a published embedding surface — a `HostPolicy` value object and a `StrandRuntime` facade — so a JVM host can verify and run a Strand program in-process against an injected policy bundle, and so two graphs can run under different policies in one process. It does not change the node algebra, the canonical encoding, any hash, or the verifier's type-checking. It is a runtime-architecture refactor.
 
 ## 1. Problem statement
 
@@ -201,14 +226,14 @@ No change to evaluation semantics. The interpreter, VM, and state-machine runtim
 ## References
 
 **Outgoing references:**
-- [`open-questions.md`](../open-questions.md) — Q-054 (this proposal's defining question), Q-040 / Q-041 / Q-042 (the host-policy carriers consolidated into `HostPolicy`), Q-058 (run-by-hash, the follow-on), Q-055 / Q-059 / Q-064 (composing siblings)
-- [`ROADMAP.md`](../ROADMAP.md) — Tier 3.5 single-process operational substrate, the embeddable-runtime item
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — the `Builtins` singletons and the CLI's `withProgramEvaluationContext` this consolidates
-- [`proposals/implemented/interpreter-resource-limits.md`](implemented/interpreter-resource-limits.md) — `EvaluationLimits`, a field of `HostPolicy`
-- [`proposals/implemented/io-builtin-sandboxing.md`](implemented/io-builtin-sandboxing.md) — `SandboxPolicy.OPEN_DEFAULT`/`SECURE_DEFAULT`, mirrored by `HostPolicy.OPEN`/`SECURE`
-- [`proposals/implemented/credential-isolation.md`](implemented/credential-isolation.md) — `CredentialProvider`, `ErrorVerbosity`, `CredentialScrubber`
+- [`open-questions.md`](../../open-questions.md) — Q-054 (this proposal's defining question), Q-040 / Q-041 / Q-042 (the host-policy carriers consolidated into `HostPolicy`), Q-058 (run-by-hash, the follow-on), Q-055 / Q-059 / Q-064 (composing siblings)
+- [`ROADMAP.md`](../../ROADMAP.md) — Tier 3.5 single-process operational substrate, the embeddable-runtime item
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — the `Builtins` singletons and the CLI's `withProgramEvaluationContext` this consolidates
+- [`interpreter-resource-limits.md`](interpreter-resource-limits.md) — `EvaluationLimits`, a field of `HostPolicy`
+- [`io-builtin-sandboxing.md`](io-builtin-sandboxing.md) — `SandboxPolicy.OPEN_DEFAULT`/`SECURE_DEFAULT`, mirrored by `HostPolicy.OPEN`/`SECURE`
+- [`credential-isolation.md`](credential-isolation.md) — `CredentialProvider`, `ErrorVerbosity`, `CredentialScrubber`
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-054 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section, Q-054 bullet
+- [`open-questions.md`](../../open-questions.md) — Q-054 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section, Q-054 bullet

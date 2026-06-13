@@ -94,17 +94,26 @@ class StrandRuntimeIsolationTest {
         )
 
         // SECURE: workspace rooted at the temp dir, escape denied — the
-        // `../escape.txt` path escapes and the sandbox rejects it.
+        // `../escape.txt` path escapes the workspace and the sandbox rejects it.
         val securePolicy = HostPolicy.OPEN.copy(
             sandbox = SandboxPolicy(
                 fs = FsPolicy(workspaceRoot = tmp, escape = EscapePolicy.Deny),
                 net = NetPolicy(defaultDeny = false),
             ),
         )
-        // OPEN: no workspace constraint, escape allowed — the sandbox permits
-        // the path (the write itself may fail at the JVM, but NOT with a
-        // SandboxViolation, which is the policy difference under test).
-        val openRt = StrandRuntime(HostPolicy.OPEN)
+        // "OPEN": escape allowed, workspace rooted one level DOWN (tmp/ws) so the
+        // same `../escape.txt` path resolves to tmp/escape.txt — inside the
+        // @TempDir (cleaned automatically), no write into the repo. The policy
+        // difference under test is whether the escape is permitted, not where the
+        // bytes land.
+        val openWs = tmp.resolve("ws").also { java.nio.file.Files.createDirectories(it) }
+        val openPolicy = HostPolicy.OPEN.copy(
+            sandbox = SandboxPolicy(
+                fs = FsPolicy(workspaceRoot = openWs, escape = EscapePolicy.Allow),
+                net = NetPolicy(defaultDeny = false),
+            ),
+        )
+        val openRt = StrandRuntime(openPolicy)
         val secureRt = StrandRuntime(securePolicy)
 
         // SECURE rejects with FsPathEscape.
@@ -113,15 +122,14 @@ class StrandRuntimeIsolationTest {
             ?: error("expected SandboxViolation under SECURE, got ${secureEx.error}")
         assertEquals(SandboxViolationKind.FsPathEscape, sv.kind)
 
-        // OPEN does NOT produce a SandboxViolation — it either succeeds or
-        // fails with an IoFailure, but the secure run's policy did not leak.
-        val openErr = runCatching { openRt.run(prog, caps) }.exceptionOrNull()
-        if (openErr is InterpretException) {
-            assertTrue(
-                openErr.error !is InterpretError.SandboxViolation,
-                "OPEN runtime must not raise SandboxViolation; got ${openErr.error}",
-            )
-        }
+        // OPEN (escape allowed) does NOT produce a SandboxViolation — the secure
+        // run's policy did not leak. The write lands at tmp/escape.txt.
+        val openOutcome = openRt.run(prog, caps)
+        assertInstanceOf(RunOutcome.Ok::class.java, openOutcome)
+        assertTrue(
+            java.nio.file.Files.exists(tmp.resolve("escape.txt")),
+            "OPEN-policy write should have landed inside the temp dir",
+        )
 
         // Reverse order: SECURE again after OPEN still rejects (OPEN's policy
         // did not leak into SECURE).
