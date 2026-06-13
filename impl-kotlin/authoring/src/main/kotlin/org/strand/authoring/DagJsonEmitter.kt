@@ -1630,9 +1630,9 @@ object DagJsonEmitter {
      *
      * UnitLit and BytesLit are not synthesizable inline: the grammar has no
      * inline-token form for them (`_` already means Null, and bytes are
-     * base64-encoded strings — distinguishable from string literals only by
+     * hex-encoded strings — distinguishable from string literals only by
      * type, which the slot doesn't carry). Programs needing those declare
-     * `u ULT` or `b BYT "<base64>"` explicitly.
+     * `u ULT` or `b BYT "<hex>"` explicitly.
      */
     private fun synthesizeLiteralIfLiteral(arg: Arg, ctx: EmitContext): String? {
         val (jsonType, value) = when (arg) {

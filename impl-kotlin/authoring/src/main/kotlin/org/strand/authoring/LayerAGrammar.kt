@@ -2017,8 +2017,10 @@ object LayerAGrammar {
         ),
         "BYT" to CodeSchema(
             jsonType = "BytesLit",
-            // Base64-encoded payload as a string. Matches the JSON ingest's
-            // BytesLit convention (a single base64 string field).
+            // Hex-encoded payload as a string, passed through verbatim to the
+            // BytesLit `value` field. The :core JsonIngest hex-decodes that
+            // field (JsonIngest.hexDecode), so the Layer A surface carries hex
+            // — e.g. `bs1 BYT "deadbeef"`, not base64.
             required = listOf(FieldSpec("value", ArgKind.STRING, "value")),
             producesValue = true,
         ),

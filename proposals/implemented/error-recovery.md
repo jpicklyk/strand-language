@@ -56,7 +56,7 @@ fsReadTryT FNT [stringT] resBytesT [readFx]
 fsReadTry FN "strand-builtin:Fs.Read.Try" fsReadTryT [readFx]
 pathS STR "config.json"
 attempt APP fsReadTry [pathS]
-defaultB BYT "e30="
+defaultB BYT "7b7d"
 result WHEN attempt resBytesT "Ok(b) -> b | Err(e) -> defaultB"
 ```
 
@@ -69,7 +69,7 @@ Extend N-043 with failure semantics: a handler that fires *after* dispatch, when
 ```layer-a
 pathS STR "config.json"
 readApp APP fsRead [pathS]
-defaultB BYT "e30="
+defaultB BYT "7b7d"
 fallback LAM [p:stringT] defaultB
 guarded CH readFx fallback readApp
 ```
@@ -87,7 +87,7 @@ resBytesT SUM [okCase errCase]
 pathS STR "config.json"
 readApp APP fsRead [pathS]
 tryRead TRY readApp
-defaultB BYT "e30="
+defaultB BYT "7b7d"
 result WHEN tryRead resBytesT "Ok(b) -> b | Err(e) -> defaultB"
 ```
 
@@ -193,7 +193,7 @@ The fallback program of § 3.3, end to end. The agent emits (density v4, with th
 ```layer-a
 pathS STR "config.json"
 tryRead TRY (APP fsRead [pathS])
-defaultB BYT "e30="
+defaultB BYT "7b7d"
 result WHEN tryRead (RES bytesT) "Ok(b) -> b | Err(e) -> defaultB"
 ```
 

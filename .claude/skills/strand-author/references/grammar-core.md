@@ -9,7 +9,7 @@ The essential codes for Strand emission. Each code below shows its `jsonType`, p
 - `STR value:String` — StringLit. `s1 STR "hello"`
 - `BLT value:Bool` — BoolLit. `b1 BLT true`
 - `ULT` — UnitLit (no args). `u1 ULT`
-- `BYT value:String` — BytesLit (base64). `bs1 BYT "aGVsbG8="`
+- `BYT value:String` — BytesLit (hex). `bs1 BYT "68656c6c6f"`
 
 ## Types
 
