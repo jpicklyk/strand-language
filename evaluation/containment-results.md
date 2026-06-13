@@ -8,6 +8,8 @@
 
 The core thesis, as re-weighted in [`02-core-thesis.md`](../02-core-thesis.md) § outcome-priority, leads with structural safety: the maximum harm a generated subgraph can cause is computable from the graph before it executes and bounded at execution. This document is the measurement behind that claim. It defines the harm bound as a function of the graph and its capability context, states the soundness property that makes the bound trustworthy, and presents a comparative containment matrix against a conventional AI-generation target.
 
+An executable companion that drives these containment mechanisms through the host embedding boundary — admitting unfamiliar programs, computing the harm bound from the artifact, rejecting or bounding each, and isolating concurrent tenants — is [`containment-demo.md`](containment-demo.md).
+
 The measurement is the structural-safety counterpart to the Q-021 cost measurement in [`dynamic-results.md`](dynamic-results.md). It differs from Q-021 in kind. Token cost is continuous and noisy, so Q-021 samples and reports confidence intervals. Containment is categorical and deterministic: a given subgraph either is rejected at admission, or is bound at runtime, or is not — a property of the language, not a rate to be sampled. The measurement is therefore an executed demonstration matrix plus a soundness argument, not a statistical estimate.
 
 The headline result: across six harm classes that an AI agent can plausibly emit, every class is either rejected at verification time or contained at runtime by construction in Strand, and none is contained by default in the conventional baseline. The conventional-baseline rows are grounded in executed probes ([`containment/python_baseline_probes.py`](containment/python_baseline_probes.py)), not asserted.
@@ -94,6 +96,7 @@ The Strand-side witnesses are the corpus programs and unit tests named in the ma
 - [`design/security-model.md`](../design/security-model.md) — the threat model this measurement operationalizes
 - [`design/effects-and-capabilities.md`](../design/effects-and-capabilities.md) — effect closure and refinement-lattice capability matching
 - [`dynamic-results.md`](dynamic-results.md) — the cost measurement this parallels (Q-021)
+- [`containment-demo.md`](containment-demo.md) — the executable companion that drives these mechanisms through the host embedding boundary
 - [`open-questions.md`](../open-questions.md) — Q-044 (this measurement), Q-039 through Q-042 (the resolved findings measured here)
 - [`proposals/implemented/foreign-effect-projections.md`](../proposals/implemented/foreign-effect-projections.md) — Q-039 confused-deputy mechanism
 - [`proposals/implemented/interpreter-resource-limits.md`](../proposals/implemented/interpreter-resource-limits.md) — Q-040 resource budget
