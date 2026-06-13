@@ -1,0 +1,18 @@
+// Layer F form of the tree-sum task: a union with TWO self-referential
+// fields in one case, exercising the mandatory inner/outer product
+// split. sum(Node(Leaf(3), Node(Leaf(4), Leaf(5)))) -> 12. Hash-equal
+// to reference.layer-a.
+type Tree = { tag: "Leaf", v: Int } | { tag: "Node", left: Tree, right: Tree }
+
+use prelude.{add}
+
+function sumLeaves(t: Tree): Int {
+  return match (t) {
+    Leaf(n) => n,
+    Node(p) => add(sumLeaves(p.left), sumLeaves(p.right)),
+  }
+}
+
+function main(): Int {
+  return sumLeaves({ tag: "Node", left: { tag: "Leaf", v: 3 }, right: { tag: "Node", left: { tag: "Leaf", v: 4 }, right: { tag: "Leaf", v: 5 } } })
+}

@@ -1,0 +1,18 @@
+// Layer F form of the list-length task: the recursive alias routes
+// self-references through RecursiveSelf inside the RT body and through
+// the RT itself at pattern/construction sites. length([7, 8]) -> 2.
+// Hash-equal to reference.layer-a.
+type List = { tag: "Cons", head: Int, tail: List } | { tag: "Nil" }
+
+use prelude.{add}
+
+function length(xs: List): Int {
+  return match (xs) {
+    Cons(p) => add(1, length(p.tail)),
+    Nil => 0,
+  }
+}
+
+function main(): Int {
+  return length({ tag: "Cons", head: 7, tail: { tag: "Cons", head: 8, tail: { tag: "Nil" } } })
+}

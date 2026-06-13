@@ -1,0 +1,15 @@
+// Layer F form of the factorial task: named recursion lambda-lifts to
+// Fixpoint; the Bool match lowers to the literal-pattern Match tower.
+// fact(5) -> 120. Hash-equal to reference.layer-a.
+use prelude.{eqInt, sub, mul}
+
+function fact(n: Int): Int {
+  return match (eqInt(n, 0)) {
+    true => 1,
+    false => mul(n, fact(sub(n, 1))),
+  }
+}
+
+function main(): Int {
+  return fact(5)
+}

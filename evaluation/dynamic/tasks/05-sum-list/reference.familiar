@@ -1,0 +1,18 @@
+// Layer F form of the recursive list-sum task: the self-referential
+// alias produces the RecursiveType + RecursiveSelf inner/outer product
+// split; sum lambda-lifts to Fixpoint. sum([1, 2, 3]) -> 6. Hash-equal
+// to reference.layer-a.
+type List = { tag: "Cons", head: Int, tail: List } | { tag: "Nil" }
+
+use prelude.{add}
+
+function sum(xs: List): Int {
+  return match (xs) {
+    Cons(p) => add(p.head, sum(p.tail)),
+    Nil => 0,
+  }
+}
+
+function main(): Int {
+  return sum({ tag: "Cons", head: 1, tail: { tag: "Cons", head: 2, tail: { tag: "Cons", head: 3, tail: { tag: "Nil" } } } })
+}

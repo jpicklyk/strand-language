@@ -1,0 +1,12 @@
+// Layer F form of the option-unwrap task: a tagged union with a
+// collapsed single-field payload, constructed with a tagged object
+// literal and consumed with constructor patterns. Hash-equal to
+// reference.layer-a.
+type Option = { tag: "Some", v: Int } | { tag: "None" }
+
+function main(): Int {
+  return match ({ tag: "Some", v: 42 }) {
+    Some(n) => n,
+    None => 0,
+  }
+}

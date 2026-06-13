@@ -1,0 +1,13 @@
+// Layer F form of the file-write task (the proposal section 4.2 worked
+// example): the declare-form pins the legacy single-argument
+// Filesystem.Write stub; its parameterized uses entry is a surface
+// Q-039 projection, so the call site gets an explicit EffectDecl bound
+// to the same path node the application consumes. Hash-equal to
+// reference.layer-a.
+use prelude.{add}
+
+declare function write(path: String): Int from "strand-builtin:Filesystem.Write" uses Filesystem.Write(path)
+
+function main(): Int uses Filesystem.Write("/tmp/strand-eval.log") {
+  return add(write("/tmp/strand-eval.log"), 1)
+}

@@ -1,0 +1,26 @@
+// Layer F form of the append-then-sum task: two Fixpoints share one
+// recursive alias; append rebuilds Cons cells inside its own body, so
+// the OUTER product appears at a construction site within a Match arm
+// (the UnboundRecursiveSelf trap shape). sum(append([1,2],[3])) -> 6.
+// Hash-equal to reference.layer-a.
+type List = { tag: "Cons", head: Int, tail: List } | { tag: "Nil" }
+
+use prelude.{add}
+
+function append(xs: List, ys: List): List {
+  return match (xs) {
+    Cons(ap) => { tag: "Cons", head: ap.head, tail: append(ap.tail, ys) },
+    Nil => ys,
+  }
+}
+
+function sum(zs: List): Int {
+  return match (zs) {
+    Cons(sp) => add(sp.head, sum(sp.tail)),
+    Nil => 0,
+  }
+}
+
+function main(): Int {
+  return sum(append({ tag: "Cons", head: 1, tail: { tag: "Cons", head: 2, tail: { tag: "Nil" } } }, { tag: "Cons", head: 3, tail: { tag: "Nil" } }))
+}

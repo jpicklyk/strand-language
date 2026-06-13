@@ -1,0 +1,15 @@
+// Layer F form of the effect-coverage task: the helper's uses clause
+// becomes the Lambda's explicit effect row. Omitting it is the
+// scenario-5 probe (verifier UncoveredEffects against the Layer F
+// line). Hash-equal to reference.layer-a.
+use prelude.{add}
+
+declare function write(path: String): Int from "strand-builtin:Filesystem.Write" uses Filesystem.Write(path)
+
+function appendLog(): Int uses Filesystem.Write("/tmp/strand-eval.log") {
+  return add(write("/tmp/strand-eval.log"), 1)
+}
+
+function main(): Int {
+  return add(appendLog(), 10)
+}

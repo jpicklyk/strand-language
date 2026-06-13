@@ -1,0 +1,19 @@
+// Layer F form of the audited-doubling task: the helper's body
+// exercises BOTH Time.Now and Log.Write, so its uses clause must carry
+// both (the scenario-5 failure shape is listing only the obvious one).
+// The declare-forms pin the corpus convention of the category row on
+// both the FunctionType and the ForeignNode. The audit const lowers to
+// a Let. Hash-equal to reference.layer-a.
+declare function now(): Int from "strand-builtin:Time.Now" uses Time.Now
+declare function logInfo(msg: String): Unit from "strand-builtin:Log.Info" uses Log.Write
+
+use prelude.{mul, concat, intToStr}
+
+function auditedDouble(x: Int): Int uses Time.Now, Log.Write {
+  const ignore = logInfo(concat("audit:", intToStr(now())))
+  return mul(x, 2)
+}
+
+function main(): Int {
+  return auditedDouble(21)
+}
