@@ -362,7 +362,7 @@ E-035 and E-036 were assigned by Q-037 (`LLM.Generate`, `LLM.Embed`) and E-037 a
 
 ### Open questions (Q-NNN)
 
-Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-066 are currently assigned.
+Open questions are catalogued in [`open-questions.md`](open-questions.md). Identifiers Q-001 through Q-067 are currently assigned.
 
 ## Cross-reference graph {#cross-references}
 

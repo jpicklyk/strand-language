@@ -103,8 +103,15 @@ object ContainmentDemo {
      * from its declarations, so every effect a run can reach corresponds to an
      * EffectCategory reachable here. The walk stops at NodeRef boundaries (a
      * cross-store subgraph the artifact references by hash); these demo programs
-     * have none. The verifier computes the same closure internally but does not
-     * surface it on `VerifyResult.Ok` — see the demo doc's follow-up note.
+     * have none.
+     *
+     * The verifier computes the same closure internally (`VerifyState.nodeClosures`,
+     * the Handler-aware computation) but does not surface it on `VerifyResult.Ok`,
+     * so the host re-derives it here. Q-067 (open-questions.md) tracks surfacing it.
+     * Surfacing it on `Ok` would not let this walk go away regardless: scenario S1
+     * needs the harm bound for an over-reaching submission the verifier *rejects*,
+     * and the verifier populates its closure only on a successful `Ok`. This
+     * re-derivation stays sound by the `UncoveredEffects` argument above.
      */
     fun declaredEffectClosure(program: ProgramImage): Set<String> {
         val store = program.store
