@@ -2,7 +2,7 @@
 
 **Document:** `01-prior-art.md`
 **Status:** Stable
-**Last revised:** 2026-06-11
+**Last revised:** 2026-06-13
 
 ## Summary
 
@@ -50,7 +50,7 @@ CodeAct ([Wang et al., ICML 2024](https://arxiv.org/abs/2402.01030)) consolidate
 
 Zero is an experimental systems language released by Vercel Labs in May 2026 ([github.com/vercel-labs/zerolang](https://github.com/vercel-labs/zerolang)) whose toolchain treats AI agents as the primary consumer. The compiler emits JSON diagnostics with stable error codes and typed repair metadata by default, and companion commands expose machine-readable explanations and fix plans, so an agent's repair loop never parses prose. Functions declare capability-based I/O effects in their signatures, enforced at compile time. Subsequent releases moved Zero to an explicitly graph-native model: the semantic graph is the program database and the compiler input, agents read and modify programs through query and patch commands whose patches are validated before storage, and agents address program elements through explicit handles — symbols, node identifiers, graph hashes, types, effects, and capabilities. Human-readable text files are retained as projections for review rather than as the source of truth.
 
-**Relation to Strand:** Zero is the closest contemporary system to Strand's combination of agent-first toolchain, graph-as-source, and effects declared in the program's interface, and its independent emergence is evidence that this region of the design space is being converged on rather than idiosyncratic. The divergences are the projection layer and the role the graph plays. Zero maintains a human-readable text projection and a human review path, which Strand omits per [`decisions/ADR-002-no-human-projection.md`](decisions/ADR-002-no-human-projection.md). Zero is a single-machine systems language compiling to small native binaries; its graph is the working database of a compiler, and its effect declarations are discharged at compile time. Strand's graph is the canonical artifact itself — content-addressed identity, admission-time verification of the effect closure, and runtime capability checks and placement decisions derived from the same edges. Zero is experimental and pre-1.0; its trajectory bears directly on Strand's evaluation and should be tracked.
+**Relation to Strand:** Zero is the closest contemporary system to Strand's combination of agent-first toolchain, graph-as-source, and effects declared in the program's interface, and its independent emergence is evidence that this region of the design space is being converged on rather than idiosyncratic. The divergences are the projection layer and the role the graph plays. Zero maintains a human-readable text projection and a human review path; Strand provides agent-emission text projections (Layer A and Layer F) but no projection designed for human review, per [`decisions/ADR-002-no-human-projection.md`](decisions/ADR-002-no-human-projection.md). Zero is a single-machine systems language compiling to small native binaries; its graph is the working database of a compiler, and its effect declarations are discharged at compile time. Strand's graph is the canonical artifact itself — content-addressed identity, admission-time verification of the effect closure, and runtime capability checks and placement decisions derived from the same edges. Zero is experimental and pre-1.0; its trajectory bears directly on Strand's evaluation and should be tracked.
 
 ## AI-oriented modifications to existing languages {#prior-modifications}
 
@@ -92,7 +92,7 @@ Hazel is a structured editor and language environment where programs are always 
 
 MPS is a language workbench based on projectional editing: the underlying program representation is an AST, and editors render it through customizable projections that may include text, tables, diagrams, or any other visual form. MPS is used for domain-specific languages where the projection significantly improves authorship.
 
-**Relation to Strand:** MPS demonstrates that programs can have multiple projections from a single underlying representation. Strand's design choice to omit projections entirely is a simplification — the engineering required for high-quality projections is substantial, and the use case (humans authoring programs) does not apply. The infrastructure MPS provides for projectional editing may inform future Strand tooling for failure forensics or audit.
+**Relation to Strand:** MPS demonstrates that programs can have multiple projections from a single underlying representation. Strand's design choice to omit a human-facing projection is a simplification — the engineering required for high-quality human projections is substantial, and the use case (humans authoring programs) does not apply. Strand's Layer A and Layer F surfaces are agent-emission projections, not the human-facing multi-view projections MPS provides. The infrastructure MPS provides for projectional editing may inform future Strand tooling for failure forensics or audit.
 
 ### Darklang {#prior-darklang}
 
@@ -172,7 +172,7 @@ TensorFlow's original graph mode and PyTorch's TorchScript / `torch.compile` mod
 
 Strand's design occupies a specific point in this landscape that no existing system occupies. The combination of:
 
-1. Graph-native source representation (no text projection)
+1. Graph-native source representation (no canonical text projection)
 2. Content-addressed node identity
 3. Mandatory effect declarations
 4. Effect-driven placement and distribution

@@ -2,7 +2,7 @@
 
 **Document:** `02-core-thesis.md`
 **Status:** Stable
-**Last revised:** 2026-06-11
+**Last revised:** 2026-06-13
 
 ## Summary
 
@@ -12,7 +12,7 @@ Strand is organized around five integrated design claims. Each claim is independ
 
 A Strand program is a directed graph of typed, content-addressed nodes, and the graph is the canonical form: it is what is stored, what is verified, what is hashed, and what executes. No text form carries program identity. There is no canonical concrete syntax and no character-stream serialization that the language treats as source. Programs are constructed by graph operations: creating nodes, attaching typed edges, and verifying well-formedness.
 
-The claim concerns the artifact of record, not the absence of characters from the toolchain. The implemented authoring stack has agents emit Layer A, a compact line-oriented text projection compiled to canonical dag-json before any node reaches the verifier ([Q-034](open-questions.md#Q-034)). Authoring surfaces of this kind are disposable projections with no canonical status: no hash is computed over them, verification never operates on them, and they may change or be replaced without affecting the identity of any program. The distinctive property this claim asserts is that the verified graph is the program; every downstream guarantee (Claims 3 through 5) attaches to the graph and to nothing upstream of it.
+The claim concerns the artifact of record, not the absence of characters from the toolchain. The implemented authoring stack has agents emit Layer A, a compact line-oriented text projection compiled to canonical dag-json before any node reaches the verifier ([Q-034](open-questions.md#Q-034)); a second authoring surface, Layer F, a familiar-shaped typed dialect, lowers to the same canonical form ([Q-061](open-questions.md#Q-061)). Authoring surfaces of this kind are disposable projections with no canonical status: no hash is computed over them, verification never operates on them, and they may change or be replaced without affecting the identity of any program. The distinctive property this claim asserts is that the verified graph is the program; every downstream guarantee (Claims 3 through 5) attaches to the graph and to nothing upstream of it.
 
 This claim has several immediate consequences:
 
