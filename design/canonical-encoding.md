@@ -382,7 +382,7 @@ The encoding carries no in-band epoch marker. Two epochs' encodings of the same 
 |-------|----------------|------------|
 | 1 | 2026-06-10 (this document's adoption) | The baseline: the encoding exactly as this document specifies it. Named epoch 1 retroactively when the epoch policy was adopted; no encoding change accompanied the naming. |
 
-The epoch-2 charter — the [Q-053](../open-questions.md#Q-053) nested-recursive-type fix designed on its merits, normalization of the gated optional fields (`effectProjections`, the EventStream `source` edge) to the uniform presence-prefix rule, and the [Q-049](../open-questions.md#Q-049) `bound` decision if encoding-touching — is recorded in the Q-062 proposal ([`proposals/encoding-epochs.md`](../proposals/encoding-epochs.md)) and rides the Q-053 design work; it is chartered, not in force.
+The epoch-2 charter — the [Q-053](../open-questions.md#Q-053) nested-recursive-type fix designed on its merits, normalization of the gated optional fields (`effectProjections`, the EventStream `source` edge) to the uniform presence-prefix rule, and the [Q-049](../open-questions.md#Q-049) `bound` decision if encoding-touching — is recorded in the Q-062 proposal ([`proposals/implemented/encoding-epochs.md`](../proposals/implemented/encoding-epochs.md)) and rides the Q-053 design work; it is chartered, not in force.
 
 ## References
 
@@ -391,11 +391,11 @@ The epoch-2 charter — the [Q-053](../open-questions.md#Q-053) nested-recursive
 - [`ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) — content addressing, multihash format, BLAKE3 selection
 - [`corpus/golden-hashes.json`](../corpus/golden-hashes.json) — committed conformance vectors for every corpus program
 - [`corpus/README.md`](../corpus/README.md) — golden-vector regeneration procedure
-- [`proposals/encoding-epochs.md`](../proposals/encoding-epochs.md) — the Q-062 proposal defining the epoch policy and the epoch-2 charter
+- [`proposals/implemented/encoding-epochs.md`](../proposals/implemented/encoding-epochs.md) — the Q-062 proposal defining the epoch policy and the epoch-2 charter
 - [`open-questions.md`](../open-questions.md) — Q-024, Q-049, Q-053, Q-062
 
 **Incoming references:**
 - [`node-algebra.md`](node-algebra.md) — § Hash construction defers byte-level detail here
 - [`ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) — Consequences amendment cites § Epoch log
-- [`proposals/encoding-epochs.md`](../proposals/encoding-epochs.md) — the policy this document's Epoch log records
+- [`proposals/implemented/encoding-epochs.md`](../proposals/implemented/encoding-epochs.md) — the policy this document's Epoch log records
 - [`INDEX.md`](../INDEX.md)
