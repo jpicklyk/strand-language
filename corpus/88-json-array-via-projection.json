@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "intT":        { "type": "PrimitiveType", "kind": "Int" },
+
+    "selfOuter":   { "type": "RecursiveSelf", "depth": 1 },
+    "selfInner":   { "type": "RecursiveSelf", "depth": 0 },
+    "headField":   { "type": "ProductTypeField", "name": "head", "fieldType": "selfOuter" },
+    "tailField":   { "type": "ProductTypeField", "name": "tail", "fieldType": "selfInner" },
+    "consProduct": { "type": "ProductType", "fields": ["headField", "tailField"] },
+    "consCase":    { "type": "SumTypeCase", "name": "Cons", "caseType": "consProduct" },
+    "nilCase":     { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "listBody":    { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "innerListT":  { "type": "RecursiveType", "body": "listBody" },
+
+    "numCase":     { "type": "SumTypeCase", "name": "JsonNumber", "caseType": "intT" },
+    "arrCase":     { "type": "SumTypeCase", "name": "JsonArray", "caseType": "innerListT" },
+    "jvBody":      { "type": "SumType", "cases": ["numCase", "arrCase"] },
+    "jsonValueT":  { "type": "RecursiveType", "body": "jvBody" },
+
+    "projTop":     { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Unfold" } ] },
+    "projList":    { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Case", "caseName": "JsonArray" }, { "step": "Unfold" } ] },
+    "projCons":    { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Case", "caseName": "JsonArray" },
+                               { "step": "Unfold" },
+                               { "step": "Case", "caseName": "Cons" } ] },
+
+    "one":         { "type": "IntLit", "value": 1 },
+    "two":         { "type": "IntLit", "value": 2 },
+    "num1":        { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "one" },
+    "num2":        { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "two" },
+
+    "nilVal":      { "type": "SumValue", "ofType": "projList", "caseName": "Nil", "payload": null },
+
+    "cons2Head":   { "type": "ProductFieldValue", "fieldName": "head", "value": "num2" },
+    "cons2Tail":   { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "cons2Prod":   { "type": "ProductValue", "ofType": "projCons", "fields": ["cons2Head", "cons2Tail"] },
+    "cons2":        { "type": "SumValue", "ofType": "projList", "caseName": "Cons", "payload": "cons2Prod" },
+
+    "cons1Head":   { "type": "ProductFieldValue", "fieldName": "head", "value": "num1" },
+    "cons1Tail":   { "type": "ProductFieldValue", "fieldName": "tail", "value": "cons2" },
+    "cons1Prod":   { "type": "ProductValue", "ofType": "projCons", "fields": ["cons1Head", "cons1Tail"] },
+    "cons1":        { "type": "SumValue", "ofType": "projList", "caseName": "Cons", "payload": "cons1Prod" },
+
+    "arrayValue":  { "type": "SumValue", "ofType": "projTop", "caseName": "JsonArray", "payload": "cons1" },
+
+    "sumFnT":      { "type": "FunctionType", "parameters": ["projList"], "result": "intT" },
+    "selfParam":   { "type": "ParameterDecl", "name": "self", "paramType": "sumFnT" },
+    "lstParam":    { "type": "ParameterDecl", "name": "lst", "paramType": "projList" },
+
+    "consPatVar":  { "type": "Pattern", "kind": "variable", "patternType": "projCons", "name": "c" },
+    "consPat":     { "type": "Pattern", "kind": "constructor", "patternType": "projList", "caseName": "Cons", "payloadPattern": "consPatVar" },
+    "cRef":        { "type": "VarRef", "binder": "consPatVar" },
+    "headJv":      { "type": "ProductFieldGet", "target": "cRef", "fieldName": "head" },
+    "tailLst":     { "type": "ProductFieldGet", "target": "cRef", "fieldName": "tail" },
+
+    "numPatVar":   { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+    "numPat":      { "type": "Pattern", "kind": "constructor", "patternType": "jsonValueT", "caseName": "JsonNumber", "payloadPattern": "numPatVar" },
+    "nRef":        { "type": "VarRef", "binder": "numPatVar" },
+    "numCaseMc":   { "type": "MatchCase", "pattern": "numPat", "body": "nRef" },
+    "zeroA":       { "type": "IntLit", "value": 0 },
+    "headWildPat": { "type": "Pattern", "kind": "wildcard", "patternType": "jsonValueT" },
+    "headWildMc":  { "type": "MatchCase", "pattern": "headWildPat", "body": "zeroA" },
+    "headInt":     { "type": "Match", "scrutinee": "headJv", "cases": ["numCaseMc", "headWildMc"] },
+
+    "addFnT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":       { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addFnT" },
+    "selfRef":     { "type": "VarRef", "binder": "selfParam" },
+    "recCall":     { "type": "Application", "function": "selfRef", "arguments": ["tailLst"] },
+    "addCall":     { "type": "Application", "function": "addFn", "arguments": ["headInt", "recCall"] },
+    "consBodyMc":  { "type": "MatchCase", "pattern": "consPat", "body": "addCall" },
+
+    "nilPat":      { "type": "Pattern", "kind": "constructor", "patternType": "projList", "caseName": "Nil" },
+    "zeroB":       { "type": "IntLit", "value": 0 },
+    "nilBodyMc":   { "type": "MatchCase", "pattern": "nilPat", "body": "zeroB" },
+
+    "lstRefBody":  { "type": "VarRef", "binder": "lstParam" },
+    "foldMatch":   { "type": "Match", "scrutinee": "lstRefBody", "cases": ["consBodyMc", "nilBodyMc"] },
+    "sumLambda":   { "type": "Lambda", "parameters": ["selfParam", "lstParam"], "body": "foldMatch" },
+    "sumFix":      { "type": "Fixpoint", "recursionType": "sumFnT", "body": "sumLambda" },
+
+    "topPatVar":   { "type": "Pattern", "kind": "variable", "patternType": "projList", "name": "top" },
+    "topArrPat":   { "type": "Pattern", "kind": "constructor", "patternType": "jsonValueT", "caseName": "JsonArray", "payloadPattern": "topPatVar" },
+    "topRef":      { "type": "VarRef", "binder": "topPatVar" },
+    "sumApply":    { "type": "Application", "function": "sumFix", "arguments": ["topRef"] },
+    "arrTopMc":    { "type": "MatchCase", "pattern": "topArrPat", "body": "sumApply" },
+    "topNeg":      { "type": "IntLit", "value": -1 },
+    "topWildPat":  { "type": "Pattern", "kind": "wildcard", "patternType": "jsonValueT" },
+    "topWildMc":   { "type": "MatchCase", "pattern": "topWildPat", "body": "topNeg" },
+
+    "main":        { "type": "Match", "scrutinee": "arrayValue", "cases": ["arrTopMc", "topWildMc"] }
+  }
+}

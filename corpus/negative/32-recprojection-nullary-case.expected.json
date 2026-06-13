@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "RecursiveProjectionPathSelectsNullaryCase",
+  "notes": "A RecursiveProjection path Case step selects a nullary case (Nil, no payload type). There is no payload type to make the focus, so the path cannot continue or terminate on it."
+}

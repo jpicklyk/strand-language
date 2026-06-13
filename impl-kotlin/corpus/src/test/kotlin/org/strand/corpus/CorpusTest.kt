@@ -279,6 +279,21 @@ class CorpusTest {
             "N-047 Attempt Fs.Read fallback: TRY over Fs.Read on a path that cannot exist; the catchable filesystem-read IoFailure becomes Err({kind: \"filesystem-read\", detail: ...}) and the Match takes the Err branch, yielding the default bytes {} (0x7b7d). Asserts on the fallback value only — Err.detail is platform-varying."),
         Case("/corpus/87-attempt-retry-with-backoff.json", Value.BytesV("{}".toByteArray()),
             "N-047 Attempt retry-with-backoff (the canonical agent program): a Fixpoint counts down from 2, on each Err Time.Sleep(0)s and recurses with a deterministically-missing relative path; after the final attempt the give-up branch returns the default bytes {}. Hermetic (relative path, 0ms backoff) so it runs fast and offline."),
+
+        // N-048 RecursiveProjection (Q-053). The precise nested-μ shapes the
+        // corpus-66 splice cannot type: each constructs a value through a
+        // RecursiveProjection-typed ofType / paramType / pattern type, so the
+        // inner list / entry-list / child-list — which has no standalone
+        // meaning (its RecursiveSelf depth=1 reaches the outer μ) — is named
+        // by projecting the closed outer μ rather than by a bare open inner μ.
+        Case("/corpus/88-json-array-via-projection.json", Value.IntV(3),
+            "N-048: a true JSON value with a real List<JsonValue> array [1, 2]. jsonValueT = μ jv. JsonNumber(Int) | JsonArray(μ list. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil) — the array element type reaches the outer jv binder, so it is a list OF json values, the precision corpus 66's flat splice loses. A Fixpoint folds the inner list summing each element's number; [1,2] → 3. Every construction site and the fold's list paramType / pattern types name the inner list via RecursiveProjection(jsonValueT, [Case JsonArray, Unfold])."),
+        Case("/corpus/89-json-object-via-projection.json", Value.IntV(1),
+            "N-048: a true JSON object map {\"k\": 1} as a real entry list. jsonValueT = μ jv. JsonNumber(Int) | JsonObject(μ. Cons(head: {key: String, value: jv}, tail: <self>) | Nil) — a nested Product (the entry) inside a list inside the outer μ, every value reaching the outer jv. Matches the entries, reads the head entry's value field, and unwraps its JsonNumber to 1. Demonstrates the Product-inside-list-inside-μ shape resolving through projections (including a Field path step into the entry)."),
+        Case("/corpus/90-ast-child-list-via-projection.json", Value.IntV(5),
+            "N-048: an AST whose Node case carries a child LIST. astT = μ a. Lit(Int) | Node(μ. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil) — the child-list element type is the outer ast, so a Node holds a list of asts. Two mutually-recursive Fixpoints (eval an ast; sum a child list) — the inner list fold lexically captures the ast evaluator — recursively sum the Lit leaves of Node([Lit(2), Lit(3)]) → 5. The child-list type is named via RecursiveProjection(astT, [Case Node, Unfold])."),
+        Case("/corpus/91-element-tree-via-projection.json", Value.IntV(2),
+            "N-048: an HTML/SVG-style element tree — the canonical tree-of-lists shape Q-026/Q-047 deferred. elT = μ el. Text(String) | Element({tag: String, children: μ. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil}) — Element carries a tag plus a child list of elements. Counts the Text leaves of div([text \"a\", span([text \"b\"])]) → 2. The children list is reached by a three-step path RecursiveProjection(elT, [Case Element, Field children, Unfold]) — exercising all three selector kinds (Case, Field, Unfold) in one path."),
     )
 
     /**

@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "RecursiveProjectionFieldNotFound",
+  "notes": "A RecursiveProjection path Field step names a field the focus Product does not declare (selecting 'nope' from a product whose only field is 'x')."
+}

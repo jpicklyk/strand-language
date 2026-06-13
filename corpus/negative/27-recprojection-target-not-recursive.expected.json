@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "RecursiveProjectionTargetNotRecursive",
+  "notes": "A RecursiveProjection whose recursiveType resolves to a plain SumType, not a RecursiveType. The projection's anchor must be an actual mu so the verifier can enter its binder context."
+}

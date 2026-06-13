@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "RecursiveProjectionTargetNotClosed",
+  "notes": "A RecursiveProjection whose outer mu's body references a binder outside itself (a RecursiveSelf depth=1 with only one enclosing mu). An open mu would make the projection's hash context-dependent, so it is rejected — the type-position analogue of NodeRefTargetMustBeClosed."
+}

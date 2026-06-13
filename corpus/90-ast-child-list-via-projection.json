@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "intT":         { "type": "PrimitiveType", "kind": "Int" },
+
+    "childHeadSelf":{ "type": "RecursiveSelf", "depth": 1 },
+    "childHeadF":   { "type": "ProductTypeField", "name": "head", "fieldType": "childHeadSelf" },
+    "childTailSelf":{ "type": "RecursiveSelf", "depth": 0 },
+    "childTailF":   { "type": "ProductTypeField", "name": "tail", "fieldType": "childTailSelf" },
+    "childConsProd":{ "type": "ProductType", "fields": ["childHeadF", "childTailF"] },
+    "childConsCase":{ "type": "SumTypeCase", "name": "Cons", "caseType": "childConsProd" },
+    "childNilCase": { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "childListBody":{ "type": "SumType", "cases": ["childConsCase", "childNilCase"] },
+    "childListT":   { "type": "RecursiveType", "body": "childListBody" },
+
+    "litCase":      { "type": "SumTypeCase", "name": "Lit", "caseType": "intT" },
+    "nodeCase":     { "type": "SumTypeCase", "name": "Node", "caseType": "childListT" },
+    "astBody":      { "type": "SumType", "cases": ["litCase", "nodeCase"] },
+    "astT":         { "type": "RecursiveType", "body": "astBody" },
+
+    "projTop":      { "type": "RecursiveProjection", "recursiveType": "astT",
+                      "path": [ { "step": "Unfold" } ] },
+    "projChildren": { "type": "RecursiveProjection", "recursiveType": "astT",
+                      "path": [ { "step": "Case", "caseName": "Node" }, { "step": "Unfold" } ] },
+    "projChildCons":{ "type": "RecursiveProjection", "recursiveType": "astT",
+                      "path": [ { "step": "Case", "caseName": "Node" },
+                                { "step": "Unfold" },
+                                { "step": "Case", "caseName": "Cons" } ] },
+
+    "two":          { "type": "IntLit", "value": 2 },
+    "three":        { "type": "IntLit", "value": 3 },
+    "lit2":         { "type": "SumValue", "ofType": "projTop", "caseName": "Lit", "payload": "two" },
+    "lit3":         { "type": "SumValue", "ofType": "projTop", "caseName": "Lit", "payload": "three" },
+
+    "childNil":     { "type": "SumValue", "ofType": "projChildren", "caseName": "Nil", "payload": null },
+    "cons3HeadFv":  { "type": "ProductFieldValue", "fieldName": "head", "value": "lit3" },
+    "cons3TailFv":  { "type": "ProductFieldValue", "fieldName": "tail", "value": "childNil" },
+    "cons3Prod":    { "type": "ProductValue", "ofType": "projChildCons", "fields": ["cons3HeadFv", "cons3TailFv"] },
+    "cons3":         { "type": "SumValue", "ofType": "projChildren", "caseName": "Cons", "payload": "cons3Prod" },
+    "cons2HeadFv":  { "type": "ProductFieldValue", "fieldName": "head", "value": "lit2" },
+    "cons2TailFv":  { "type": "ProductFieldValue", "fieldName": "tail", "value": "cons3" },
+    "cons2Prod":    { "type": "ProductValue", "ofType": "projChildCons", "fields": ["cons2HeadFv", "cons2TailFv"] },
+    "childCons":     { "type": "SumValue", "ofType": "projChildren", "caseName": "Cons", "payload": "cons2Prod" },
+    "treeValue":    { "type": "SumValue", "ofType": "projTop", "caseName": "Node", "payload": "childCons" },
+
+    "sumListFnT":   { "type": "FunctionType", "parameters": ["projChildren"], "result": "intT" },
+
+    "sumSelfParam": { "type": "ParameterDecl", "name": "sumSelf", "paramType": "sumListFnT" },
+    "lstParam":     { "type": "ParameterDecl", "name": "lst", "paramType": "projChildren" },
+    "consPatVar":   { "type": "Pattern", "kind": "variable", "patternType": "projChildCons", "name": "c" },
+    "consPat":      { "type": "Pattern", "kind": "constructor", "patternType": "projChildren", "caseName": "Cons", "payloadPattern": "consPatVar" },
+    "cRef":         { "type": "VarRef", "binder": "consPatVar" },
+    "headAst":      { "type": "ProductFieldGet", "target": "cRef", "fieldName": "head" },
+    "tailLst":      { "type": "ProductFieldGet", "target": "cRef", "fieldName": "tail" },
+
+    "litPatVar":    { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+    "litPat":       { "type": "Pattern", "kind": "constructor", "patternType": "astT", "caseName": "Lit", "payloadPattern": "litPatVar" },
+    "litNRef":      { "type": "VarRef", "binder": "litPatVar" },
+    "litMc":        { "type": "MatchCase", "pattern": "litPat", "body": "litNRef" },
+    "headWildPat":  { "type": "Pattern", "kind": "wildcard", "patternType": "astT" },
+    "headZero":     { "type": "IntLit", "value": 0 },
+    "headWildMc":   { "type": "MatchCase", "pattern": "headWildPat", "body": "headZero" },
+    "headVal":      { "type": "Match", "scrutinee": "headAst", "cases": ["litMc", "headWildMc"] },
+
+    "sumSelfRef":   { "type": "VarRef", "binder": "sumSelfParam" },
+    "sumTail":      { "type": "Application", "function": "sumSelfRef", "arguments": ["tailLst"] },
+    "addFnT":       { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":        { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addFnT" },
+    "addCall":      { "type": "Application", "function": "addFn", "arguments": ["headVal", "sumTail"] },
+    "consSumMc":    { "type": "MatchCase", "pattern": "consPat", "body": "addCall" },
+
+    "nilPat":       { "type": "Pattern", "kind": "constructor", "patternType": "projChildren", "caseName": "Nil" },
+    "zeroL":        { "type": "IntLit", "value": 0 },
+    "nilSumMc":     { "type": "MatchCase", "pattern": "nilPat", "body": "zeroL" },
+    "lstRefBody":   { "type": "VarRef", "binder": "lstParam" },
+    "sumListMatch": { "type": "Match", "scrutinee": "lstRefBody", "cases": ["consSumMc", "nilSumMc"] },
+    "sumListLambda":{ "type": "Lambda", "parameters": ["sumSelfParam", "lstParam"], "body": "sumListMatch" },
+    "sumListFix":   { "type": "Fixpoint", "recursionType": "sumListFnT", "body": "sumListLambda" },
+
+    "nodePatVar":   { "type": "Pattern", "kind": "variable", "patternType": "projChildren", "name": "kids" },
+    "nodePat":      { "type": "Pattern", "kind": "constructor", "patternType": "astT", "caseName": "Node", "payloadPattern": "nodePatVar" },
+    "kidsRef":      { "type": "VarRef", "binder": "nodePatVar" },
+    "sumKidsApply": { "type": "Application", "function": "sumListFix", "arguments": ["kidsRef"] },
+    "nodeMc":       { "type": "MatchCase", "pattern": "nodePat", "body": "sumKidsApply" },
+
+    "topLitPatVar": { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "m" },
+    "topLitPat":    { "type": "Pattern", "kind": "constructor", "patternType": "astT", "caseName": "Lit", "payloadPattern": "topLitPatVar" },
+    "topLitRef":    { "type": "VarRef", "binder": "topLitPatVar" },
+    "topLitMc":     { "type": "MatchCase", "pattern": "topLitPat", "body": "topLitRef" },
+
+    "main":         { "type": "Match", "scrutinee": "treeValue", "cases": ["topLitMc", "nodeMc"] }
+  }
+}

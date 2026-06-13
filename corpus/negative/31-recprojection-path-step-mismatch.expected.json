@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "RecursiveProjectionPathStepMismatch",
+  "notes": "A RecursiveProjection path Field step applied to a Sum focus (the outer mu unfolds to a Sum, not a Product), so the step cannot be applied."
+}

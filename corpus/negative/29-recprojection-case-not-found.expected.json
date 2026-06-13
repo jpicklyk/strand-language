@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "RecursiveProjectionCaseNotFound",
+  "notes": "A RecursiveProjection path Case step names a case the focus Sum does not declare (selecting 'Nope' from a sum of A | B)."
+}

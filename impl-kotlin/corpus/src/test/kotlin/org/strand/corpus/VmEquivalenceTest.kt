@@ -148,6 +148,15 @@ class VmEquivalenceTest {
         Layer14Pair("85-attempt-ok-passthrough"),
         Layer14Pair("86-attempt-fs-read-fallback"),
         Layer14Pair("87-attempt-retry-with-backoff"),
+        // N-048 RecursiveProjection (Q-053). RecursiveProjection is a
+        // type-position node, erased before lowering — the lowerer never
+        // sees it. The value path (SumValue/ProductValue towers, Match,
+        // Fixpoint folds) lowers and evaluates identically on both engines,
+        // so interpreter==VM holds for the precise nested-μ shapes.
+        Layer14Pair("88-json-array-via-projection"),
+        Layer14Pair("89-json-object-via-projection"),
+        Layer14Pair("90-ast-child-list-via-projection"),
+        Layer14Pair("91-element-tree-via-projection"),
     )
 
     @TestFactory

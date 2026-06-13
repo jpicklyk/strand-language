@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "root": "v",
+  "nodes": {
+    "intT":  { "type": "PrimitiveType", "kind": "Int" },
+    "aCase": { "type": "SumTypeCase", "name": "A", "caseType": "intT" },
+    "body":  { "type": "SumType", "cases": ["aCase"] },
+    "muT":   { "type": "RecursiveType", "body": "body" },
+    "proj":  { "type": "RecursiveProjection", "recursiveType": "muT",
+               "path": [ { "step": "Field", "fieldName": "x" } ] },
+    "v":     { "type": "ProductValue", "ofType": "proj", "fields": [] }
+  }
+}

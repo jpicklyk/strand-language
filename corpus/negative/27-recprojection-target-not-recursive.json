@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "root": "v",
+  "nodes": {
+    "intT":  { "type": "PrimitiveType", "kind": "Int" },
+    "case":  { "type": "SumTypeCase", "name": "A", "caseType": "intT" },
+    "sumT":  { "type": "SumType", "cases": ["case"] },
+    "proj":  { "type": "RecursiveProjection", "recursiveType": "sumT",
+               "path": [ { "step": "Case", "caseName": "A" } ] },
+    "one":   { "type": "IntLit", "value": 1 },
+    "v":     { "type": "SumValue", "ofType": "proj", "caseName": "A", "payload": "one" }
+  }
+}

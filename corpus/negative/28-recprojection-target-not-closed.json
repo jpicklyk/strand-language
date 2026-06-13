@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "root": "v",
+  "nodes": {
+    "escape":  { "type": "RecursiveSelf", "depth": 1 },
+    "field":   { "type": "ProductTypeField", "name": "f", "fieldType": "escape" },
+    "prod":    { "type": "ProductType", "fields": ["field"] },
+    "case":    { "type": "SumTypeCase", "name": "A", "caseType": "prod" },
+    "body":    { "type": "SumType", "cases": ["case"] },
+    "openMu":  { "type": "RecursiveType", "body": "body" },
+    "proj":    { "type": "RecursiveProjection", "recursiveType": "openMu",
+                 "path": [ { "step": "Unfold" } ] },
+    "v":       { "type": "ProductValue", "ofType": "proj", "fields": [] }
+  }
+}

@@ -1163,7 +1163,15 @@ class Verifier(
             // sum type itself; for nested payload patterns it is the
             // case's caseType.)
             val patternType = resolveType(pattern.patternType, typeParams)
-            if (patternType != expectedType) {
+            // Equirecursive equality (N-048): a pattern may declare the
+            // folded `μ.T` while the scrutinee's type is the unfolded
+            // `[X↦μ.T]T` (the type a `[Unfold]` RecursiveProjection-typed
+            // value carries), or vice versa. These denote the same type, so
+            // accept a fold/unfold difference here just as `typesCompatible`
+            // does at value-flow sites. The relaxation only widens
+            // acceptance — a strict-equal pattern still passes — so no
+            // previously-accepted program changes.
+            if (patternType != expectedType && !equirecursivelyEqual(patternType, expectedType)) {
                 report(VerifyError.PatternTypeMismatch(
                     at = at,
                     scrutineeType = expectedType,
@@ -3426,24 +3434,30 @@ class Verifier(
             node: Node.RecursiveProjection,
             typeParams: Set<NodeId>,
         ): TypeExpr {
-            // 1. The recursiveType must resolve to a Recursive (the outer μ).
+            // 1. Closed-ness FIRST (before resolving the body). The outer μ
+            //    must reference no binder outside itself — the type-position
+            //    analogue of NodeRefTargetMustBeClosed: an open μ would make
+            //    the projection's hash context-dependent. The structural
+            //    closed-ness check runs on the source subgraph (a free
+            //    TypeParameter not bound within the μ, or a RecursiveSelf
+            //    whose depth escapes its own μ-nesting). Checking this first
+            //    is what lets the dedicated diagnostic fire for an open
+            //    target — `resolveType` on an open μ would otherwise abort
+            //    with the lower-level `UnboundRecursiveSelf` before this
+            //    rule could run. A non-Recursive target passes the
+            //    closed-ness walk vacuously (it has no escaping self) and is
+            //    caught as TargetNotRecursive in step 2.
+            if (!isClosedRecursiveTarget(node.recursiveType, typeParams)) {
+                report(VerifyError.RecursiveProjectionTargetNotClosed(
+                    at = id, recursiveType = node.recursiveType
+                ))
+                throw VerifyAbort()
+            }
+            // 2. The recursiveType must resolve to a Recursive (the outer μ).
             val resolvedTarget = resolveType(node.recursiveType, typeParams)
             if (resolvedTarget !is TypeExpr.Recursive) {
                 report(VerifyError.RecursiveProjectionTargetNotRecursive(
                     at = id, actualCategory = resolvedTarget::class.simpleName ?: "?"
-                ))
-                throw VerifyAbort()
-            }
-            // 2. Closed-ness: the outer μ must reference no binder outside
-            //    itself. The type-position analogue of
-            //    NodeRefTargetMustBeClosed: an open μ would make the
-            //    projection's hash context-dependent. The structural
-            //    closed-ness of `recursiveType` is checked on the source
-            //    subgraph (a free TypeParameter not bound within the μ, or a
-            //    RecursiveSelf whose depth escapes its own μ-nesting).
-            if (!isClosedRecursiveTarget(node.recursiveType, typeParams)) {
-                report(VerifyError.RecursiveProjectionTargetNotClosed(
-                    at = id, recursiveType = node.recursiveType
                 ))
                 throw VerifyAbort()
             }

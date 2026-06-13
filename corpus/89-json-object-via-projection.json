@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "intT":        { "type": "PrimitiveType", "kind": "Int" },
+    "strT":        { "type": "PrimitiveType", "kind": "String" },
+
+    "keyField":    { "type": "ProductTypeField", "name": "key", "fieldType": "strT" },
+    "valSelf":     { "type": "RecursiveSelf", "depth": 1 },
+    "valField":    { "type": "ProductTypeField", "name": "value", "fieldType": "valSelf" },
+    "entryProduct":{ "type": "ProductType", "fields": ["keyField", "valField"] },
+    "entryHeadF":  { "type": "ProductTypeField", "name": "head", "fieldType": "entryProduct" },
+    "entryTailSelf":{ "type": "RecursiveSelf", "depth": 0 },
+    "entryTailF":  { "type": "ProductTypeField", "name": "tail", "fieldType": "entryTailSelf" },
+    "entryConsProd":{ "type": "ProductType", "fields": ["entryHeadF", "entryTailF"] },
+    "entryConsCase":{ "type": "SumTypeCase", "name": "Cons", "caseType": "entryConsProd" },
+    "entryNilCase":{ "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "entryListBody":{ "type": "SumType", "cases": ["entryConsCase", "entryNilCase"] },
+    "entryListT":  { "type": "RecursiveType", "body": "entryListBody" },
+
+    "numCase":     { "type": "SumTypeCase", "name": "JsonNumber", "caseType": "intT" },
+    "objCase":     { "type": "SumTypeCase", "name": "JsonObject", "caseType": "entryListT" },
+    "jvBody":      { "type": "SumType", "cases": ["numCase", "objCase"] },
+    "jsonValueT":  { "type": "RecursiveType", "body": "jvBody" },
+
+    "projTop":     { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Unfold" } ] },
+    "projEntries": { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Case", "caseName": "JsonObject" }, { "step": "Unfold" } ] },
+    "projEntryCons":{ "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Case", "caseName": "JsonObject" },
+                               { "step": "Unfold" },
+                               { "step": "Case", "caseName": "Cons" } ] },
+    "projEntry":   { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Case", "caseName": "JsonObject" },
+                               { "step": "Unfold" },
+                               { "step": "Case", "caseName": "Cons" },
+                               { "step": "Field", "fieldName": "head" } ] },
+
+    "one":         { "type": "IntLit", "value": 1 },
+    "num1":        { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "one" },
+    "kStr":        { "type": "StringLit", "value": "k" },
+    "entryKeyFv":  { "type": "ProductFieldValue", "fieldName": "key", "value": "kStr" },
+    "entryValFv":  { "type": "ProductFieldValue", "fieldName": "value", "value": "num1" },
+    "entryProd":   { "type": "ProductValue", "ofType": "projEntry", "fields": ["entryKeyFv", "entryValFv"] },
+
+    "nilVal":      { "type": "SumValue", "ofType": "projEntries", "caseName": "Nil", "payload": null },
+    "consHeadFv":  { "type": "ProductFieldValue", "fieldName": "head", "value": "entryProd" },
+    "consTailFv":  { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "consProd":    { "type": "ProductValue", "ofType": "projEntryCons", "fields": ["consHeadFv", "consTailFv"] },
+    "entriesCons": { "type": "SumValue", "ofType": "projEntries", "caseName": "Cons", "payload": "consProd" },
+    "objectValue": { "type": "SumValue", "ofType": "projTop", "caseName": "JsonObject", "payload": "entriesCons" },
+
+    "entriesPatVar":{ "type": "Pattern", "kind": "variable", "patternType": "projEntries", "name": "es" },
+    "objPat":      { "type": "Pattern", "kind": "constructor", "patternType": "jsonValueT", "caseName": "JsonObject", "payloadPattern": "entriesPatVar" },
+    "esRef":       { "type": "VarRef", "binder": "entriesPatVar" },
+
+    "consPatVar":  { "type": "Pattern", "kind": "variable", "patternType": "projEntryCons", "name": "c" },
+    "entriesConsPat":{ "type": "Pattern", "kind": "constructor", "patternType": "projEntries", "caseName": "Cons", "payloadPattern": "consPatVar" },
+    "cRef":        { "type": "VarRef", "binder": "consPatVar" },
+    "headEntry":   { "type": "ProductFieldGet", "target": "cRef", "fieldName": "head" },
+    "entryVal":    { "type": "ProductFieldGet", "target": "headEntry", "fieldName": "value" },
+
+    "numPatVar":   { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+    "numPat":      { "type": "Pattern", "kind": "constructor", "patternType": "jsonValueT", "caseName": "JsonNumber", "payloadPattern": "numPatVar" },
+    "nRef":        { "type": "VarRef", "binder": "numPatVar" },
+    "numMc":       { "type": "MatchCase", "pattern": "numPat", "body": "nRef" },
+    "valWildPat":  { "type": "Pattern", "kind": "wildcard", "patternType": "jsonValueT" },
+    "negA":        { "type": "IntLit", "value": -1 },
+    "valWildMc":   { "type": "MatchCase", "pattern": "valWildPat", "body": "negA" },
+    "valMatch":    { "type": "Match", "scrutinee": "entryVal", "cases": ["numMc", "valWildMc"] },
+
+    "consMc":      { "type": "MatchCase", "pattern": "entriesConsPat", "body": "valMatch" },
+    "nilPat":      { "type": "Pattern", "kind": "constructor", "patternType": "projEntries", "caseName": "Nil" },
+    "negB":        { "type": "IntLit", "value": -2 },
+    "nilMc":       { "type": "MatchCase", "pattern": "nilPat", "body": "negB" },
+    "entriesMatch":{ "type": "Match", "scrutinee": "esRef", "cases": ["consMc", "nilMc"] },
+
+    "objMc":       { "type": "MatchCase", "pattern": "objPat", "body": "entriesMatch" },
+    "topWildPat":  { "type": "Pattern", "kind": "wildcard", "patternType": "jsonValueT" },
+    "negC":        { "type": "IntLit", "value": -3 },
+    "topWildMc":   { "type": "MatchCase", "pattern": "topWildPat", "body": "negC" },
+
+    "main":        { "type": "Match", "scrutinee": "objectValue", "cases": ["objMc", "topWildMc"] }
+  }
+}

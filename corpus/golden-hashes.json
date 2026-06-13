@@ -90,7 +90,11 @@
     "84-bridged-stream.json": "1eceec9b3160b03c746f594ce36896c81fb677d0386c06e29a061cc2a3a3803fb6",
     "85-attempt-ok-passthrough.json": "1e27ebf11e640f6dc37d86d5d0720199caa137ec4f65c8ed5054c4ee55e566d29c",
     "86-attempt-fs-read-fallback.json": "1e267099388b3e158065f8a563200e6045ad2cac4160ae92949c515c3fe2720ada",
-    "87-attempt-retry-with-backoff.json": "1ef7909a3cea1957b5d27894fb40e5e8da67333bbf62e7d4d30e7a8b90dc81917d"
+    "87-attempt-retry-with-backoff.json": "1ef7909a3cea1957b5d27894fb40e5e8da67333bbf62e7d4d30e7a8b90dc81917d",
+    "88-json-array-via-projection.json": "1e08556dc00e850b723f14be77af59503dd280077edd9d092ae0189552dd0eaea4",
+    "89-json-object-via-projection.json": "1e6913314e7e719333322b5c44e0e7d5d3792401f241350814cfcb2283531a5250",
+    "90-ast-child-list-via-projection.json": "1efae1bba260fcdd239fd3e3e06b990f0bc67be09ececb15ed3d40f3e6d2153fe5",
+    "91-element-tree-via-projection.json": "1e6388243ec19679c2d80ca183d178c50992a5155afcc2583c712ea5082fe2f879"
   },
   "layerA": {
     "layer-a/density-v1.5/21-fixpoint-factorial-if.layer-a": "1e40d2797fc4598b64192a4dc468df0573559982c6d27e8b705399d62c17658c13",

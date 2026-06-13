@@ -80,6 +80,10 @@ class CorpusHashingTest {
         "/corpus/85-attempt-ok-passthrough.json",
         "/corpus/86-attempt-fs-read-fallback.json",
         "/corpus/87-attempt-retry-with-backoff.json",
+        "/corpus/88-json-array-via-projection.json",
+        "/corpus/89-json-object-via-projection.json",
+        "/corpus/90-ast-child-list-via-projection.json",
+        "/corpus/91-element-tree-via-projection.json",
     )
 
     @TestFactory
