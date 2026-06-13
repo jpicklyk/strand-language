@@ -1,7 +1,7 @@
 # Familiar-Shaped Authoring Surface with Mechanical Lowering
 
 **Document:** `proposals/familiar-surface-lowering.md`
-**Status:** Draft proposal
+**Status:** Draft proposal — step 1 implemented 2026-06-13 (see § Implementation progress); steps 2–3 open
 **Date:** 2026-06-11
 **Concerns:** [Q-021](../open-questions.md#Q-021), [Q-034](../open-questions.md#Q-034), [Q-051](../open-questions.md#Q-051) (error-to-source mapping), [Q-057](../open-questions.md#Q-057), [`02-core-thesis.md`](../02-core-thesis.md) Claims 1–2 and § strongest-alternatives, [`decisions/ADR-001-graph-not-text.md`](../decisions/ADR-001-graph-not-text.md), [`decisions/ADR-002-no-human-projection.md`](../decisions/ADR-002-no-human-projection.md), [`01-prior-art.md`](../01-prior-art.md)
 **Scope:** large (multi-step shipping)
@@ -42,7 +42,8 @@ Layer A remains: it is the reverse-projection target (`strand translate`), the d
 | `type P = { a: T, b: U }` | ProductType; object literal → ProductValue; `.field` → ProductFieldGet |
 | `type S = { tag: "A", v: T } \| { tag: "B" }` | SumType with SumTypeCase per tag; construction → SumValue |
 | `match (x) { A(v) => e1, B => e2 }` | Match with case patterns (dialect keyword; lowered exactly as Layer A MAT) |
-| `uses Fs.Write(path)` clause | EffectDecl with projection-aligned instances at each application site |
+| `uses Filesystem.Write(path)` clause | EffectDecl with projection-aligned instances at each application site |
+| `declare function f(a: T): R from "strand-builtin:X" uses C(a)` | ForeignNode (N-020) + FunctionType with the declared effect row on both; a parameterized `uses` entry is a surface-level Q-039 projection instantiating call-site EffectDecls |
 | `capability { only: [...] } in { ... }` | CapabilityScope (N-036) |
 | `attempt { ... }` | Attempt (N-047), consumed with `match` on `Ok`/`Err` |
 | `machine M(state: S) on (e: Ev) { ... return [state2, [outs]] }` | StateMachine (N-027) with EventStreams and pure transition Lambda |
@@ -57,15 +58,16 @@ The right-hand column is the existing algebra; the proposal introduces no node c
 The Run 7 file-write task in Layer F:
 
 ```
-use prelude.{fsWrite, add}
+use prelude.{add}
 
-function main(): Int uses Fs.Write("/tmp/strand-eval.log") {
-  const n = fsWrite("/tmp/strand-eval.log")
-  return add(n, 1)
+declare function write(path: String): Int from "strand-builtin:Filesystem.Write" uses Filesystem.Write(path)
+
+function main(): Int uses Filesystem.Write("/tmp/strand-eval.log") {
+  return add(write("/tmp/strand-eval.log"), 1)
 }
 ```
 
-Lowering: the `use` line resolves both names through the prelude; the `uses` clause plus the prelude projection on `fsWrite` produce the EffectDecl with the path bound per Q-039; the body lowers to a Let over the application chain. The canonical graph is node-for-node the corpus file-write shape, and hashes identically to the same program authored through Layer A — the equality test in § 7 makes that the defining correctness property.
+Lowering: `main` is the program root expression; the `use` line resolves `add` through the prelude; the `declare function` lowers to the ForeignNode + FunctionType pair with the effect row on both, and its parameterized `uses` entry is a surface-level Q-039 projection — the call site receives an EffectDecl whose parameter references the same path node the application consumes. The canonical graph is node-for-node the corpus file-write shape, and hashes identically to the same program authored through Layer A — the equality test in § 7 makes that the defining correctness property, and this example ships verbatim as `evaluation/dynamic/tasks/09-file-write-capability/reference.familiar`. (The example as originally drafted called a single-argument prelude `fsWrite` and bound the result with `const`; the prelude `fsWrite` is the two-argument real `Fs.Write`, the Run 7 task pins the legacy single-argument `Filesystem.Write` stub reachable only through the `declare` form, and a `const` inside `main` lowers to a Let the corpus shape does not contain — see § Implementation progress.)
 
 ### 4.3 Error mapping
 
@@ -122,9 +124,26 @@ This proposal does not relitigate ADR-001 or ADR-002. The canonical form remains
 | `evaluation/dynamic/prompts/strand-familiar-system.md` (new) | dialect prompt: restrictions and the non-TypeScript constructs only | Medium |
 | `evaluation/dynamic/strand_eval/` | `familiar` language adapter for the A/B measurement | Small |
 
-**Order of work.** Step 1: pure subset plus effects and `attempt` (covers 15 of 22 tasks); cross-surface hash test from the first commit. Step 2: `machine`, `schema`/`invariant`, `handler`, `capability`. Step 3: the harness A/B measurement, which is the proposal's exit criterion in either direction.
+**Order of work.** Step 1: pure subset plus effects and `attempt` (covers 9 of 22 tasks; the original 15-of-22 estimate preceded the handler/schema census of the Run 7 task set); cross-surface hash test from the first commit. Step 2: `machine`, `schema`/`invariant`, `handler`, `capability` (the remaining 13 tasks). Step 3: the harness A/B measurement, which is the proposal's exit criterion in either direction.
 
 **Not in this slice.** Reverse projection, loop sugar, GBNF for the dialect (worthwhile, after the grammar settles), any Layer A removal.
+
+## Implementation progress
+
+**Step 1 landed 2026-06-13.** The pure subset plus effects and `attempt`: lexer, parser, and lowerer in `impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/familiar/`, the `Authoring.compile(text, surface = FAMILIAR)` entry returning the standard `CompileResult` with Layer F source lines, and `strand author --surface familiar` (a `.familiar` extension auto-selects the surface). The lowerer targets the Layer A document model, so Layer F runs the existing Elaborator and DagJsonEmitter unchanged and inherits prelude resolution (Q-063), registry-wide dotted builtins and `@auto` effect-instance synthesis (Q-060 density v5), and the Q-051 error-line annotation. Coverage: 9 of the 22 evaluation tasks carry `reference.familiar` files asserted root-hash-identical to their live `reference.layer-a` compiles by `FamiliarSurfaceHashEqualityTest` (01, 04, 05, 09, 11, 15, 16, 19, 22); the remaining 13 require step-2 constructs (2 machines, 5 schemas, 5 handlers, 1 capability block) and are recorded as explicit pending entries in the same test, which fails if a `reference.familiar` appears without promotion to the covered list. Of the § 7 scenarios, 1, 3, 4, 5, 6, 8, 9, and 10 are covered by tests; 2 (corpus sweep) and 7 (machine template) ride steps 2 and 3. Zero golden-hash impact — both surfaces compile live in the equality test.
+
+Grammar and lowering decisions taken in step 1 beyond the proposal text:
+
+- **`declare function` ambient form.** `declare function f(a: T): R from "strand-builtin:X" uses C(a)` declares a foreign target the implicit surface does not reach — needed because the Run 7 file-write tasks pin the legacy `Filesystem.Write` stub, which the density-v5 signature table deliberately excludes. The form lowers to the corpus convention for hand-declared builtins: the effect row appears on both the FunctionType and the ForeignNode (the prelude entries carry it on the ForeignNode only, which is a different — and differently hashing — shape). A parameterized `uses` entry binds category parameters to declared value parameters by name, a surface-level Q-039 projection; the lowerer plants an explicit EffectDecl at each call site referencing the same argument nodes the application consumes.
+- **§ 4.2 example revised.** The original example called a one-argument prelude `fsWrite` (the prelude's `fsWrite` is the two-argument real `Fs.Write`) and bound the call with a `const`, which lowers to a Let absent from the corpus file-write shape. The revised example is the declare-form program above and ships verbatim as the task-09 reference.
+- **Effect-instance placement.** A call site receives EffectDecls in exactly two cases: a declare-form callee whose `uses` entry is parameterized (the surface projection), or a prelude/dotted callee carrying a Q-039 projection for a parameterized category when the governing function's `uses` entry for that category is itself parameterized — lowered as the `@auto` marker so AutoEffectSynthesis builds the instances. Bare `uses` entries declare the category on the Lambda effect row only, matching the corpus convention that parameterless-category calls carry no instances.
+- **Effect rows are always explicit.** A `function` without a `uses` clause lowers to a Lambda with an empty effects list rather than an absent one, so the always-on Elaborator cannot infer the omission away and scenario 5 surfaces as the standard verifier UncoveredEffects. Arrow functions are pure by construction (empty row; no `uses` syntax).
+- **Sum surface.** Construction is the tagged object literal (`{ tag: "Cons", head: h, tail: t }`); a case with a single payload field collapses to a bare `caseType` (producing the `Some(Int)`-shaped corpus graphs), a multi-field case lowers to a payload product, and a direct self-reference produces the RecursiveType + RecursiveSelf inner/outer product split with outer products emitted lazily at use sites. One-field payloads that must be genuine products are inexpressible in step 1. Indirect (mutually) recursive aliases are rejected with a hint.
+- **`main` lowers to the root expression**, not a zero-parameter Lambda — the evaluation and corpus references are bare-expression roots. A top-level `const` is a shared document node (graph sharing, the corpus convention); a `const` inside a function body is a Let. Mutual recursion between functions is rejected with a hint (direct self-recursion lambda-lifts to Fixpoint).
+- **Dotted-name resolution order.** A dotted callee resolves against the density-v5 signature table first, then against a registry-target index of the prelude (so `Math.Abs(x)` lowers to the reserved `abs` without an import); excluded registry names are rejected with a hint naming the `declare` form.
+- **Operators, `if`/ternary, generics, lowercase TS primitive names (`number`/`string`/`boolean`), block-bodied arrows, and statement-position TypeScript habits** reject with per-construct corrective hints (§ 3's parse-error-with-hint contract), including a per-operator hint naming the prelude builtin to call.
+
+**Remaining.** Step 2: the `machine`, `schema`/`invariant`, `handler`, and `capability` forms (the 13 pending tasks, scenario 7, and the scenario-2 corpus sweep). Step 3: the dialect system prompt, the `familiar` harness adapter, and the Q-021 A/B measurement that is the proposal's exit criterion in either direction.
 
 ## References
 
