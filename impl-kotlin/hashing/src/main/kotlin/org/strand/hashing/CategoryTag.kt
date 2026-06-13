@@ -60,6 +60,7 @@ value class CategoryTag(val value: Int) {
         val ForallType = CategoryTag(35)
         val RecursiveType = CategoryTag(41)
         val RecursiveSelf = CategoryTag(42)
+        val RecursiveProjection = CategoryTag(48)
 
         // Functions and binding (N-014..N-018, N-034)
         val Lambda = CategoryTag(14)

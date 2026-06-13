@@ -242,6 +242,7 @@ class SchemaChecker(
             is Node.ProductFieldValue,
             is Node.RecursiveType,
             is Node.RecursiveSelf,
+            is Node.RecursiveProjection,
             is Node.Schema,
             is Node.Invariant,
             is Node.ToolDef,

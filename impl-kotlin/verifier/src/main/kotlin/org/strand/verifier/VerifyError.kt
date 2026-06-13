@@ -517,6 +517,85 @@ sealed class VerifyError {
         }
     }
 
+    // ----- Recursive projections (N-048) -----
+
+    /**
+     * A `RecursiveProjection.recursiveType` does not resolve to a
+     * `RecursiveType` (`TypeExpr.Recursive`). A projection's anchor must be
+     * an actual μ — its whole purpose is to enter that μ's binder context
+     * before walking the path. [actualCategory] names what the target
+     * resolved to instead.
+     */
+    data class RecursiveProjectionTargetNotRecursive(
+        override val at: NodeId,
+        val actualCategory: String,
+    ) : VerifyError()
+
+    /**
+     * A `RecursiveProjection.recursiveType` resolves to a `Recursive` whose
+     * body references a binder outside its own μ-nesting — a free
+     * `RecursiveSelf` whose depth escapes the μ, or a free `TypeParameter`.
+     * The projection's only type edge is this outer μ, so the projection is
+     * closed iff the μ is closed; an open μ would make the projection's hash
+     * context-dependent, breaking the one-canonical-interpretation rule.
+     * This is the type-position analogue of [NodeRefTargetMustBeClosed].
+     */
+    data class RecursiveProjectionTargetNotClosed(
+        override val at: NodeId,
+        val recursiveType: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A `RecursiveProjection.path` step cannot be applied to the current
+     * focus type: an `Unfold` on a non-`Recursive` focus, a `Case` on a
+     * non-`Sum` focus (after the implicit unfold), or a `Field` on a
+     * non-`Product` focus. [stepIndex] is the offending step's position;
+     * [step] renders the step; [focusCategory] names what the focus was.
+     */
+    data class RecursiveProjectionPathStepMismatch(
+        override val at: NodeId,
+        val stepIndex: Int,
+        val step: String,
+        val focusCategory: String,
+    ) : VerifyError()
+
+    /**
+     * A `RecursiveProjection.path` `Case` step names a case the focus Sum
+     * does not declare. [stepIndex] is the step's position; [caseName] is
+     * the requested case; [declared] is the set of case names available.
+     */
+    data class RecursiveProjectionCaseNotFound(
+        override val at: NodeId,
+        val stepIndex: Int,
+        val caseName: String,
+        val declared: Set<String>,
+    ) : VerifyError()
+
+    /**
+     * A `RecursiveProjection.path` `Field` step names a field the focus
+     * Product does not declare. [stepIndex] is the step's position;
+     * [fieldName] is the requested field; [declared] is the set of field
+     * names available.
+     */
+    data class RecursiveProjectionFieldNotFound(
+        override val at: NodeId,
+        val stepIndex: Int,
+        val fieldName: String,
+        val declared: Set<String>,
+    ) : VerifyError()
+
+    /**
+     * A `RecursiveProjection.path` `Case` step selects a nullary case (one
+     * with no payload type). There is no payload type to make the focus, so
+     * the path cannot continue or terminate on it. [stepIndex] is the step's
+     * position; [caseName] is the nullary case selected.
+     */
+    data class RecursiveProjectionPathSelectsNullaryCase(
+        override val at: NodeId,
+        val stepIndex: Int,
+        val caseName: String,
+    ) : VerifyError()
+
     /**
      * A `RecursiveType`'s body is not contractive: it is, or reduces to,
      * a `RecursiveSelf` reference without traversing any type constructor.
@@ -1162,6 +1241,7 @@ internal fun categoryName(node: Node?): String = when (node) {
     is Node.SumValue -> "SumValue"
     is Node.RecursiveType -> "RecursiveType"
     is Node.RecursiveSelf -> "RecursiveSelf"
+    is Node.RecursiveProjection -> "RecursiveProjection"
     is Node.Handler -> "Handler"
     is Node.StateMachine -> "StateMachine"
     is Node.EventStream -> "EventStream"

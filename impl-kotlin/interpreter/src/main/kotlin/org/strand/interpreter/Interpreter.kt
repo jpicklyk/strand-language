@@ -540,6 +540,7 @@ class Interpreter(
             is Node.ProductFieldValue,
             is Node.RecursiveType,
             is Node.RecursiveSelf,
+            is Node.RecursiveProjection,
             is Node.StateMachine,
             is Node.EventStream,
             is Node.Transition,

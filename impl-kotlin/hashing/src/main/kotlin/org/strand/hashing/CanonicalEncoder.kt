@@ -7,6 +7,7 @@ import org.strand.core.NodeId
 import org.strand.core.NodeStore
 import org.strand.core.OverflowPolicy
 import org.strand.core.ProjectionSource
+import org.strand.core.ProjectionStep
 import org.strand.core.RawNodeStore
 import org.strand.core.StoredNode
 
@@ -234,6 +235,7 @@ internal class CanonicalEncoder(
 
         is Node.RecursiveType -> encodeRecursiveType(node, stack)
         is Node.RecursiveSelf -> encodeRecursiveSelf(node)
+        is Node.RecursiveProjection -> encodeRecursiveProjection(node, stack)
 
         is Node.Handler -> encodeHandler(node, stack)
 
@@ -359,6 +361,44 @@ internal class CanonicalEncoder(
         }
         return encodeWithTag(CategoryTag.RecursiveSelf, listOf(
             CanonicalCbor.encodeUint(depth)
+        ))
+    }
+
+    private fun encodeRecursiveProjection(node: Node.RecursiveProjection, stack: BinderStack): ByteArray {
+        // [tag=48, H(recursiveType), array(step_1, ..., step_n)]
+        //
+        // RecursiveProjection introduces no binder of its own — the binder
+        // motion is entirely the verifier-resolver's, driven by the Unfold
+        // steps — so `recursiveType` hashes in the surrounding context
+        // exactly like any other H(c) reference. (It is required to be a
+        // closed RecursiveType, so its hash is in fact context-independent.)
+        //
+        // The path is POSITIONAL: order is semantically load-bearing
+        // (`Case` then `Field` differs from `Field` then `Case`), so it is
+        // NOT hash-sorted — it is encoded in declaration order, like
+        // Application.arguments and Match.cases. Each step is nested CBOR:
+        //   Case   -> array(uint(0), bytes(utf8(caseName)))
+        //   Field  -> array(uint(1), bytes(utf8(fieldName)))
+        //   Unfold -> array(uint(2))
+        // The selector-tag discriminator (0/1/2) is frozen on assignment.
+        val stepEncodings = node.path.map { step -> encodeProjectionStep(step) }
+        return encodeWithTag(CategoryTag.RecursiveProjection, listOf(
+            CanonicalCbor.encodeBytes(hash(node.recursiveType, stack)),
+            CanonicalCbor.encodeArray(stepEncodings),
+        ))
+    }
+
+    private fun encodeProjectionStep(step: ProjectionStep): ByteArray = when (step) {
+        is ProjectionStep.Case -> CanonicalCbor.encodeArray(listOf(
+            CanonicalCbor.encodeUint(0L),
+            CanonicalCbor.encodeBytes(step.caseName.toByteArray(Charsets.UTF_8)),
+        ))
+        is ProjectionStep.Field -> CanonicalCbor.encodeArray(listOf(
+            CanonicalCbor.encodeUint(1L),
+            CanonicalCbor.encodeBytes(step.fieldName.toByteArray(Charsets.UTF_8)),
+        ))
+        ProjectionStep.Unfold -> CanonicalCbor.encodeArray(listOf(
+            CanonicalCbor.encodeUint(2L),
         ))
     }
 

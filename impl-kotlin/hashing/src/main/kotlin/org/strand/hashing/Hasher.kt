@@ -332,6 +332,16 @@ class Hasher(private val rawStore: RawNodeStore) {
             }
             is Node.RecursiveSelf -> Unit  // intrinsic — no standalone hash entry
 
+            is Node.RecursiveProjection -> {
+                // N-048: closed front-door node with a standalone hash. Its
+                // only NodeId child is the outer μ (a RecursiveType); the
+                // `path` steps are a content field with no NodeIds. The
+                // recursiveType is hashed in the SURROUNDING stack (the
+                // projection introduces no binder of its own; the Unfold
+                // binder motion is the resolver's, not the encoder's).
+                walk(node.recursiveType, stack, out)
+            }
+
             is Node.Handler -> {
                 walk(node.intercept, stack, out)
                 walk(node.handle, stack, out)

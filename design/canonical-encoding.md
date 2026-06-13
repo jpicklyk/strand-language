@@ -2,7 +2,7 @@
 
 **Document:** `design/canonical-encoding.md`
 **Status:** Normative specification, extracted from and continuously validated against the Kotlin reference implementation
-**Last revised:** 2026-06-13 (Epoch log section added per [Q-062](../open-questions.md#Q-062): the pre-1.0 epoch policy and the epoch-1 baseline entry. No encoding rule changed and no hash moved — the addition names the encoding this document already specifies as epoch 1 and states how breaking changes are batched before the stability point.) 2026-06-10 (initial version — specifies the byte-level canonical encoding and hash construction implemented by `impl-kotlin/hashing`, precisely enough that a second implementation can reproduce identical hashes without reading the Kotlin source)
+**Last revised:** 2026-06-13 (N-048 RecursiveProjection tag 48 specified per [Q-053](../open-questions.md#Q-053) / [`proposals/implemented/nested-recursive-types.md`](../proposals/implemented/nested-recursive-types.md): a new closed type-position node naming a component position inside a closed outer μ. Added additively — tag 48 is a fresh category, so no existing tag's layout changed and no existing hash moved; the encoding stays epoch 1. The chartered epoch-2 normalization and the epoch bump are a separate pass.) 2026-06-13 (Epoch log section added per [Q-062](../open-questions.md#Q-062): the pre-1.0 epoch policy and the epoch-1 baseline entry. No encoding rule changed and no hash moved — the addition names the encoding this document already specifies as epoch 1 and states how breaking changes are batched before the stability point.) 2026-06-10 (initial version — specifies the byte-level canonical encoding and hash construction implemented by `impl-kotlin/hashing`, precisely enough that a second implementation can reproduce identical hashes without reading the Kotlin source)
 
 ## Summary
 
@@ -142,12 +142,13 @@ Tags are stable numeric identifiers drawn from the N-NNN registry; once publishe
 | 45 | ResponseSchemaSpec | N-045 | |
 | 46 | ModuleManifest | N-046 | |
 | 47 | Attempt | N-047 | single child (the body), no content fields, introduces no binder |
+| 48 | RecursiveProjection | N-048 | a closed type-position node: one child (the outer μ) plus a positional path of Case/Field/Unfold selector steps |
 
 Values 30 and 31 carry no assignment: N-030 Name and N-031 Provenance have no canonical encoding of their own. A structural Name's UTF-8 content is inlined into its parent's encoding (§ Hash construction of `node-algebra.md`), and Provenance is metadata, excluded entirely.
 
 ## Set-like and positional edge lists {#sets-and-lists}
 
-Edge lists fall into three ordering disciplines. *Positional* lists encode in declaration order because order is semantically significant: `FunctionType.parameters`, `Lambda` parameter types, `Application.arguments` and `typeArguments`, `EffectCategory.parameters`, `EffectDecl.parameters`, `Match.cases` (first match wins), `StateMachine.inputStreams` and `outputStreams` (stream index is the runtime wiring key), `ModuleManifest.exports`, the effect-projection list (entry *i* covers effect *i*), and each projection's `sources` (entry *i* covers category parameter *i*).
+Edge lists fall into three ordering disciplines. *Positional* lists encode in declaration order because order is semantically significant: `FunctionType.parameters`, `Lambda` parameter types, `Application.arguments` and `typeArguments`, `EffectCategory.parameters`, `EffectDecl.parameters`, `Match.cases` (first match wins), `StateMachine.inputStreams` and `outputStreams` (stream index is the runtime wiring key), `ModuleManifest.exports`, the effect-projection list (entry *i* covers effect *i*), each projection's `sources` (entry *i* covers category parameter *i*), and the `RecursiveProjection.path` selector list (a `Case` then a `Field` selects a different position than a `Field` then a `Case`).
 
 *Hash-sorted sets* encode each element's 33-byte multihash and sort the hashes as byte strings, lexicographically by unsigned byte value, so declaration order does not affect identity: `Lambda.effects`, `FunctionType.effects`, `ForeignNode.effects`, `StateMachine.effects`, `Application.effectInstances`, `CapabilityScope.capabilities`, `Schema.invariants`, and each manifest export's `declaredEffects`. The encoder sorts but does not deduplicate; a duplicate entry appears twice (the verifier owns rejecting such graphs).
 
@@ -183,6 +184,17 @@ FloatLit encodes the *raw* bit pattern (`Double.toRawBits`), not a CBOR float: `
 | ForallType (35) | `uint(arity)` — the count of `typeParameters` — then `T(body)` with a frame of those parameters pushed |
 | RecursiveType (41) | `T(body)` with the recursive-binder counter incremented for the duration of the body |
 | RecursiveSelf (42) | `uint(depth)`, or the sentinel (§ Unbound sentinels) when out of range |
+| RecursiveProjection (48) | `H(recursiveType)` — the closed outer μ, a hash reference in the surrounding context — then `array(step_1, ..., step_n)`, the positional path |
+
+RecursiveProjection (48) names a component position inside a closed outer μ (N-048, [`proposals/implemented/nested-recursive-types.md`](../proposals/implemented/nested-recursive-types.md)). It introduces no binder of its own: the binder motion that resolves an inner `RecursiveSelf` is the verifier-resolver's, driven by the `Unfold` path steps, so `recursiveType` is hashed in the surrounding context exactly like any other `H(c)` reference. Because `recursiveType` is required to be a closed RecursiveType, its hash is context-independent and the projection therefore has one canonical hash regardless of where it appears — the type-position analogue of the NodeRef closed-target rule. The `path` is positional (§ Set-like and positional edge lists) and so is not sorted. Each step is well-formed nested CBOR:
+
+```
+step = array( uint(0), bytes(utf8(caseName)) )    -- Case
+     | array( uint(1), bytes(utf8(fieldName)) )    -- Field
+     | array( uint(2) )                            -- Unfold
+```
+
+The selector-tag discriminator (`Case 0, Field 1, Unfold 2`, § Discriminators) is frozen on assignment. Two RecursiveProjection nodes are the same node iff they have hash-identical `recursiveType` and identical `path`; reordering the path changes the hash. RecursiveProjection's tag 48 was added additively — a fresh category that no earlier hash depended on — and the encoding stays epoch 1; the chartered epoch-2 normalization of the gated optional fields and the epoch bump are a separate pass (§ Epoch log).
 
 ForallType and TypeAbstraction encode only the *arity* of their binder list; the TypeParameter nodes themselves contribute nothing (their names and bounds are discarded), which is what makes alpha-equivalent quantified types hash identically. The bound-TypeParameter reference form under tag 13 is `uint(depth) uint(index)` and appears only inline at `T(...)` positions.
 
@@ -319,6 +331,7 @@ All discriminator assignments are frozen; extending an enumeration appends new v
 | ConsumerMode (EventStream) | Single 0, Broadcast 1 |
 | Pattern kind | LiteralPattern 0, VariablePattern 1, WildcardPattern 2, ConstructorPattern 3 |
 | ProjectionSource tag | ArgRef 0, LiteralNode 1 |
+| RecursiveProjection step tag | Case 0 (followed by `bytes(utf8(caseName))`), Field 1 (followed by `bytes(utf8(fieldName))`), Unfold 2 (no payload) |
 | Multihash prefix | BLAKE3-256 `0x1e` (32-byte digest); SHA-256 reserved per ADR-003, unimplemented |
 
 ## Worked example {#worked-example}
@@ -368,6 +381,22 @@ The Lambda itself is tag 14 followed by the parameter-type array (one element, a
 
 Renaming `x` changes nothing above — the name appears nowhere — which is alpha-equivalence by construction. Had the parameter type been a TypeParameter bound by an enclosing TypeAbstraction, the array element would instead be the six inline bytes `00 00 00 0d 00 00` (tag 13, depth 0, index 0) with no byte-string header.
 
+**A RecursiveProjection path.** The list-type projection from the nested-recursive-types worked example — `RecursiveProjection(recursiveType = jsonValueT, path = [Case("JsonArray"), Unfold])`, selecting the inner list type inside the outer JSON-value μ — encodes as tag 48, the outer μ's hash reference, then the two-element path array:
+
+```
+00 00 00 30   category tag 48, big-endian
+58 21 <H(jsonValueT)>   hash reference: byte string of the 33-byte outer-μ multihash
+82            CBOR array header, 2 path steps
+  82          step 1: CBOR array header, 2 elements
+  00          uint(0) — Case
+  49          CBOR byte string header, length 9
+  4a 73 6f 6e 41 72 72 61 79   the 9 UTF-8 bytes of "JsonArray"
+  81          step 2: CBOR array header, 1 element
+  02          uint(2) — Unfold
+```
+
+The path is encoded in declaration order; the same two steps reversed (`[Unfold, Case("JsonArray")]`) would emit a different byte sequence and hence a different hash, which is what makes the projection select one canonical position. `CanonicalEncodingSpecTest` asserts this trace verbatim.
+
 ## Conformance {#conformance}
 
 [`corpus/golden-hashes.json`](../corpus/golden-hashes.json) commits the root hash of every corpus program (including deliberately verifier-failing fixtures, since hashing precedes verification) and of every Layer A fixture's compiled canonical form. A second implementation conforms when it reproduces every committed hash from the same inputs; the reference implementation's `CorpusGoldenHashTest` asserts the file continuously and enforces that corpus and goldens stay in bidirectional sync, and `CanonicalEncodingSpecTest` asserts the byte-level traces stated in this document. The regeneration procedure for legitimate corpus changes is documented in [`corpus/README.md`](../corpus/README.md); any hash change outside such a regeneration is a compatibility break. Before the declared stability point, intentional breaking changes to the encoding itself are governed by the epoch policy (§ Epoch log).
@@ -392,6 +421,7 @@ The epoch-2 charter — the [Q-053](../open-questions.md#Q-053) nested-recursive
 - [`corpus/golden-hashes.json`](../corpus/golden-hashes.json) — committed conformance vectors for every corpus program
 - [`corpus/README.md`](../corpus/README.md) — golden-vector regeneration procedure
 - [`proposals/implemented/encoding-epochs.md`](../proposals/implemented/encoding-epochs.md) — the Q-062 proposal defining the epoch policy and the epoch-2 charter
+- [`proposals/implemented/nested-recursive-types.md`](../proposals/implemented/nested-recursive-types.md) — the Q-053 proposal defining N-048 RecursiveProjection and its tag-48 encoding
 - [`open-questions.md`](../open-questions.md) — Q-024, Q-049, Q-053, Q-062
 
 **Incoming references:**

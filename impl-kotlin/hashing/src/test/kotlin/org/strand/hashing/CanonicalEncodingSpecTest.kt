@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test
 import org.strand.core.Node
 import org.strand.core.NodeStore
 import org.strand.core.Primitive
+import org.strand.core.ProjectionStep
 import org.strand.core.StreamKind
 
 /**
@@ -129,6 +130,63 @@ class CanonicalEncodingSpecTest {
             "1ec30a2eadd3a4e604aeecb08d48c115207a4d3484f70f7360e5643de34c48e7c3",
             hex(multihash(actual)),
         )
+    }
+
+    // ----- Trace 2b: RecursiveProjection (tag 48, positional path) -----
+
+    @Test
+    fun `RecursiveProjection path - tag 48 byte trace and path positionality`() {
+        // A minimal closed outer μ standing in for jsonValueT:
+        //   μ jv. JsonArray( μ list. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil )
+        // We only need it to be a closed RecursiveType for the encoding trace;
+        // the verifier's resolution is exercised separately in VerifierTest.
+        val store = NodeStore()
+        val selfOuter = store.add(Node.RecursiveSelf(depth = 1))
+        val selfInner = store.add(Node.RecursiveSelf(depth = 0))
+        val headField = store.add(Node.ProductTypeField("head", selfOuter))
+        val tailField = store.add(Node.ProductTypeField("tail", selfInner))
+        val consProduct = store.add(Node.ProductType(listOf(headField, tailField)))
+        val consCase = store.add(Node.SumTypeCase("Cons", consProduct))
+        val nilCase = store.add(Node.SumTypeCase("Nil", null))
+        val listBody = store.add(Node.SumType(listOf(consCase, nilCase)))
+        val innerListT = store.add(Node.RecursiveType(listBody))
+        val arrayCase = store.add(Node.SumTypeCase("JsonArray", innerListT))
+        val jvBody = store.add(Node.SumType(listOf(arrayCase)))
+        val jsonValueT = store.add(Node.RecursiveType(jvBody))
+
+        val proj = store.add(Node.RecursiveProjection(
+            recursiveType = jsonValueT,
+            path = listOf(ProjectionStep.Case("JsonArray"), ProjectionStep.Unfold),
+        ))
+        val encoder = newEncoder(store)
+
+        // The outer μ hashes in the surrounding (empty) context — the
+        // projection introduces no binder, so H(jsonValueT) is an ordinary
+        // hash reference.
+        val outerHash = multihash(encoder.encode(jsonValueT))
+
+        // Spec § Worked example "A RecursiveProjection path":
+        //   tag 48, hashRef(outer), array(2)[ array(2)[uint(0), bytes("JsonArray")], array(1)[uint(2)] ]
+        val jsonArrayBytes = "JsonArray".toByteArray(Charsets.UTF_8)  // 9 bytes
+        val expected = tag(48) +
+            hashRef(outerHash) +
+            byteArrayOf(0x82.toByte()) +                                  // path array, 2 steps
+            byteArrayOf(0x82.toByte(), 0x00, 0x49) + jsonArrayBytes +     // Case: array(2), uint(0), bytes(9)…
+            byteArrayOf(0x81.toByte(), 0x02)                             // Unfold: array(1), uint(2)
+        val actual = encoder.encode(proj)
+        assertArrayEquals(expected, actual) { "RecursiveProjection encoding: ${hex(actual)}" }
+
+        // The selector bytes spell out the spec trace verbatim.
+        assertEquals("4a736f6e4172726179", hex(jsonArrayBytes))
+
+        // Positionality: the same two steps reversed hash differently.
+        val reversed = store.add(Node.RecursiveProjection(
+            recursiveType = jsonValueT,
+            path = listOf(ProjectionStep.Unfold, ProjectionStep.Case("JsonArray")),
+        ))
+        org.junit.jupiter.api.Assertions.assertFalse(
+            encoder.encode(proj).contentEquals(encoder.encode(reversed))
+        ) { "reordered path must produce a different encoding" }
     }
 
     // ----- Trace 3: TypeAbstraction (inline bound-TypeParameter form) -----

@@ -7,6 +7,7 @@ import org.strand.core.NodeId
 import org.strand.core.NodeStore
 import org.strand.core.Primitive
 import org.strand.core.ProjectionSource
+import org.strand.core.ProjectionStep
 import org.strand.core.translateNodeIds
 
 /**
@@ -313,6 +314,50 @@ class Verifier(
             // Plain-T-into-SchemaType direction (and SchemaType-into-
             // SchemaType is the `expected == actual` branch above).
             if (expected is TypeExpr.SchemaType && expected.valueType == actual) return true
+            // N-048: equirecursive equality at value-flow sites. A
+            // RecursiveProjection resolves a selected position to a focus
+            // that is sometimes a folded `μ.T` and sometimes its one-step
+            // unfold (a `[Unfold]` projection yields the unfolded Sum; a
+            // field reached through an unfold yields the substituted-in
+            // folded `μ.T`). `μ.T` and `[X↦μ.T]T` are the SAME type under
+            // Strand's equirecursive semantics, so a value of one flows into
+            // a position typed as the other. The relation folds/unfolds at
+            // most one Recursive per side before retrying structural
+            // equality, which is sufficient because the focus and the value
+            // type differ by at most one fold. (Strict `==` is still used at
+            // the structural-equivalence sites — Match divergence, Fixpoint
+            // shape, Handler/state-machine signatures — that compare on
+            // `TypeExpr` directly; this relaxation is only at value-flow.)
+            if (equirecursivelyEqual(expected, actual)) return true
+            return false
+        }
+
+        /**
+         * Equirecursive equality up to a single fold/unfold on either side.
+         * Returns true when [a] and [b] denote the same equirecursive type:
+         * structurally equal, or equal after unfolding a `Recursive` on one
+         * side once. The `seen` set guards against revisiting a `(Recursive,
+         * other)` pair so the relation terminates on cyclic μ.
+         */
+        private fun equirecursivelyEqual(
+            a: TypeExpr,
+            b: TypeExpr,
+            seen: MutableSet<Pair<TypeExpr, TypeExpr>> = HashSet(),
+        ): Boolean {
+            if (a == b) return true
+            // Strip a SchemaType wrapper on either side to its valueType —
+            // value-flow compatibility already permits T ↔ Schema<T>.
+            if (a is TypeExpr.SchemaType) return equirecursivelyEqual(a.valueType, b, seen)
+            if (b is TypeExpr.SchemaType) return equirecursivelyEqual(a, b.valueType, seen)
+            // Unfold a Recursive on either side once and retry.
+            if (a is TypeExpr.Recursive) {
+                if (!seen.add(a to b)) return false
+                return equirecursivelyEqual(unfoldRecursive(a), b, seen)
+            }
+            if (b is TypeExpr.Recursive) {
+                if (!seen.add(a to b)) return false
+                return equirecursivelyEqual(a, unfoldRecursive(b), seen)
+            }
             return false
         }
 
@@ -573,6 +618,7 @@ class Verifier(
                 is Node.ProductFieldValue,
                 is Node.RecursiveType,
                 is Node.RecursiveSelf,
+                is Node.RecursiveProjection,
                 is Node.Schema,
                 is Node.Invariant ->
                     reportFatal(VerifyError.CategoryMismatch(
@@ -1839,7 +1885,7 @@ class Verifier(
                     is Node.SumType, is Node.SumTypeCase, is Node.FunctionType,
                     is Node.TypeParameter, is Node.ForallType, is Node.ParameterDecl,
                     is Node.EffectCategory, is Node.EffectDecl, is Node.Pattern,
-                    is Node.RecursiveType, is Node.RecursiveSelf,
+                    is Node.RecursiveType, is Node.RecursiveSelf, is Node.RecursiveProjection,
                     is Node.StateMachine, is Node.EventStream, is Node.Transition,
                     is Node.Schema, is Node.Invariant, is Node.ToolDef,
                     is Node.ResponseSchemaSpec,
@@ -3139,6 +3185,7 @@ class Verifier(
                     // List<JsonValue> binder.
                     TypeExpr.RecursiveSelf(depth = node.depth)
                 }
+                is Node.RecursiveProjection -> resolveRecursiveProjection(typeId, node, typeParams)
                 is Node.Schema -> resolveSchema(typeId, node, typeParams)
                 else -> {
                     report(VerifyError.CategoryMismatch(
@@ -3346,6 +3393,179 @@ class Verifier(
                 valueType = substituteSelf(t.valueType, target, currentDepth),
                 invariants = t.invariants,
             )
+        }
+
+        /**
+         * Resolve a [Node.RecursiveProjection] (N-048,
+         * `proposals/implemented/nested-recursive-types.md` § 5) into the
+         * [TypeExpr] of the component it selects, with the outer μ's binder
+         * context already substituted in.
+         *
+         * The mechanism: the projection's `recursiveType` must resolve to a
+         * closed `TypeExpr.Recursive` (the outer μ). Resolution starts with
+         * that μ as the focus and walks the positional `path`. Each
+         * `Unfold` does one equirecursive step (substituting the enclosing μ
+         * for its depth-0 self-references via [unfoldRecursive]), which is
+         * precisely the operation that raises the live binder depth so an
+         * inner `RecursiveSelf` resolves; a `Case` implicitly unfolds the
+         * current μ (if it is still a bare `Recursive`) to a `Sum` and
+         * selects the named case's payload; a `Field` selects a `Product`
+         * field's type. Because every `Unfold`/`Case` substitutes the μ for
+         * its self-references, the returned focus is closed — it has no
+         * dangling `RecursiveSelf` — so it composes with equirecursive
+         * equality at the value-construction site exactly as the unfolded
+         * outer type would.
+         *
+         * An empty path is impossible at this point (ingest rejects it), so
+         * the proposal's "empty path = one implicit outer unfold" degenerate
+         * case is moot; the common top-level inhabitant uses an explicit
+         * single `[Unfold]` step.
+         */
+        private fun resolveRecursiveProjection(
+            id: NodeId,
+            node: Node.RecursiveProjection,
+            typeParams: Set<NodeId>,
+        ): TypeExpr {
+            // 1. The recursiveType must resolve to a Recursive (the outer μ).
+            val resolvedTarget = resolveType(node.recursiveType, typeParams)
+            if (resolvedTarget !is TypeExpr.Recursive) {
+                report(VerifyError.RecursiveProjectionTargetNotRecursive(
+                    at = id, actualCategory = resolvedTarget::class.simpleName ?: "?"
+                ))
+                throw VerifyAbort()
+            }
+            // 2. Closed-ness: the outer μ must reference no binder outside
+            //    itself. The type-position analogue of
+            //    NodeRefTargetMustBeClosed: an open μ would make the
+            //    projection's hash context-dependent. The structural
+            //    closed-ness of `recursiveType` is checked on the source
+            //    subgraph (a free TypeParameter not bound within the μ, or a
+            //    RecursiveSelf whose depth escapes its own μ-nesting).
+            if (!isClosedRecursiveTarget(node.recursiveType, typeParams)) {
+                report(VerifyError.RecursiveProjectionTargetNotClosed(
+                    at = id, recursiveType = node.recursiveType
+                ))
+                throw VerifyAbort()
+            }
+            // 3. Walk the path. `focus` starts as the outer μ.
+            var focus: TypeExpr = resolvedTarget
+            for ((i, step) in node.path.withIndex()) {
+                focus = when (step) {
+                    ProjectionStep.Unfold -> {
+                        if (focus !is TypeExpr.Recursive) {
+                            report(VerifyError.RecursiveProjectionPathStepMismatch(
+                                at = id, stepIndex = i, step = "Unfold",
+                                focusCategory = focus::class.simpleName ?: "?"
+                            ))
+                            throw VerifyAbort()
+                        }
+                        unfoldRecursive(focus)
+                    }
+                    is ProjectionStep.Case -> {
+                        // Implicit unfold if the focus is still a bare μ
+                        // (the common entry: the outer μ wraps a Sum).
+                        val sum = (if (focus is TypeExpr.Recursive) unfoldRecursive(focus) else focus)
+                        if (sum !is TypeExpr.Sum) {
+                            report(VerifyError.RecursiveProjectionPathStepMismatch(
+                                at = id, stepIndex = i, step = "Case(${step.caseName})",
+                                focusCategory = sum::class.simpleName ?: "?"
+                            ))
+                            throw VerifyAbort()
+                        }
+                        val match = sum.cases.firstOrNull { it.name == step.caseName }
+                        if (match == null) {
+                            report(VerifyError.RecursiveProjectionCaseNotFound(
+                                at = id, stepIndex = i, caseName = step.caseName,
+                                declared = sum.cases.map { it.name }.toSet()
+                            ))
+                            throw VerifyAbort()
+                        }
+                        match.type ?: run {
+                            report(VerifyError.RecursiveProjectionPathSelectsNullaryCase(
+                                at = id, stepIndex = i, caseName = step.caseName
+                            ))
+                            throw VerifyAbort()
+                        }
+                    }
+                    is ProjectionStep.Field -> {
+                        if (focus !is TypeExpr.Product) {
+                            report(VerifyError.RecursiveProjectionPathStepMismatch(
+                                at = id, stepIndex = i, step = "Field(${step.fieldName})",
+                                focusCategory = focus::class.simpleName ?: "?"
+                            ))
+                            throw VerifyAbort()
+                        }
+                        val field = focus.fields.firstOrNull { it.name == step.fieldName }
+                        if (field == null) {
+                            report(VerifyError.RecursiveProjectionFieldNotFound(
+                                at = id, stepIndex = i, fieldName = step.fieldName,
+                                declared = focus.fields.map { it.name }.toSet()
+                            ))
+                            throw VerifyAbort()
+                        }
+                        field.type
+                    }
+                }
+            }
+            return focus
+        }
+
+        /**
+         * Structural closed-ness check for a [Node.RecursiveProjection]'s
+         * `recursiveType` (which is known to resolve to a `Recursive`). The
+         * outer μ is closed iff, walking its source subgraph, every
+         * `RecursiveSelf` depth stays within the count of enclosing
+         * `RecursiveType` binders and every `TypeParameter` reference is
+         * bound within the μ (in [typeParams] from an enclosing
+         * ForallType/TypeAbstraction is NOT sufficient — a projection target
+         * must be self-contained for its hash to be context-independent). A
+         * VarRef inside a type position is already impossible (type
+         * positions hold no expression binders), so only the two type-level
+         * binder forms are checked.
+         *
+         * The check seeds with an EMPTY bound-parameter set: a projection
+         * target must be self-contained, so a TypeParameter bound only by an
+         * enclosing ForallType (outside the target) is a free reference and
+         * makes the target open. [typeParams] (the enclosing binder context)
+         * is therefore intentionally NOT consulted.
+         */
+        @Suppress("UNUSED_PARAMETER")
+        private fun isClosedRecursiveTarget(typeId: NodeId, typeParams: Set<NodeId>): Boolean {
+            val visited = HashSet<NodeId>()
+            // Type parameters that are bound *within* the target subgraph
+            // (by a ForallType inside it) are fine; type parameters bound by
+            // an enclosing binder outside the target are free references.
+            fun walk(id: NodeId, recDepth: Int, boundParams: Set<NodeId>): Boolean {
+                if (id in visited && recDepth == 0) return true
+                if (recDepth == 0) visited.add(id)
+                val node = store.getOrNull(id) ?: return true  // dangling caught elsewhere
+                return when (node) {
+                    is Node.RecursiveType -> walk(node.body, recDepth + 1, boundParams)
+                    is Node.RecursiveSelf -> node.depth in 0 until recDepth
+                    is Node.TypeParameter -> id in boundParams
+                    is Node.ForallType -> walk(node.body, recDepth, boundParams + node.typeParameters)
+                    is Node.ProductType -> node.fields.all { walk(it, recDepth, boundParams) }
+                    is Node.ProductTypeField -> walk(node.fieldType, recDepth, boundParams)
+                    is Node.SumType -> node.cases.all { walk(it, recDepth, boundParams) }
+                    is Node.SumTypeCase -> node.caseType?.let { walk(it, recDepth, boundParams) } ?: true
+                    is Node.FunctionType ->
+                        node.parameters.all { walk(it, recDepth, boundParams) } &&
+                            walk(node.result, recDepth, boundParams)
+                    // A nested RecursiveProjection target is itself closed by
+                    // its own rule; treat its outer-μ edge as a closed
+                    // boundary (it resolves to a closed type).
+                    is Node.RecursiveProjection -> true
+                    is Node.Schema -> walk(node.valueType, recDepth, boundParams)
+                    is Node.NodeRef -> true  // NodeRef targets are closed by NodeRefTargetMustBeClosed
+                    is Node.PrimitiveType -> true
+                    // Any other category is not a well-formed type-position
+                    // node; resolveType will reject it. For the closed-ness
+                    // pre-check, treat it as not-open (the real category
+                    // error surfaces from resolveType).
+                    else -> true
+                }
+            }
+            return walk(typeId, 0, emptySet())
         }
     }
 }

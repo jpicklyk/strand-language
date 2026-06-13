@@ -52,6 +52,12 @@ import kotlinx.serialization.json.longOrNull
  *   FunctionType      { "type": "FunctionType", "parameters": [<id>, ...], "result": <id> }
  *   TypeParameter     { "type": "TypeParameter", "name": <string>, "bound": <id?> }
  *   ForallType        { "type": "ForallType", "typeParameters": [<id>, ...], "body": <id> }
+ *   RecursiveType     { "type": "RecursiveType", "body": <id> }
+ *   RecursiveSelf     { "type": "RecursiveSelf", "depth": <int>?  (default 0) }
+ *   RecursiveProjection { "type": "RecursiveProjection", "recursiveType": <RecursiveType id>,
+ *                         "path": [ { "step": "Case", "caseName": <string> }
+ *                                 | { "step": "Field", "fieldName": <string> }
+ *                                 | { "step": "Unfold" }, ... ] }
  *
  * Functions and binding:
  *   Lambda           { "type": "Lambda", "parameters": [<id>, ...], "body": <id> }
@@ -678,6 +684,10 @@ object JsonIngest {
             "RecursiveSelf" -> Node.RecursiveSelf(
                 depth = obj.optionalInt("depth", ctx) ?: 0,
             )
+            "RecursiveProjection" -> Node.RecursiveProjection(
+                recursiveType = obj.requireRef("recursiveType", ctx, resolve),
+                path = obj.requireProjectionPath("path", ctx)
+            )
 
             "Lambda" -> Node.Lambda(
                 parameters = obj.requireRefList("parameters", ctx, resolve),
@@ -844,7 +854,7 @@ object JsonIngest {
             )
 
             else -> throw IngestError.Malformed(
-                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-047)"
+                "Unknown node type '$type' in $ctx (current set: N-001..N-029, N-032..N-048)"
             )
         }
     }
@@ -1216,6 +1226,53 @@ private fun JsonObject.optionalEffectProjections(
             }
         }
         EffectProjection(category = categoryId, sources = sources)
+    }
+}
+
+/**
+ * Parse a [Node.RecursiveProjection.path] field (N-048). The path is a
+ * non-empty JSON array of selector-step objects, each one of:
+ *
+ * ```
+ * { "step": "Case",   "caseName":  "<string>" }
+ * { "step": "Field",  "fieldName": "<string>" }
+ * { "step": "Unfold" }
+ * ```
+ *
+ * The path is positional — order is semantically load-bearing — so it is
+ * preserved in declaration order and never sorted. An empty or absent path
+ * is rejected: a RecursiveProjection must select at least one position.
+ */
+private fun JsonObject.requireProjectionPath(field: String, ctx: String): List<ProjectionStep> {
+    val arr = this[field]?.jsonArray
+        ?: throw IngestError.Malformed("Missing or non-array field '$field' in $ctx")
+    if (arr.isEmpty()) {
+        throw IngestError.Malformed(
+            "RecursiveProjection '$field' in $ctx must select at least one position " +
+                "(an empty path is ill-formed)"
+        )
+    }
+    return arr.mapIndexed { i, e ->
+        val stepObj = e as? JsonObject
+            ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be an object")
+        val stepCtx = "$ctx.$field[$i]"
+        val step = stepObj["step"]?.jsonPrimitive?.contentOrNull
+            ?: throw IngestError.Malformed("Missing or non-string 'step' in $stepCtx")
+        when (step) {
+            "Case" -> ProjectionStep.Case(
+                caseName = stepObj["caseName"]?.jsonPrimitive?.contentOrNull
+                    ?: throw IngestError.Malformed("Missing or non-string 'caseName' in $stepCtx")
+            )
+            "Field" -> ProjectionStep.Field(
+                fieldName = stepObj["fieldName"]?.jsonPrimitive?.contentOrNull
+                    ?: throw IngestError.Malformed("Missing or non-string 'fieldName' in $stepCtx")
+            )
+            "Unfold" -> ProjectionStep.Unfold
+            else -> throw IngestError.Malformed(
+                "Unknown RecursiveProjection step '$step' in $stepCtx " +
+                    "(expected Case, Field, or Unfold)"
+            )
+        }
     }
 }
 

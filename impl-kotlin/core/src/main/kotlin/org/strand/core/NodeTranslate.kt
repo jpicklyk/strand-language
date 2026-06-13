@@ -118,6 +118,9 @@ fun Node.translateNodeIds(fn: (NodeId) -> NodeId): Node = when (this) {
     // ----- Recursive types -----
     is Node.RecursiveType -> copy(body = fn(body))
     is Node.RecursiveSelf -> this  // depth is an Int, no NodeId field
+    // N-048: only `recursiveType` is a NodeId; `path` steps carry structural
+    // identifiers (caseName / fieldName) or nothing, no NodeIds to rewrite.
+    is Node.RecursiveProjection -> copy(recursiveType = fn(recursiveType))
 
     // ----- Layer 6: state machines -----
     is Node.StateMachine -> copy(

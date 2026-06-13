@@ -122,6 +122,9 @@ fun Node.childNodeIds(): List<NodeId> = when (this) {
     // ----- Recursive types -----
     is Node.RecursiveType -> listOf(body)
     is Node.RecursiveSelf -> emptyList()  // intrinsic, no NodeId children
+    // N-048: the only NodeId edge is the closed outer μ; `path` steps are a
+    // content field carrying structural identifiers (no NodeIds).
+    is Node.RecursiveProjection -> listOf(recursiveType)
 
     // ----- Layer 6: state machines -----
     is Node.StateMachine -> buildList {

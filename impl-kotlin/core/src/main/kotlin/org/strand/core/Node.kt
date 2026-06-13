@@ -146,6 +146,45 @@ sealed class Node {
     data class RecursiveType(val body: NodeId) : Node()
 
     /**
+     * N-048. A type expression that names a component *position* inside a
+     * closed enclosing recursive type, resolved by entering the outer μ's
+     * binder context before walking the path. Appears only in type position
+     * (any `ofType`, `paramType`, field type, or case-payload type).
+     *
+     * [recursiveType] must be an actual [RecursiveType] node (N-041) — the
+     * closed outer μ, e.g. the whole `jsonValueT`. [path] is a non-empty
+     * ordered list of [ProjectionStep] selectors (a content field, not a
+     * child node). Resolution starts with the outer μ as focus and, for each
+     * step, descends: a [ProjectionStep.Case] unfolds the current μ to a Sum
+     * and selects the named case's payload; a [ProjectionStep.Field] selects
+     * a Product field's type; a [ProjectionStep.Unfold] enters a nested μ,
+     * raising the live recursive-binder depth so an inner [RecursiveSelf]
+     * resolves. The resolved focus is carried *with* the accumulated binder
+     * context, so subsequent RecursiveSelf references inside it are already
+     * bound.
+     *
+     * Because the node's only type edge is the closed outer μ, the
+     * projection is itself closed: it has one canonical hash and one
+     * canonical interpretation independent of where it is referenced —
+     * exactly as `NodeRefTargetMustBeClosed` demands of cross-store
+     * references. The verifier rejects a `recursiveType` that does not
+     * resolve to a [RecursiveType] (`RecursiveProjectionTargetNotRecursive`)
+     * or that is not closed (`RecursiveProjectionTargetNotClosed`), and a
+     * `path` that cannot be walked (`RecursiveProjectionPathStepMismatch`,
+     * `RecursiveProjectionCaseNotFound`, `RecursiveProjectionFieldNotFound`,
+     * `RecursiveProjectionPathSelectsNullaryCase`).
+     *
+     * See `proposals/implemented/nested-recursive-types.md` for the full
+     * mechanism. The depth field on [RecursiveSelf] is unchanged;
+     * RecursiveProjection is the closed front-door that makes a
+     * depth-bearing inner type reachable from a value-construction site.
+     */
+    data class RecursiveProjection(
+        val recursiveType: NodeId,       // a RecursiveType (the closed outer μ)
+        val path: List<ProjectionStep>   // content field: ordered selector steps
+    ) : Node()
+
+    /**
      * N-042. A reference to an enclosing [RecursiveType] binder, identified
      * by [depth] as a de Bruijn index (0 = the immediately-enclosing
      * RecursiveType, 1 = the next one out, ...). The canonical encoding
@@ -962,6 +1001,56 @@ sealed class ProjectionSource {
      * literal node of the right type.
      */
     data class LiteralNode(val target: NodeId) : ProjectionSource()
+}
+
+/**
+ * One selector step in an [Node.RecursiveProjection.path] (N-048). The path
+ * is a non-empty ordered list of these steps; it is a content field, not a
+ * list of child nodes — none of the variants carries a [NodeId].
+ *
+ * The selector vocabulary is exactly the three structural type constructors
+ * the algebra already has, so no path step can name a binder by anything but
+ * its structural position — no mutable name enters type identity. The
+ * resolver walks the path from the closed outer μ:
+ *
+ *  * [Case] — after one unfold of the current μ to a Sum, select the named
+ *    case; the focus becomes that case's payload type (a Product, a nested
+ *    μ, or a RecursiveSelf).
+ *  * [Field] — when the current focus is a Product, select the named field's
+ *    type.
+ *  * [Unfold] — when the current focus is a nested [Node.RecursiveType],
+ *    enter it: increment the binder context and make the focus the unfolded
+ *    body. This is the step that makes an inner `RecursiveSelf(depth=1)`
+ *    resolvable, because it raises the live recursive-binder depth.
+ *
+ * The path is *positional* — order is semantically load-bearing (`Case`
+ * then `Field` differs from `Field` then `Case`) — so the canonical
+ * encoding does not sort it. The selector-tag discriminator
+ * (`Case = 0, Field = 1, Unfold = 2`) is frozen on assignment.
+ */
+sealed class ProjectionStep {
+    /**
+     * After one unfold of the current μ to a Sum, select the case named
+     * [caseName]; the focus becomes that case's payload type. [caseName] is
+     * a structural identifier (included in the canonical encoding).
+     */
+    data class Case(val caseName: String) : ProjectionStep()
+
+    /**
+     * When the current focus is a Product, select the type of the field
+     * named [fieldName]. [fieldName] is a structural identifier (included
+     * in the canonical encoding).
+     */
+    data class Field(val fieldName: String) : ProjectionStep()
+
+    /**
+     * When the current focus is a nested [Node.RecursiveType], enter it,
+     * raising the live recursive-binder depth so an inner [Node.RecursiveSelf]
+     * resolves.
+     */
+    object Unfold : ProjectionStep() {
+        override fun toString(): String = "Unfold"
+    }
 }
 
 /**

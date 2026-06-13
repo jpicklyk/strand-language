@@ -2330,4 +2330,295 @@ class VerifierTest {
         assertTrue(r is VerifyResult.Ok,
             "expected Ok for a well-formed Q-039 projection at a matching call site, got $r")
     }
+
+    // ----- N-048 RecursiveProjection (Q-053) -----
+    //
+    // The shared nested-μ model used by several tests below:
+    //
+    //   jsonValueT = μ jv. JsonNumber(Int) | JsonArray(innerListT)
+    //   innerListT = μ list. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil
+    //
+    // The inner list's head reaches past the `list` binder (depth 1) to the
+    // outer `jv` binder, so the list is a list OF json values — the precise
+    // model the corpus-66 splice cannot express. A value-construction site
+    // names a RecursiveProjection of jsonValueT selecting the position it
+    // builds, never the bare open innerListT.
+
+    private fun jsonModelNodes(): String = """
+        "intT":        { "type": "PrimitiveType", "kind": "Int" },
+
+        "selfOuter":   { "type": "RecursiveSelf", "depth": 1 },
+        "selfInner":   { "type": "RecursiveSelf", "depth": 0 },
+        "headField":   { "type": "ProductTypeField", "name": "head", "fieldType": "selfOuter" },
+        "tailField":   { "type": "ProductTypeField", "name": "tail", "fieldType": "selfInner" },
+        "consProduct": { "type": "ProductType", "fields": ["headField", "tailField"] },
+        "consCase":    { "type": "SumTypeCase", "name": "Cons", "caseType": "consProduct" },
+        "nilCase":     { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+        "listBody":    { "type": "SumType", "cases": ["consCase", "nilCase"] },
+        "innerListT":  { "type": "RecursiveType", "body": "listBody" },
+
+        "numCase":     { "type": "SumTypeCase", "name": "JsonNumber", "caseType": "intT" },
+        "arrCase":     { "type": "SumTypeCase", "name": "JsonArray", "caseType": "innerListT" },
+        "jvBody":      { "type": "SumType", "cases": ["numCase", "arrCase"] },
+        "jsonValueT":  { "type": "RecursiveType", "body": "jvBody" },
+
+        "projTop":     { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                         "path": [ { "step": "Unfold" } ] },
+        "projList":    { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                         "path": [ { "step": "Case", "caseName": "JsonArray" }, { "step": "Unfold" } ] }
+    """.trimIndent()
+
+    @Test
+    fun `RecursiveProjection - true JSON array of one type-checks with precision`() {
+        // Build [1]: JsonArray( Cons(JsonNumber(1), Nil) ).
+        val r = verify("""{
+          "version": 1, "root": "arrayValue",
+          "nodes": {
+            ${jsonModelNodes()},
+
+            "one":       { "type": "IntLit", "value": 1 },
+            "numOne":    { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "one" },
+
+            "nilVal":    { "type": "SumValue", "ofType": "projList", "caseName": "Nil", "payload": null },
+            "consHead":  { "type": "ProductFieldValue", "fieldName": "head", "value": "numOne" },
+            "consTail":  { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+            "consProj":  { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                           "path": [ { "step": "Case", "caseName": "JsonArray" },
+                                     { "step": "Unfold" },
+                                     { "step": "Case", "caseName": "Cons" } ] },
+            "consVal":   { "type": "ProductValue", "ofType": "consProj", "fields": ["consHead", "consTail"] },
+            "listVal":   { "type": "SumValue", "ofType": "projList", "caseName": "Cons", "payload": "consVal" },
+
+            "arrayValue":{ "type": "SumValue", "ofType": "projTop", "caseName": "JsonArray", "payload": "listVal" }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Ok,
+            "expected Ok for the precise nested-μ JSON array [1], got $r")
+    }
+
+    @Test
+    fun `RecursiveProjection - malformed array spine is a verify error`() {
+        // Cons(JsonNumber(1), JsonString("x")) — the tail must inhabit the
+        // inner list (Cons | Nil), but a bare JsonNumber does not, so the
+        // tail's payload type mismatches.
+        val r = verify("""{
+          "version": 1, "root": "consVal",
+          "nodes": {
+            ${jsonModelNodes()},
+            "strT":      { "type": "PrimitiveType", "kind": "String" },
+
+            "one":       { "type": "IntLit", "value": 1 },
+            "numOne":    { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "one" },
+
+            "consHead":  { "type": "ProductFieldValue", "fieldName": "head", "value": "numOne" },
+            "consTail":  { "type": "ProductFieldValue", "fieldName": "tail", "value": "numOne" },
+            "consProj":  { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                           "path": [ { "step": "Case", "caseName": "JsonArray" },
+                                     { "step": "Unfold" },
+                                     { "step": "Case", "caseName": "Cons" } ] },
+            "consVal":   { "type": "ProductValue", "ofType": "consProj", "fields": ["consHead", "consTail"] }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Failed,
+            "expected a verify failure for a malformed array spine, got $r")
+        r as VerifyResult.Failed
+        assertTrue(r.errors.any { it is VerifyError.ProductFieldValueTypeMismatch },
+            "expected a ProductFieldValueTypeMismatch for the ill-typed tail, got ${r.errors}")
+    }
+
+    @Test
+    fun `RecursiveProjection - top-level inhabitant via single Unfold path`() {
+        // The common non-nested case: a bare JsonNumber(7) as a JsonValue.
+        val r = verify("""{
+          "version": 1, "root": "num",
+          "nodes": {
+            ${jsonModelNodes()},
+            "seven": { "type": "IntLit", "value": 7 },
+            "num":   { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "seven" }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Ok,
+            "expected Ok for a top-level JsonNumber via [Unfold], got $r")
+    }
+
+    @Test
+    fun `RecursiveProjection - AST with child list resolves`() {
+        // ast = μ a. Lit(Int) | Node(innerAstListT)
+        // innerAstListT = μ l. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil
+        // Build Node([Lit(1)]).
+        val r = verify("""{
+          "version": 1, "root": "tree",
+          "nodes": {
+            "intT":        { "type": "PrimitiveType", "kind": "Int" },
+            "selfOuter":   { "type": "RecursiveSelf", "depth": 1 },
+            "selfInner":   { "type": "RecursiveSelf", "depth": 0 },
+            "headField":   { "type": "ProductTypeField", "name": "head", "fieldType": "selfOuter" },
+            "tailField":   { "type": "ProductTypeField", "name": "tail", "fieldType": "selfInner" },
+            "consProduct": { "type": "ProductType", "fields": ["headField", "tailField"] },
+            "consCase":    { "type": "SumTypeCase", "name": "Cons", "caseType": "consProduct" },
+            "nilCase":     { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+            "listBody":    { "type": "SumType", "cases": ["consCase", "nilCase"] },
+            "childListT":  { "type": "RecursiveType", "body": "listBody" },
+
+            "litCase":     { "type": "SumTypeCase", "name": "Lit", "caseType": "intT" },
+            "nodeCase":    { "type": "SumTypeCase", "name": "Node", "caseType": "childListT" },
+            "astBody":     { "type": "SumType", "cases": ["litCase", "nodeCase"] },
+            "astT":        { "type": "RecursiveType", "body": "astBody" },
+
+            "projTop":     { "type": "RecursiveProjection", "recursiveType": "astT",
+                             "path": [ { "step": "Unfold" } ] },
+            "projList":    { "type": "RecursiveProjection", "recursiveType": "astT",
+                             "path": [ { "step": "Case", "caseName": "Node" }, { "step": "Unfold" } ] },
+            "projCons":    { "type": "RecursiveProjection", "recursiveType": "astT",
+                             "path": [ { "step": "Case", "caseName": "Node" },
+                                       { "step": "Unfold" },
+                                       { "step": "Case", "caseName": "Cons" } ] },
+
+            "one":       { "type": "IntLit", "value": 1 },
+            "lit1":      { "type": "SumValue", "ofType": "projTop", "caseName": "Lit", "payload": "one" },
+            "nilVal":    { "type": "SumValue", "ofType": "projList", "caseName": "Nil", "payload": null },
+            "consHead":  { "type": "ProductFieldValue", "fieldName": "head", "value": "lit1" },
+            "consTail":  { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+            "consVal":   { "type": "ProductValue", "ofType": "projCons", "fields": ["consHead", "consTail"] },
+            "childList": { "type": "SumValue", "ofType": "projList", "caseName": "Cons", "payload": "consVal" },
+            "tree":      { "type": "SumValue", "ofType": "projTop", "caseName": "Node", "payload": "childList" }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Ok,
+            "expected Ok for an AST node with a child list, got $r")
+    }
+
+    @Test
+    fun `RecursiveProjection - target not recursive`() {
+        val r = verify("""{
+          "version": 1, "root": "num",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "case":  { "type": "SumTypeCase", "name": "A", "caseType": "intT" },
+            "sumT":  { "type": "SumType", "cases": ["case"] },
+            "proj":  { "type": "RecursiveProjection", "recursiveType": "sumT",
+                       "path": [ { "step": "Case", "caseName": "A" } ] },
+            "one":   { "type": "IntLit", "value": 1 },
+            "num":   { "type": "SumValue", "ofType": "proj", "caseName": "A", "payload": "one" }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Failed)
+        r as VerifyResult.Failed
+        assertTrue(r.errors.any { it is VerifyError.RecursiveProjectionTargetNotRecursive },
+            "expected RecursiveProjectionTargetNotRecursive, got ${r.errors}")
+    }
+
+    @Test
+    fun `RecursiveProjection - target not closed`() {
+        // The outer μ's body references depth=1, but there is only one
+        // enclosing binder (the μ itself, depth 0): the body reaches a
+        // binder outside itself, so the target is open.
+        val r = verify("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            "intT":    { "type": "PrimitiveType", "kind": "Int" },
+            "escape":  { "type": "RecursiveSelf", "depth": 1 },
+            "field":   { "type": "ProductTypeField", "name": "f", "fieldType": "escape" },
+            "prod":    { "type": "ProductType", "fields": ["field"] },
+            "case":    { "type": "SumTypeCase", "name": "A", "caseType": "prod" },
+            "body":    { "type": "SumType", "cases": ["case"] },
+            "openMu":  { "type": "RecursiveType", "body": "body" },
+            "proj":    { "type": "RecursiveProjection", "recursiveType": "openMu",
+                         "path": [ { "step": "Unfold" } ] },
+            "v":       { "type": "ProductValue", "ofType": "proj", "fields": [] }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Failed)
+        r as VerifyResult.Failed
+        // An open μ is rejected. The verifier reaches the closed-ness check
+        // (RecursiveProjectionTargetNotClosed) or the underlying
+        // UnboundRecursiveSelf when resolving the μ standalone; either is a
+        // sound rejection of the open target. Assert at least one fires.
+        assertTrue(
+            r.errors.any {
+                it is VerifyError.RecursiveProjectionTargetNotClosed ||
+                    it is VerifyError.UnboundRecursiveSelf
+            },
+            "expected the open μ target to be rejected, got ${r.errors}")
+    }
+
+    @Test
+    fun `RecursiveProjection - case not found`() {
+        val r = verify("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            ${jsonModelNodes()},
+            "proj":  { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                       "path": [ { "step": "Case", "caseName": "Nope" } ] },
+            "v":     { "type": "ProductValue", "ofType": "proj", "fields": [] }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Failed)
+        r as VerifyResult.Failed
+        assertTrue(r.errors.any { it is VerifyError.RecursiveProjectionCaseNotFound },
+            "expected RecursiveProjectionCaseNotFound, got ${r.errors}")
+    }
+
+    @Test
+    fun `RecursiveProjection - field not found`() {
+        // Route the root at a value whose ofType is the projection so the
+        // verifier resolves the projection's path.
+        val r2 = verify("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            ${jsonModelNodes()},
+            "proj":  { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                       "path": [ { "step": "Case", "caseName": "JsonArray" },
+                                 { "step": "Unfold" },
+                                 { "step": "Case", "caseName": "Cons" },
+                                 { "step": "Field", "fieldName": "nope" } ] },
+            "x":     { "type": "IntLit", "value": 0 },
+            "v":     { "type": "ProductValue", "ofType": "proj", "fields": [] }
+          }
+        }""")
+        assertTrue(r2 is VerifyResult.Failed)
+        r2 as VerifyResult.Failed
+        assertTrue(r2.errors.any { it is VerifyError.RecursiveProjectionFieldNotFound },
+            "expected RecursiveProjectionFieldNotFound, got ${r2.errors}")
+    }
+
+    @Test
+    fun `RecursiveProjection - path step mismatch on Field over a Sum focus`() {
+        // A Field step applied directly to the outer μ (whose unfold is a
+        // Sum, not a Product) is a step mismatch.
+        val r = verify("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            ${jsonModelNodes()},
+            "proj":  { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                       "path": [ { "step": "Field", "fieldName": "head" } ] },
+            "x":     { "type": "IntLit", "value": 0 },
+            "v":     { "type": "ProductValue", "ofType": "proj", "fields": [] }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Failed)
+        r as VerifyResult.Failed
+        assertTrue(r.errors.any { it is VerifyError.RecursiveProjectionPathStepMismatch },
+            "expected RecursiveProjectionPathStepMismatch for Field over a Sum focus, got ${r.errors}")
+    }
+
+    @Test
+    fun `RecursiveProjection - selecting a nullary case is rejected`() {
+        val r = verify("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            ${jsonModelNodes()},
+            "proj":  { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                       "path": [ { "step": "Case", "caseName": "JsonArray" },
+                                 { "step": "Unfold" },
+                                 { "step": "Case", "caseName": "Nil" } ] },
+            "x":     { "type": "IntLit", "value": 0 },
+            "v":     { "type": "ProductValue", "ofType": "proj", "fields": [] }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Failed)
+        r as VerifyResult.Failed
+        assertTrue(r.errors.any { it is VerifyError.RecursiveProjectionPathSelectsNullaryCase },
+            "expected RecursiveProjectionPathSelectsNullaryCase, got ${r.errors}")
+    }
 }

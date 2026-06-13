@@ -8,6 +8,7 @@ import org.strand.core.NodeId
 import org.strand.core.OverflowPolicy
 import org.strand.core.Primitive
 import org.strand.core.ProjectionSource
+import org.strand.core.ProjectionStep
 import org.strand.core.StreamKind
 import org.strand.core.ConsumerMode
 
@@ -125,6 +126,11 @@ internal object NodeStoreCodec {
             }
             is Node.RecursiveType -> { t("RecursiveType"); o.put("body", ref(idx(node.body))) }
             is Node.RecursiveSelf -> { t("RecursiveSelf"); o.put("depth", Js.of(node.depth)) }
+            is Node.RecursiveProjection -> {
+                t("RecursiveProjection")
+                o.put("recursiveType", ref(idx(node.recursiveType)))
+                o.put("path", encodeProjectionPath(node.path))
+            }
 
             is Node.Lambda -> {
                 t("Lambda")
@@ -315,6 +321,20 @@ internal object NodeStoreCodec {
         return arr
     }
 
+    private fun encodeProjectionPath(path: List<ProjectionStep>): Js.Arr {
+        val arr = Js.Arr()
+        for (step in path) {
+            val so = Js.Obj()
+            when (step) {
+                is ProjectionStep.Case -> { so.put("step", Js.of("Case")); so.put("caseName", Js.of(step.caseName)) }
+                is ProjectionStep.Field -> { so.put("step", Js.of("Field")); so.put("fieldName", Js.of(step.fieldName)) }
+                ProjectionStep.Unfold -> so.put("step", Js.of("Unfold"))
+            }
+            arr.items.add(so)
+        }
+        return arr
+    }
+
     private fun encodeOverflow(p: OverflowPolicy): Js = when (p) {
         OverflowPolicy.BlockProducer -> Js.of("BlockProducer")
         OverflowPolicy.DropNewest -> Js.of("DropNewest")
@@ -410,6 +430,10 @@ internal object NodeStoreCodec {
             )
             "RecursiveType" -> Node.RecursiveType(body = o.refId("body"))
             "RecursiveSelf" -> Node.RecursiveSelf(depth = o.int("depth") ?: 0)
+            "RecursiveProjection" -> Node.RecursiveProjection(
+                recursiveType = o.refId("recursiveType"),
+                path = decodeProjectionPath(o.arr("path") ?: throw StoreJsonParseException("RecursiveProjection missing path")),
+            )
 
             "Lambda" -> Node.Lambda(
                 parameters = o.refIdList("parameters"),
@@ -569,6 +593,17 @@ internal object NodeStoreCodec {
             EffectProjection(category = category, sources = sources)
         }
     }
+
+    private fun decodeProjectionPath(arr: Js.Arr): List<ProjectionStep> =
+        arr.items.map { s ->
+            val so = s as? Js.Obj ?: throw StoreJsonParseException("projection step must be an object")
+            when (val step = so.str("step")) {
+                "Case" -> ProjectionStep.Case(so.str("caseName") ?: throw StoreJsonParseException("Case step missing caseName"))
+                "Field" -> ProjectionStep.Field(so.str("fieldName") ?: throw StoreJsonParseException("Field step missing fieldName"))
+                "Unfold" -> ProjectionStep.Unfold
+                else -> throw StoreJsonParseException("Unknown RecursiveProjection step '$step'")
+            }
+        }
 
     private fun decodeOverflow(js: Js): OverflowPolicy = when (js) {
         is Js.Str -> when (js.value) {
