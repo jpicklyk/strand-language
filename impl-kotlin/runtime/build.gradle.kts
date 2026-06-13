@@ -50,6 +50,10 @@ private val replayProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/replay-timetravel/programs")
 private val pluginHostProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/plugin-host/programs")
+//   - demos/output-by-construction/programs : the Q-053/N-048 + Q-035/Q-047
+//     correct-by-construction structured-output demonstration
+private val outputByConstructionProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/output-by-construction/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(containmentProgramsDir) {
@@ -64,12 +68,17 @@ tasks.named<ProcessResources>("processTestResources") {
         include("*.json")
         into("demo/programs")
     }
+    from(outputByConstructionProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
 }
 
 tasks.test {
     inputs.dir(containmentProgramsDir)
     inputs.dir(replayProgramsDir)
     inputs.dir(pluginHostProgramsDir)
+    inputs.dir(outputByConstructionProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -104,4 +113,16 @@ tasks.register<JavaExec>("pluginHostDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.PluginHostDemo")
+}
+
+// Print the correct-by-construction structured-output demonstration transcript.
+// Like the others, the driver lives in the test source set (it shares scenario
+// code with OutputByConstructionDemoTest). Usage:
+// `./gradlew :runtime:outputByConstructionDemo -q`.
+tasks.register<JavaExec>("outputByConstructionDemo") {
+    group = "verification"
+    description = "Print the correct-by-construction structured-output demonstration transcript (N-048 + schema invariants)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.OutputByConstructionDemo")
 }

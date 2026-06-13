@@ -1,0 +1,481 @@
+{
+  "version": 1,
+  "root": "schemaClaim",
+  "_comment": "W3 -- a MALFORMED document caught at RUNTIME on a dynamic value (Q-047, interpreter-only). The middle element is computed at runtime: JsonNumber(Int.Sub(3, 10)) = JsonNumber(-7). Because Int.Sub is non-static, the verifier cannot fold the array at admission and records a SchemaInvariantDeferred -- the graph verifies clean. At runtime the interpreter materializes the array, the all_elements_non_negative obligation fires at the value-flow site, and the run halts with the runtime InterpretError.SchemaInvariantViolation BEFORE the malformed document is returned.",
+  "nodes": {
+    "intT": {
+      "type": "PrimitiveType",
+      "kind": "Int"
+    },
+    "boolT": {
+      "type": "PrimitiveType",
+      "kind": "Bool"
+    },
+    "selfOuter": {
+      "type": "RecursiveSelf",
+      "depth": 1
+    },
+    "selfInner": {
+      "type": "RecursiveSelf",
+      "depth": 0
+    },
+    "headField": {
+      "type": "ProductTypeField",
+      "name": "head",
+      "fieldType": "selfOuter"
+    },
+    "tailField": {
+      "type": "ProductTypeField",
+      "name": "tail",
+      "fieldType": "selfInner"
+    },
+    "consProduct": {
+      "type": "ProductType",
+      "fields": [
+        "headField",
+        "tailField"
+      ]
+    },
+    "consCase": {
+      "type": "SumTypeCase",
+      "name": "Cons",
+      "caseType": "consProduct"
+    },
+    "nilCase": {
+      "type": "SumTypeCase",
+      "name": "Nil",
+      "caseType": null
+    },
+    "listBody": {
+      "type": "SumType",
+      "cases": [
+        "consCase",
+        "nilCase"
+      ]
+    },
+    "innerListT": {
+      "type": "RecursiveType",
+      "body": "listBody"
+    },
+    "numCase": {
+      "type": "SumTypeCase",
+      "name": "JsonNumber",
+      "caseType": "intT"
+    },
+    "arrCase": {
+      "type": "SumTypeCase",
+      "name": "JsonArray",
+      "caseType": "innerListT"
+    },
+    "jvBody": {
+      "type": "SumType",
+      "cases": [
+        "numCase",
+        "arrCase"
+      ]
+    },
+    "jsonValueT": {
+      "type": "RecursiveType",
+      "body": "jvBody"
+    },
+    "projTop": {
+      "type": "RecursiveProjection",
+      "recursiveType": "jsonValueT",
+      "path": [
+        {
+          "step": "Unfold"
+        }
+      ]
+    },
+    "projList": {
+      "type": "RecursiveProjection",
+      "recursiveType": "jsonValueT",
+      "path": [
+        {
+          "step": "Case",
+          "caseName": "JsonArray"
+        },
+        {
+          "step": "Unfold"
+        }
+      ]
+    },
+    "projCons": {
+      "type": "RecursiveProjection",
+      "recursiveType": "jsonValueT",
+      "path": [
+        {
+          "step": "Case",
+          "caseName": "JsonArray"
+        },
+        {
+          "step": "Unfold"
+        },
+        {
+          "step": "Case",
+          "caseName": "Cons"
+        }
+      ]
+    },
+    "one": {
+      "type": "IntLit",
+      "value": 1
+    },
+    "three": {
+      "type": "IntLit",
+      "value": 3
+    },
+    "num1": {
+      "type": "SumValue",
+      "ofType": "projTop",
+      "caseName": "JsonNumber",
+      "payload": "one"
+    },
+    "num2": {
+      "type": "SumValue",
+      "ofType": "projTop",
+      "caseName": "JsonNumber",
+      "payload": "dynNeg"
+    },
+    "num3": {
+      "type": "SumValue",
+      "ofType": "projTop",
+      "caseName": "JsonNumber",
+      "payload": "three"
+    },
+    "nilVal": {
+      "type": "SumValue",
+      "ofType": "projList",
+      "caseName": "Nil",
+      "payload": null
+    },
+    "cons3Head": {
+      "type": "ProductFieldValue",
+      "fieldName": "head",
+      "value": "num3"
+    },
+    "cons3Tail": {
+      "type": "ProductFieldValue",
+      "fieldName": "tail",
+      "value": "nilVal"
+    },
+    "cons3Prod": {
+      "type": "ProductValue",
+      "ofType": "projCons",
+      "fields": [
+        "cons3Head",
+        "cons3Tail"
+      ]
+    },
+    "cons3": {
+      "type": "SumValue",
+      "ofType": "projList",
+      "caseName": "Cons",
+      "payload": "cons3Prod"
+    },
+    "cons2Head": {
+      "type": "ProductFieldValue",
+      "fieldName": "head",
+      "value": "num2"
+    },
+    "cons2Tail": {
+      "type": "ProductFieldValue",
+      "fieldName": "tail",
+      "value": "cons3"
+    },
+    "cons2Prod": {
+      "type": "ProductValue",
+      "ofType": "projCons",
+      "fields": [
+        "cons2Head",
+        "cons2Tail"
+      ]
+    },
+    "cons2": {
+      "type": "SumValue",
+      "ofType": "projList",
+      "caseName": "Cons",
+      "payload": "cons2Prod"
+    },
+    "cons1Head": {
+      "type": "ProductFieldValue",
+      "fieldName": "head",
+      "value": "num1"
+    },
+    "cons1Tail": {
+      "type": "ProductFieldValue",
+      "fieldName": "tail",
+      "value": "cons2"
+    },
+    "cons1Prod": {
+      "type": "ProductValue",
+      "ofType": "projCons",
+      "fields": [
+        "cons1Head",
+        "cons1Tail"
+      ]
+    },
+    "arrayList": {
+      "type": "SumValue",
+      "ofType": "projList",
+      "caseName": "Cons",
+      "payload": "cons1Prod"
+    },
+    "geFnT": {
+      "type": "FunctionType",
+      "parameters": [
+        "intT",
+        "intT"
+      ],
+      "result": "boolT"
+    },
+    "geFn": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Ge",
+      "foreignType": "geFnT"
+    },
+    "boolAndT": {
+      "type": "FunctionType",
+      "parameters": [
+        "boolT",
+        "boolT"
+      ],
+      "result": "boolT"
+    },
+    "boolAnd": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Bool.And",
+      "foreignType": "boolAndT"
+    },
+    "allNonNegT": {
+      "type": "FunctionType",
+      "parameters": [
+        "projList"
+      ],
+      "result": "boolT"
+    },
+    "annRecurse": {
+      "type": "ParameterDecl",
+      "name": "self",
+      "paramType": "allNonNegT"
+    },
+    "annXs": {
+      "type": "ParameterDecl",
+      "name": "xs",
+      "paramType": "projList"
+    },
+    "annRecRef": {
+      "type": "VarRef",
+      "binder": "annRecurse"
+    },
+    "annXsRef": {
+      "type": "VarRef",
+      "binder": "annXs"
+    },
+    "annConsVar": {
+      "type": "Pattern",
+      "kind": "variable",
+      "patternType": "projCons",
+      "name": "c"
+    },
+    "annConsPat": {
+      "type": "Pattern",
+      "kind": "constructor",
+      "patternType": "projList",
+      "caseName": "Cons",
+      "payloadPattern": "annConsVar"
+    },
+    "annCRef": {
+      "type": "VarRef",
+      "binder": "annConsVar"
+    },
+    "annHeadJv": {
+      "type": "ProductFieldGet",
+      "target": "annCRef",
+      "fieldName": "head"
+    },
+    "annTailLst": {
+      "type": "ProductFieldGet",
+      "target": "annCRef",
+      "fieldName": "tail"
+    },
+    "annNumVar": {
+      "type": "Pattern",
+      "kind": "variable",
+      "patternType": "intT",
+      "name": "n"
+    },
+    "annNumPat": {
+      "type": "Pattern",
+      "kind": "constructor",
+      "patternType": "jsonValueT",
+      "caseName": "JsonNumber",
+      "payloadPattern": "annNumVar"
+    },
+    "annNRef": {
+      "type": "VarRef",
+      "binder": "annNumVar"
+    },
+    "zeroLit": {
+      "type": "IntLit",
+      "value": 0
+    },
+    "headIsNonNeg": {
+      "type": "Application",
+      "function": "geFn",
+      "arguments": [
+        "annNRef",
+        "zeroLit"
+      ]
+    },
+    "annNumMc": {
+      "type": "MatchCase",
+      "pattern": "annNumPat",
+      "body": "headIsNonNeg"
+    },
+    "falseLit": {
+      "type": "BoolLit",
+      "value": false
+    },
+    "annHeadWild": {
+      "type": "Pattern",
+      "kind": "wildcard",
+      "patternType": "jsonValueT"
+    },
+    "annHeadWildMc": {
+      "type": "MatchCase",
+      "pattern": "annHeadWild",
+      "body": "falseLit"
+    },
+    "headOk": {
+      "type": "Match",
+      "scrutinee": "annHeadJv",
+      "cases": [
+        "annNumMc",
+        "annHeadWildMc"
+      ]
+    },
+    "annRecCall": {
+      "type": "Application",
+      "function": "annRecRef",
+      "arguments": [
+        "annTailLst"
+      ]
+    },
+    "annConsBody": {
+      "type": "Application",
+      "function": "boolAnd",
+      "arguments": [
+        "headOk",
+        "annRecCall"
+      ]
+    },
+    "annConsMc": {
+      "type": "MatchCase",
+      "pattern": "annConsPat",
+      "body": "annConsBody"
+    },
+    "annNilPat": {
+      "type": "Pattern",
+      "kind": "constructor",
+      "patternType": "projList",
+      "caseName": "Nil"
+    },
+    "trueLit": {
+      "type": "BoolLit",
+      "value": true
+    },
+    "annNilMc": {
+      "type": "MatchCase",
+      "pattern": "annNilPat",
+      "body": "trueLit"
+    },
+    "annMatch": {
+      "type": "Match",
+      "scrutinee": "annXsRef",
+      "cases": [
+        "annConsMc",
+        "annNilMc"
+      ]
+    },
+    "annLambda": {
+      "type": "Lambda",
+      "parameters": [
+        "annRecurse",
+        "annXs"
+      ],
+      "body": "annMatch"
+    },
+    "allNonNegFn": {
+      "type": "Fixpoint",
+      "recursionType": "allNonNegT",
+      "body": "annLambda"
+    },
+    "nonNegInvariant": {
+      "type": "Invariant",
+      "invariantName": "all_elements_non_negative",
+      "targetSchema": "nonNegArraySchema",
+      "body": "allNonNegFn"
+    },
+    "nonNegArraySchema": {
+      "type": "Schema",
+      "schemaName": "NonNegativeJsonArray",
+      "valueType": "projList",
+      "invariants": [
+        "nonNegInvariant"
+      ]
+    },
+    "docParam": {
+      "type": "ParameterDecl",
+      "name": "doc",
+      "paramType": "nonNegArraySchema"
+    },
+    "docRef": {
+      "type": "VarRef",
+      "binder": "docParam"
+    },
+    "identityOfDoc": {
+      "type": "Lambda",
+      "parameters": [
+        "docParam"
+      ],
+      "body": "docRef"
+    },
+    "schemaClaim": {
+      "type": "Application",
+      "function": "identityOfDoc",
+      "arguments": [
+        "arrayList"
+      ]
+    },
+    "subFnT": {
+      "type": "FunctionType",
+      "parameters": [
+        "intT",
+        "intT"
+      ],
+      "result": "intT"
+    },
+    "subFn": {
+      "type": "ForeignNode",
+      "target": "strand-builtin:Int.Sub",
+      "foreignType": "subFnT"
+    },
+    "subA": {
+      "type": "IntLit",
+      "value": 3
+    },
+    "subB": {
+      "type": "IntLit",
+      "value": 10
+    },
+    "dynNeg": {
+      "type": "Application",
+      "function": "subFn",
+      "arguments": [
+        "subA",
+        "subB"
+      ]
+    }
+  }
+}
