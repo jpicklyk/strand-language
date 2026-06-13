@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "root": "main",
+  "nodes": {
+    "intT":        { "type": "PrimitiveType", "kind": "Int" },
+    "strT":        { "type": "PrimitiveType", "kind": "String" },
+
+    "selfOuter":   { "type": "RecursiveSelf", "depth": 1 },
+    "selfInner":   { "type": "RecursiveSelf", "depth": 0 },
+    "headField":   { "type": "ProductTypeField", "name": "head", "fieldType": "selfOuter" },
+    "tailField":   { "type": "ProductTypeField", "name": "tail", "fieldType": "selfInner" },
+    "consProduct": { "type": "ProductType", "fields": ["headField", "tailField"] },
+    "consCase":    { "type": "SumTypeCase", "name": "Cons", "caseType": "consProduct" },
+    "nilCase":     { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "listBody":    { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "innerListT":  { "type": "RecursiveType", "body": "listBody" },
+
+    "numCase":     { "type": "SumTypeCase", "name": "JsonNumber", "caseType": "intT" },
+    "arrCase":     { "type": "SumTypeCase", "name": "JsonArray", "caseType": "innerListT" },
+    "jvBody":      { "type": "SumType", "cases": ["numCase", "arrCase"] },
+    "jsonValueT":  { "type": "RecursiveType", "body": "jvBody" },
+
+    "projTop":     { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Unfold" } ] },
+    "projList":    { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Case", "caseName": "JsonArray" }, { "step": "Unfold" } ] },
+    "projCons":    { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                     "path": [ { "step": "Case", "caseName": "JsonArray" },
+                               { "step": "Unfold" },
+                               { "step": "Case", "caseName": "Cons" } ] },
+
+    "one":         { "type": "IntLit", "value": 1 },
+    "two":         { "type": "IntLit", "value": 2 },
+    "num1":        { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "one" },
+    "num2":        { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "two" },
+
+    "nilVal":      { "type": "SumValue", "ofType": "projList", "caseName": "Nil", "payload": null },
+
+    "cons2Head":   { "type": "ProductFieldValue", "fieldName": "head", "value": "num2" },
+    "cons2Tail":   { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "cons2Prod":   { "type": "ProductValue", "ofType": "projCons", "fields": ["cons2Head", "cons2Tail"] },
+    "cons2":       { "type": "SumValue", "ofType": "projList", "caseName": "Cons", "payload": "cons2Prod" },
+
+    "cons1Head":   { "type": "ProductFieldValue", "fieldName": "head", "value": "num1" },
+    "cons1Tail":   { "type": "ProductFieldValue", "fieldName": "tail", "value": "cons2" },
+    "cons1Prod":   { "type": "ProductValue", "ofType": "projCons", "fields": ["cons1Head", "cons1Tail"] },
+    "cons1":       { "type": "SumValue", "ofType": "projList", "caseName": "Cons", "payload": "cons1Prod" },
+
+    "arrayValue":  { "type": "SumValue", "ofType": "projTop", "caseName": "JsonArray", "payload": "cons1" },
+
+    "stringifyT":  { "type": "FunctionType", "parameters": ["jsonValueT"], "result": "strT" },
+    "stringifyFn": { "type": "ForeignNode", "target": "strand-builtin:Json.Stringify", "foreignType": "stringifyT" },
+    "main":        { "type": "Application", "function": "stringifyFn", "arguments": ["arrayValue"] }
+  }
+}

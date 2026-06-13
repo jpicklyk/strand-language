@@ -70,7 +70,7 @@
     "63-non-empty-markdown-fail.json": "1ec0f365198fd61165b69005bef813e991d428746c5e3a5685852dd81cc4c2d46e",
     "64-option-parseint-unwrap.json": "1e66e39877b689efd861c3febb9e20d77d39f072ed773714ead348a6528452e9b0",
     "65-option-parseint-fallback.json": "1e58ebd8a59397df206162aedfc2ac312eb8c920339ff90914296faae6f54c33ad",
-    "66-json-value-nested.json": "1e7d73266df2328bc61e66356832f95c3330145fe6747505394cfd9b75619d09be",
+    "66-json-roundtrip-via-builtins.json": "1e1bc39012c3d4c3e7a1a55799de4ab83c83f19dd73b0be35d63f59c841193d9d5",
     "67-llm-state-machine-with-tool.json": "1e137ff28fa1ca6083b8d727412e0b45edcd41bdaf08078cc2a537a0ab4751ad0d",
     "68-vector-pinecone-upsert-query.json": "1e107e0752cdfeb82b79656bd72a02af865a7fdbf4c860d776f77e5ca251bd62d4",
     "69-response-schema-spec.json": "1ee721b947c1cc3987bc2c1590cd5e16f7c0e94a5ab4847b1d8665e2455c0155fa",

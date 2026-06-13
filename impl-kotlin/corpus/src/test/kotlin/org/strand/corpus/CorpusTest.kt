@@ -153,32 +153,21 @@ class CorpusTest {
         Case("/corpus/65-option-parseint-fallback.json", Value.IntV(-1L),
             "Phase 4 #10: ParseInt(\"not a number\") -> None, unwrapped to fallback -1. Pair with corpus 64 for the canonical Option-with-default pattern."),
 
-        // Slice 3 of stdlib expansion round 2 — nested-μ JsonValue
-        // exercising the new RecursiveSelf depth field. corpus 66
-        // builds a [1, 2] array literal using the full six-case
-        // JsonValueFull schema (corpus 54 stays flat for backward
-        // compat). The identity Lambda returns the array value
-        // unchanged; the schemaClaim evaluates to the JsonArray
-        // SumV with a Cons-Nil chain of JsonNumber payloads.
+        // Q-069 precise-model migration — corpus 66 retired-and-replaced.
+        // The former spliced JsonValueFull program is gone (the spliced
+        // model has no remaining consumer now that Json.* speak the
+        // precise model); the slot is a precise round-trip demonstrator.
+        // It builds a genuine N-048 JsonArray [1, 2] (a real
+        // List<JsonValue>, corpus 88's construction via
+        // RecursiveProjection) and applies Json.Stringify to it,
+        // evaluating to the JSON text "[1,2]" — the round-trip the
+        // spliced model blocked and the output-by-construction demo
+        // had to cut (W4). The first corpus program to exercise a JSON
+        // builtin end-to-end on a constructed value.
         Case(
-            "/corpus/66-json-value-nested.json",
-            // [1, 2] encoded as JsonArrayCons(JsonNumber(1),
-            //                     JsonArrayCons(JsonNumber(2),
-            //                       JsonArrayNil))
-            Value.SumV(
-                "JsonArrayCons",
-                Value.ProductV(mapOf(
-                    "head" to Value.SumV("JsonNumber", Value.IntV(1L)),
-                    "tail" to Value.SumV(
-                        "JsonArrayCons",
-                        Value.ProductV(mapOf(
-                            "head" to Value.SumV("JsonNumber", Value.IntV(2L)),
-                            "tail" to Value.SumV("JsonArrayNil", null),
-                        )),
-                    ),
-                )),
-            ),
-            "Slice 3: post-blocker JsonValue with spliced JsonArrayCons/JsonArrayNil and JsonObjectCons/JsonObjectNil variants inside a single RecursiveType. The depth-field extension is sound but doesn't compose with value construction across nested μ; the spliced-variants approach keeps the type self-contained while still expressing arrays and objects. arrayValue [JsonNumber(1), JsonNumber(2)] round-trips through the identity Lambda unchanged.",
+            "/corpus/66-json-roundtrip-via-builtins.json",
+            Value.StringV("[1,2]"),
+            "Q-069: build a precise N-048 JsonArray [1, 2] (a real List<JsonValue> via RecursiveProjection, corpus 88's construction) and Json.Stringify it to \"[1,2]\". Closes the build-via-N-048 -> stringify round-trip the corpus-66 splice blocked. Json.Stringify's (jsonValueT) -> String foreignType accepts the projTop-typed array value by the N-048 equirecursive (fold/unfold) value-flow relaxation.",
         ),
         // Q-037 Phase 1 — agent-native LLM ForeignNodes. Corpus 67 is
         // a verify-only demonstrator of the agent-as-state-machine
