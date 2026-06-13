@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "root": "writeApp",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "strT":   { "type": "PrimitiveType", "kind": "String" },
+    "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+
+    "innerHead":  { "type": "ProductTypeField", "name": "head", "fieldType": "strT" },
+    "innerTail":  { "type": "ProductTypeField", "name": "tail", "fieldType": "recSelf" },
+    "innerProd":  { "type": "ProductType", "fields": ["innerHead", "innerTail"] },
+    "consCase":   { "type": "SumTypeCase", "name": "Cons", "caseType": "innerProd" },
+    "nilCase":    { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "listBody":   { "type": "SumType", "cases": ["consCase", "nilCase"] },
+    "recSelf":    { "type": "RecursiveSelf" },
+    "listT":      { "type": "RecursiveType", "body": "listBody" },
+
+    "outerHead":  { "type": "ProductTypeField", "name": "head", "fieldType": "strT" },
+    "outerTail":  { "type": "ProductTypeField", "name": "tail", "fieldType": "listT" },
+    "outerProd":  { "type": "ProductType", "fields": ["outerHead", "outerTail"] },
+
+    "concatT":    { "type": "FunctionType", "parameters": ["strT", "strT"], "result": "strT" },
+    "concatFn":   { "type": "ForeignNode", "target": "strand-builtin:String.Concat", "foreignType": "concatT" },
+
+    "sep":        { "type": "StringLit", "value": "\n- " },
+    "accParam":   { "type": "ParameterDecl", "name": "acc", "paramType": "strT" },
+    "noteParam":  { "type": "ParameterDecl", "name": "note", "paramType": "strT" },
+    "accRef":     { "type": "VarRef", "binder": "accParam" },
+    "noteRef":    { "type": "VarRef", "binder": "noteParam" },
+    "accSep":     { "type": "Application", "function": "concatFn", "arguments": ["accRef", "sep"] },
+    "foldStep":   { "type": "Application", "function": "concatFn", "arguments": ["accSep", "noteRef"] },
+    "foldFn":     { "type": "Lambda", "parameters": ["accParam", "noteParam"], "body": "foldStep" },
+
+    "foldStepT":  { "type": "FunctionType", "parameters": ["strT", "strT"], "result": "strT" },
+    "foldT":      { "type": "FunctionType", "parameters": ["listT", "strT", "foldStepT"], "result": "strT" },
+    "foldBuiltin": { "type": "ForeignNode", "target": "strand-builtin:List.Fold", "foreignType": "foldT" },
+
+    "nilVal":     { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+
+    "note2":      { "type": "StringLit", "value": "minor: widget-B label truncated on narrow viewports" },
+    "h2":         { "type": "ProductFieldValue", "fieldName": "head", "value": "note2" },
+    "t2":         { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+    "p2":         { "type": "ProductValue", "ofType": "outerProd", "fields": ["h2", "t2"] },
+    "node2":      { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p2" },
+
+    "note1":      { "type": "StringLit", "value": "high: widget-A checkout button overlaps footer at 320px" },
+    "h1":         { "type": "ProductFieldValue", "fieldName": "head", "value": "note1" },
+    "t1":         { "type": "ProductFieldValue", "fieldName": "tail", "value": "node2" },
+    "p1":         { "type": "ProductValue", "ofType": "outerProd", "fields": ["h1", "t1"] },
+    "decisions":  { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "p1" },
+
+    "reportName": { "type": "StringLit", "value": "report.md" },
+    "header":     { "type": "StringLit", "value": "# triage digest for " },
+
+    "headerWithName": { "type": "Application", "function": "concatFn", "arguments": ["header", "reportName"] },
+    "foldedNotes":    { "type": "Application", "function": "foldBuiltin", "arguments": ["decisions", "headerWithName", "foldFn"] },
+
+    "fromUtf8T":  { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT" },
+    "fromUtf8Fn": { "type": "ForeignNode", "target": "strand-builtin:Bytes.FromUtf8", "foreignType": "fromUtf8T" },
+    "digestBytes": { "type": "Application", "function": "fromUtf8Fn", "arguments": ["foldedNotes"] },
+
+    "writeFx":   { "type": "EffectCategory", "categoryName": "Filesystem.Write", "parameters": ["strT"] },
+    "writeT":    { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT" },
+    "writeFn":   { "type": "ForeignNode", "target": "strand-builtin:Fs.Write", "foreignType": "writeT", "effects": ["writeFx"],
+                   "effectProjections": [ { "category": "writeFx", "sources": [ { "kind": "ArgRef", "index": 0 } ] } ] },
+    "writeDecl": { "type": "EffectDecl", "effectType": "writeFx", "parameters": ["reportName"] },
+    "writeApp":  { "type": "Application", "function": "writeFn", "arguments": ["reportName", "digestBytes"], "effectInstances": ["writeDecl"] }
+  }
+}
