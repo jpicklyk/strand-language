@@ -30,6 +30,34 @@ Run the assertion-backed test that pins every property, from `impl-kotlin/`:
 ./gradlew :runtime:test --tests "org.strand.runtime.ContainmentDemoTest"
 ```
 
+### output-by-construction
+
+A correct-by-construction structured-output demonstration: a program produces a
+structured document — a `JsonValue` whose array case is a genuine N-048 nested
+`List<JsonValue>` (a real `Cons`/`Nil` spine, not the corpus-66 flat splice) —
+carrying a Schema whose invariant makes a malformed document unemittable. The
+invariant is checked before the value is admitted (verify time, for a
+statically-known value, with the Q-035 `SchemaChecker`) or produced (runtime, for
+a dynamically-computed value, via the Q-047 obligation), so a malformed artifact
+never reaches output: correctness is structural, not a post-hoc lint. It
+exercises this session's Q-053 / N-048 `RecursiveProjection` work for the nested
+document and the Q-035 / Q-047 schema mechanism for the invariant. The Kotlin
+driver and its assertion test live in the `:runtime` test source set; the
+document programs and narrative live under
+[`output-by-construction/`](output-by-construction/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:outputByConstructionDemo -q
+```
+
+Run the assertion-backed test that pins every property, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.OutputByConstructionDemoTest"
+```
+
 ### plugin-host
 
 A host application that loads untrusted plugins — agent-generated Strand programs
