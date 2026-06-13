@@ -28,20 +28,21 @@ import org.strand.hashing.Hasher
 import org.strand.hashing.LocalProgramResolver
 import org.strand.hashing.NameRegistry
 import org.strand.hashing.federated
-import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.EscapePolicy
 import org.strand.interpreter.FsPolicy
 import org.strand.interpreter.HostPattern
-import org.strand.interpreter.Interpreter
+import org.strand.interpreter.HostPolicy
 import org.strand.interpreter.InterpretException
 import org.strand.interpreter.NetPolicy
 import org.strand.interpreter.SandboxPolicy
 import org.strand.interpreter.Value
 import org.strand.runtime.EventCodec
 import org.strand.runtime.MachineGroup
+import org.strand.runtime.ProgramImage
+import org.strand.runtime.RunOutcome
 import org.strand.runtime.RuntimeMetrics
-import org.strand.runtime.StateMachineRuntime
+import org.strand.runtime.StrandRuntime
 import org.strand.runtime.Trace
 import org.strand.runtime.TraceStep
 import org.strand.schema.SchemaChecker
@@ -258,44 +259,28 @@ private fun loadFinalized(text: String, limits: EvaluationLimits = EvaluationLim
     loadFinalizedWithIngest(text, limits).second
 
 /**
- * Install the per-run host context on the [Builtins] singleton, run [block],
- * and restore the prior values in a `finally`. Three slots are installed:
- *
- *  * [Builtins.sandboxPolicy] — Q-041. The library default is open; CLI
- *    invocations override to secure (or to whatever the flags request).
- *  * [Builtins.streamReceiveTimeoutMillis] — Q-045 per-read streaming-receive
- *    ceiling, taken from [EvaluationLimits.streamReceiveTimeoutMillis].
- *  * [Builtins.verifierNodeTypes] — the verifier's `nodeTypes` map from the
- *    successful `VerifyResult.Ok`, so the N-044 ToolDef parameter-schema and
- *    N-045 ResponseSchemaSpec projections can resolve a Schema NodeId to its
- *    `TypeExpr.SchemaType`. Without this the LLM tool-dispatch path silently
- *    degrades to empty `{}` JSON schemas on every real CLI run.
- *
- * Every CLI path that evaluates a verified program (`run`, `machine`,
- * `group`) goes through this helper so the install/restore discipline cannot
- * drift between subcommands. Internal (not private) so the CLI test suite
- * can prove the wiring directly.
+ * Q-054: build the per-run [HostPolicy] from the CLI's parsed flags. The base
+ * is [HostPolicy.OPEN] — the CLI historically installed only the sandbox
+ * policy, the stream-receive timeout (carried on [EvaluationLimits]), and the
+ * verifier node-types, leaving the clock / RNG / credential provider / HTTP
+ * clients at their library defaults. Keeping the OPEN base preserves that:
+ * the sandbox comes from the flags (default-secure, relaxed by flags), the
+ * limits from the flags, and everything else stays at the OPEN defaults.
  */
-internal fun <T> withProgramEvaluationContext(
-    sandboxPolicy: SandboxPolicy,
-    limits: EvaluationLimits,
-    verifierNodeTypes: Map<NodeId, org.strand.verifier.TypeExpr>?,
-    block: () -> T,
-): T {
-    val priorSandbox = Builtins.sandboxPolicy
-    val priorStreamTimeout = Builtins.streamReceiveTimeoutMillis
-    val priorNodeTypes = Builtins.verifierNodeTypes
-    Builtins.sandboxPolicy = sandboxPolicy
-    Builtins.streamReceiveTimeoutMillis = limits.streamReceiveTimeoutMillis
-    Builtins.verifierNodeTypes = verifierNodeTypes
-    try {
-        return block()
-    } finally {
-        Builtins.sandboxPolicy = priorSandbox
-        Builtins.streamReceiveTimeoutMillis = priorStreamTimeout
-        Builtins.verifierNodeTypes = priorNodeTypes
-    }
-}
+private fun hostPolicyFor(sandboxPolicy: SandboxPolicy, limits: EvaluationLimits): HostPolicy =
+    HostPolicy.OPEN.copy(sandbox = sandboxPolicy, limits = limits)
+
+/**
+ * Q-054: build a [ProgramImage] (the facade's program-supply form) from the
+ * resolved canonical store / root / reverse map plus the optional Q-043
+ * cross-store resolution callback.
+ */
+private fun programImageOf(
+    store: org.strand.core.NodeStore,
+    root: NodeId,
+    hashToNodeId: Map<Hash, NodeId>,
+    resolveTarget: ((Hash) -> NodeId?)?,
+): ProgramImage = ProgramImage(store, root, hashToNodeId, resolveTarget)
 
 /**
  * Build a permissive [CapabilitySet] that grants wildcard patterns for every
@@ -430,27 +415,35 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
             // (informational, per the proposal's default disposition).
             if (!runSchemaCheck(schemaProgram, result, annotator, limits, resolveCb)) exitProcess(1)
             if (command == "run") {
-                // Install the host context (Q-041 sandbox, Q-045 stream
-                // timeout, verifier nodeTypes for N-044/N-045 schema
-                // projection) for the duration of the run.
+                // Q-054: the StrandRuntime facade owns the host-context
+                // install/restore (Q-041 sandbox, Q-045 stream timeout,
+                // verifier nodeTypes for N-044/N-045 schema projection) and
+                // the Q-047 runtime-schema-obligation wiring. The CLI is a
+                // thin client: build the policy + program image, call run,
+                // render the outcome. (The facade re-verifies and
+                // re-schema-checks internally; the CLI's earlier passes above
+                // produced the warning/diagnostic rendering and the exit on a
+                // static violation — by here both are known clean.)
+                val runtime = StrandRuntime(hostPolicyFor(sandboxPolicy, limits))
+                val image = programImageOf(store, root, hashToNodeId, resolveCb)
+                val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
                 try {
-                    withProgramEvaluationContext(sandboxPolicy, limits, result.nodeTypes) {
-                        // Q-047 (Layer 7 step 2): runtime schema enforcement.
-                        // The verifier re-records a SchemaType at every value-flow
-                        // site; pass those obligations to the interpreter so it
-                        // enforces invariants on dynamic values the verify-time
-                        // SchemaChecker could only defer.
-                        val schemaObligations = result.nodeTypes.mapNotNull { (nid, t) ->
-                            (t as? org.strand.verifier.TypeExpr.SchemaType)?.let { nid to it }
-                        }.toMap()
-                        val interp = Interpreter(
-                            store, hashToNodeId,
-                            resolveTarget = resolveCb,
-                            schemaObligations = schemaObligations,
-                        )
-                        val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
-                        val value = interp.eval(root, caps, limits)
-                        println("value: $value")
+                    when (val outcome = runtime.run(image, caps)) {
+                        is RunOutcome.Ok -> println("value: ${outcome.value}")
+                        // The CLI already rendered verify failures and schema
+                        // violations above and would have exited; reaching
+                        // these here would mean the facade's re-check diverged,
+                        // which is a hard inconsistency.
+                        is RunOutcome.VerifyFailed -> {
+                            System.err.println("verification failed:")
+                            for (e in outcome.errors) System.err.println("  ${annotator.annotate(e.toString())}")
+                            exitProcess(1)
+                        }
+                        is RunOutcome.SchemaViolation -> {
+                            System.err.println("schema-check failed:")
+                            for (v in outcome.schema.violations) System.err.println("  ${annotator.annotate(v.toString())}")
+                            exitProcess(1)
+                        }
                     }
                 } catch (e: InterpretException) {
                     // Q-064: one machine-readable strand:denial line on a
@@ -549,22 +542,22 @@ private fun runMachine(args: Array<String>) {
             if (!runSchemaCheck(schemaProgram, result, annotator, limits, resolveCb)) exitProcess(1)
             val eventsText = File(eventsPath).readText()
             val events = EventCodec.parseEventList(eventsText)
-            val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
-            // Install the host context (Q-041 sandbox, Q-045 stream timeout,
-            // verifier nodeTypes for N-044/N-045) for the duration of the run.
+            // Q-054: the facade owns the host-context install/restore. The CLI
+            // builds the policy + program image, drives one machine, and
+            // renders the trace.
+            val runtime = StrandRuntime(hostPolicyFor(sandboxPolicy, limits))
+            val image = programImageOf(store, root, hashToNodeId, resolveCb)
+            val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
             try {
-                withProgramEvaluationContext(sandboxPolicy, limits, result.nodeTypes) {
-                    val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
-                    val trace = runtime.runMachine(root, events, caps, limits)
-                    printTrace(trace)
-                    // Q-064: a denial-caused halt is a denial-caused
-                    // termination — the trace above is the human rendering;
-                    // emit the one machine-readable line and exit non-zero.
-                    val haltReason = trace.final.reason
-                    if (haltReason is org.strand.runtime.HaltReason.CapabilityDenial) {
-                        DenialLine.emitReport(haltReason.report, annotator)
-                        exitProcess(1)
-                    }
+                val trace = runtime.runMachine(image, root, events, caps, result.nodeTypes)
+                printTrace(trace)
+                // Q-064: a denial-caused halt is a denial-caused termination —
+                // the trace above is the human rendering; emit the one
+                // machine-readable line and exit non-zero.
+                val haltReason = trace.final.reason
+                if (haltReason is org.strand.runtime.HaltReason.CapabilityDenial) {
+                    DenialLine.emitReport(haltReason.report, annotator)
+                    exitProcess(1)
                 }
             } catch (e: InterpretException) {
                 // Q-064: denials thrown outside the per-event fold (e.g.
@@ -700,13 +693,17 @@ private fun runGroup(args: Array<String>) {
     val nameByNodeId: Map<NodeId, String> = ingest.nameMap.entries
         .associate { (name, id) -> id to name }
 
-    // Install the host context (Q-041 sandbox, Q-045 stream timeout,
-    // verifier nodeTypes for N-044/N-045) for the duration of the group run.
+    // Q-054: the facade scopes the host-context install/restore around the
+    // entire group lifecycle (the actors evaluate asynchronously, so the
+    // install must outlive `runGroup`'s return until the group halts). The CLI
+    // builds the policy + program image and drives the group through the
+    // facade's runGroup.
+    val runtime = StrandRuntime(hostPolicyFor(sandboxPolicy, limits))
+    val image = programImageOf(store, root, hashToNodeId, resolveCb)
     try {
-        withProgramEvaluationContext(sandboxPolicy, limits, verifyResult.nodeTypes) {
+        runtime.withGroupInstalled(verifyResult.nodeTypes) {
             runBlocking {
-                val runtime = StateMachineRuntime(store, hashToNodeId, resolveCb)
-                val handle = runtime.runGroup(group, this, limits)
+                val handle = runtime.runGroup(image, group, this, verifyResult.nodeTypes)
 
                 // Send routed events on their designated input streams, then
                 // close all host-feedable external inputs so the actors halt
