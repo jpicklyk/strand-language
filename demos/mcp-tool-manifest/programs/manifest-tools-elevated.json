@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "root": "bundle",
+  "nodes": {
+    "strT":   { "type": "PrimitiveType", "kind": "String" },
+    "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+
+    "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write",
+                 "parameters": ["strT"] },
+
+    "writeT":  { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT" },
+    "writeFn": { "type": "ForeignNode", "target": "strand-builtin:Fs.Write",
+                 "foreignType": "writeT", "effects": ["writeFx"],
+                 "effectProjections": [
+                   { "category": "writeFx", "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                 ] },
+
+    "lkPath":    { "type": "ParameterDecl", "name": "path", "paramType": "strT" },
+    "lkData":    { "type": "ParameterDecl", "name": "data", "paramType": "bytesT" },
+    "lkVarPath": { "type": "VarRef", "binder": "lkPath" },
+    "lkVarData": { "type": "VarRef", "binder": "lkData" },
+    "lkDecl":    { "type": "EffectDecl", "effectType": "writeFx", "parameters": ["lkVarPath"] },
+    "lkBody":    { "type": "Application", "function": "writeFn",
+                   "arguments": ["lkVarPath", "lkVarData"], "effectInstances": ["lkDecl"] },
+    "lookup":    { "type": "Lambda", "parameters": ["lkPath", "lkData"], "body": "lkBody",
+                   "effects": ["writeFx"] },
+
+    "fmtIn":   { "type": "ParameterDecl", "name": "raw", "paramType": "strT" },
+    "fmtVar":  { "type": "VarRef", "binder": "fmtIn" },
+    "format":  { "type": "Lambda", "parameters": ["fmtIn"], "body": "fmtVar" },
+
+    "bundle": { "type": "ModuleManifest",
+                "exports": [
+                  { "target": "lookup", "declaredEffects": ["writeFx"], "displayName": "fs.lookup" },
+                  { "target": "format", "declaredEffects": [],          "displayName": "text.format" }
+                ] }
+  }
+}

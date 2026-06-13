@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "root": "bundle",
+  "nodes": {
+    "strT":   { "type": "PrimitiveType", "kind": "String" },
+    "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+
+    "readFx": { "type": "EffectCategory", "categoryName": "Filesystem.Read",
+                "parameters": ["strT"] },
+
+    "readT":  { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT" },
+    "readFn": { "type": "ForeignNode", "target": "strand-builtin:Fs.Read",
+                "foreignType": "readT", "effects": ["readFx"],
+                "effectProjections": [
+                  { "category": "readFx", "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                ] },
+
+    "lkPath":    { "type": "ParameterDecl", "name": "path", "paramType": "strT" },
+    "lkVarPath": { "type": "VarRef", "binder": "lkPath" },
+    "lkDecl":    { "type": "EffectDecl", "effectType": "readFx", "parameters": ["lkVarPath"] },
+    "lkBody":    { "type": "Application", "function": "readFn",
+                   "arguments": ["lkVarPath"], "effectInstances": ["lkDecl"] },
+    "lookup":    { "type": "Lambda", "parameters": ["lkPath"], "body": "lkBody",
+                   "effects": ["readFx"] },
+
+    "fmtIn":   { "type": "ParameterDecl", "name": "raw", "paramType": "strT" },
+    "fmtVar":  { "type": "VarRef", "binder": "fmtIn" },
+    "format":  { "type": "Lambda", "parameters": ["fmtIn"], "body": "fmtVar" },
+
+    "bundle": { "type": "ModuleManifest",
+                "exports": [
+                  { "target": "lookup", "declaredEffects": [], "displayName": "fs.lookup" },
+                  { "target": "format", "declaredEffects": [], "displayName": "text.format" }
+                ] }
+  }
+}
