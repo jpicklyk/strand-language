@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "root": "analytic",
+  "nodes": {
+    "strT":      { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":    { "type": "PrimitiveType", "kind": "Bytes" },
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+
+    "readFx":    { "type": "EffectCategory", "categoryName": "Filesystem.Read", "parameters": ["strT"] },
+    "readT":     { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT" },
+    "readFn":    { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "readT", "effects": ["readFx"], "effectProjections": [{ "category": "readFx", "sources": [{ "kind": "ArgRef", "index": 0 }] }] },
+
+    "lenT":      { "type": "FunctionType", "parameters": ["bytesT"], "result": "intT" },
+    "lenFn":     { "type": "ForeignNode", "target": "strand-builtin:Bytes.Length", "foreignType": "lenT" },
+
+    "datasetPath": { "type": "StringLit", "value": "dataset.csv" },
+    "readDecl":  { "type": "EffectDecl", "effectType": "readFx", "parameters": ["datasetPath"] },
+    "readApp":   { "type": "Application", "function": "readFn", "arguments": ["datasetPath"], "typeArguments": [], "effectInstances": ["readDecl"] },
+
+    "analytic":  { "type": "Application", "function": "lenFn", "arguments": ["readApp"] }
+  }
+}

