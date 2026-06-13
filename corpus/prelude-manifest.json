@@ -1,6 +1,7 @@
 {
   "description": "Pinned content hashes for the generated prelude module (Q-063): the N-046 ModuleManifest hash, per-export hashes (the ForeignNode entries the manifest exports), and per-node hashes for every reserved name in the Layer A implicit prelude. Language-independent conformance vectors: any Strand implementation's prelude must reproduce these hashes. Regenerate via the command in corpus/README.md when the reserved-spec table legitimately changes.",
   "hashFormat": "BLAKE3-256 multihash over the canonical node encoding (design/canonical-encoding.md): one 0x1e prefix byte + 32 digest bytes, rendered as lowercase hex (66 hex chars).",
+  "epoch": 1,
   "manifestHash": "1e31a8cd03c8de0820188952ee4dadf1919c98a8057ec628f7904017aaa7fc08bd",
   "exports": {
     "abs": "1e244fc88fc6b72fc50874409ac1746a4e74a5c949fc7f8ee2a9d13186add80b71",

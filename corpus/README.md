@@ -96,6 +96,14 @@ reproduce these hashes from the same inputs; the Kotlin implementation asserts t
 `CorpusGoldenHashTest` (`impl-kotlin/corpus`), which also enforces bidirectional coverage — adding
 a corpus program without a golden entry, or leaving a stale entry behind, fails the build.
 
+The top-level `epoch` field pins the canonical-encoding epoch the vectors were generated under
+([Q-062](../open-questions.md#Q-062), [`design/canonical-encoding.md`](../design/canonical-encoding.md)
+§ Epoch log). Consumers assert it against their own declared epoch constant before comparing hashes:
+the Kotlin side via `CanonicalEncoding.EPOCH` in `CorpusGoldenHashTest`, the independent Python
+encoder via `CANONICAL_ENCODING_EPOCH` in `evaluation/conformance/independent_encoder.py`. An epoch
+advance regenerates this file (bumping the field together with both constants) in the same pass as
+its defining proposal.
+
 A corpus JSON file counts as a program iff its top-level object has both `root` and `nodes` keys;
 event-input files (`*.events.json`), the corpus-77 name registry (`registry.json`), and
 `golden-hashes.json` itself are excluded by that structural rule. Hashing does not require
@@ -125,7 +133,9 @@ bundled dag-json snapshot at
 the reserved-spec table by `PreludeModuleGenerator`; `PreludeModuleConformanceTest`
 (`impl-kotlin/corpus`) asserts that regeneration reproduces both artifacts, so the table cannot
 drift from the published module silently. Like the corpus-77 registry, this file is not a program
-(no `root`/`nodes` document keys) and is excluded from `golden-hashes.json` structurally.
+(no `root`/`nodes` document keys) and is excluded from `golden-hashes.json` structurally. It carries
+the same top-level `epoch` field as `golden-hashes.json`, asserted against `CanonicalEncoding.EPOCH`
+by `PreludeModuleConformanceTest` and written by its regeneration path.
 
 To regenerate after a legitimate reserved-table change, run from `impl-kotlin/`:
 

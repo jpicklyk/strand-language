@@ -4,10 +4,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.strand.authoring.Authoring
 import org.strand.core.JsonIngest
+import org.strand.hashing.CanonicalEncoding
 import org.strand.hashing.Hasher
 import java.nio.file.Files
 import java.nio.file.Path
@@ -23,7 +25,10 @@ import kotlin.streams.toList
  * its root content hash (BLAKE3-256 multihash: one 0x1e prefix byte plus the
  * 32 digest bytes, lowercase hex — `Hash.toString()`). A second section maps
  * every Layer A fixture to the root hash of its compiled canonical form,
- * witnessing Layer A <-> canonical conformance.
+ * witnessing Layer A <-> canonical conformance. The top-level `epoch` field
+ * pins the canonical-encoding epoch the vectors were generated under (Q-062,
+ * `design/canonical-encoding.md` § Epoch log) and must equal
+ * [CanonicalEncoding.EPOCH].
  *
  * Program/non-program classification is structural: a corpus JSON file is a
  * program iff its top-level JSON object carries both a `root` and a `nodes`
@@ -165,10 +170,14 @@ object GoldenHashes {
         val root = Json.parseToJsonElement(Files.readString(path)).jsonObject
         fun section(key: String): Map<String, String> =
             root[key]?.jsonObject?.mapValues { (_, v) -> v.jsonPrimitive.content } ?: emptyMap()
-        return GoldenFile(programs = section("programs"), layerA = section("layerA"))
+        return GoldenFile(
+            epoch = root["epoch"]?.jsonPrimitive?.int,
+            programs = section("programs"),
+            layerA = section("layerA"),
+        )
     }
 
-    /** Recompute both sections from the corpus on disk. */
+    /** Recompute both sections from the corpus on disk under the implementation's epoch. */
     fun computeGoldenFile(corpusDir: Path): GoldenFile {
         val programs = enumerateProgramFiles(corpusDir).associateWith { rel ->
             computeRootHashOrMarker(Files.readString(corpusDir.resolve(rel)))
@@ -176,7 +185,7 @@ object GoldenHashes {
         val layerA = enumerateLayerAFiles(corpusDir).associateWith { rel ->
             computeLayerARootHash(Files.readString(corpusDir.resolve(rel)))
         }
-        return GoldenFile(programs, layerA)
+        return GoldenFile(CanonicalEncoding.EPOCH, programs, layerA)
     }
 
     /** Serialize and write the golden file deterministically (sorted keys, LF, trailing newline). */
@@ -198,6 +207,7 @@ object GoldenHashes {
                         "one 0x1e prefix byte + 32 digest bytes, rendered as lowercase hex (66 hex chars)."
                 )
             )
+            put("epoch", JsonPrimitive(golden.epoch ?: CanonicalEncoding.EPOCH))
             put(
                 "exclusionRule",
                 JsonPrimitive(
@@ -221,6 +231,12 @@ object GoldenHashes {
     }
 
     data class GoldenFile(
+        /**
+         * The canonical-encoding epoch the vectors were generated under
+         * (Q-062); null only for a pre-epoch file, which the conformance
+         * test rejects. Must equal [CanonicalEncoding.EPOCH].
+         */
+        val epoch: Int?,
         val programs: Map<String, String>,
         val layerA: Map<String, String>,
     )

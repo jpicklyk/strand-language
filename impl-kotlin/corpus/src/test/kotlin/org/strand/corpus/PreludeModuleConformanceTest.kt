@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -14,6 +15,7 @@ import org.strand.authoring.LayerAGrammar
 import org.strand.authoring.PreludeModule
 import org.strand.authoring.PreludeModuleGenerator
 import org.strand.core.JsonIngest
+import org.strand.hashing.CanonicalEncoding
 import org.strand.hashing.Hasher
 import org.strand.verifier.VerifyResult
 import org.strand.verifier.Verifier
@@ -85,6 +87,18 @@ class PreludeModuleConformanceTest {
     }
 
     @Test
+    fun `golden epoch matches the implementation's declared encoding epoch`() {
+        assumeNotRegenerating()
+        val golden = readGolden()
+        assertEquals(CanonicalEncoding.EPOCH, golden.epoch) {
+            "corpus/$GOLDEN_FILE_NAME declares encoding epoch ${golden.epoch} but this " +
+                "implementation declares epoch ${CanonicalEncoding.EPOCH} " +
+                "(CanonicalEncoding.EPOCH). Regenerate the prelude artifacts in the same " +
+                "pass as the epoch advance (Q-062)."
+        }
+    }
+
+    @Test
     fun `regenerated manifest hash matches the pinned golden`() {
         assumeNotRegenerating()
         val golden = readGolden()
@@ -151,6 +165,8 @@ class PreludeModuleConformanceTest {
     // ── golden file plumbing ─────────────────────────────────────────────────
 
     private data class Golden(
+        /** The canonical-encoding epoch (Q-062); must equal [CanonicalEncoding.EPOCH]. */
+        val epoch: Int?,
         val manifestHash: String,
         val exports: Map<String, String>,
         val nodes: Map<String, String>,
@@ -165,6 +181,7 @@ class PreludeModuleConformanceTest {
         fun section(key: String): Map<String, String> =
             root[key]?.jsonObject?.mapValues { (_, v) -> v.jsonPrimitive.content } ?: emptyMap()
         return Golden(
+            epoch = root["epoch"]?.jsonPrimitive?.int,
             manifestHash = root["manifestHash"]!!.jsonPrimitive.content,
             exports = section("exports"),
             nodes = section("nodes"),
@@ -191,6 +208,7 @@ class PreludeModuleConformanceTest {
                         "one 0x1e prefix byte + 32 digest bytes, rendered as lowercase hex (66 hex chars)."
                 )
             )
+            put("epoch", JsonPrimitive(CanonicalEncoding.EPOCH))
             put("manifestHash", JsonPrimitive(generated.manifestHash.toString()))
             put("exports", buildJsonObject {
                 generated.exportHashes.toSortedMap().forEach { (k, v) -> put(k, JsonPrimitive(v.toString())) }

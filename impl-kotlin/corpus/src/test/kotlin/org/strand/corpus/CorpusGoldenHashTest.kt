@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
+import org.strand.hashing.CanonicalEncoding
 import java.nio.file.Files
 
 /**
@@ -60,6 +61,19 @@ class CorpusGoldenHashTest {
             "Regenerated ${corpusDir.resolve(GoldenHashes.GOLDEN_FILE_NAME)}: " +
                 "${golden.programs.size} programs, ${golden.layerA.size} Layer A fixtures"
         )
+    }
+
+    @Test
+    fun `golden epoch matches the implementation's declared encoding epoch`() {
+        assumeNotRegenerating()
+        val golden = GoldenHashes.readGoldenFile(corpusDir)
+        assertEquals(CanonicalEncoding.EPOCH, golden.epoch) {
+            "corpus/golden-hashes.json declares encoding epoch ${golden.epoch} but this " +
+                "implementation declares epoch ${CanonicalEncoding.EPOCH} " +
+                "(CanonicalEncoding.EPOCH). An epoch advance must ship as one pass: its own " +
+                "proposal, the constant bump, regenerated goldens, and an Epoch log entry in " +
+                "design/canonical-encoding.md (Q-062)."
+        }
     }
 
     @TestFactory

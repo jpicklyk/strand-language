@@ -43,6 +43,14 @@ authoring pipeline (Layer A text to canonical form), which is a Kotlin-side
 concern; their compiled canonical graphs exercise the same encoder paths that
 the `programs` section covers.
 
+The golden file's top-level `epoch` field (Q-062, pre-1.0 encoding epochs) is
+checked before any hash comparison: the encoder declares
+`CANONICAL_ENCODING_EPOCH`, mirroring the Kotlin constant
+`org.strand.hashing.CanonicalEncoding.EPOCH`, and exits nonzero on a mismatch
+rather than reporting cross-epoch hashes as failures. The two constants
+advance together when an epoch ships; the Python side is then extended from
+the revised specification text per the independence rule below.
+
 ## The independence rule
 
 `independent_encoder.py` was written from

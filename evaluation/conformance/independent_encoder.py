@@ -76,6 +76,12 @@ def blake3_256(data: bytes) -> bytes:
 
 MULTIHASH_PREFIX = b"\x1e"  # BLAKE3-256 per ADR-003
 
+# Canonical-encoding epoch this encoder implements (Q-062,
+# design/canonical-encoding.md "Epoch log"). Mirrors the Kotlin constant
+# org.strand.hashing.CanonicalEncoding.EPOCH; the pair advances together when
+# an epoch ships. --golden refuses to compare vectors from any other epoch.
+CANONICAL_ENCODING_EPOCH = 1
+
 
 def multihash(encoding: bytes) -> bytes:
     return MULTIHASH_PREFIX + blake3_256(encoding)
@@ -589,6 +595,15 @@ def find_repo_corpus() -> Path:
 
 def run_golden(corpus_dir: Path) -> int:
     golden = json.loads((corpus_dir / "golden-hashes.json").read_text(encoding="utf-8"))
+    file_epoch = golden.get("epoch")
+    if file_epoch != CANONICAL_ENCODING_EPOCH:
+        print(
+            f"epoch mismatch: golden-hashes.json declares encoding epoch {file_epoch}, "
+            f"this encoder implements epoch {CANONICAL_ENCODING_EPOCH} (Q-062, "
+            "design/canonical-encoding.md 'Epoch log'); refusing to compare hashes "
+            "across epochs"
+        )
+        return 1
     programs = golden["programs"]
     mismatches = []
     skipped = []
@@ -606,6 +621,7 @@ def run_golden(corpus_dir: Path) -> int:
             mismatches.append((rel, expected, got))
     layer_a = golden.get("layerA", {})
 
+    print(f"encoding epoch   : {file_epoch}")
     print(f"programs checked : {len(programs) - len(skipped)}")
     print(f"matched          : {len(programs) - len(skipped) - len(mismatches)}")
     print(f"skipped (marker) : {len(skipped)}")
