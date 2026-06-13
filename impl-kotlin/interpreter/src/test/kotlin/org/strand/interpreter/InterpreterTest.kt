@@ -1351,4 +1351,85 @@ class InterpreterTest {
         // flowing through both Lambdas — `/etc/shadow`, not `/safe`.
         assertEquals(listOf(Value.StringV("/etc/shadow")), err.requirement)
     }
+
+    // ----- N-048 RecursiveProjection (Q-053) runtime erasure -----
+
+    @Test
+    fun `RecursiveProjection - value built through a projection-typed ofType evaluates correctly`() {
+        // Build the true nested-mu JSON array [1] (JsonArray(Cons(JsonNumber(1), Nil)))
+        // entirely through RecursiveProjection-typed ofType edges, then
+        // Match the outer JsonValue and the inner list to extract the head
+        // integer. The interpreter never inspects the projection — types are
+        // erased — so the value path evaluates exactly as a hand-flattened
+        // SumV/ProductV tower would.
+        val v = run("""{
+          "version": 1, "root": "main",
+          "nodes": {
+            "intT":        { "type": "PrimitiveType", "kind": "Int" },
+
+            "selfOuter":   { "type": "RecursiveSelf", "depth": 1 },
+            "selfInner":   { "type": "RecursiveSelf", "depth": 0 },
+            "headField":   { "type": "ProductTypeField", "name": "head", "fieldType": "selfOuter" },
+            "tailField":   { "type": "ProductTypeField", "name": "tail", "fieldType": "selfInner" },
+            "consProduct": { "type": "ProductType", "fields": ["headField", "tailField"] },
+            "consCase":    { "type": "SumTypeCase", "name": "Cons", "caseType": "consProduct" },
+            "nilCase":     { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+            "listBody":    { "type": "SumType", "cases": ["consCase", "nilCase"] },
+            "innerListT":  { "type": "RecursiveType", "body": "listBody" },
+
+            "numCase":     { "type": "SumTypeCase", "name": "JsonNumber", "caseType": "intT" },
+            "arrCase":     { "type": "SumTypeCase", "name": "JsonArray", "caseType": "innerListT" },
+            "jvBody":      { "type": "SumType", "cases": ["numCase", "arrCase"] },
+            "jsonValueT":  { "type": "RecursiveType", "body": "jvBody" },
+
+            "projTop":     { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                             "path": [ { "step": "Unfold" } ] },
+            "projList":    { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                             "path": [ { "step": "Case", "caseName": "JsonArray" }, { "step": "Unfold" } ] },
+            "projCons":    { "type": "RecursiveProjection", "recursiveType": "jsonValueT",
+                             "path": [ { "step": "Case", "caseName": "JsonArray" },
+                                       { "step": "Unfold" },
+                                       { "step": "Case", "caseName": "Cons" } ] },
+
+            "one":       { "type": "IntLit", "value": 1 },
+            "numOne":    { "type": "SumValue", "ofType": "projTop", "caseName": "JsonNumber", "payload": "one" },
+            "nilVal":    { "type": "SumValue", "ofType": "projList", "caseName": "Nil", "payload": null },
+            "consHead":  { "type": "ProductFieldValue", "fieldName": "head", "value": "numOne" },
+            "consTail":  { "type": "ProductFieldValue", "fieldName": "tail", "value": "nilVal" },
+            "consVal":   { "type": "ProductValue", "ofType": "projCons", "fields": ["consHead", "consTail"] },
+            "listVal":   { "type": "SumValue", "ofType": "projList", "caseName": "Cons", "payload": "consVal" },
+            "arrayValue":{ "type": "SumValue", "ofType": "projTop", "caseName": "JsonArray", "payload": "listVal" },
+
+            "consPatVar":  { "type": "Pattern", "kind": "variable", "patternType": "consProduct", "name": "c" },
+            "consPat":     { "type": "Pattern", "kind": "constructor", "patternType": "innerListT", "caseName": "Cons", "payloadPattern": "consPatVar" },
+            "cRef":        { "type": "VarRef", "binder": "consPatVar" },
+            "headGet":     { "type": "ProductFieldGet", "target": "cRef", "fieldName": "head" },
+            "numPatVar":   { "type": "Pattern", "kind": "variable", "patternType": "intT", "name": "n" },
+            "numPat":      { "type": "Pattern", "kind": "constructor", "patternType": "jsonValueT", "caseName": "JsonNumber", "payloadPattern": "numPatVar" },
+            "nRef":        { "type": "VarRef", "binder": "numPatVar" },
+            "numMatchCase":{ "type": "MatchCase", "pattern": "numPat", "body": "nRef" },
+            "zeroLit":     { "type": "IntLit", "value": -1 },
+            "wildPat":     { "type": "Pattern", "kind": "wildcard", "patternType": "jsonValueT" },
+            "wildCase":    { "type": "MatchCase", "pattern": "wildPat", "body": "zeroLit" },
+            "innerMatch":  { "type": "Match", "scrutinee": "headGet", "cases": ["numMatchCase", "wildCase"] },
+            "consMatchCase":{ "type": "MatchCase", "pattern": "consPat", "body": "innerMatch" },
+            "nilPat":      { "type": "Pattern", "kind": "constructor", "patternType": "innerListT", "caseName": "Nil" },
+            "negTwo":      { "type": "IntLit", "value": -2 },
+            "nilMatchCase":{ "type": "MatchCase", "pattern": "nilPat", "body": "negTwo" },
+
+            "arrPatVar":   { "type": "Pattern", "kind": "variable", "patternType": "innerListT", "name": "lst" },
+            "arrPat":      { "type": "Pattern", "kind": "constructor", "patternType": "jsonValueT", "caseName": "JsonArray", "payloadPattern": "arrPatVar" },
+            "lstRef":      { "type": "VarRef", "binder": "arrPatVar" },
+            "listMatch":   { "type": "Match", "scrutinee": "lstRef", "cases": ["consMatchCase", "nilMatchCase"] },
+            "arrMatchCase":{ "type": "MatchCase", "pattern": "arrPat", "body": "listMatch" },
+            "negThree":    { "type": "IntLit", "value": -3 },
+            "topWildPat":  { "type": "Pattern", "kind": "wildcard", "patternType": "jsonValueT" },
+            "topWildCase": { "type": "MatchCase", "pattern": "topWildPat", "body": "negThree" },
+
+            "main":        { "type": "Match", "scrutinee": "arrayValue", "cases": ["arrMatchCase", "topWildCase"] }
+          }
+        }""")
+        assertEquals(Value.IntV(1), v,
+            "the array [1]'s head integer, extracted through projection-typed construction and Match")
+    }
 }
