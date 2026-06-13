@@ -33,3 +33,32 @@ dependencies {
     // Virtual-time test dispatcher for actor-loop assertions without wall-clock dependence.
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
+
+// The containment-demonstration tenant programs (compiled canonical dag-json)
+// live at impl-kotlin/demo/programs/ as a single source of truth. Copy them
+// onto the test classpath under /demo/programs/ so ContainmentDemo and
+// ContainmentDemoTest load them via getResourceAsStream without duplicating the
+// JSON in git or depending on a fragile relative working-directory path.
+private val demoProgramsDir = projectDir.parentFile.resolve("demo/programs")
+
+tasks.named<ProcessResources>("processTestResources") {
+    from(demoProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
+}
+
+tasks.test {
+    inputs.dir(demoProgramsDir)
+}
+
+// Print the containment-demonstration transcript. The driver lives in the test
+// source set (it shares scenario code with ContainmentDemoTest), so it runs on
+// the test runtime classpath. Usage: `./gradlew :runtime:containmentDemo -q`.
+tasks.register<JavaExec>("containmentDemo") {
+    group = "verification"
+    description = "Print the untrusted-agent-program host containment demonstration transcript."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.ContainmentDemo")
+}
