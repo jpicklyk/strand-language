@@ -320,7 +320,7 @@ private fun grantAllCapabilities(finalized: FinalizedProgram): CapabilitySet {
  *   strand run     <file.json>
  *   strand machine <file.json> --events <events.json>
  *   strand group   <file.json> --events <events.json>
- *   strand author  <file.layer-a> [--emit-json]
+ *   strand author  <file.layer-a|file.familiar> [--emit-json] [--surface layer-a|familiar]
  *   strand grammar
  *
  * `verify` ingests and type-checks; `run` additionally evaluates pure
@@ -823,14 +823,22 @@ private fun parseRoutedEvents(text: String): List<Pair<String, Value>> {
 }
 
 /**
- * Q-034 step 1: compile a Layer A authoring-format file to canonical
+ * Q-034 step 1: compile an authoring-surface file to canonical
  * dag-json, ingest, finalize, verify. Elaboration (Layer C — fills in
  * absent Lambda effects, Application effectInstances / typeArguments,
  * Lambda paramType) runs unconditionally.
  *
+ * Q-061: `--surface familiar` selects the Layer F dialect
+ * (proposals/familiar-surface-lowering.md); the default is Layer A,
+ * except that a `.familiar` file extension auto-selects Layer F. Both
+ * surfaces share the elaborator/emitter pipeline and the Q-051
+ * error-annotation path (source lines point into whichever surface
+ * the agent wrote).
+ *
  * Flags:
- *   `--emit-json`   print the compiled JSON to stdout, skip the verify
- *                   pipeline
+ *   `--emit-json`             print the compiled JSON to stdout, skip
+ *                             the verify pipeline
+ *   `--surface <layer-a|familiar>`  the authoring surface of the input
  */
 private fun runAuthor(args: Array<String>) {
     if (args.size < 2) {
@@ -838,20 +846,44 @@ private fun runAuthor(args: Array<String>) {
         exitProcess(2)
     }
     val path = args[1]
-    val flags = args.drop(2).toSet()
-    val emitOnly = "--emit-json" in flags
-    val recognized = setOf("--emit-json")
-    val unknown = flags - recognized
-    if (unknown.isNotEmpty()) {
-        System.err.println("unknown flags: ${unknown.joinToString(", ")}")
-        usage()
-        exitProcess(2)
+    val rest = args.drop(2)
+    var emitOnly = false
+    var surfaceArg: String? = null
+    var i = 0
+    while (i < rest.size) {
+        when (val flag = rest[i]) {
+            "--emit-json" -> emitOnly = true
+            "--surface" -> {
+                surfaceArg = rest.getOrNull(i + 1)
+                if (surfaceArg == null) {
+                    System.err.println("--surface needs an argument: layer-a or familiar")
+                    exitProcess(2)
+                }
+                i++
+            }
+            else -> {
+                System.err.println("unknown flags: $flag")
+                usage()
+                exitProcess(2)
+            }
+        }
+        i++
     }
-    val layerAText = File(path).readText()
+    val surface = when (surfaceArg) {
+        null -> if (path.endsWith(".familiar")) Authoring.Surface.FAMILIAR else Authoring.Surface.LAYER_A
+        "layer-a" -> Authoring.Surface.LAYER_A
+        "familiar" -> Authoring.Surface.FAMILIAR
+        else -> {
+            System.err.println("unknown surface '$surfaceArg' — expected layer-a or familiar")
+            exitProcess(2)
+        }
+    }
+    val surfaceLabel = if (surface == Authoring.Surface.FAMILIAR) "Layer F" else "Layer A"
+    val sourceText = File(path).readText()
     val compiled = try {
-        Authoring.compile(layerAText)
+        Authoring.compile(sourceText, surface)
     } catch (e: AuthoringException) {
-        System.err.println("Layer A compilation failed:")
+        System.err.println("$surfaceLabel compilation failed:")
         for (err in e.errors) {
             System.err.println("  line ${err.line}: ${err.detail}")
         }
@@ -865,7 +897,7 @@ private fun runAuthor(args: Array<String>) {
     val (ingest, finalized) = try {
         loadFinalizedWithIngest(compiled.dagJson)
     } catch (e: IngestError) {
-        System.err.println("ingest failed for $path (after Layer A compile): ${e.message}")
+        System.err.println("ingest failed for $path (after $surfaceLabel compile): ${e.message}")
         printElaborationNotes(compiled.elaborationGaps)
         exitProcess(1)
     }
@@ -881,7 +913,7 @@ private fun runAuthor(args: Array<String>) {
     val verifier = Verifier(finalized.store, finalized.hashToNodeId)
     when (val result = verifier.verify(finalized.root)) {
         is VerifyResult.Failed -> {
-            System.err.println("verification failed for $path (after Layer A compile):")
+            System.err.println("verification failed for $path (after $surfaceLabel compile):")
             for (e in result.errors) System.err.println("  ${annotator.annotate(e.toString())}")
             printElaborationNotes(compiled.elaborationGaps)
             exitProcess(1)
@@ -1093,7 +1125,7 @@ private fun usage() {
     System.err.println("  strand run       <file.json> [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
     System.err.println("  strand machine   <file.json> --events <events.json> [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
     System.err.println("  strand group     <file.json> --events <events.json> [--peer-store <lib.json>]... [--grant-all] [--metrics] [<federation>...] [<limits>...]")
-    System.err.println("  strand author    <file.layer-a> [--emit-json]")
+    System.err.println("  strand author    <file.layer-a|file.familiar> [--emit-json] [--surface layer-a|familiar]")
     System.err.println("  strand translate <file.json>  → emit Layer A reverse projection (Q-036)")
     System.err.println("  strand registry  resolve <name> | put <name> <hash> | list  [--registry <file>]")
     System.err.println("  strand grammar                → emit Layer B constraint grammar (GBNF)")
