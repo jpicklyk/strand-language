@@ -1,0 +1,24 @@
+# plugin-a-reach-sibling.layer-a
+# Untrusted plugin "A" reaching plugin B's directory, under host attenuation
+# (C4, least-privilege delegation enforced below the host).
+#
+# Intent: this plugin writes to /plugins/B/config.json -- a path the HOST itself
+# is fully authorized to write, because the host holds broad authority over the
+# whole plugin tree, Filesystem.Write{/plugins/*}. The point of C4 is that the
+# host does NOT hand the plugin its own broad authority. It runs the plugin under
+# a narrowed grant -- Filesystem.Write confined to /plugins/A/ -- so even though
+# the host could write to /plugins/B, the scoped plugin cannot. The plugin is
+# honest (the authored EffectDecl pins the refinement to the call argument, so it
+# admits cleanly); the denial is not because the plugin misbehaved at admission
+# but because the delegated slice does not cover /plugins/B. Least privilege is
+# enforced by the grant the runtime applies, not by the plugin's good behavior.
+@v=1 root=writeApp
+strT PRM String
+bytesT PRM Bytes
+writeFx EFC "Filesystem.Write" [strT]
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+siblingPath STR "/plugins/B/config.json"
+payload BYT "7b22636f6e666967223a317d"
+writeDecl EFD writeFx [siblingPath]
+writeApp APP writeFn [siblingPath payload] [] [writeDecl]

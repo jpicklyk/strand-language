@@ -1,0 +1,21 @@
+# plugin-a-scoped-write.layer-a
+# Untrusted plugin "A": the legitimate scoped operation (C1, the happy path of
+# delegation).
+#
+# Intent: the host loaded an agent-generated plugin and granted it exactly one
+# slice of authority -- Filesystem.Write to its own directory, /plugins/A/. This
+# plugin writes its state file at /plugins/A/state.json and returns the byte
+# count. The authored EffectDecl pins the Filesystem.Write refinement to the same
+# literal the call passes (Q-039 projection agreement holds), so the program
+# admits cleanly. The host's grant covers /plugins/A/state.json, so the write
+# succeeds at runtime: delegated authority used exactly as intended.
+@v=1 root=writeApp
+strT PRM String
+bytesT PRM Bytes
+writeFx EFC "Filesystem.Write" [strT]
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+ownPath STR "/plugins/A/state.json"
+payload BYT "7b227374617465223a226f6b227d"
+writeDecl EFD writeFx [ownPath]
+writeApp APP writeFn [ownPath payload] [] [writeDecl]

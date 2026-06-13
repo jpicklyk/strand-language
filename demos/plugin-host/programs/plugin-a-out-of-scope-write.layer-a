@@ -1,0 +1,25 @@
+# plugin-a-out-of-scope-write.layer-a
+# Untrusted plugin "A" reaching outside its scope (C3, denied at runtime).
+#
+# Intent: plugin A is granted Filesystem.Write to its own slice, /plugins/A/. It
+# is honest about its effect -- the authored EffectDecl pins the refinement to
+# the SAME literal the call passes (Q-039 agreement holds), so it admits cleanly.
+# But the path it targets, /plugins/B/secret.json, lies outside its granted
+# slice -- it reaches into another plugin's directory. Whether that is harmful
+# depends on a value (the path) and the grant the host handed it: a runtime
+# question, not a structural one. At the foreign-call boundary the runtime
+# evaluates the requested path against the held grant; no granted pattern covers
+# /plugins/B/secret.json, so the call is denied with a RefinementViolation
+# carrying a structured DenialReport (category, requested vs held, node, phase).
+# Note: because the projection is honest, the value the capability check sees is
+# the value the foreign code would receive -- the denial is on the real target.
+@v=1 root=writeApp
+strT PRM String
+bytesT PRM Bytes
+writeFx EFC "Filesystem.Write" [strT]
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+victimPath STR "/plugins/B/secret.json"
+payload BYT "6578667472617465"
+writeDecl EFD writeFx [victimPath]
+writeApp APP writeFn [victimPath payload] [] [writeDecl]

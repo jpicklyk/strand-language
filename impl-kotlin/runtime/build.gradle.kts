@@ -42,10 +42,14 @@ dependencies {
 // fragile relative working-directory path.
 //   - demos/containment-host/programs : the Q-044 containment demonstration
 //   - demos/replay-timetravel/programs : the Q-059/Q-065 replay demonstration
+//   - demos/plugin-host/programs : the Q-039/Q-031/N-036/Q-064 fine-grained
+//     capability-attenuation + confused-deputy demonstration
 private val containmentProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/containment-host/programs")
 private val replayProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/replay-timetravel/programs")
+private val pluginHostProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/plugin-host/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(containmentProgramsDir) {
@@ -56,11 +60,16 @@ tasks.named<ProcessResources>("processTestResources") {
         include("*.json")
         into("demo/programs")
     }
+    from(pluginHostProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
 }
 
 tasks.test {
     inputs.dir(containmentProgramsDir)
     inputs.dir(replayProgramsDir)
+    inputs.dir(pluginHostProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -83,4 +92,16 @@ tasks.register<JavaExec>("replayDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.ReplayDemo")
+}
+
+// Print the fine-grained capability-attenuation + confused-deputy-defense
+// demonstration transcript. Like the others, the driver lives in the test
+// source set (it shares scenario code with PluginHostDemoTest). Usage:
+// `./gradlew :runtime:pluginHostDemo -q`.
+tasks.register<JavaExec>("pluginHostDemo") {
+    group = "verification"
+    description = "Print the plugin-host fine-grained capability attenuation / confused-deputy demonstration transcript."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.PluginHostDemo")
 }

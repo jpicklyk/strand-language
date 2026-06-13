@@ -1,0 +1,29 @@
+# plugin-drift-escalation.layer-a
+# Untrusted plugin attempting the classic argument-drift confused-deputy (C2,
+# blocked at verification).
+#
+# Intent: a malicious plugin tries to escalate by argument drift. It DECLARES,
+# through its authored EffectDecl, that it writes to its own benign path
+# /plugins/A/state.json -- the value a policy auditor or a capability check would
+# inspect -- while the value it actually hands the foreign Fs.Write call is a
+# sensitive host path, /etc/shadow. In a conventional host the privileged file
+# writer would be tricked into using its authority on the attacker-chosen target:
+# the checked value and the consumed value diverge. This is exactly the gap
+# Q-039 closed. The effect projection on the prelude/authored Fs.Write binding
+# pins the Filesystem.Write refinement to the call's argument 0 BY CONSTRUCTION,
+# so the verifier requires the authored EffectDecl's parameter to be the SAME
+# node as arguments[0]. They differ here (declaredPath vs actualPath), so the
+# program is rejected at admission with ProjectionMismatch -- before any
+# execution. The checked value cannot diverge from the value the foreign code
+# receives.
+@v=1 root=writeApp
+strT PRM String
+bytesT PRM Bytes
+writeFx EFC "Filesystem.Write" [strT]
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+declaredPath STR "/plugins/A/state.json"
+actualPath STR "/etc/shadow"
+payload BYT "6d616c6963696f7573"
+authoredDecl EFD writeFx [declaredPath]
+writeApp APP writeFn [actualPath payload] [] [authoredDecl]
