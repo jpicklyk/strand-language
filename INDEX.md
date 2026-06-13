@@ -364,7 +364,7 @@ The following table summarizes which documents cite which others, providing a na
 | `02-core-thesis.md` | `00`, `01`, ADR-001 through ADR-004, several design docs, `research-plan.md` | `README.md`, `00`, `01`, ADR-001 |
 | `decisions/ADR-001-graph-not-text.md` | `00`, `01`, `02`, ADR-002 through ADR-004, `design/node-algebra.md`, `open-questions.md` | `02`, ADR-002 through ADR-008 |
 | `decisions/ADR-002-no-human-projection.md` | `00`, `01`, `02`, ADR-001, ADR-006, `open-questions.md` | `00`, `02`, ADR-001, ADR-006 |
-| `decisions/ADR-003-content-addressing.md` | `01`, `02`, ADR-001, ADR-004, ADR-006, `design/node-algebra.md`, `open-questions.md` | `02`, ADR-001, ADR-005, ADR-006, ADR-007, ADR-008 |
+| `decisions/ADR-003-content-addressing.md` | `01`, `02`, ADR-001, ADR-004, ADR-006, `design/node-algebra.md`, `design/canonical-encoding.md`, `open-questions.md` | `02`, ADR-001, ADR-005, ADR-006, ADR-007, ADR-008, `design/canonical-encoding.md` |
 | `decisions/ADR-004-effects-as-edges.md` | `01`, `02`, ADR-001, ADR-005, `design/effects-and-capabilities.md`, `design/distribution-model.md`, `open-questions.md` | `02`, ADR-001, ADR-003, ADR-005, ADR-006, ADR-007, ADR-008 |
 | `decisions/ADR-005-foreign-nodes.md` | `01`, ADR-001, ADR-003, ADR-004, ADR-007, `design/security-model.md`, `open-questions.md` | ADR-004, ADR-006, ADR-007, ADR-008 |
 | `decisions/ADR-006-per-node-encryption.md` | `02`, ADR-002, ADR-003, ADR-004, ADR-005, `design/encryption-model.md`, `design/security-model.md`, `open-questions.md` | `02`, ADR-002, ADR-003, ADR-008 |
@@ -372,7 +372,7 @@ The following table summarizes which documents cite which others, providing a na
 | `decisions/ADR-008-compilation-target.md` | `02`, ADR-001, ADR-003, ADR-004, ADR-005, ADR-006, ADR-007, `design/node-algebra.md`, `open-questions.md` | `02`, `research-plan.md` |
 | `decisions/ADR-009-structured-outputs.md` | `02`, ADR-001, ADR-002, ADR-003, ADR-004, ADR-005, ADR-007, `design/node-algebra.md`, `design/rendering-and-views.md`, `design/security-model.md`, `open-questions.md` | `design/rendering-and-views.md` |
 | `design/node-algebra.md` | ADR-001, ADR-003, ADR-004, ADR-005, ADR-007, `canonical-encoding.md`, `effects-and-capabilities.md`, `state-machines.md`, `open-questions.md` | ADR-001, ADR-003, ADR-008, `canonical-encoding.md`, `effects-and-capabilities.md`, `state-machines.md`, `encryption-model.md`, `research-plan.md` |
-| `design/canonical-encoding.md` | ADR-003, `node-algebra.md`, `corpus/golden-hashes.json`, `corpus/README.md` | `node-algebra.md` |
+| `design/canonical-encoding.md` | ADR-003, `node-algebra.md`, `corpus/golden-hashes.json`, `corpus/README.md`, `open-questions.md` | `node-algebra.md`, ADR-003 |
 | `design/effects-and-capabilities.md` | `02`, ADR-004, ADR-005, `node-algebra.md`, `encryption-model.md`, `security-model.md`, `state-machines.md`, `open-questions.md` | ADR-004, `node-algebra.md`, `security-model.md`, `distribution-model.md`, `state-machines.md`, `encryption-model.md`, `research-plan.md` |
 | `design/state-machines.md` | `02`, `01`, ADR-003, ADR-004, ADR-007, ADR-008, `node-algebra.md`, `effects-and-capabilities.md`, `distribution-model.md`, `open-questions.md` | ADR-007, `01`, `node-algebra.md`, `distribution-model.md`, `research-plan.md` |
 | `design/encryption-model.md` | ADR-003, ADR-006, `effects-and-capabilities.md`, `security-model.md`, `open-questions.md` | ADR-006, `security-model.md`, `research-plan.md` |

@@ -2,7 +2,7 @@
 
 **Document:** `design/canonical-encoding.md`
 **Status:** Normative specification, extracted from and continuously validated against the Kotlin reference implementation
-**Last revised:** 2026-06-10 (initial version — specifies the byte-level canonical encoding and hash construction implemented by `impl-kotlin/hashing`, precisely enough that a second implementation can reproduce identical hashes without reading the Kotlin source)
+**Last revised:** 2026-06-13 (Epoch log section added per [Q-062](../open-questions.md#Q-062): the pre-1.0 epoch policy and the epoch-1 baseline entry. No encoding rule changed and no hash moved — the addition names the encoding this document already specifies as epoch 1 and states how breaking changes are batched before the stability point.) 2026-06-10 (initial version — specifies the byte-level canonical encoding and hash construction implemented by `impl-kotlin/hashing`, precisely enough that a second implementation can reproduce identical hashes without reading the Kotlin source)
 
 ## Summary
 
@@ -370,7 +370,19 @@ Renaming `x` changes nothing above — the name appears nowhere — which is alp
 
 ## Conformance {#conformance}
 
-[`corpus/golden-hashes.json`](../corpus/golden-hashes.json) commits the root hash of every corpus program (including deliberately verifier-failing fixtures, since hashing precedes verification) and of every Layer A fixture's compiled canonical form. A second implementation conforms when it reproduces every committed hash from the same inputs; the reference implementation's `CorpusGoldenHashTest` asserts the file continuously and enforces that corpus and goldens stay in bidirectional sync, and `CanonicalEncodingSpecTest` asserts the byte-level traces stated in this document. The regeneration procedure for legitimate corpus changes is documented in [`corpus/README.md`](../corpus/README.md); any hash change outside such a regeneration is a compatibility break.
+[`corpus/golden-hashes.json`](../corpus/golden-hashes.json) commits the root hash of every corpus program (including deliberately verifier-failing fixtures, since hashing precedes verification) and of every Layer A fixture's compiled canonical form. A second implementation conforms when it reproduces every committed hash from the same inputs; the reference implementation's `CorpusGoldenHashTest` asserts the file continuously and enforces that corpus and goldens stay in bidirectional sync, and `CanonicalEncodingSpecTest` asserts the byte-level traces stated in this document. The regeneration procedure for legitimate corpus changes is documented in [`corpus/README.md`](../corpus/README.md); any hash change outside such a regeneration is a compatibility break. Before the declared stability point, intentional breaking changes to the encoding itself are governed by the epoch policy (§ Epoch log).
+
+## Epoch log {#epoch-log}
+
+Until a declared stability point — 1.0, or the first external holder of Strand artifacts, whichever comes first — the canonical encoding may change incompatibly. Breaking changes are batched into named **epochs** ([Q-062](../open-questions.md#Q-062)). Each epoch is defined by its own proposal naming every encoding change it bundles, regenerates [`corpus/golden-hashes.json`](../corpus/golden-hashes.json) and every other hash-bearing conformance fixture in the same commit, updates the normative text of this document in the same pass, and is recorded as an entry in this log and in `INDEX.md`. Between epochs the invariance discipline of § Conformance continues to apply: a hash change outside a declared epoch's regeneration remains a compatibility break.
+
+The encoding carries no in-band epoch marker. Two epochs' encodings of the same graph simply produce different hashes; an implementation accepts exactly the epoch it implements, and a store mixing artifacts hashed under different epochs fails closed on hash mismatch — the same integrity check that rejects a tampered federation fetch. The current epoch number lives in this log and as the top-level `"epoch"` field of `corpus/golden-hashes.json`; an implementation declares the epoch it implements as a constant and asserts it against the conformance vectors it consumes. At 1.0 or first external adoption the policy flips to the additive-only discipline of [Q-024](../open-questions.md#Q-024), and the then-current epoch becomes the long-term encoding.
+
+| Epoch | In force since | Definition |
+|-------|----------------|------------|
+| 1 | 2026-06-10 (this document's adoption) | The baseline: the encoding exactly as this document specifies it. Named epoch 1 retroactively when the epoch policy was adopted; no encoding change accompanied the naming. |
+
+The epoch-2 charter — the [Q-053](../open-questions.md#Q-053) nested-recursive-type fix designed on its merits, normalization of the gated optional fields (`effectProjections`, the EventStream `source` edge) to the uniform presence-prefix rule, and the [Q-049](../open-questions.md#Q-049) `bound` decision if encoding-touching — is recorded in the Q-062 proposal ([`proposals/encoding-epochs.md`](../proposals/encoding-epochs.md)) and rides the Q-053 design work; it is chartered, not in force.
 
 ## References
 
@@ -379,7 +391,11 @@ Renaming `x` changes nothing above — the name appears nowhere — which is alp
 - [`ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) — content addressing, multihash format, BLAKE3 selection
 - [`corpus/golden-hashes.json`](../corpus/golden-hashes.json) — committed conformance vectors for every corpus program
 - [`corpus/README.md`](../corpus/README.md) — golden-vector regeneration procedure
+- [`proposals/encoding-epochs.md`](../proposals/encoding-epochs.md) — the Q-062 proposal defining the epoch policy and the epoch-2 charter
+- [`open-questions.md`](../open-questions.md) — Q-024, Q-049, Q-053, Q-062
 
 **Incoming references:**
 - [`node-algebra.md`](node-algebra.md) — § Hash construction defers byte-level detail here
+- [`ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) — Consequences amendment cites § Epoch log
+- [`proposals/encoding-epochs.md`](../proposals/encoding-epochs.md) — the policy this document's Epoch log records
 - [`INDEX.md`](../INDEX.md)

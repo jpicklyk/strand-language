@@ -3,7 +3,7 @@
 **Document:** `decisions/ADR-003-content-addressing.md`
 **Status:** Accepted
 **Date:** 2026-05-23
-**Last revised:** 2026-05-28 (Clarifying amendment to the Consequences section: the "no import system" stance is specifically about name-based identity, import-path resolution, visibility annotations, and version constraints — it does not rule out content-addressed grouping primitives such as the N-046 ModuleManifest node introduced by Q-043. The amendment sharpens the conclusion to match what the argument actually supports.) 2026-05-23 (Alternatives considered: separated full-semantic-equivalence rejection from alpha-equivalence-of-bound-variables, which is in fact adopted per `design/node-algebra.md` § Hash construction)
+**Last revised:** 2026-06-13 (Clarifying amendment to the Consequences section: before the language's declared stability point, breaking changes to the canonical encoding beneath the hash are permitted when batched into named epochs per [Q-062](../open-questions.md#Q-062), each shipped with regenerated conformance vectors and an Epoch log entry in `design/canonical-encoding.md`; at 1.0 or first external adoption the additive-only discipline of Q-024 takes over. The hash-construction scheme decided here is unchanged — the amendment records how the encoding underneath it may evolve before stability.) 2026-05-28 (Clarifying amendment to the Consequences section: the "no import system" stance is specifically about name-based identity, import-path resolution, visibility annotations, and version constraints — it does not rule out content-addressed grouping primitives such as the N-046 ModuleManifest node introduced by Q-043. The amendment sharpens the conclusion to match what the argument actually supports.) 2026-05-23 (Alternatives considered: separated full-semantic-equivalence rejection from alpha-equivalence-of-bound-variables, which is in fact adopted per `design/node-algebra.md` § Hash construction)
 **Supersedes:** none
 **Superseded by:** none
 
@@ -57,6 +57,8 @@ What this conclusion specifically rejects is identifying code by *mutable name* 
 
 Versioning is reframed. There is no notion of "version 2.0 of function f," because a modified function is a different node with a different hash. Tools that need version-like semantics (e.g., "the latest sanctioned implementation of an interface") maintain a mutable registry that maps a name or interface identifier to a current hash; the registry is metadata over the immutable graph, not part of the graph itself. The migration story for the language itself ([Q-024](../open-questions.md#Q-024)) is bounded by this property: old graphs remain valid because their hashes still resolve; new graphs may use new node types but coexist.
 
+The canonical encoding beneath the hash is itself versioned by epoch before the language's declared stability point ([Q-062](../open-questions.md#Q-062)). Pre-1.0, a breaking change to the canonical encoding is permitted when batched into a named epoch — defined by its own proposal, shipped with regenerated conformance vectors, and recorded in the Epoch log of [`design/canonical-encoding.md`](../design/canonical-encoding.md). The encoding carries no in-band epoch marker: an implementation accepts exactly the epoch it implements, and a store mixing artifacts hashed under different epochs fails closed on hash mismatch. At 1.0 or first external adoption the policy flips to Q-024's additive-only discipline; the multihash prefix above remains the mechanism for the orthogonal case of hash-function migration.
+
 Tamper resistance is intrinsic. A node's hash binds its content; any modification changes the hash, breaking every reference. A graph whose root hash matches an expected value is unchanged from the moment that root was computed. This property is the basis for distribution security (a worker that fetches a node by hash knows it has the right node) and for replay determinism (a graph with a given root hash produces a given output, assuming pure subgraphs and identical capability contexts).
 
 Garbage collection is by reachability. The set of live nodes is the transitive closure of the set of root references; nodes not in the closure can be removed. Reference counting does not apply because references are content-derived and persist after their referrer is removed; only the absence of any path from a known root marks a node as collectible.
@@ -74,7 +76,8 @@ The encryption interaction is not resolved here. When a node is encrypted ([ADR-
 - [`ADR-004-effects-as-edges.md`](ADR-004-effects-as-edges.md) — capability constraints on references
 - [`ADR-006-per-node-encryption.md`](ADR-006-per-node-encryption.md) — encryption interaction
 - [`design/node-algebra.md`](../design/node-algebra.md) — formal hash construction
-- [`open-questions.md`](../open-questions.md) — Q-011, Q-019, Q-024
+- [`design/canonical-encoding.md`](../design/canonical-encoding.md) — byte-level encoding and the pre-1.0 Epoch log
+- [`open-questions.md`](../open-questions.md) — Q-011, Q-019, Q-024, Q-062
 
 **Incoming references:**
 - [`02-core-thesis.md`](../02-core-thesis.md) — cites this ADR from Claim 4

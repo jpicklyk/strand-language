@@ -77,6 +77,8 @@ After epoch 2, every root hash in `golden-hashes.json` changes, the `"epoch"` fi
 
 **Incoming references:**
 - [`open-questions.md`](../open-questions.md) — Q-062 points at this proposal
+- [`design/canonical-encoding.md`](../design/canonical-encoding.md) — § Epoch log records the adopted policy and cites the epoch-2 charter here
+- [`decisions/ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) — Consequences amendment cites this proposal
 - [`proposals/README.md`](README.md)
 - [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
 - [`ROADMAP.md`](../ROADMAP.md) — Tier 2
