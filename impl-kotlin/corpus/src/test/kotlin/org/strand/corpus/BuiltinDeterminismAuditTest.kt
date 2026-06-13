@@ -9,6 +9,7 @@ import org.strand.hashing.Hasher
 import org.strand.interpreter.Builtins
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.Value
+import org.strand.interpreter.invoke
 
 /**
  * Q-065 behavioral audit: every registry entry marked

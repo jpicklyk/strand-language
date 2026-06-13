@@ -4,7 +4,6 @@ import kotlinx.coroutines.CoroutineScope
 import org.strand.core.Hash
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
-import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.HostPolicy
 import org.strand.interpreter.Interpreter
@@ -19,35 +18,30 @@ import org.strand.verifier.VerifyResult
  * Q-054: the published embedding surface. A JVM host constructs a
  * [StrandRuntime] with a [HostPolicy] and calls [verify] / [run] /
  * [runMachine] / [runGroup] to drive a verified program in-process, without
- * hand-replicating the CLI's pipeline and without participating in the
- * [Builtins] singleton mutation protocol directly.
+ * hand-replicating the CLI's pipeline.
  *
- * See [`proposals/embeddable-runtime.md`](../../../../../../../proposals/embeddable-runtime.md).
+ * See [`proposals/implemented/embeddable-runtime.md`](../../../../../../../proposals/implemented/embeddable-runtime.md).
  * The two graphs-one-process property the item exists to provide: two
  * [StrandRuntime] instances carrying different [HostPolicy] values run their
  * programs under their own policy with no cross-contamination — one SECURE
- * sandbox and one OPEN, or two different limits, etc. The facade installs the
- * policy's host-routed fields onto the [Builtins] singletons for the duration
- * of each run and restores them in a `finally`, so the install/restore
- * discipline lives in exactly one place ([withInstalled]) rather than
- * scattered across CLI subcommands.
+ * sandbox and one OPEN, or two different limits, etc.
  *
- * **Scope decision (the central tradeoff).** The published surface is
- * value-threaded — policy is a constructor argument and is passed explicitly
- * into the [Interpreter] / [StateMachineRuntime] this facade builds and into
- * their [org.strand.core.EvaluationLimits] arguments. But the fields read by
- * bare name inside builtin lambdas (clock, random, sandbox, …) are still
- * installed onto the [Builtins] singletons around the run rather than threaded
- * into each lambda. This makes the facade correct for *sequential* embedding
- * and for the CLI — and centralizes the install/restore — but the install is
- * process-global for the run's duration, so true *concurrent* multi-tenant
- * isolation in one JVM is gated on the documented follow-up that removes the
- * singleton reads. This facade is that follow-up's structural prerequisite.
+ * **Concurrent multi-tenant isolation (Q-054 follow-up, completed).** Each
+ * evaluating method derives a per-invocation
+ * [org.strand.interpreter.HostContext] from this runtime's policy and threads
+ * it into the [Interpreter] / [StateMachineRuntime] it builds as an ordinary
+ * value. The builtin lambdas read their clock / random / sandbox / credentials
+ * / etc. from that context, never from the [org.strand.interpreter.Builtins]
+ * process-global singletons. There is no install/restore around a run, so two
+ * runtimes evaluating effectful programs *concurrently* in one JVM each see
+ * their own policy with nothing to clobber — the property the facade was the
+ * structural prerequisite for. Each context also carries its own credential
+ * scrubber, so a tenant's credential never appears in another tenant's scrubbed
+ * error text.
  *
- * The program is supplied as the canonical [store] + [root] + [hashToNodeId]
- * (the primitives the verifier / interpreter / runtime already consume), not
- * as a root hash — run-by-hash is Q-058 and out of scope. The optional
- * [resolveTarget] is the Q-043 cross-store resolution callback, threaded into
+ * The program is supplied as the canonical [ProgramImage] (store + root +
+ * hashToNodeId), not a root hash — run-by-hash is Q-058. The optional
+ * `resolveTarget` is the Q-043 cross-store resolution callback, threaded into
  * every backend exactly as the CLI threads its `FederatedProgram::fetchAndAdmit`.
  */
 class StrandRuntime(private val policy: HostPolicy) {
@@ -80,10 +74,10 @@ class StrandRuntime(private val policy: HostPolicy) {
      * failure or a static schema violation the result carries the diagnostics
      * and no value. On success the result carries the produced [Value].
      *
-     * The host-routed singletons are installed for the duration of the
-     * evaluation and restored afterward (including on a thrown
-     * [org.strand.interpreter.InterpretException], which propagates after the
-     * restore).
+     * The policy is projected to a per-invocation
+     * [org.strand.interpreter.HostContext] and threaded into the interpreter as
+     * a value; no process-global singleton is installed, so a concurrent
+     * `run` on another [StrandRuntime] under a different policy is unaffected.
      */
     fun run(program: ProgramImage, capabilities: CapabilitySet = CapabilitySet.EMPTY): RunOutcome {
         val verify = verify(program)
@@ -95,15 +89,19 @@ class StrandRuntime(private val policy: HostPolicy) {
         val schemaObligations: Map<NodeId, TypeExpr.SchemaType> = verify.nodeTypes
             .mapNotNull { (nid, t) -> (t as? TypeExpr.SchemaType)?.let { nid to it } }
             .toMap()
-        val value = policy.withInstalled(verify.nodeTypes) {
-            val interp = Interpreter(
-                program.store,
-                program.hashToNodeId,
-                resolveTarget = program.resolveTarget,
-                schemaObligations = schemaObligations,
-            )
-            interp.eval(program.root, capabilities, policy.limits)
-        }
+        // Q-054 follow-up: derive a per-invocation HostContext from this
+        // runtime's policy and thread it into the interpreter as a value. No
+        // singleton install — two runtimes evaluating concurrently each read
+        // their own context, so there is nothing to clobber.
+        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verify.nodeTypes)
+        val interp = Interpreter(
+            program.store,
+            program.hashToNodeId,
+            resolveTarget = program.resolveTarget,
+            schemaObligations = schemaObligations,
+            hostContext = ctx,
+        )
+        val value = interp.eval(program.root, capabilities, policy.limits)
         return RunOutcome.Ok(verify, schema, value)
     }
 
@@ -123,22 +121,20 @@ class StrandRuntime(private val policy: HostPolicy) {
         events: List<Value>,
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
-    ): Trace = policy.withInstalled(verifierNodeTypes) {
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget)
-        runtime.runMachine(machine, events, capabilities, policy.limits)
+    ): Trace {
+        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes)
+        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
+        return runtime.runMachine(machine, events, capabilities, policy.limits)
     }
 
     /**
      * Spawn a [MachineGroup] under this runtime's policy and return the
-     * [MachineGroupHandle]. The host-routed singletons are installed *before*
-     * `runGroup` so the group-start path (initial spawns, source openers) sees
-     * the policy; the caller must keep the runtime's policy installed for the
-     * lifetime of the group (use [withGroupInstalled] to scope it), since the
-     * actors evaluate asynchronously after this returns.
-     *
-     * Unlike the synchronous paths, this method does NOT restore on return —
-     * the group is still live. Callers that want the install/restore scoped
-     * around the entire group lifecycle use [withGroupInstalled].
+     * [MachineGroupHandle]. The policy is projected to a
+     * [org.strand.interpreter.HostContext] and bound to every per-actor
+     * interpreter, source opener, and feeder the group spawns, so the actors —
+     * which evaluate asynchronously after this returns, on `Dispatchers.IO` —
+     * read the group's tenant policy with no shared mutable singleton on the
+     * path. Two groups can therefore run concurrently under different policies.
      */
     fun runGroup(
         program: ProgramImage,
@@ -146,24 +142,29 @@ class StrandRuntime(private val policy: HostPolicy) {
         scope: CoroutineScope,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
     ): MachineGroupHandle {
-        // Install without restoring — the group runs asynchronously past this
-        // return. The caller scopes the restore via [withGroupInstalled].
-        Builtins.install(policy, verifierNodeTypes)
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget)
+        // Q-054 follow-up: the policy flows into the runtime as a HostContext
+        // value, bound to every per-actor interpreter and feeder. No singleton
+        // install — the group runs asynchronously past this return without
+        // depending on a mutable process-global being held in place, so two
+        // groups can run concurrently under different policies.
+        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes)
+        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
         return runtime.runGroup(group, scope, policy.limits)
     }
 
     /**
-     * Scope the policy install/restore around an entire group lifecycle.
-     * Installs the policy, runs [block] (which spawns and drives the group to
-     * completion via [runGroup] + the handle's await/drain), and restores the
-     * singletons afterward. The CLI's `group` subcommand uses this to wrap its
-     * `runBlocking` body so the singletons are restored once the group halts.
+     * Retained for CLI source compatibility: the `group` subcommand wraps its
+     * `runBlocking` body in this to scope the group lifecycle. Since the Q-054
+     * follow-up retired the singleton install/restore (policy now flows as a
+     * [org.strand.interpreter.HostContext] value), this is simply
+     * `block()` — there is nothing to install or restore. The
+     * [verifierNodeTypes] parameter is ignored; the per-invocation context is
+     * derived inside [runGroup] from the runtime's policy.
      */
     fun <T> withGroupInstalled(
-        verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
+        @Suppress("UNUSED_PARAMETER") verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
         block: () -> T,
-    ): T = policy.withInstalled(verifierNodeTypes, block)
+    ): T = block()
 
     /**
      * Q-059: spawn [group] in SERVICE mode and return a [GroupService] the host
@@ -172,9 +173,10 @@ class StrandRuntime(private val policy: HostPolicy) {
      * runs until the host calls `stop()` or a real halt occurs — the server
      * shape that `Http.Listen` / `Http.Accept` invite.
      *
-     * Like [runGroup], this installs the policy WITHOUT restoring on return (the
-     * service runs asynchronously past this call); the caller scopes the restore
-     * around the whole service lifetime via [withGroupInstalled].
+     * Like [runGroup], the policy flows into the spawned actors as a
+     * [org.strand.interpreter.HostContext] value bound at spawn, so the service
+     * runs asynchronously past this call under its own tenant policy with no
+     * singleton install to hold in place.
      *
      * The long-running limits model is host policy: set
      * [org.strand.core.EvaluationLimits.perEventStepBudget] on the runtime's
@@ -204,9 +206,8 @@ class StrandRuntime(private val policy: HostPolicy) {
      * starts from a checkpointed state instead of the machine's declared
      * `initialState` — the restart half of the snapshot-persistence story.
      *
-     * Installs the host-routed singletons for the duration (and restores them,
-     * including on a thrown [org.strand.interpreter.InterpretException]) exactly
-     * as [runMachine] does. Delegates to the existing
+     * Threads the runtime's policy in as a [org.strand.interpreter.HostContext]
+     * value exactly as [runMachine] does. Delegates to the existing
      * [StateMachineRuntime.resume]; the [SnapshotMachineHashMismatch] integrity
      * check fires if [machine]'s hash (in [nodeIdToHash]) does not match the
      * snapshot's recorded `machineHash`. Returns the [Trace] of the
@@ -224,9 +225,10 @@ class StrandRuntime(private val policy: HostPolicy) {
         nodeIdToHash: Map<NodeId, Hash>,
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
-    ): Trace = policy.withInstalled(verifierNodeTypes) {
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget)
-        runtime.resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
+    ): Trace {
+        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes)
+        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
+        return runtime.resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
     }
 
     /**
@@ -355,25 +357,6 @@ class StrandRuntime(private val policy: HostPolicy) {
         ).check()
 }
 
-/**
- * Q-054: the host-routed install/restore extension on [HostPolicy]. Captures
- * the [Builtins] singletons, installs the policy plus the per-program
- * verifier node-types, runs [block], and restores in a `finally`. This is the
- * single place the install/restore discipline lives — it subsumes the CLI's
- * former `withProgramEvaluationContext` helper.
- */
-internal fun <T> HostPolicy.withInstalled(
-    verifierNodeTypes: Map<NodeId, TypeExpr>?,
-    block: () -> T,
-): T {
-    val prior = Builtins.snapshot()
-    Builtins.install(this, verifierNodeTypes)
-    try {
-        return block()
-    } finally {
-        Builtins.restore(prior)
-    }
-}
 
 /**
  * A finalized, canonical program image: the primitives every Strand backend

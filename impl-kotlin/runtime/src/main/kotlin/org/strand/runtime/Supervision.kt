@@ -94,6 +94,14 @@ internal class RuntimeContext(
      * single-store actor behaviour.
      */
     val resolveTarget: ((Hash) -> NodeId?)? = null,
+    /**
+     * Q-054 follow-up: the host context every per-actor [Interpreter] this
+     * context spawns is bound to, so an actor's effectful builtins read the
+     * group's tenant policy rather than the [org.strand.interpreter.Builtins]
+     * singletons. Default [org.strand.interpreter.HostContext.processDefault].
+     */
+    val hostContext: org.strand.interpreter.HostContext =
+        org.strand.interpreter.HostContext.processDefault(),
 ) {
     private val instancesMap = ConcurrentHashMap<InstanceId, MachineInstance>()
     private val actorJobsMap = ConcurrentHashMap<InstanceId, Job>()
@@ -114,7 +122,7 @@ internal class RuntimeContext(
         // Each actor gets its own Interpreter so the foreign dispatcher is
         // bound to THIS group's runtime context (Spawn from inside the
         // transition spawns into this group, not some other one).
-        val perActorInterpreter = Interpreter(store, hashToNodeId, foreignDispatcher, resolveTarget)
+        val perActorInterpreter = Interpreter(store, hashToNodeId, foreignDispatcher, resolveTarget, hostContext = hostContext)
         // Q-040: build under the group's limits so eval-time caps apply
         // from instance construction through every per-event call.
         val transitionFnValue = perActorInterpreter.eval(node.transitionFn, capabilities, limits)

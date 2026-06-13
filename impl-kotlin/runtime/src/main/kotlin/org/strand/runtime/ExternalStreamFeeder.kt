@@ -6,9 +6,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import org.strand.core.NodeId
 import org.strand.interpreter.Builtins
+import org.strand.interpreter.HostContext
 import org.strand.interpreter.IoFailure
 import org.strand.interpreter.ResourceTable
 import org.strand.interpreter.Value
+import org.strand.interpreter.invoke
 
 /**
  * Q-046 actor-runtime bridge: a host-side feeder coroutine that drains a
@@ -53,6 +55,13 @@ internal class ExternalStreamFeeder(
     private val handle: Value.Resource,
     private val dispatcher: OverflowDispatcher,
     private val bus: StreamBus,
+    /**
+     * Q-054 follow-up: the host context the receive/close builtins run under,
+     * so a feeder bridging tenant A's stream uses tenant A's sandbox / stream
+     * timeout, not a shared singleton. Default
+     * [HostContext.processDefault].
+     */
+    private val hostContext: HostContext = HostContext.processDefault(),
     private val maxBytes: Int = DEFAULT_MAX_BYTES,
 ) {
     /** The scrubbed transport-failure kind if the feeder ended on failure; null on clean EOF/cancel. */
@@ -93,7 +102,7 @@ internal class ExternalStreamFeeder(
     private fun receiveOnce(): Chunk {
         val fn = Builtins.lookup(receiveTarget) ?: error("ExternalStreamFeeder: missing builtin $receiveTarget")
         return try {
-            val result = fn.invoke(listOf(handle, Value.IntV(maxBytes.toLong()))) as Value.SumV
+            val result = fn.invoke(hostContext, listOf(handle, Value.IntV(maxBytes.toLong()))) as Value.SumV
             when (result.case) {
                 "Some" -> Chunk.Data((result.payload as Value.BytesV).v)
                 else -> Chunk.Eof
@@ -106,7 +115,7 @@ internal class ExternalStreamFeeder(
     private fun closeHandle() {
         Builtins.lookup(closeTarget)?.let { close ->
             try {
-                close.invoke(listOf(handle))
+                close.invoke(hostContext, listOf(handle))
             } catch (_: IoFailure) {
                 // Close is idempotent; a failure here means already-closed.
             }

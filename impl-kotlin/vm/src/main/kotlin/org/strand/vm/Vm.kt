@@ -10,11 +10,13 @@ import org.strand.core.NodeId
 import org.strand.interpreter.Builtins
 import org.strand.interpreter.DenialPhase
 import org.strand.interpreter.DenialReport
+import org.strand.interpreter.HostContext
 import org.strand.interpreter.InterpretError
 import org.strand.interpreter.InterpretException
 import org.strand.interpreter.IoFailure
 import org.strand.interpreter.SandboxViolation
 import org.strand.interpreter.Value
+import org.strand.interpreter.invoke
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -35,7 +37,19 @@ import java.nio.ByteOrder
  * Invocation: `Vm(table).run()` returns the top-of-stack value when the
  * root chunk hits `HALT`. The root chunk is at index 0 by convention.
  */
-class Vm(private val table: ChunkTable) {
+class Vm(
+    private val table: ChunkTable,
+    /**
+     * Q-054 follow-up: the host policy this VM evaluates under, projected to a
+     * [HostContext]. Threaded into every foreign-builtin dispatch so effectful
+     * builtins read their clock / random / sandbox / credentials / etc. from
+     * the context rather than the [Builtins] process-global singletons. Default
+     * [HostContext.processDefault] reads the current singletons, so every
+     * `Vm(table)` construction (the equivalence tests, the runtime's VM
+     * dispatcher) behaves exactly as before.
+     */
+    private val hostContext: HostContext = HostContext.processDefault(),
+) {
 
     // Layer 3 runtime state: capability stack + active handler list.
     // CAP_PUSH stashes the current caps onto [capStack] and replaces
@@ -163,7 +177,7 @@ class Vm(private val table: ChunkTable) {
                     val builtin = Builtins.lookup(closure.target)
                         ?: error("applyClosure: no Builtins entry for foreign target '${closure.target}'")
                     return try {
-                        builtin.invoke(args)
+                        builtin.invoke(hostContext, args)
                     } catch (e: IllegalArgumentException) {
                         throw InterpretException(InterpretError.BuiltinContractViolation(
                             at = null,
@@ -633,8 +647,11 @@ class Vm(private val table: ChunkTable) {
      * `translateIoFailure` does. `at` is null — VM opcodes carry no NodeIds.
      */
     private fun translateVmIoFailure(io: IoFailure, limits: EvaluationLimits): InterpretError.IoFailure {
+        // Q-054 follow-up: scrub the Redacted detail against this VM's
+        // per-context scrubber (the active tenant's credentials), mirroring the
+        // interpreter's translateIoFailure.
         val detail = when (limits.errorVerbosity) {
-            org.strand.core.ErrorVerbosity.Redacted -> io.detail
+            org.strand.core.ErrorVerbosity.Redacted -> hostContext.scrubber.scrub(io.unscrubbedDetail)
             org.strand.core.ErrorVerbosity.Full -> io.unscrubbedDetail
             org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
         }
@@ -650,7 +667,7 @@ class Vm(private val table: ChunkTable) {
      */
     private fun translateVmSandboxViolation(sv: SandboxViolation, limits: EvaluationLimits): InterpretError.SandboxViolation {
         val detail = when (limits.errorVerbosity) {
-            org.strand.core.ErrorVerbosity.Redacted -> sv.detail
+            org.strand.core.ErrorVerbosity.Redacted -> hostContext.scrubber.scrub(sv.unscrubbedDetail)
             org.strand.core.ErrorVerbosity.Full -> sv.unscrubbedDetail
             org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
         }
@@ -748,7 +765,7 @@ class Vm(private val table: ChunkTable) {
                         ?: error("CALL_FOREIGN: arg is ${arg::class.simpleName}, not a Value")
                 }
                 val result = try {
-                    builtin.invoke(valueArgs)
+                    builtin.invoke(hostContext, valueArgs)
                 } catch (e: IllegalArgumentException) {
                     // Builtin contract violation (e.g. division by zero from
                     // Int.Div / Int.Mod / Math.Mod). Translated to a structured,

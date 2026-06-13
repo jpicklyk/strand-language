@@ -73,7 +73,22 @@ class StateMachineRuntime(
      * admitted nodes are visible here.
      */
     private val resolveTarget: ((Hash) -> NodeId?)? = null,
-    private val interpreter: Interpreter = Interpreter(store, hashToNodeId, resolveTarget = resolveTarget),
+    /**
+     * Q-054 follow-up: the host policy this runtime evaluates under, projected
+     * to a [org.strand.interpreter.HostContext]. Threaded as a value into the
+     * sync-fold [interpreter], every per-actor interpreter the async
+     * `runGroup` path constructs, the source-opener interpreter, and each
+     * [ExternalStreamFeeder] — so two `StrandRuntime` instances driving groups
+     * concurrently read their own tenant's clock / sandbox / credentials, with
+     * no shared mutable singleton on the eval path. Default
+     * [org.strand.interpreter.HostContext.processDefault] reads the current
+     * [org.strand.interpreter.Builtins] singletons (unchanged single-tenant
+     * behaviour).
+     */
+    private val hostContext: org.strand.interpreter.HostContext =
+        org.strand.interpreter.HostContext.processDefault(),
+    private val interpreter: Interpreter =
+        Interpreter(store, hashToNodeId, resolveTarget = resolveTarget, hostContext = hostContext),
 ) {
 
     /**
@@ -276,6 +291,7 @@ class StateMachineRuntime(
             dispatcherFactory = group.dispatcherFactory,
             limits = limits,
             resolveTarget = resolveTarget,
+            hostContext = hostContext,
         )
 
         // Pass 2: spawn one initial actor per declared machine. Each
@@ -332,7 +348,7 @@ class StateMachineRuntime(
         val feederJobs: List<Job> = if (sourceBound.isEmpty()) {
             emptyList()
         } else {
-            val openInterpreter = Interpreter(group.store, group.hashToNodeId, resolveTarget = resolveTarget)
+            val openInterpreter = Interpreter(group.store, group.hashToNodeId, resolveTarget = resolveTarget, hostContext = hostContext)
             sourceBound.map { (streamId, sourceId) ->
                 // Q-064: opener denials are group-startup denials too.
                 val handleValue = attachingGroupStartPhase {
@@ -348,6 +364,7 @@ class StateMachineRuntime(
                     handle = handle,
                     dispatcher = streamDispatchers.getValue(streamId),
                     bus = streamBuses.getValue(streamId),
+                    hostContext = hostContext,
                 )
                 scope.launch { feeder.run() }
             }

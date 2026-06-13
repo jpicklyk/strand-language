@@ -85,7 +85,7 @@ class DeterminismWarningEndToEndTest {
             fakeTarget,
             effectful = false,
             determinism = Builtins.Determinism.Nondeterministic,
-            fn = Builtins.Fn { args -> args[0] },
+            fn = Builtins.Fn { _, args -> args[0] },
         )
 
         val warning = replayWarnings(verify(toggleMachineJson(fakeTarget))).single()
@@ -98,7 +98,7 @@ class DeterminismWarningEndToEndTest {
             fakeTarget,
             effectful = false,
             determinism = Builtins.Determinism.Nondeterministic,
-            fn = Builtins.Fn { args -> args[0] },
+            fn = Builtins.Fn { _, args -> args[0] },
         )
 
         val result = verify("""{
@@ -122,7 +122,7 @@ class DeterminismWarningEndToEndTest {
             fakeTarget,
             effectful = false,
             determinism = Builtins.Determinism.Nondeterministic,
-            fn = Builtins.Fn { Value.UnitV },
+            fn = Builtins.Fn { _, _ -> Value.UnitV },
         )
         assertTrue(replayWarnings(verify(toggleMachineJson(fakeTarget))).isNotEmpty())
 
