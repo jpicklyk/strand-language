@@ -247,3 +247,33 @@ Run the assertion-backed test that pins every property, from `impl-kotlin/`:
 ```sh
 ./gradlew :runtime:test --tests "org.strand.runtime.BoundedRagDemoTest"
 ```
+
+### skill-workflow
+
+A model-as-policy / graph-as-actuator demonstration — and the one place the
+threat model flips. The other demonstrations contain untrusted *code*; this one
+contains untrusted *data*: the decisions an LLM emits, flowing into a trusted,
+verified, capability-bounded actuator graph. A triage skill splits into the
+*policy* (the model classifies items — non-deterministic, unbounded, outside the
+graph) and the *actuator* (a verified graph that folds the decisions into a digest
+and performs exactly its declared effect, `Filesystem.Write`). Because the model's
+output is data the graph consumes, not code the graph runs, the action set is
+graph structure fixed at admission: the surfaced closure is identical whatever the
+decisions say, a poisoned `note` is contained as digest content with no new effect,
+a poisoned output path is denied by the refined `Filesystem.Write` capability, and
+the same decisions replay to the identical effect. The design is specified in
+[`skill-workflow/SPEC.md`](skill-workflow/SPEC.md). The Kotlin driver and its
+assertion test live in the `:runtime` test source set; the programs and narrative
+live under [`skill-workflow/`](skill-workflow/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:skillWorkflowDemo -q
+```
+
+Run the assertion-backed test that pins every property, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.SkillWorkflowDemoTest"
+```

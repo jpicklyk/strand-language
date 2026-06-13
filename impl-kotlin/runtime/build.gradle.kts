@@ -74,6 +74,10 @@ private val llmVirtualizationProgramsDir =
 //     (Embed + Vector.Read refined to one store + Generate, surfaced and refinement-gated)
 private val boundedRagProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/bounded-rag/programs")
+//   - demos/skill-workflow/programs : the model-as-policy / graph-as-actuator
+//     demonstration (untrusted model decisions as data into a verified bounded actuator)
+private val skillWorkflowProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/skill-workflow/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(containmentProgramsDir) {
@@ -112,6 +116,10 @@ tasks.named<ProcessResources>("processTestResources") {
         include("*.json")
         into("demo/programs")
     }
+    from(skillWorkflowProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
 }
 
 tasks.test {
@@ -124,6 +132,7 @@ tasks.test {
     inputs.dir(mcpToolManifestProgramsDir)
     inputs.dir(llmVirtualizationProgramsDir)
     inputs.dir(boundedRagProgramsDir)
+    inputs.dir(skillWorkflowProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -225,4 +234,15 @@ tasks.register<JavaExec>("boundedRagDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.BoundedRagDemo")
+}
+
+// Print the model-as-policy / graph-as-actuator (skill-workflow) demonstration
+// transcript. Like the others, the driver lives in the test source set (it shares
+// scenario code with SkillWorkflowDemoTest). Usage: `./gradlew :runtime:skillWorkflowDemo -q`.
+tasks.register<JavaExec>("skillWorkflowDemo") {
+    group = "verification"
+    description = "Print the skill-workflow demonstration transcript (untrusted model decisions as data flowing into a verified, capability-bounded actuator graph; a poisoned decision cannot expand the action set)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.SkillWorkflowDemo")
 }
