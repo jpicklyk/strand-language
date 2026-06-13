@@ -66,6 +66,14 @@ private val cleanRoomProgramsDir =
 //     demonstration (an N-046 ModuleManifest whose declared effects are machine-checked)
 private val mcpToolManifestProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/mcp-tool-manifest/programs")
+//   - demos/llm-virtualization/programs : the Handler-based LLM-virtualization
+//     demonstration (a Handler intercepting LLM.Generate subtracts it from the closure)
+private val llmVirtualizationProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/llm-virtualization/programs")
+//   - demos/bounded-rag/programs : the bounded-retrieval (RAG) demonstration
+//     (Embed + Vector.Read refined to one store + Generate, surfaced and refinement-gated)
+private val boundedRagProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/bounded-rag/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(containmentProgramsDir) {
@@ -96,6 +104,14 @@ tasks.named<ProcessResources>("processTestResources") {
         include("*.json")
         into("demo/programs")
     }
+    from(llmVirtualizationProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
+    from(boundedRagProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
 }
 
 tasks.test {
@@ -106,6 +122,8 @@ tasks.test {
     inputs.dir(agentWorkflowProgramsDir)
     inputs.dir(cleanRoomProgramsDir)
     inputs.dir(mcpToolManifestProgramsDir)
+    inputs.dir(llmVirtualizationProgramsDir)
+    inputs.dir(boundedRagProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -185,4 +203,26 @@ tasks.register<JavaExec>("mcpToolManifestDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.McpToolManifestDemo")
+}
+
+// Print the Handler-based LLM-virtualization demonstration transcript. Like the
+// others, the driver lives in the test source set (it shares scenario code with
+// LlmVirtualizationDemoTest). Usage: `./gradlew :runtime:llmVirtualizationDemo -q`.
+tasks.register<JavaExec>("llmVirtualizationDemo") {
+    group = "verification"
+    description = "Print the Handler-based LLM-virtualization demonstration transcript (a Handler intercepting LLM.Generate subtracts it from the effect closure)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.LlmVirtualizationDemo")
+}
+
+// Print the bounded-retrieval (RAG) demonstration transcript. Like the others,
+// the driver lives in the test source set (it shares scenario code with
+// BoundedRagDemoTest). Usage: `./gradlew :runtime:boundedRagDemo -q`.
+tasks.register<JavaExec>("boundedRagDemo") {
+    group = "verification"
+    description = "Print the bounded-retrieval (RAG) demonstration transcript (Embed + Vector.Read refined to one store + Generate, with the data-access capability surfaced and refinement-gated)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.BoundedRagDemo")
 }

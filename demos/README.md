@@ -193,3 +193,57 @@ Run the assertion-backed test that pins every property, from `impl-kotlin/`:
 ```sh
 ./gradlew :runtime:test --tests "org.strand.runtime.McpToolManifestDemoTest"
 ```
+
+### llm-virtualization
+
+An LLM-virtualization demonstration built on the Handler node (N-043) — the one
+shipped language primitive no other demonstration uses. A `Handler` intercepting
+`LLM.Generate` (E-035) replaces the model call wholesale, and the closure-
+subtraction rule (`closureOf(handler) = closureOf(body) − {intercept} ∪ …`) means
+the agent's LLM dependency *disappears from its harm bound* when wrapped: the same
+agent program surfaces closure `{LLM.Generate}` run normally and an empty (pure)
+closure run under a pure substitution handler. This is effect virtualization as a
+verified language feature — the mechanism behind deterministic agent testing,
+prompt-rewriting policy layers, response caching, and budget enforcement, none of
+which is monkey-patching. The Kotlin driver and its assertion test live in the
+`:runtime` test source set; the programs and narrative live under
+[`llm-virtualization/`](llm-virtualization/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:llmVirtualizationDemo -q
+```
+
+Run the assertion-backed test that pins every property, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.LlmVirtualizationDemoTest"
+```
+
+### bounded-rag
+
+A retrieval-augmented-generation demonstration with a refined data-access
+capability — the canonical agent pattern, expressed as a verified graph. An
+embed → vector-query → generate pipeline surfaces the effect closure
+`{LLM.Embed, Vector.Read, LLM.Generate}`, and the vector capability is *refined to
+a specific store* (`Vector.Read{store=corp-kb}`) so the agent provably can query
+only that index — a query against any other store is denied at the foreign-call
+boundary with a `DenialReport`. The data the agent may reach is a declared,
+verifiable, refinement-checked property, not a configuration convention. Made
+deterministic by mock LLM and vector transports injected through the Q-054
+`HostPolicy`; no real network I/O. The Kotlin driver and its assertion test live
+in the `:runtime` test source set; the programs and narrative live under
+[`bounded-rag/`](bounded-rag/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:boundedRagDemo -q
+```
+
+Run the assertion-backed test that pins every property, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.BoundedRagDemoTest"
+```
