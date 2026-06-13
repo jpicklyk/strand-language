@@ -28,8 +28,10 @@ package org.strand.authoring
  * projections mirror the per-builtin documentation in
  * `evaluation/dynamic/prompts/strand-system.md` and the runtime
  * registrations in `interpreter/Builtins.kt`. The structural macros
- * ([Sig.JsonValue], [Sig.MarkdownDoc]) reproduce the blessed corpus-66
- * (JsonValueFull) and corpus-61 (MarkdownDocument) type towers
+ * ([Sig.JsonValue], [Sig.MarkdownDoc]) reproduce the precise N-048
+ * JsonValue tower (Q-069 — the model corpus 88/89 construct, a
+ * JsonArray over a real List<JsonValue> and a JsonObject over a real
+ * entry list) and the corpus-61 (MarkdownDocument) type tower
  * byte-identically.
  *
  * **Surface-type conventions** (same as the documented agent-facing ones):
@@ -75,7 +77,7 @@ object BuiltinSignatures {
         /** Product type with named fields in declaration order. */
         data class ProductOf(val fields: List<Pair<String, Sig>>) : Sig()
 
-        /** The blessed corpus-66 JsonValueFull recursive sum (8 cases). */
+        /** The precise N-048 JsonValue recursive sum (6 cases, Q-069). */
         object JsonValue : Sig() {
             override fun toString(): String = "JsonValue"
         }
@@ -236,7 +238,7 @@ object BuiltinSignatures {
         "Bytes.ParseBase64" to sig(STR, result = Sig.OptionOf(BYTES)),
         "Bytes.ParseHex" to sig(STR, result = Sig.OptionOf(BYTES)),
 
-        // ===== Json — typed against the blessed corpus-66 JsonValueFull =====
+        // ===== Json — typed against the precise N-048 JsonValue (Q-069) =====
         "Json.Parse" to sig(STR, result = Sig.OptionOf(Sig.JsonValue)),
         "Json.Stringify" to sig(Sig.JsonValue, result = STR),
 

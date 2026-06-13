@@ -2386,6 +2386,11 @@ object LayerAGrammar {
         "RS" to CodeSchema(
             jsonType = "RecursiveSelf",
             required = emptyList(),
+            // Optional de Bruijn depth (default 0 = the innermost
+            // enclosing RT binder). A depth > 0 reaches an outer binder,
+            // as the precise nested-μ JSON tower (Q-069) needs for an
+            // inner list's element type to reach the outer JsonValue μ.
+            optional = listOf(FieldSpec("depth", ArgKind.INT, "depth")),
             // RS is type-producing but CANNOT be safely nested via the
             // `(CODE args...)` form: the synthesized standalone RS node
             // loses its lexical RT binder context (the canonical encoder

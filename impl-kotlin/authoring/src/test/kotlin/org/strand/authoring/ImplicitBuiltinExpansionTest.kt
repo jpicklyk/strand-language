@@ -127,33 +127,48 @@ class ImplicitBuiltinExpansionTest {
     }
 
     @Test
-    fun `Json Parse bare name compiles byte-identical to the explicit blessed tower`() {
+    fun `Json Parse bare name compiles byte-identical to the explicit precise tower`() {
         val bare = """
             @v=1 root=parsed
             input STR "{\"a\": 1}"
             parsed APP Json.Parse [input]
         """.trimIndent()
-        // The hand-declared counterpart: the corpus-66 JsonValueFull tower
-        // wrapped in the canonical Option sum.
+        // The hand-declared counterpart: the precise N-048 JsonValue tower
+        // (Q-069, the model corpus 88/89 construct) wrapped in the
+        // canonical Option sum. JsonArray carries a real inner list
+        // (μ list. Cons(head: jv, tail: list) | Nil) whose head reaches
+        // the outer jv via RS 1; JsonObject carries a real entry list
+        // whose cell head is a {key, value: jv} product.
         val explicit = """
             @v=1 root=parsed
-            recSelf RS
-            arrConsHead PRF "head" recSelf
-            arrConsTail PRF "tail" recSelf
-            arrConsProd PRD [arrConsHead arrConsTail]
-            objConsKey PRF "key" stringT
-            objConsValue PRF "value" recSelf
-            objConsTail PRF "tail" recSelf
-            objConsProd PRD [objConsKey objConsValue objConsTail]
+            arrHeadSelf RS 1
+            arrTailSelf RS
+            arrHeadF PRF "head" arrHeadSelf
+            arrTailF PRF "tail" arrTailSelf
+            arrConsProd PRD [arrHeadF arrTailF]
+            arrConsCase SCS "Cons" arrConsProd
+            arrNilCase SCS "Nil" _
+            arrListBody SUM [arrConsCase arrNilCase]
+            innerListT RT arrListBody
+            entKeyF PRF "key" stringT
+            entValSelf RS 1
+            entValF PRF "value" entValSelf
+            entryProd PRD [entKeyF entValF]
+            entHeadF PRF "head" entryProd
+            entTailSelf RS
+            entTailF PRF "tail" entTailSelf
+            entConsProd PRD [entHeadF entTailF]
+            entConsCase SCS "Cons" entConsProd
+            entNilCase SCS "Nil" _
+            entListBody SUM [entConsCase entNilCase]
+            entryListT RT entListBody
             jsonNullCase SCS "JsonNull" _
             jsonBoolCase SCS "JsonBool" boolT
             jsonNumberCase SCS "JsonNumber" intT
             jsonStringCase SCS "JsonString" stringT
-            jsonArrConsCase SCS "JsonArrayCons" arrConsProd
-            jsonArrNilCase SCS "JsonArrayNil" _
-            jsonObjConsCase SCS "JsonObjectCons" objConsProd
-            jsonObjNilCase SCS "JsonObjectNil" _
-            jsonValueBody SUM [jsonNullCase jsonBoolCase jsonNumberCase jsonStringCase jsonArrConsCase jsonArrNilCase jsonObjConsCase jsonObjNilCase]
+            jsonArrCase SCS "JsonArray" innerListT
+            jsonObjCase SCS "JsonObject" entryListT
+            jsonValueBody SUM [jsonNullCase jsonBoolCase jsonNumberCase jsonStringCase jsonArrCase jsonObjCase]
             jsonValueT RT jsonValueBody
             someCase SCS "Some" jsonValueT
             noneCase SCS "None" _

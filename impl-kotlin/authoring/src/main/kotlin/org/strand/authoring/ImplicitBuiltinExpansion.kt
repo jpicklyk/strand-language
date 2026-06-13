@@ -973,39 +973,84 @@ internal object ImplicitBuiltinExpansion {
         return prd
     }
 
-    /** The blessed corpus-66 JsonValueFull tower (8-case recursive sum). */
+    /**
+     * The precise N-048 JsonValue tower (Q-069), the agent-facing type
+     * `Json.Parse` / `Json.Stringify` are typed against. This is the
+     * six-case model corpus 88/89 construct via RecursiveProjection,
+     * NOT the retired corpus-66 spliced 8-case JsonValueFull:
+     *
+     *   jsonValueT = μ jv. JsonNull | JsonBool(Bool) | JsonNumber(Int)
+     *                    | JsonString(String)
+     *                    | JsonArray (μ list. Cons(head: jv, tail: list) | Nil)
+     *                    | JsonObject(μ ents. Cons(head: {key: String, value: jv},
+     *                                              tail: ents) | Nil)
+     *
+     * The inner list's `head` / the entry's `value` are RecursiveSelf at
+     * depth 1, reaching the outer `jv` binder; the inner `tail` is at
+     * depth 0. Resolution of this type at value-construction sites needs
+     * the N-048 RecursiveProjection front-door, but as a builtin
+     * signature the tower only appears in type position, where the
+     * verifier resolves the nested μ directly.
+     */
     private fun synthJsonValueTower(st: State): String {
         val stringT = st.prim.getValue("String")
         val intT = st.prim.getValue("Int")
         val boolT = st.prim.getValue("Bool")
-        val rs = st.freshId("rs")
-        st.addSynth(NodeDecl(rs, "RS", emptyList(), 0))
-        val arrHead = st.freshId("prf")
-        val arrTail = st.freshId("prf")
-        val arrProd = st.freshId("prd")
-        st.addSynth(NodeDecl(arrHead, "PRF", listOf(Arg.Str("head"), Arg.Bare(rs)), 0))
-        st.addSynth(NodeDecl(arrTail, "PRF", listOf(Arg.Str("tail"), Arg.Bare(rs)), 0))
-        st.addSynth(NodeDecl(arrProd, "PRD", listOf(Arg.Listing(listOf(Arg.Bare(arrHead), Arg.Bare(arrTail)))), 0))
-        val objKey = st.freshId("prf")
-        val objValue = st.freshId("prf")
-        val objTail = st.freshId("prf")
-        val objProd = st.freshId("prd")
-        st.addSynth(NodeDecl(objKey, "PRF", listOf(Arg.Str("key"), Arg.Bare(stringT)), 0))
-        st.addSynth(NodeDecl(objValue, "PRF", listOf(Arg.Str("value"), Arg.Bare(rs)), 0))
-        st.addSynth(NodeDecl(objTail, "PRF", listOf(Arg.Str("tail"), Arg.Bare(rs)), 0))
-        st.addSynth(NodeDecl(
-            objProd, "PRD",
-            listOf(Arg.Listing(listOf(Arg.Bare(objKey), Arg.Bare(objValue), Arg.Bare(objTail)))), 0,
-        ))
+
+        // --- The inner array list: μ list. Cons(head: jv, tail: list) | Nil ---
+        val arrHeadSelf = st.freshId("rs")   // depth 1 -> the outer jv
+        val arrTailSelf = st.freshId("rs")   // depth 0 -> this inner list
+        st.addSynth(NodeDecl(arrHeadSelf, "RS", listOf(Arg.IntL(1)), 0))
+        st.addSynth(NodeDecl(arrTailSelf, "RS", emptyList(), 0))
+        val arrHeadF = st.freshId("prf")
+        val arrTailF = st.freshId("prf")
+        st.addSynth(NodeDecl(arrHeadF, "PRF", listOf(Arg.Str("head"), Arg.Bare(arrHeadSelf)), 0))
+        st.addSynth(NodeDecl(arrTailF, "PRF", listOf(Arg.Str("tail"), Arg.Bare(arrTailSelf)), 0))
+        val arrConsProd = st.freshId("prd")
+        st.addSynth(NodeDecl(arrConsProd, "PRD", listOf(Arg.Listing(listOf(Arg.Bare(arrHeadF), Arg.Bare(arrTailF)))), 0))
+        val arrConsCase = st.freshId("scs")
+        val arrNilCase = st.freshId("scs")
+        st.addSynth(NodeDecl(arrConsCase, "SCS", listOf(Arg.Str("Cons"), Arg.Bare(arrConsProd)), 0))
+        st.addSynth(NodeDecl(arrNilCase, "SCS", listOf(Arg.Str("Nil"), Arg.Null), 0))
+        val arrListBody = st.freshId("sum")
+        st.addSynth(NodeDecl(arrListBody, "SUM", listOf(Arg.Listing(listOf(Arg.Bare(arrConsCase), Arg.Bare(arrNilCase)))), 0))
+        val innerListT = st.freshId("rt")
+        st.addSynth(NodeDecl(innerListT, "RT", listOf(Arg.Bare(arrListBody)), 0))
+
+        // --- The inner entry list: μ ents. Cons(head: {key, value: jv}, tail: ents) | Nil ---
+        val entKeyF = st.freshId("prf")
+        val entValSelf = st.freshId("rs")    // depth 1 -> the outer jv
+        val entValF = st.freshId("prf")
+        st.addSynth(NodeDecl(entKeyF, "PRF", listOf(Arg.Str("key"), Arg.Bare(stringT)), 0))
+        st.addSynth(NodeDecl(entValSelf, "RS", listOf(Arg.IntL(1)), 0))
+        st.addSynth(NodeDecl(entValF, "PRF", listOf(Arg.Str("value"), Arg.Bare(entValSelf)), 0))
+        val entryProd = st.freshId("prd")
+        st.addSynth(NodeDecl(entryProd, "PRD", listOf(Arg.Listing(listOf(Arg.Bare(entKeyF), Arg.Bare(entValF)))), 0))
+        val entHeadF = st.freshId("prf")
+        val entTailSelf = st.freshId("rs")   // depth 0 -> this inner entry list
+        val entTailF = st.freshId("prf")
+        st.addSynth(NodeDecl(entHeadF, "PRF", listOf(Arg.Str("head"), Arg.Bare(entryProd)), 0))
+        st.addSynth(NodeDecl(entTailSelf, "RS", emptyList(), 0))
+        st.addSynth(NodeDecl(entTailF, "PRF", listOf(Arg.Str("tail"), Arg.Bare(entTailSelf)), 0))
+        val entConsProd = st.freshId("prd")
+        st.addSynth(NodeDecl(entConsProd, "PRD", listOf(Arg.Listing(listOf(Arg.Bare(entHeadF), Arg.Bare(entTailF)))), 0))
+        val entConsCase = st.freshId("scs")
+        val entNilCase = st.freshId("scs")
+        st.addSynth(NodeDecl(entConsCase, "SCS", listOf(Arg.Str("Cons"), Arg.Bare(entConsProd)), 0))
+        st.addSynth(NodeDecl(entNilCase, "SCS", listOf(Arg.Str("Nil"), Arg.Null), 0))
+        val entListBody = st.freshId("sum")
+        st.addSynth(NodeDecl(entListBody, "SUM", listOf(Arg.Listing(listOf(Arg.Bare(entConsCase), Arg.Bare(entNilCase)))), 0))
+        val entryListT = st.freshId("rt")
+        st.addSynth(NodeDecl(entryListT, "RT", listOf(Arg.Bare(entListBody)), 0))
+
+        // --- The outer μ: the six JsonValue cases ---
         val caseDefs = listOf(
             "JsonNull" to null,
             "JsonBool" to boolT,
             "JsonNumber" to intT,
             "JsonString" to stringT,
-            "JsonArrayCons" to arrProd,
-            "JsonArrayNil" to null,
-            "JsonObjectCons" to objProd,
-            "JsonObjectNil" to null,
+            "JsonArray" to innerListT,
+            "JsonObject" to entryListT,
         )
         val caseIds = caseDefs.map { (name, caseType) ->
             val id = st.freshId("scs")
