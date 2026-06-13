@@ -147,8 +147,12 @@ TAGS = {
     "ProductValue": 37, "ProductFieldValue": 38, "ProductFieldGet": 39,
     "SumValue": 40, "RecursiveType": 41, "RecursiveSelf": 42, "Handler": 43,
     "ToolDef": 44, "ResponseSchemaSpec": 45, "ModuleManifest": 46,
-    "Attempt": 47,
+    "Attempt": 47, "RecursiveProjection": 48,
 }
+
+# RecursiveProjection path-step discriminator (spec: Discriminators):
+# Case 0 (+ bytes(caseName)), Field 1 (+ bytes(fieldName)), Unfold 2 (no payload).
+PROJECTION_STEP_TAGS = {"Case": 0, "Field": 1, "Unfold": 2}
 
 TYPE_PARAMETER_REFERENCE_TAG = 13  # inline positional form only
 
@@ -339,6 +343,30 @@ class Encoder:
             if 0 <= depth < rec_depth:
                 return t + uint(depth)
             return t + uint(RECURSIVE_SENTINEL)
+        if ntype == "RecursiveProjection":
+            # [tag 48][H(recursiveType)][array(step_1, ..., step_n)] (spec:
+            # Types, RecursiveProjection). The recursiveType is a hash
+            # reference in the SURROUNDING context — the projection introduces
+            # no binder; the Unfold binder motion is the verifier-resolver's,
+            # not the encoder's. The path is POSITIONAL (order is
+            # semantically load-bearing), so it is not sorted. Each step is
+            # nested CBOR: Case -> array(uint(0), bytes(caseName)),
+            # Field -> array(uint(1), bytes(fieldName)), Unfold -> array(uint(2)).
+            out = t + self.H(node["recursiveType"], ctx)
+            steps = node["path"]
+            out += array_header(len(steps))
+            for step in steps:
+                kind = step["step"]
+                code = PROJECTION_STEP_TAGS[kind]
+                if kind == "Case":
+                    out += array_header(2) + uint(code) + cbor_bytes(step["caseName"].encode("utf-8"))
+                elif kind == "Field":
+                    out += array_header(2) + uint(code) + cbor_bytes(step["fieldName"].encode("utf-8"))
+                elif kind == "Unfold":
+                    out += array_header(1) + uint(code)
+                else:
+                    raise EncoderError(f"unknown RecursiveProjection step '{kind}'")
+            return out
 
         # ----- functions and binding -----
         if ntype == "Lambda":
