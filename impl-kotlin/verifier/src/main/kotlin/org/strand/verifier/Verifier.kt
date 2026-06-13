@@ -104,6 +104,11 @@ class Verifier(
             rootType,
             state.nodeTypes.toMap(),
             warnings = unreachableNodeWarnings(root) + replayDeterminismWarnings(),
+            // Q-067: surface the verifier's own effect closure (the
+            // closure-subtraction-aware, Handler-aware computation that backs
+            // UncoveredEffects) so a host reads the harm bound's `closure(g)`
+            // instead of re-deriving it. `VerifyResult` is not encoded — hash-neutral.
+            nodeClosures = state.nodeClosures.toMap(),
         )
     }
 

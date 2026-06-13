@@ -1189,13 +1189,35 @@ sealed class VerifyResult {
      * [VerifyWarning.UnreachableNode]). It is parallel to
      * [deferredChecks], which stays dedicated to the Layer 7
      * schema-deferral disposition.
+     *
+     * [nodeClosures] (Q-067) maps every reached node to its effect closure:
+     * the set of EffectCategory NodeIds the node's evaluation may exercise.
+     * It is the verifier's own `VerifyState.nodeClosures` — the
+     * closure-subtraction-aware computation that is the source of truth for
+     * `UncoveredEffects` and for Handler's effect removal — surfaced verbatim,
+     * keyed by NodeId exactly as [nodeTypes] is. The closure of the program
+     * root is the declared effect closure that the Q-044 harm bound
+     * `closure(g) ∩ C ∩ B ∩ P` opens with; read it via [rootClosure]. Unlike a
+     * structural walk over the graph, this value is Handler-aware (a Handler
+     * subtracts the category it intercepts), so it is the exact closure the
+     * verifier enforced rather than a looser upper bound. [VerifyResult] is not
+     * part of the canonical node encoding, so carrying it moves no hash.
      */
     data class Ok(
         val rootType: TypeExpr,
         val nodeTypes: Map<NodeId, TypeExpr>,
         val deferredChecks: List<VerifyError.SchemaInvariantDeferred> = emptyList(),
         val warnings: List<VerifyWarning> = emptyList(),
-    ) : VerifyResult()
+        val nodeClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
+    ) : VerifyResult() {
+        /**
+         * Q-067: the effect closure of the program [root] — the set of
+         * EffectCategory NodeIds reachable from the root, Handler-aware. This is
+         * `closure(g)` in the Q-044 harm bound. Empty for a root that exercises
+         * no effects, and (defensively) empty if [root] has no recorded closure.
+         */
+        fun rootClosure(root: NodeId): Set<NodeId> = nodeClosures[root] ?: emptySet()
+    }
     data class Failed(val errors: List<VerifyError>) : VerifyResult()
 }
 
