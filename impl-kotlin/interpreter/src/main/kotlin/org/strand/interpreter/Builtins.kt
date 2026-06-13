@@ -1540,19 +1540,18 @@ object Builtins {
             }
         },
 
-        // Layer 4 step 2 (round 2 update) — Json.Parse. Parses any
-        // valid JSON value (null, true, false, number, string, array,
-        // object) into the full JsonValue sum encoding now that the
-        // nested-μ blocker is lifted (Slice 3 of stdlib expansion
-        // round 2, via the RecursiveSelf depth field).
+        // Layer 4 step 2 (round 2 update; Q-069 precise-model migration)
+        // — Json.Parse. Parses any valid JSON value (null, true, false,
+        // number, string, array, object) into the PRECISE JsonValue sum
+        // encoding (N-048): JsonArray wraps a genuine List<JsonValue> and
+        // JsonObject a genuine entry list, both built from the canonical
+        // Cons/Nil sum with a {key, value} entry product. This is the
+        // model corpus 88/89 construct via RecursiveProjection — NOT the
+        // corpus-66 spliced JsonArrayCons/Nil/JsonObjectCons/Nil cases.
         //
-        // The blessed JsonValue type lives in corpus 66; the four
-        // primitive cases match corpus 54's flat predecessor for
-        // primitives — programs that only handle primitives continue
-        // to work unchanged. Arrays and objects now produce real
-        // recursive structure: JsonArray(List<JsonValue>) and
-        // JsonObject(List<{key, value}>) using the canonical Cons/Nil
-        // sum encoding.
+        // The four primitive cases (JsonNull / JsonBool / JsonNumber /
+        // JsonString) are byte-identical to the flat corpus-54 and the
+        // former spliced model, so primitive-only programs are unchanged.
         //
         // Returns Option<JsonValue>: Some on any valid JSON,
         // None on malformed input.
@@ -2163,11 +2162,14 @@ object Builtins {
             else Value.SumV("Some", Value.IntV(maxOpt))
         },
 
-        // Stdlib expansion round 2 — Json.Stringify. Inverse of
-        // Json.Parse, handling all six JsonValue cases (the four
-        // primitives plus JsonArray and JsonObject from the Slice-3
-        // nested-μ JsonValue). Recurses through Cons/Nil chains
-        // inside array/object payloads.
+        // Stdlib expansion round 2 (Q-069 precise-model migration) —
+        // Json.Stringify. Inverse of Json.Parse over the PRECISE model:
+        // the six JsonValue cases (four primitives plus JsonArray and
+        // JsonObject). JsonArray / JsonObject each wrap a genuine
+        // Cons/Nil list, so the array/object arms take the wrapper's
+        // payload and walk the inner list. A value built the precise
+        // way via N-048 RecursiveProjection (corpus 88/89) stringifies
+        // correctly through this builtin.
 
         "strand-builtin:Json.Stringify" to det { args ->
             require(args.size == 1) { "Json.Stringify expects 1 arg (json: JsonValue), got ${args.size}" }
@@ -3702,34 +3704,46 @@ object Builtins {
                 }
             }
             is kotlinx.serialization.json.JsonArray -> {
-                var chain: Value = Value.SumV("JsonArrayNil", null)
+                // Precise model (Q-069 / N-048): JsonArray wraps a real
+                // List<JsonValue> built from the canonical Cons/Nil sum,
+                // NOT the corpus-66 spliced JsonArrayCons/Nil cases.
+                var chain: Value = Value.SumV("Nil", null)
                 for (entry in element.reversed()) {
                     val converted = jsonElementToValue(entry) ?: return null
-                    chain = Value.SumV("JsonArrayCons", Value.ProductV(mapOf(
+                    chain = Value.SumV("Cons", Value.ProductV(mapOf(
                         "head" to converted, "tail" to chain,
                     )))
                 }
-                chain
+                Value.SumV("JsonArray", chain)
             }
             is kotlinx.serialization.json.JsonObject -> {
-                var chain: Value = Value.SumV("JsonObjectNil", null)
+                // Precise model (Q-069 / N-048): JsonObject wraps a real
+                // entry list whose cells carry a {key, value} entry
+                // product as head, NOT the corpus-66 spliced
+                // JsonObjectCons/Nil cases that flattened key/value/tail.
+                var chain: Value = Value.SumV("Nil", null)
                 for ((key, value) in element.entries.reversed()) {
                     val convertedValue = jsonElementToValue(value) ?: return null
-                    chain = Value.SumV("JsonObjectCons", Value.ProductV(mapOf(
+                    val entry = Value.ProductV(mapOf(
                         "key" to Value.StringV(key),
                         "value" to convertedValue,
-                        "tail" to chain,
+                    ))
+                    chain = Value.SumV("Cons", Value.ProductV(mapOf(
+                        "head" to entry, "tail" to chain,
                     )))
                 }
-                chain
+                Value.SumV("JsonObject", chain)
             }
         }
     }
 
     /**
      * Render a Strand `JsonValue` SumV back to canonical JSON text.
-     * Inverse of [jsonElementToValue]. Recurses through Cons/Nil
-     * chains inside JsonArray / JsonObject payloads.
+     * Inverse of [jsonElementToValue]. The precise model (Q-069 /
+     * N-048): a JsonArray / JsonObject wraps a real Cons/Nil list, so
+     * the array/object arms take the wrapper's payload and walk the
+     * inner list, rather than matching the corpus-66 spliced spine
+     * cases. The four primitive arms are unchanged.
      */
     private fun jsonValueToText(v: Value.SumV): String = when (v.case) {
         "JsonNull" -> "null"
@@ -3739,37 +3753,38 @@ object Builtins {
             val s = (v.payload as Value.StringV).v
             kotlinx.serialization.json.JsonPrimitive(s).toString()
         }
-        "JsonArrayCons", "JsonArrayNil" -> {
+        "JsonArray" -> {
             val out = StringBuilder("[")
             var first = true
-            var cur: Value = v
+            var cur: Value = v.payload as Value.SumV  // the inner Cons/Nil list
             while (true) {
                 val sumV = cur as? Value.SumV ?: break
-                if (sumV.case != "JsonArrayCons") break
-                val payload = sumV.payload as Value.ProductV
+                if (sumV.case != "Cons") break
+                val cell = sumV.payload as Value.ProductV
                 if (!first) out.append(",")
                 first = false
-                out.append(jsonValueToText(payload.fields.getValue("head") as Value.SumV))
-                cur = payload.fields.getValue("tail")
+                out.append(jsonValueToText(cell.fields.getValue("head") as Value.SumV))
+                cur = cell.fields.getValue("tail")
             }
             out.append("]")
             out.toString()
         }
-        "JsonObjectCons", "JsonObjectNil" -> {
+        "JsonObject" -> {
             val out = StringBuilder("{")
             var first = true
-            var cur: Value = v
+            var cur: Value = v.payload as Value.SumV  // the inner Cons/Nil entry list
             while (true) {
                 val sumV = cur as? Value.SumV ?: break
-                if (sumV.case != "JsonObjectCons") break
-                val payload = sumV.payload as Value.ProductV
+                if (sumV.case != "Cons") break
+                val cell = sumV.payload as Value.ProductV
+                val entry = cell.fields.getValue("head") as Value.ProductV  // {key, value}
                 if (!first) out.append(",")
                 first = false
-                val key = (payload.fields.getValue("key") as Value.StringV).v
+                val key = (entry.fields.getValue("key") as Value.StringV).v
                 out.append(kotlinx.serialization.json.JsonPrimitive(key).toString())
                 out.append(":")
-                out.append(jsonValueToText(payload.fields.getValue("value") as Value.SumV))
-                cur = payload.fields.getValue("tail")
+                out.append(jsonValueToText(entry.fields.getValue("value") as Value.SumV))
+                cur = cell.fields.getValue("tail")
             }
             out.append("}")
             out.toString()
@@ -3948,8 +3963,11 @@ object Builtins {
     }
 
     /**
-     * Convert a Strand JsonValue SumV (corpus 66 encoding) into a
-     * kotlinx-serialization JsonElement. Mirrors [jsonElementToValue].
+     * Convert a Strand JsonValue SumV (the precise N-048 model, Q-069)
+     * into a kotlinx-serialization JsonElement. Mirrors
+     * [jsonElementToValue]: JsonArray / JsonObject each wrap a genuine
+     * Cons/Nil list, so the array/object arms take the wrapper's
+     * payload and walk the inner list.
      */
     private fun strandJsonValueToElement(v: Value.SumV): kotlinx.serialization.json.JsonElement {
         return when (v.case) {
@@ -3957,24 +3975,25 @@ object Builtins {
             "JsonBool" -> kotlinx.serialization.json.JsonPrimitive((v.payload as Value.BoolV).v)
             "JsonNumber" -> kotlinx.serialization.json.JsonPrimitive((v.payload as Value.IntV).v)
             "JsonString" -> kotlinx.serialization.json.JsonPrimitive((v.payload as Value.StringV).v)
-            "JsonArrayCons", "JsonArrayNil" -> {
+            "JsonArray" -> {
                 val out = mutableListOf<kotlinx.serialization.json.JsonElement>()
-                var cur: Value = v
-                while (cur is Value.SumV && cur.case == "JsonArrayCons") {
-                    val payload = cur.payload as Value.ProductV
-                    out += strandJsonValueToElement(payload.fields.getValue("head") as Value.SumV)
-                    cur = payload.fields.getValue("tail")
+                var cur: Value = v.payload as Value.SumV
+                while (cur is Value.SumV && cur.case == "Cons") {
+                    val cell = cur.payload as Value.ProductV
+                    out += strandJsonValueToElement(cell.fields.getValue("head") as Value.SumV)
+                    cur = cell.fields.getValue("tail")
                 }
                 kotlinx.serialization.json.JsonArray(out)
             }
-            "JsonObjectCons", "JsonObjectNil" -> {
+            "JsonObject" -> {
                 val out = linkedMapOf<String, kotlinx.serialization.json.JsonElement>()
-                var cur: Value = v
-                while (cur is Value.SumV && cur.case == "JsonObjectCons") {
-                    val payload = cur.payload as Value.ProductV
-                    val key = (payload.fields.getValue("key") as Value.StringV).v
-                    out[key] = strandJsonValueToElement(payload.fields.getValue("value") as Value.SumV)
-                    cur = payload.fields.getValue("tail")
+                var cur: Value = v.payload as Value.SumV
+                while (cur is Value.SumV && cur.case == "Cons") {
+                    val cell = cur.payload as Value.ProductV
+                    val entry = cell.fields.getValue("head") as Value.ProductV
+                    val key = (entry.fields.getValue("key") as Value.StringV).v
+                    out[key] = strandJsonValueToElement(entry.fields.getValue("value") as Value.SumV)
+                    cur = cell.fields.getValue("tail")
                 }
                 kotlinx.serialization.json.JsonObject(out)
             }
@@ -3984,12 +4003,12 @@ object Builtins {
 
     /**
      * Convert a kotlinx-serialization JsonElement to the Strand
-     * JsonValue SumV (the inverse of [strandJsonValueToElement]).
-     * Used to surface a model's tool-call `input` JSON as a Strand
-     * JsonValue inside the returned block. Numbers that don't fit a
-     * Long are represented as 0 with a JsonNull payload — agents that
-     * need full numeric range should parse the raw bytes via
-     * `Json.Parse` separately.
+     * JsonValue SumV in the precise N-048 model (Q-069), the inverse of
+     * [strandJsonValueToElement]. Used to surface a model's tool-call
+     * `input` JSON as a Strand JsonValue inside the returned block.
+     * Numbers that don't fit a Long are represented as 0 with a JsonNull
+     * payload — agents that need full numeric range should parse the raw
+     * bytes via `Json.Parse` separately.
      */
     private fun jsonElementToStrand(el: kotlinx.serialization.json.JsonElement): Value.SumV {
         return when (el) {
@@ -4003,25 +4022,28 @@ object Builtins {
                 }
             }
             is kotlinx.serialization.json.JsonArray -> {
-                var chain: Value = Value.SumV("JsonArrayNil", null)
+                var chain: Value = Value.SumV("Nil", null)
                 for (entry in el.reversed()) {
-                    chain = Value.SumV("JsonArrayCons", Value.ProductV(mapOf(
+                    chain = Value.SumV("Cons", Value.ProductV(mapOf(
                         "head" to jsonElementToStrand(entry),
                         "tail" to chain,
                     )))
                 }
-                chain as Value.SumV
+                Value.SumV("JsonArray", chain)
             }
             is kotlinx.serialization.json.JsonObject -> {
-                var chain: Value = Value.SumV("JsonObjectNil", null)
+                var chain: Value = Value.SumV("Nil", null)
                 for ((key, value) in el.entries.reversed()) {
-                    chain = Value.SumV("JsonObjectCons", Value.ProductV(mapOf(
+                    val entry = Value.ProductV(mapOf(
                         "key" to Value.StringV(key),
                         "value" to jsonElementToStrand(value),
+                    ))
+                    chain = Value.SumV("Cons", Value.ProductV(mapOf(
+                        "head" to entry,
                         "tail" to chain,
                     )))
                 }
-                chain as Value.SumV
+                Value.SumV("JsonObject", chain)
             }
         }
     }

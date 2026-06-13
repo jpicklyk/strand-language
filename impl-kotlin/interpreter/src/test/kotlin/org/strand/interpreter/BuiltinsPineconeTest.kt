@@ -61,17 +61,20 @@ class BuiltinsPineconeTest {
         return Value.BytesV(buf.array())
     }
 
-    /** Encode a metadata ProductV as JsonValueFull SumV. */
+    /** Encode a metadata object as a precise N-048 JsonObject SumV. */
     private fun metadata(vararg entries: Pair<String, String>): Value.SumV {
-        var chain: Value = Value.SumV("JsonObjectNil", null)
+        var chain: Value = Value.SumV("Nil", null)
         for ((k, v) in entries.reversed()) {
-            chain = Value.SumV("JsonObjectCons", Value.ProductV(mapOf(
+            val entry = Value.ProductV(mapOf(
                 "key" to Value.StringV(k),
                 "value" to Value.SumV("JsonString", Value.StringV(v)),
+            ))
+            chain = Value.SumV("Cons", Value.ProductV(mapOf(
+                "head" to entry,
                 "tail" to chain,
             )))
         }
-        return chain as Value.SumV
+        return Value.SumV("JsonObject", chain)
     }
 
     private fun upsertItem(id: String, v: Value.BytesV, meta: Value.SumV): Value.ProductV =

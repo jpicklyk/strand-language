@@ -95,8 +95,9 @@ class ToolDispatchLoopTest {
         assertEquals(1, toolCallCount)
         // The observed input arrived as a Strand JsonValue SumV.
         val inputSum = observedInput as Value.SumV
-        // Outermost: JsonObjectCons (the JSON object {query, city}).
-        assertTrue(inputSum.case == "JsonObjectCons", "expected JsonObjectCons, got ${inputSum.case}")
+        // Outermost: JsonObject (the JSON object {query, city}) in the
+        // precise N-048 model — a JsonObject wrapping a Cons/Nil entry list.
+        assertTrue(inputSum.case == "JsonObject", "expected JsonObject, got ${inputSum.case}")
 
         // Result content is the final assistant text block.
         val first = LlmTestSupport.firstBlock(result.fields.getValue("content"))

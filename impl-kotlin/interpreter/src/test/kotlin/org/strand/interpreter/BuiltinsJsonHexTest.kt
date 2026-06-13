@@ -62,23 +62,52 @@ class BuiltinsJsonHexTest {
     }
 
     @Test
-    fun `Json_Stringify handles arrays and objects via spliced variants`() {
+    fun `Json_Stringify handles arrays and objects on the precise model`() {
         val parse = lookup("strand-builtin:Json.Parse")
         val stringify = lookup("strand-builtin:Json.Stringify")
-        // Empty container forms — JsonArrayNil / JsonObjectNil.
+        // Empty container forms — a JsonArray / JsonObject wrapping a
+        // bare Nil list (the precise N-048 model, Q-069).
         assertEquals(
             Value.StringV("[]"),
-            stringify.invoke(listOf(Value.SumV("JsonArrayNil", null))),
+            stringify.invoke(listOf(Value.SumV("JsonArray", Value.SumV("Nil", null)))),
         )
         assertEquals(
             Value.StringV("{}"),
-            stringify.invoke(listOf(Value.SumV("JsonObjectNil", null))),
+            stringify.invoke(listOf(Value.SumV("JsonObject", Value.SumV("Nil", null)))),
         )
         // Parse + stringify round-trip for non-trivial nested shapes.
         for (input in listOf("[1,2,3]", "{\"a\":1,\"b\":\"x\"}", "[true,null,\"y\"]")) {
             val parsed = (parse.invoke(listOf(Value.StringV(input))) as Value.SumV).payload!!
             assertEquals(Value.StringV(input), stringify.invoke(listOf(parsed)), input)
         }
+    }
+
+    @Test
+    fun `Json_Stringify of a value built the precise N-048 way`() {
+        // The closing of the output-by-construction demo's W4 round-trip:
+        // a JsonArray value built directly as the precise nested model
+        // (corpus 88's runtime shape, a JsonArray wrapping a real
+        // Cons/Nil List<JsonValue>) stringifies correctly through the
+        // builtin — no driver-side walk needed.
+        val stringify = lookup("strand-builtin:Json.Stringify")
+        fun num(n: Long) = Value.SumV("JsonNumber", Value.IntV(n))
+        fun cons(head: Value, tail: Value) =
+            Value.SumV("Cons", Value.ProductV(mapOf("head" to head, "tail" to tail)))
+        val nil = Value.SumV("Nil", null)
+        // [1, 2] as the precise model.
+        val array = Value.SumV("JsonArray", cons(num(1), cons(num(2), nil)))
+        assertEquals(Value.StringV("[1,2]"), stringify.invoke(listOf(array)))
+
+        // {"k": 1} as the precise model: a JsonObject wrapping an entry
+        // list whose cell head is a {key, value} product (corpus 89).
+        fun entry(key: String, value: Value) =
+            Value.ProductV(mapOf("key" to Value.StringV(key), "value" to value))
+        val obj = Value.SumV("JsonObject", cons(entry("k", num(1)), nil))
+        assertEquals(Value.StringV("{\"k\":1}"), stringify.invoke(listOf(obj)))
+
+        // Nested: {"xs": [1, 2]} — a container inside a container.
+        val nested = Value.SumV("JsonObject", cons(entry("xs", array), nil))
+        assertEquals(Value.StringV("{\"xs\":[1,2]}"), stringify.invoke(listOf(nested)))
     }
 
     // ---------- Bytes hex codecs ----------

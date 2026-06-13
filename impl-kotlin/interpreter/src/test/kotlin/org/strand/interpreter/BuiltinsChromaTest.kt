@@ -64,7 +64,8 @@ class BuiltinsChromaTest {
         return Value.BytesV(buf.array())
     }
 
-    private fun emptyMetadata(): Value.SumV = Value.SumV("JsonObjectNil", null)
+    // Precise N-048 model: an empty JSON object is a JsonObject wrapping a bare Nil list.
+    private fun emptyMetadata(): Value.SumV = Value.SumV("JsonObject", Value.SumV("Nil", null))
 
     private fun upsertItem(id: String, v: Value.BytesV, meta: Value.SumV): Value.ProductV =
         Value.ProductV(mapOf(

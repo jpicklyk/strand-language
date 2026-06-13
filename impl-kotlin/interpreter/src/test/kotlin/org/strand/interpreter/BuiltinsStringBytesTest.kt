@@ -208,18 +208,19 @@ class BuiltinsStringBytesTest {
     }
 
     @Test
-    fun `Json_Parse array yields a JsonArrayCons-JsonArrayNil chain`() {
-        // The spliced-variants encoding (corpus 66) avoids the
-        // nested-μ value-construction issue by inlining
-        // JsonArrayCons / JsonArrayNil directly as JsonValue
-        // variants. Each cell points to head: JsonValue and
-        // tail: JsonValue (next cell or JsonArrayNil).
+    fun `Json_Parse array yields a JsonArray wrapping a genuine Cons-Nil list`() {
+        // The precise N-048 model (Q-069): JsonArray wraps a genuine
+        // List<JsonValue> built from the canonical Cons/Nil sum, whose
+        // cells carry head: JsonValue and tail: the inner list. This is
+        // the model corpus 88 constructs via RecursiveProjection.
         val fn = lookup("strand-builtin:Json.Parse")
         val result = fn.invoke(listOf(Value.StringV("[1,2,3]"))) as Value.SumV
         assertEquals("Some", result.case)
+        val array = result.payload as Value.SumV
+        assertEquals("JsonArray", array.case)
         val heads = mutableListOf<Long>()
-        var cur: Value = result.payload!!
-        while (cur is Value.SumV && cur.case == "JsonArrayCons") {
+        var cur: Value = array.payload!!  // the inner Cons/Nil list
+        while (cur is Value.SumV && cur.case == "Cons") {
             val p = cur.payload as Value.ProductV
             val h = p.fields.getValue("head") as Value.SumV
             assertEquals("JsonNumber", h.case)
@@ -227,24 +228,27 @@ class BuiltinsStringBytesTest {
             cur = p.fields.getValue("tail")
         }
         assertEquals(listOf(1L, 2L, 3L), heads)
-        // The terminator is JsonArrayNil.
-        assertEquals(Value.SumV("JsonArrayNil", null), cur)
+        // The inner list terminates in the canonical Nil.
+        assertEquals(Value.SumV("Nil", null), cur)
     }
 
     @Test
-    fun `Json_Parse object yields a JsonObjectCons-JsonObjectNil chain`() {
+    fun `Json_Parse object yields a JsonObject wrapping a genuine entry list`() {
         val fn = lookup("strand-builtin:Json.Parse")
         val result = fn.invoke(listOf(Value.StringV("{\"a\":1,\"b\":\"two\"}"))) as Value.SumV
         assertEquals("Some", result.case)
+        val obj = result.payload as Value.SumV
+        assertEquals("JsonObject", obj.case)
         val entries = mutableListOf<Pair<String, Value>>()
-        var cur: Value = result.payload!!
-        while (cur is Value.SumV && cur.case == "JsonObjectCons") {
+        var cur: Value = obj.payload!!  // the inner Cons/Nil entry list
+        while (cur is Value.SumV && cur.case == "Cons") {
             val p = cur.payload as Value.ProductV
-            val key = (p.fields.getValue("key") as Value.StringV).v
-            entries += (key to p.fields.getValue("value"))
+            val entry = p.fields.getValue("head") as Value.ProductV  // {key, value}
+            val key = (entry.fields.getValue("key") as Value.StringV).v
+            entries += (key to entry.fields.getValue("value"))
             cur = p.fields.getValue("tail")
         }
-        assertEquals(Value.SumV("JsonObjectNil", null), cur)
+        assertEquals(Value.SumV("Nil", null), cur)
         assertEquals(2, entries.size)
         assertEquals("a", entries[0].first)
         assertEquals(Value.SumV("JsonNumber", Value.IntV(1L)), entries[0].second)
@@ -253,14 +257,14 @@ class BuiltinsStringBytesTest {
     }
 
     @Test
-    fun `Json_Parse empty object and empty array yield the appropriate Nil variants`() {
+    fun `Json_Parse empty object and empty array wrap a bare Nil list`() {
         val fn = lookup("strand-builtin:Json.Parse")
         assertEquals(
-            Value.SumV("Some", Value.SumV("JsonObjectNil", null)),
+            Value.SumV("Some", Value.SumV("JsonObject", Value.SumV("Nil", null))),
             fn.invoke(listOf(Value.StringV("{}"))),
         )
         assertEquals(
-            Value.SumV("Some", Value.SumV("JsonArrayNil", null)),
+            Value.SumV("Some", Value.SumV("JsonArray", Value.SumV("Nil", null))),
             fn.invoke(listOf(Value.StringV("[]"))),
         )
     }
