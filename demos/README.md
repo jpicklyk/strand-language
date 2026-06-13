@@ -30,6 +30,34 @@ Run the assertion-backed test that pins every property, from `impl-kotlin/`:
 ./gradlew :runtime:test --tests "org.strand.runtime.ContainmentDemoTest"
 ```
 
+### plugin-host
+
+A host application that loads untrusted plugins — agent-generated Strand programs
+— and grants each a precisely-scoped slice of its own authority, showing that a
+confused or malicious plugin cannot escalate the delegated capability: not by
+argument drift (the Q-039 effect projection binds the capability-check value to
+the actual foreign-call argument, caught at admission), not by reaching outside
+its scope (the Q-031 refined-capability match denies it at the foreign-call
+boundary with a Q-064 `DenialReport`), and not by relying on the host's broad
+authority (the host attenuates the grant before delegating). Distinct from
+`containment-host`, which shows coarse whole-program tenant isolation; this demo
+is about fine-grained capability attenuation and delegation within a single host.
+The Kotlin driver and its assertion test live in the `:runtime` test source set;
+the plugin programs and narrative live under
+[`plugin-host/`](plugin-host/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:pluginHostDemo -q
+```
+
+Run the assertion-backed test that pins every property, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.PluginHostDemoTest"
+```
+
 ### replay-timetravel
 
 A stateful service — an event-sourced ledger — whose lifetime trajectory
