@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "InvariantTargetMismatch at #3: at=#3 'shortNameSchema' (line 5), invariant=#2 'shortNameInv' (line 4), targetSchema=#29 (prelude 'stringT'), declaringSchema=#3 'shortNameSchema' (line 5)",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "InvariantTargetMismatch",
+        "at": "3",
+        "detail": "at=#3 'shortNameSchema' (line 5), invariant=#2 'shortNameInv' (line 4), targetSchema=#29 (prelude 'stringT'), declaringSchema=#3 'shortNameSchema' (line 5)"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

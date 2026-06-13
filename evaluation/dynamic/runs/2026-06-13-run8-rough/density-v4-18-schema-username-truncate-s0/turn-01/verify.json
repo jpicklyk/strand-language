@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "line 4: code 'INV' expects 3..3 positional arguments but got 1",
+  "error_json": {
+    "phase": "compile",
+    "errors": [
+      {
+        "phase": "compile",
+        "line": 4,
+        "error_class": "LayerACompileError",
+        "detail": "code 'INV' expects 3..3 positional arguments but got 1"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

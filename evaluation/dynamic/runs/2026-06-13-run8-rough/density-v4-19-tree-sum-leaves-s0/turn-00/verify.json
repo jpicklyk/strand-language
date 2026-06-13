@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "error_prose": "ingest failed for C:\\Users\\jeff_\\AppData\\Local\\Temp\\tmpnzsha4hv.layer-a (after Layer A compile): Unknown node id 'RS' referenced from node 'leftField'.fieldType",
+  "error_json": {
+    "phase": "unknown",
+    "stderr": "ingest failed for C:\\Users\\jeff_\\AppData\\Local\\Temp\\tmpnzsha4hv.layer-a (after Layer A compile): Unknown node id 'RS' referenced from node 'leftField'.fieldType\n",
+    "returncode": 1
+  },
+  "canonical_dag_json": null
+}

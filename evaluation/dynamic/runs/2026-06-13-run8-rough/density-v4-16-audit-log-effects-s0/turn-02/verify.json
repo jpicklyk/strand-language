@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "NonEffectCategoryInEffectList at #7: at=#7 'helperLam' (line 17), offendingChild=#1 'nowEfd' (line 7), actualCategory=EffectDecl",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "NonEffectCategoryInEffectList",
+        "at": "7",
+        "detail": "at=#7 'helperLam' (line 17), offendingChild=#1 'nowEfd' (line 7), actualCategory=EffectDecl"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "error_prose": "line 9: code 'RT' at position 0 expected value-producing nested expression (code `SUM` produces a type but slot `body` carries a value) but got nested `(SUM ...)`\nline 14: unterminated nested expression starting at column 1",
+  "error_json": {
+    "phase": "compile",
+    "errors": [
+      {
+        "phase": "compile",
+        "line": 9,
+        "error_class": "LayerACompileError",
+        "detail": "code 'RT' at position 0 expected value-producing nested expression (code `SUM` produces a type but slot `body` carries a value) but got nested `(SUM ...)`"
+      },
+      {
+        "phase": "compile",
+        "line": 14,
+        "error_class": "LayerACompileError",
+        "detail": "unterminated nested expression starting at column 1"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

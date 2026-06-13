@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "NonEffectCategoryInEffectList at #8: at=#8 'scopedWrite' (line 21), offendingChild=#6 'writeDecl' (line 17), actualCategory=EffectDecl",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "NonEffectCategoryInEffectList",
+        "at": "8",
+        "detail": "at=#8 'scopedWrite' (line 21), offendingChild=#6 'writeDecl' (line 17), actualCategory=EffectDecl"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

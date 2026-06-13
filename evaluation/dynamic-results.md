@@ -78,6 +78,108 @@ the expected output, so the relevant Python error is whatever the
 agent would face when the first emission fails for the equivalent
 reason (type error, runtime exception, value mismatch).
 
+## Run 8 (rough) — 2026-06-13, minimal-core prompt over the semantic-error probes
+
+A rough, partial sweep run via sub-agent dispatch (no API key) to exercise
+the post-Q-060/Q-063 authoring pipeline for the first time. Scope is a
+10-cell subset of the 22-task suite, single arm, N=1 — not the full Q-021
+sweep, which remains an API-backed job (the cached cost gates M-1 and the
+A/B gate M-2 require real token counts and prompt caching that sub-agent
+dispatch cannot observe). This run measures what sub-agent dispatch can
+measure honestly: first-pass and eventual convergence, whether the
+2026-06-11 semantic-error probes fire, and whether the verifier-feedback
+loop recovers them. Artifacts under
+`evaluation/dynamic/runs/2026-06-13-run8-rough/`.
+
+Run metadata:
+- Date: 2026-06-13
+- Model: claude-sonnet-4-6 (via Agent tool sub-agents with model override, `general-purpose` subtype, one Read of the turn prompt + one Write of the response per emission; integrity rule: emit from the prompt alone, no repository reads)
+- Backend: step-mode (file-IPC) with per-cell fresh sub-agent dispatch
+- Token counting: byte-proxy (no `ANTHROPIC_API_KEY`); comparable in scale to Runs 1–7, not to any future api-labeled run
+- Samples per task: 1
+- Arm: Strand minimal-core prompt only (`strand-layer-a-density-v4`, the ~3,900-token core from Q-060 M-2, with the `strand:need` reference channel live)
+- Tasks: 10 of 22 — the three anchors 01/09/10 and the seven 2026-06-11 semantic-error probes 16–22
+- Max retries per cell: effective cap 4 emissions
+- Not run: the full 22-task suite, the full-prompt A/B arm, the Python and Kotlin baselines (their ~100% first-pass is established in Runs 6/7), prompt-cache economics, multi-sample CIs
+
+### Convergence
+
+| Task | Converged at emission | Reference turns | Tokens/success (byte-proxy) | First failure family |
+|------|----------------------|-----------------|------------------------------|----------------------|
+| 01-factorial | 1 (first-pass) | 0 | 4,112 | — |
+| 09-file-write-capability | 1 (first-pass) | 0 | 4,282 | — |
+| 10-handler-intercept | 1 (first-pass) | 1 | 10,775 | — (took a `strand:need` for Handler syntax, then first emission verified) |
+| 17-handler-config-read | 2 | 1 | 16,906 | Bytes-vs-hex literal encoding |
+| 20-connect-effect-decl | 2 | 1 | 16,681 | verified, then runtime `SandboxViolation` (NetHostBlocked) — Q-041 containment, not an authoring error |
+| 19-tree-sum-leaves | 3 | 0 | 14,681 | `Unknown node id 'RS'` (RecursiveSelf as bare name) |
+| 21-capability-scoped-write | 3 | 1 | 24,586 | `CapabilityScopeUnsatisfiable` (CAP omitted nowFx) |
+| 16-audit-log-effects | 4 | 0 | 18,507 | `EFD` arity / `@auto` misplacement, then `NonEffectCategoryInEffectList` |
+| 18-schema-username-truncate | 4 | 0 | 17,905 | `CategoryMismatch` (Lambda where Invariant expected), then `INV` arity, then `InvariantTargetMismatch` |
+| 22-list-append-sum | 4 | 0 | 20,604 | `RT`/`SUM` nesting, then `UnboundRecursiveSelf` at construction |
+
+### Findings
+
+**Eventual convergence 10/10; first-pass 3/10.** Every cell converged within
+four emissions; mean emissions to convergence ≈ 2.5. The three first-pass
+cells are the two simplest originals and the handler task (which first-passed
+on its first *emission* after one reference turn). All seven semantic-error
+probes required at least two emissions.
+
+**The probes fired — decisively, and on their intended semantic families.**
+Unlike the 2026-05-28 probes (tasks 11/14/15, three of which converged
+first-pass because their descriptions named the rule), every one of 16–22
+failed its first emission. The errors were specific and on-target:
+`CategoryMismatch`/`InvariantTargetMismatch` (schema invariant construction),
+`UnboundRecursiveSelf` and `Unknown node id 'RS'` (recursive-type
+construction — the Q-053-adjacent difficulty), `CapabilityScopeUnsatisfiable`
+(CAP narrower than the body closure), `NonEffectCategoryInEffectList` (the
+EFC-vs-EFD distinction). Task 20 is a distinct case worth noting: its first
+emission *verified* and was stopped at runtime by the secure-default sandbox
+(`NetHostBlocked` on an internal host) — Q-041 containment doing its job, and
+arguably a task-design artifact (the expected output presumes a connect the
+secure default blocks).
+
+**The verifier-feedback loop converged the hard cases — the central
+unmeasured claim, now with a first positive data point.** Across 16–22 the
+agents read the structured errors and made correctly-targeted fixes turn over
+turn (wrap the Lambda in an `INV` node; declare `RS` as a standalone node;
+`CAP` takes effect categories not EffectDecls; the inner/outer product split
+for recursive construction). No agent thrashed or repeated a rejected form.
+This is the qualitative behavior the verifier-feedback hypothesis predicts;
+it is one model, one sample, on ten cells, so it is a positive signal, not a
+measured rate.
+
+**The minimal-core prompt shows its cost win directly.** The two clean
+first-pass cells cost ~4,100–4,300 byte-proxy tokens each, against Run 7's
+~28,000 tokens-per-successful-task under the pre-split monolith — the M-2
+prompt diet visible in the cheap cells. The expensive cells (18k–25k) are
+expensive because of *retries*, not prompt size: each retry re-sends the
+(small) core, so multi-attempt convergence on the dense forms is where the
+tokens go.
+
+**The dense v5 forms are not first-pass learnable from the core alone.** The
+recurring first-failure causes — `@auto` placement, `EFD` arity, the EFC/EFD
+distinction, `INV`/`SCH` wiring, `RS`-as-node, `RT`/`SUM` nesting, the
+inner/outer recursive split — are exactly the constructs the 3,900-token core
+summarizes in one line each. Agents recovered them from verifier feedback (or
+a `strand:need` reference turn for Handler/CAP syntax), but rarely emitted
+them correctly first try. This is actionable: the highest-frequency of these
+failure shapes are candidates for a worked example or a tightened one-liner
+in the core, and the `strand:need` channel worked as the intended escape hatch
+(used on 10/17/20/21 for Handler and CAP).
+
+### What this run does and does not establish
+
+It establishes, roughly, that the post-Q-060/Q-063 pipeline produces a working
+agent loop in which the semantic-error probes fire and the verifier-feedback
+loop converges them 10/10 within four attempts, and that the minimal core
+collapses first-pass cost on the tasks an agent gets right immediately. It
+does not establish first-pass *rate* (N=1, 10 cells, one model), the
+minimal-core-vs-full-prompt A/B (M-2 gate, not run), cached cost economics
+(M-1 gate, requires the API backend), or any cross-baseline ratio. Those
+remain the API-backed Run 8 proper. The byte-proxy figures here are
+comparable to Runs 1–7 in scale and to nothing api-labeled.
+
 ## Run 7 — 2026-05-28, Kotlin baseline added (three-way comparison)
 
 First end-to-end Kotlin sweep against the 15-task suite using the

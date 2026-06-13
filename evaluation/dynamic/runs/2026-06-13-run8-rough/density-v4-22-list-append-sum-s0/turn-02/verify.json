@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "UnboundRecursiveSelf at #0: at=#0 'rsSelf' (line 4), hint=RecursiveSelf reached at a resolution site outside any RecursiveType binder. The most common cause: a ProductType or SumType that contains RecursiveSelf (declared inside an RT body's reference chain) is being used at a top-level construction site such as a ProductValue.ofType, SumValue.ofType, or ParameterDecl.paramType. The Strand convention for recursive types is the inner/outer split (see corpus program 31, recursive-list-head): declare TWO ProductType nodes \u2014 an 'inner' product whose recursive field references RecursiveSelf (used by the SumTypeCase INSIDE the RecursiveType body), and an 'outer' product whose same field references the RecursiveType node itself (used by ProductValue / SumValue / function parameter types AT TOP-LEVEL value-construction sites). Both products compare equirecursively-equal under the verifier and the canonical encoder, so the program's hash is unaffected by which one is used where, but the inner form is only valid inside an RT walk and surfaces as this error when used outside one.",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "UnboundRecursiveSelf",
+        "at": "0",
+        "detail": "at=#0 'rsSelf' (line 4), hint=RecursiveSelf reached at a resolution site outside any RecursiveType binder. The most common cause: a ProductType or SumType that contains RecursiveSelf (declared inside an RT body's reference chain) is being used at a top-level construction site such as a ProductValue.ofType, SumValue.ofType, or ParameterDecl.paramType. The Strand convention for recursive types is the inner/outer split (see corpus program 31, recursive-list-head): declare TWO ProductType nodes \u2014 an 'inner' product whose recursive field references RecursiveSelf (used by the SumTypeCase INSIDE the RecursiveType body), and an 'outer' product whose same field references the RecursiveType node itself (used by ProductValue / SumValue / function parameter types AT TOP-LEVEL value-construction sites). Both products compare equirecursively-equal under the verifier and the canonical encoder, so the program's hash is unaffected by which one is used where, but the inner form is only valid inside an RT walk and surfaces as this error when used outside one."
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

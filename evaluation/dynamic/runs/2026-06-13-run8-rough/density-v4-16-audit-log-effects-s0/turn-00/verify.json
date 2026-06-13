@@ -1,0 +1,28 @@
+{
+  "ok": false,
+  "error_prose": "line 4: code 'EFD' expects 2..2 positional arguments but got 1\nline 5: code 'EFD' expects 2..2 positional arguments but got 1\nline 13: code 'APP' at position 2 expected [ref ref ...] list but got bare token '@auto'",
+  "error_json": {
+    "phase": "compile",
+    "errors": [
+      {
+        "phase": "compile",
+        "line": 4,
+        "error_class": "LayerACompileError",
+        "detail": "code 'EFD' expects 2..2 positional arguments but got 1"
+      },
+      {
+        "phase": "compile",
+        "line": 5,
+        "error_class": "LayerACompileError",
+        "detail": "code 'EFD' expects 2..2 positional arguments but got 1"
+      },
+      {
+        "phase": "compile",
+        "line": 13,
+        "error_class": "LayerACompileError",
+        "detail": "code 'APP' at position 2 expected [ref ref ...] list but got bare token '@auto'"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

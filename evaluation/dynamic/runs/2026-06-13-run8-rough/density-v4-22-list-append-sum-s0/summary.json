@@ -1,0 +1,69 @@
+{
+  "task_id": "22-list-append-sum",
+  "config": "strand-layer-a-density-v4",
+  "model": "claude-sonnet-4-6",
+  "sample_index": 0,
+  "success": true,
+  "status": "converged",
+  "converged_at_attempt": 3,
+  "total_attempts": 4,
+  "emission_attempts": 4,
+  "reference_turns": 0,
+  "max_reference_turns": 3,
+  "reference_requests": [],
+  "total_input_tokens": 19250,
+  "total_output_tokens": 1354,
+  "total_cache_read_tokens": 0,
+  "total_cache_creation_tokens": 0,
+  "attempts": [
+    {
+      "attempt": 0,
+      "turn_type": "emission",
+      "input_tokens": 4168,
+      "output_tokens": 355,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "token_source": "byte-proxy"
+    },
+    {
+      "attempt": 1,
+      "turn_type": "emission",
+      "input_tokens": 4589,
+      "output_tokens": 310,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "token_source": "byte-proxy"
+    },
+    {
+      "attempt": 2,
+      "turn_type": "emission",
+      "input_tokens": 4949,
+      "output_tokens": 313,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "token_source": "byte-proxy"
+    },
+    {
+      "attempt": 3,
+      "turn_type": "emission",
+      "input_tokens": 5544,
+      "output_tokens": 376,
+      "cache_read_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "token_source": "byte-proxy"
+    }
+  ],
+  "total_cost_usd": 0.07806,
+  "token_source": "byte-proxy",
+  "prompt_token_counts": {
+    "system": {
+      "tokens": 3879,
+      "source": "byte-proxy"
+    },
+    "task": {
+      "tokens": 289,
+      "source": "byte-proxy"
+    }
+  },
+  "timestamp": 1781316767
+}

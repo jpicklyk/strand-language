@@ -1,0 +1,6 @@
+{
+  "ok": true,
+  "error_prose": null,
+  "error_json": null,
+  "canonical_dag_json": "{\"version\":1,\"root\":\"outerHandler\",\"nodes\":{\"timeNowEf\":{\"type\":\"EffectCategory\",\"categoryName\":\"Time.Now\",\"parameters\":[]},\"timeNowFnT\":{\"type\":\"FunctionType\",\"parameters\":[],\"result\":\"intT\",\"effects\":[\"timeNowEf\"]},\"timeNow\":{\"type\":\"ForeignNode\",\"target\":\"strand-builtin:Time.Now\",\"foreignType\":\"timeNowFnT\",\"effects\":[\"timeNowEf\"]},\"nowEfd\":{\"type\":\"EffectDecl\",\"effectType\":\"timeNowEf\",\"parameters\":[]},\"body\":{\"type\":\"Application\",\"function\":\"timeNow\",\"arguments\":[],\"typeArguments\":[],\"effectInstances\":[\"nowEfd\"]},\"innerHandleLam\":{\"type\":\"Lambda\",\"parameters\":[],\"body\":\"__lit0\"},\"innerHandler\":{\"type\":\"Handler\",\"intercept\":\"timeNowEf\",\"handle\":\"innerHandleLam\",\"body\":\"body\"},\"outerHandleLam\":{\"type\":\"Lambda\",\"parameters\":[],\"body\":\"__lit1\"},\"outerHandler\":{\"type\":\"Handler\",\"intercept\":\"timeNowEf\",\"handle\":\"outerHandleLam\",\"body\":\"innerHandler\"},\"__lit0\":{\"type\":\"IntLit\",\"value\":2},\"__lit1\":{\"type\":\"IntLit\",\"value\":1},\"intT\":{\"type\":\"PrimitiveType\",\"kind\":\"Int\"}}}"
+}

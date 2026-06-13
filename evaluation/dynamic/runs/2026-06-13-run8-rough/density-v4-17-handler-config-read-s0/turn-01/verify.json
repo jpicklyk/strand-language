@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "error_prose": "ingest failed for C:\\Users\\jeff_\\AppData\\Local\\Temp\\tmp695xuyde.layer-a (after Layer A compile): Invalid hex character in node 'fixedBytes'",
+  "error_json": {
+    "phase": "unknown",
+    "stderr": "ingest failed for C:\\Users\\jeff_\\AppData\\Local\\Temp\\tmp695xuyde.layer-a (after Layer A compile): Invalid hex character in node 'fixedBytes'\n",
+    "returncode": 1
+  },
+  "canonical_dag_json": null
+}

@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "CategoryMismatch at #3: at=#3 'shortNameSchema' (line 5), field=Schema.invariants[0], expectedCategory=Invariant, actualCategory=Lambda",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "CategoryMismatch",
+        "at": "3",
+        "detail": "at=#3 'shortNameSchema' (line 5), field=Schema.invariants[0], expectedCategory=Invariant, actualCategory=Lambda"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}

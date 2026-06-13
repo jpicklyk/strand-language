@@ -1,0 +1,16 @@
+{
+  "ok": false,
+  "error_prose": "CapabilityScopeUnsatisfiable at #8: at=#8 'scopedWrite' (line 20), missing=[#19 (prelude 'nowFx')]",
+  "error_json": {
+    "phase": "verify",
+    "errors": [
+      {
+        "phase": "verify",
+        "error_class": "CapabilityScopeUnsatisfiable",
+        "at": "8",
+        "detail": "at=#8 'scopedWrite' (line 20), missing=[#19 (prelude 'nowFx')]"
+      }
+    ]
+  },
+  "canonical_dag_json": null
+}
