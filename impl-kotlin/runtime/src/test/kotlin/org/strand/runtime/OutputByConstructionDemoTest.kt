@@ -33,7 +33,12 @@ class OutputByConstructionDemoTest {
 
         // The document evaluated to the well-formed array [1, 2, 3].
         assertEquals(listOf(1L, 2L, 3L), w1.elements, "the document must be the array [1, 2, 3]")
-        assertEquals("[1,2,3]", w1.renderedJson, "the genuine structure must render to [1,2,3]")
+        // W4 round-trip (Q-069): the value built correct by construction
+        // round-trips through the shipped Json.Stringify builtin, which now
+        // speaks the precise N-048 model. renderedJson is produced by the
+        // builtin (not a driver-side walk), so this asserts the migration
+        // enables the round-trip the demo previously had to cut.
+        assertEquals("[1,2,3]", w1.renderedJson, "the genuine value must Json.Stringify to [1,2,3]")
 
         // The distinctive N-048 property: the runtime value is a real Cons/Nil
         // list (a spine of ProductV cells), not a flat spliced blob.

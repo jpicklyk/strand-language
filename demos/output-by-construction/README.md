@@ -103,9 +103,11 @@ passes — so the graph verifies and evaluates to the document value. The driver
 then walks the produced runtime value to prove it is a genuine nested
 `List<JsonValue>`: a `SumV(Cons)` whose payload is a `ProductV` with `head` and
 `tail` fields, recursively, terminating in `Nil`. The transcript prints the
-structure, the element list read off the spine, and a JSON rendering produced by
-walking the real structure. The point is that the array is a real list the schema
-constrains element-by-element, not a flat blob.
+structure, the element list read off the spine, and the JSON text produced by
+the shipped `Json.Stringify` builtin (W4 round-trip). The point is that the array
+is a real list the schema constrains element-by-element, not a flat blob — and
+that the value built correct by construction yields correct output through the
+canonical serializer.
 
 ### W2 Malformed caught at verify time
 
@@ -157,10 +159,12 @@ W1  Well-formed document produced -- a genuine N-048 nested array
     is a genuine Cons/Nil list  = true
     Cons cells in the spine     = 3
     elements read off the spine = [1, 2, 3]
-    rendered JSON (from struct) = [1,2,3]
+    Json.Stringify (precise W4)  = [1,2,3]
   The value satisfies all_elements_non_negative, so it verifies and
   evaluates. The structure is a real nested list -- NOT a flat spliced
-  blob -- so the schema can constrain it element-by-element.
+  blob -- so the schema can constrain it element-by-element. It also
+  round-trips through the shipped Json.Stringify builtin (Q-069): the
+  value built correct by construction yields correct output.
 
 W2  Malformed caught at VERIFY time -- statically-known value
 ------------------------------------------------------------------------
@@ -227,15 +231,17 @@ tree-walking interpreter but would run under the VM — a bounded divergence
 documented in the runtime-schema-enforcement proposal. W3 runs the interpreter
 path, and the demonstration states this plainly rather than implying VM parity.
 
-A note on serialization. The optional round-trip-via-`Json.Stringify` scenario
-was cut: the shipped `Json.Stringify` builtin recognizes only corpus 66's
-*spliced* `JsonArrayCons`/`JsonArrayNil` model, not the precise N-048 nested
-`JsonArray(list)` model (migrating `Json.*` to the precise model is deferred
-under the N-048 proposal § 8). Rather than lean on a builtin that does not
-support the precise model, W1 renders the array as JSON text by a driver-side
-walk of the genuine runtime structure — which is itself the proof that the
-correct-by-construction value yields correct output, taken straight off the real
-nested list.
+A note on serialization. W1 round-trips its array through the shipped
+`Json.Stringify` builtin (the W4 round-trip). The builtin now speaks the precise
+N-048 nested `JsonArray(list)` model — the Q-069 migration moved `Json.Parse` /
+`Json.Stringify` and the agent-facing JSON type from corpus 66's *spliced*
+`JsonArrayCons`/`JsonArrayNil` model to the precise one — so the value built
+correct by construction yields correct output through the canonical serializer.
+The driver wraps the produced inner `Cons`/`Nil` list in the precise-model
+`JsonArray` case (the document root is the array's list) and calls
+`Json.Stringify` on it, asserting `[1,2,3]`. Before the Q-069 migration this
+scenario had to be cut because the builtin recognized only the spliced model;
+the migration closes it.
 
 It is a demonstration, not a proof. The correct-by-construction property is argued
 from the mechanisms — the N-048 nested type the schema can constrain precisely,

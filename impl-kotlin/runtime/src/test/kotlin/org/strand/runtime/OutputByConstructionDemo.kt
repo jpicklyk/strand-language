@@ -2,6 +2,8 @@ package org.strand.runtime
 
 import org.strand.core.JsonIngest
 import org.strand.hashing.Hasher
+import org.strand.interpreter.Builtins
+import org.strand.interpreter.invoke
 import org.strand.interpreter.HostPolicy
 import org.strand.interpreter.InterpretError
 import org.strand.interpreter.InterpretException
@@ -45,7 +47,10 @@ import org.strand.verifier.VerifyError
  *  - **W1 Well-formed document produced.** The genuine N-048 array `[1, 2, 3]`
  *    carries the schema, satisfies the invariant, verifies, and evaluates to the
  *    document value. The transcript shows the value is a real nested
- *    `List<JsonValue>` — a `Cons`-spine of `ProductV` cells — not a flat blob.
+ *    `List<JsonValue>` — a `Cons`-spine of `ProductV` cells — not a flat blob,
+ *    and round-trips through the shipped `Json.Stringify` builtin (Q-069: the
+ *    builtin now speaks the precise N-048 model, so the value built correct by
+ *    construction yields correct output — the W4 round-trip the demo earlier cut).
  *  - **W2 Malformed caught at VERIFY time.** The statically-known array
  *    `[1, -7, 3]` violates the invariant; the Q-035 `SchemaChecker` folds the
  *    value at admission and the graph is rejected with the real verify-time
@@ -95,7 +100,14 @@ object OutputByConstructionDemo {
     data class W1Result(
         /** The produced document value (a genuine N-048 nested array). */
         val value: Value,
-        /** The array rendered as JSON text by a driver-side walk of the real structure. */
+        /**
+         * The array rendered as JSON text by the shipped `Json.Stringify`
+         * builtin (Q-069), called on the produced value wrapped in the
+         * precise-model `JsonArray` case. The builtin now speaks the
+         * precise N-048 model, so the value built by construction
+         * round-trips through it — this is the W4 round-trip the demo
+         * previously had to cut.
+         */
         val renderedJson: String,
         /** The integer elements read out of the genuine Cons-spine, in order. */
         val elements: List<Long>,
@@ -251,15 +263,22 @@ object OutputByConstructionDemo {
     }
 
     /**
-     * Render the genuine nested array as JSON text by walking the real structure.
-     * The shipped `Json.Stringify` builtin recognizes only corpus 66's *spliced*
-     * `JsonArrayCons`/`JsonArrayNil` model, not the precise N-048 nested model
-     * (migrating `Json.*` to the precise model is deferred under the N-048
-     * proposal § 8), so this driver-side walk is what shows the value yields
-     * correct output — straight off the genuine structure.
+     * Render the genuine nested array as JSON text through the shipped
+     * `Json.Stringify` builtin (Q-069). The produced document value [v]
+     * is the array's inner `Cons`/`Nil` `List<JsonValue>`; wrapping it in
+     * the precise-model `JsonArray` case yields a full `JsonValue`, and
+     * `Json.Stringify` — which now speaks the precise N-048 model — emits
+     * its JSON text. This is the W4 round-trip: a value built correct by
+     * construction (N-048) yields correct output through the canonical
+     * serializer, no driver-side walk needed. Before the Q-069 migration
+     * the builtin spoke only the corpus-66 spliced model and this scenario
+     * had to be cut.
      */
-    fun renderJsonArray(v: Value): String =
-        "[" + arrayElements(v).joinToString(",") + "]"
+    fun renderJsonArray(v: Value): String {
+        val jsonArray = Value.SumV("JsonArray", v)
+        val stringify = Builtins.lookup("strand-builtin:Json.Stringify")!!
+        return (stringify.invoke(listOf(jsonArray)) as Value.StringV).v
+    }
 
     /** Render a (possibly nested) JsonValue / list value compactly for the transcript. */
     fun renderValue(v: Value): String = when (v) {
@@ -310,10 +329,12 @@ object OutputByConstructionDemo {
         line("    is a genuine Cons/Nil list  = ${w1.isGenuineNestedList}")
         line("    Cons cells in the spine     = ${w1.consDepth}")
         line("    elements read off the spine = ${w1.elements}")
-        line("    rendered JSON (from struct) = ${w1.renderedJson}")
+        line("    Json.Stringify (precise W4)  = ${w1.renderedJson}")
         line("  The value satisfies all_elements_non_negative, so it verifies and")
         line("  evaluates. The structure is a real nested list -- NOT a flat spliced")
-        line("  blob -- so the schema can constrain it element-by-element.")
+        line("  blob -- so the schema can constrain it element-by-element. It also")
+        line("  round-trips through the shipped Json.Stringify builtin (Q-069): the")
+        line("  value built correct by construction yields correct output.")
         line()
 
         // --- W2 ---
