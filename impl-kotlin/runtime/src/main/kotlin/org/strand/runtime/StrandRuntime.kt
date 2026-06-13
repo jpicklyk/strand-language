@@ -165,6 +165,52 @@ class StrandRuntime(private val policy: HostPolicy) {
         block: () -> T,
     ): T = policy.withInstalled(verifierNodeTypes, block)
 
+    /**
+     * Q-059: resume a [machine] from a [snapshot] over [additionalEvents] under
+     * this runtime's policy. The synchronous-fold analogue of [runMachine] that
+     * starts from a checkpointed state instead of the machine's declared
+     * `initialState` — the restart half of the snapshot-persistence story.
+     *
+     * Installs the host-routed singletons for the duration (and restores them,
+     * including on a thrown [org.strand.interpreter.InterpretException]) exactly
+     * as [runMachine] does. Delegates to the existing
+     * [StateMachineRuntime.resume]; the [SnapshotMachineHashMismatch] integrity
+     * check fires if [machine]'s hash (in [nodeIdToHash]) does not match the
+     * snapshot's recorded `machineHash`. Returns the [Trace] of the
+     * post-snapshot events.
+     *
+     * [nodeIdToHash] is the forward map from `Hasher.finalize` (the host has it
+     * alongside [ProgramImage.hashToNodeId]); it is a parameter rather than a
+     * [ProgramImage] field so the Q-054 image shape and its tests are untouched.
+     */
+    fun resume(
+        program: ProgramImage,
+        machine: NodeId,
+        snapshot: Snapshot,
+        additionalEvents: List<Value>,
+        nodeIdToHash: Map<NodeId, Hash>,
+        capabilities: CapabilitySet = CapabilitySet.EMPTY,
+        verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
+    ): Trace = policy.withInstalled(verifierNodeTypes) {
+        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget)
+        runtime.resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
+    }
+
+    /**
+     * Q-059: serialize [snapshot] to [path] via [SnapshotCodec] so a
+     * checkpointed group can survive a process restart. Propagates
+     * [ValueCodecError.NotSnapshotable] if the snapshotted state holds a
+     * non-serializable runtime-only [Value] (a Closure or a live Resource).
+     * No policy install — serialization reads no host-routed singleton.
+     */
+    fun writeSnapshot(snapshot: Snapshot, path: java.nio.file.Path) {
+        java.nio.file.Files.writeString(path, SnapshotCodec.encode(snapshot))
+    }
+
+    /** Q-059: deserialize a [Snapshot] from [path] (the inverse of [writeSnapshot]). */
+    fun readSnapshot(path: java.nio.file.Path): Snapshot =
+        SnapshotCodec.decode(java.nio.file.Files.readString(path))
+
     private fun checkSchema(program: ProgramImage, verify: VerifyResult.Ok): SchemaCheckResult =
         SchemaChecker(
             program.store,
