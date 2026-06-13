@@ -35,11 +35,13 @@ dependencies {
 }
 
 // The containment-demonstration tenant programs (compiled canonical dag-json)
-// live at impl-kotlin/demo/programs/ as a single source of truth. Copy them
-// onto the test classpath under /demo/programs/ so ContainmentDemo and
-// ContainmentDemoTest load them via getResourceAsStream without duplicating the
-// JSON in git or depending on a fragile relative working-directory path.
-private val demoProgramsDir = projectDir.parentFile.resolve("demo/programs")
+// live at the top-level demos/containment-host/programs/ as a single source of
+// truth (the demo is self-contained and discoverable there). Copy them onto the
+// test classpath under /demo/programs/ so ContainmentDemo and ContainmentDemoTest
+// load them via getResourceAsStream without duplicating the JSON in git or
+// depending on a fragile relative working-directory path.
+private val demoProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/containment-host/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(demoProgramsDir) {

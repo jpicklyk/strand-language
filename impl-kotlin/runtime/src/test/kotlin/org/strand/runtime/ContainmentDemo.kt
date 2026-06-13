@@ -41,8 +41,8 @@ import java.util.concurrent.CyclicBarrier
  * artifact alone, and running it contained — with concurrent tenants provably
  * isolated. Every scenario exercises a real property the shipped runtime
  * enforces; nothing is staged. The tenant programs are hand-authored stand-ins
- * for agent submissions (see `impl-kotlin/demo/programs/`), so the demo isolates
- * the *host's* containment from the separate agent-generation question.
+ * for agent submissions (see `demos/containment-host/programs/`), so the demo
+ * isolates the *host's* containment from the separate agent-generation question.
  *
  * Four scenarios, mapped to the Q-044 harm classes:
  *
@@ -72,7 +72,13 @@ object ContainmentDemo {
     // Program loading — the host admits the canonical dag-json artifact.
     // ------------------------------------------------------------------
 
-    /** Load a committed tenant program (canonical dag-json) from the classpath. */
+    /**
+     * Load a committed tenant program (canonical dag-json) from the classpath.
+     * The source of truth is `demos/containment-host/programs/<name>.json`; the
+     * `:runtime` build copies those onto the test classpath under `/demo/programs/`
+     * (see `runtime/build.gradle.kts`), so this resource path is the classpath
+     * namespace, not a filesystem location.
+     */
     fun loadProgramJson(name: String): String =
         ContainmentDemo::class.java.getResourceAsStream("/demo/programs/$name.json")
             ?.bufferedReader()?.readText()

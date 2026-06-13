@@ -1,20 +1,21 @@
 # Containment-demonstration tenant programs
 
 Hand-authored Strand programs that stand in for agent submissions to the
-untrusted-agent-program host demonstrated by
-`runtime/src/test/.../ContainmentDemo.kt` and its companion
-`ContainmentDemoTest`. The narrative is `evaluation/containment-demo.md`.
+untrusted-agent-program host demonstrated by the `:runtime` test-source-set
+driver `ContainmentDemo.kt`
+(`impl-kotlin/runtime/src/test/kotlin/org/strand/runtime/`) and its companion
+`ContainmentDemoTest`. The narrative is the parent [`README.md`](../README.md).
 
 Each program is kept as Layer A source (`<name>.layer-a`) plus the canonical
 dag-json it compiles to (`<name>.json`), so the artifact the host admits is the
 content-addressed graph, not the human-facing projection. The JSON is produced
-by the built CLI:
+by the built CLI, run from `impl-kotlin/`:
 
-    cli/build/install/cli/bin/cli.bat author demo/programs/<name>.layer-a --emit-json > demo/programs/<name>.json
+    cli/build/install/cli/bin/cli.bat author ../demos/containment-host/programs/<name>.layer-a --emit-json > ../demos/containment-host/programs/<name>.json
 
 (Run `:cli:installDist` first if the distribution is stale.) The demo driver
-loads the `.json` files from the classpath, so regenerating them is only needed
-when the `.layer-a` source changes.
+loads the `.json` files from the test classpath, so regenerating them is only
+needed when the `.layer-a` source changes.
 
 ## Programs
 
@@ -30,7 +31,8 @@ when the `.layer-a` source changes.
   each attempting to read the other's workspace via a relative escape; denied by
   each tenant's own workspace sandbox. Used by S2.
 
-The location `impl-kotlin/demo/` was chosen so the programs sit beside the
-demonstration code that consumes them and stay out of the `corpus/` golden-hash
-regression net (these are demonstration fixtures, not corpus conformance
-programs).
+These are demonstration fixtures, not corpus conformance programs, so they sit
+under the top-level `demos/` tree rather than in `corpus/` and stay out of the
+golden-hash regression net. The `:runtime` build copies them onto the test
+classpath so the driver and its assertion test load them without a fragile
+working-directory dependency.

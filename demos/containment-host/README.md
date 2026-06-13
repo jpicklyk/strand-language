@@ -1,13 +1,14 @@
 # Containment demonstration {#containment-demo}
 
-**Document:** `evaluation/containment-demo.md`
+**Document:** `demos/containment-host/README.md`
 **Status:** Executable companion to the Q-044 containment measurement
 **Last revised:** 2026-06-13
 
 ## What this demonstration is
 
-[`containment-results.md`](containment-results.md) measures the structural-safety
-lead claim: the maximum harm a generated subgraph can cause is computable from
+[`containment-results.md`](../../evaluation/containment-results.md) measures the
+structural-safety lead claim: the maximum harm a generated subgraph can cause is
+computable from
 the graph before it executes and bounded at execution, expressed as the harm
 bound `closure(g) ∩ C ∩ B ∩ P`. That document is the measurement of record. This
 document is its executable companion. It describes a small running host that
@@ -25,7 +26,7 @@ assertion net (`ContainmentDemoTest`) protects each one from silently rotting.
 
 The tenant programs are hand-authored stand-ins for agent submissions. They live
 as Layer A source plus compiled canonical dag-json under
-`impl-kotlin/demo/programs/`. Hand-authoring them isolates the host's containment
+[`programs/`](programs/). Hand-authoring them isolates the host's containment
 — the subject of this demonstration — from the separate question of how an agent
 generates programs, which the Q-021 cost measurement and the deferred Run 8
 dynamic study address.
@@ -45,11 +46,14 @@ Run the assertion-backed test that pins every property:
 ```
 
 The driver `ContainmentDemo` and the test `ContainmentDemoTest` live in the
-`:runtime` test source set and share one body of scenario code, so the printed
-demonstration and the regression net cannot diverge. The driver loads the
-committed canonical dag-json from `impl-kotlin/demo/programs/` through the test
-classpath (`processTestResources` copies the directory in), so the artifact the
-host admits is the content-addressed graph, not the human-facing projection.
+`:runtime` test source set
+(`impl-kotlin/runtime/src/test/kotlin/org/strand/runtime/`) and share one body of
+scenario code, so the printed demonstration and the regression net cannot diverge.
+They stay in `:runtime` because they compile against the runtime modules. The
+driver loads the committed canonical dag-json from [`programs/`](programs/) through
+the test classpath (`runtime/build.gradle.kts` copies the directory in via
+`processTestResources`), so the artifact the host admits is the content-addressed
+graph, not the human-facing projection.
 
 ## The scenarios
 
@@ -225,13 +229,13 @@ shipped runtime enforces, witnessed under the published embedding API.
 It does not demonstrate first-pass correctness — whether an agent's submission is
 the program the agent intended — nor inference cost, the tokens an agent spends to
 produce an admissible program. Those belong to the deferred Run 8 dynamic
-measurement recorded in [`dynamic-results.md`](dynamic-results.md), which requires
+measurement recorded in [`dynamic-results.md`](../../evaluation/dynamic-results.md), which requires
 agent-emission sampling through the model API and is a distinct study. The tenant
 programs here are hand-authored precisely so the demonstration measures the host's
 containment in isolation from the agent-generation question.
 
 It is a demonstration matrix, not a soundness proof. As stated in
-[`containment-results.md`](containment-results.md), soundness is a universal
+[`containment-results.md`](../../evaluation/containment-results.md), soundness is a universal
 property argued from the mechanisms, with executed witnesses as spot-checks; this
 companion is one more set of executed witnesses, driving the containment
 mechanisms through the host boundary an orchestrating principal would actually use.
@@ -240,42 +244,46 @@ mechanisms through the host boundary an orchestrating principal would actually u
 
 One API gap surfaced while building the demonstration, worked around rather than
 closed (consistent with the demonstration's hard scope constraint of building only
-on shipped APIs).
+on shipped APIs). It is registered as [Q-067](../../open-questions.md#Q-067).
 
-The verifier computes a per-node effect closure internally (`nodeClosures` /
-`closureOf`) but does not surface it on `VerifyResult.Ok`. A host that wants the
-exact declared closure the verifier computed — rather than re-deriving a sound
-upper bound by walking the graph itself, as the demonstration does in
-`ContainmentDemo.declaredEffectClosure` — has no published accessor for it. The
-re-derivation is correct (the verifier's `UncoveredEffects` rule guarantees the
-walk is a sound over-approximation) but it duplicates work the verifier already
-did. Surfacing the root's effect closure on the verify result, keyed by node hash
-the way the Q-058 verdict already keys node types, would let a host read the harm
-bound's static half directly from the verdict. This is a small additive change to
-the verify result shape, not a language change, and is noted here as a candidate
-follow-up for the embedding surface rather than built as part of this
-demonstration.
+The verifier computes a per-node effect closure internally (`VerifyState.nodeClosures`,
+the Handler-aware computation) but does not surface it on `VerifyResult.Ok`. A host
+that wants the exact declared closure the verifier computed — rather than
+re-deriving a sound upper bound by walking the graph itself, as the demonstration
+does in `ContainmentDemo.declaredEffectClosure` — has no published accessor for it.
+The re-derivation is correct (the verifier's `UncoveredEffects` rule guarantees the
+walk is a sound over-approximation) but it duplicates work the verifier already did.
+A `nodeClosures` field on `VerifyResult.Ok`, keyed by node the way `nodeTypes`
+already is, would be a small additive change to the verify-result shape — no
+language change, no encoding or hash impact. It would not, however, remove this
+demonstration's walk: scenario S1 needs the harm bound for an over-reaching
+submission the verifier *rejects*, and the verifier populates its closure only on a
+successful `Ok`. Covering the rejected-artifact case — the pre-admission harm-bound
+use this demonstration exercises — is the broader design question Q-067 records.
+Until it is decided, the demonstration carries the sound walk above.
 
 ## References
 
 **Outgoing references:**
-- [`containment-results.md`](containment-results.md) — the Q-044 containment
+- [`containment-results.md`](../../evaluation/containment-results.md) — the Q-044 containment
   measurement this demonstration executes; the harm bound `closure(g) ∩ C ∩ B ∩ P`
   and the six harm classes this maps onto.
-- [`dynamic-results.md`](dynamic-results.md) — the deferred Run 8 cost measurement
+- [`dynamic-results.md`](../../evaluation/dynamic-results.md) — the deferred Run 8 cost measurement
   this demonstration deliberately does not cover (first-pass correctness, inference
   cost).
-- [`containment/python_baseline_probes.py`](containment/python_baseline_probes.py)
+- [`containment/python_baseline_probes.py`](../../evaluation/containment/python_baseline_probes.py)
   — the conventional-baseline probes the containment matrix contrasts against.
-- [`proposals/implemented/embeddable-runtime.md`](../proposals/implemented/embeddable-runtime.md)
+- [`proposals/implemented/embeddable-runtime.md`](../../proposals/implemented/embeddable-runtime.md)
   — Q-054, the `StrandRuntime` facade and the per-tenant `HostContext` isolation
   this host is built on.
-- [`proposals/implemented/persistent-store.md`](../proposals/implemented/persistent-store.md)
+- [`proposals/implemented/persistent-store.md`](../../proposals/implemented/persistent-store.md)
   — Q-058, the `PersistentStore` and admit-and-verify-once / run-by-hash path of S4.
-- [`proposals/implemented/capability-denial-observability.md`](../proposals/implemented/capability-denial-observability.md)
+- [`proposals/implemented/capability-denial-observability.md`](../../proposals/implemented/capability-denial-observability.md)
   — Q-064, the `DenialReport` captured in S3.
+- [`open-questions.md`](../../open-questions.md#Q-067) — Q-067, the effect-closure
+  accessor gap the demonstration works around in `declaredEffectClosure`.
 
 **Incoming references:**
-- [`containment-results.md`](containment-results.md) — points at this demonstration
+- [`containment-results.md`](../../evaluation/containment-results.md) — points at this demonstration
   as its executable companion.
-- [`INDEX.md`](../INDEX.md) — changelog entry (2026-06-13).
+- [`INDEX.md`](../../INDEX.md) — changelog entry (2026-06-13).
