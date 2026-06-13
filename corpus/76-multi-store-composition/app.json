@@ -3,7 +3,7 @@
   "root": "app",
   "nodes": {
     "forty":  { "type": "IntLit", "value": 40 },
-    "incRef": { "type": "NodeRef", "targetHash": "1e16f603b7c76b000f78d534a466d8099a7fa299877a755fdb80cd2eafc98adc8b" },
+    "incRef": { "type": "NodeRef", "targetHash": "1eb0b74ebbc9d9b895bf8733e7ada027f8df54c93266542a6d67824cd6749ca2fd" },
     "inner":  { "type": "Application", "function": "incRef", "arguments": ["forty"] },
     "app":    { "type": "Application", "function": "incRef", "arguments": ["inner"] }
   }

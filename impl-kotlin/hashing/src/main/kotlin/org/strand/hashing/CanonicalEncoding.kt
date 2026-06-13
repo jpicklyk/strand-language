@@ -22,6 +22,17 @@ package org.strand.hashing
  */
 object CanonicalEncoding {
 
-    /** The encoding epoch implemented by [CanonicalEncoder] / [Hasher]. */
-    const val EPOCH: Int = 1
+    /**
+     * The encoding epoch implemented by [CanonicalEncoder] / [Hasher].
+     *
+     * Epoch 2 (2026-06-13) is the first deliberate break: the two gated
+     * optional fields — FunctionType / ForeignNode `effectProjections`
+     * (Q-039) and EventStream `source` (Q-046) — were normalized from their
+     * epoch-1 gated-omit special cases to the uniform presence-prefix rule,
+     * so every FunctionType, ForeignNode, and EventStream hash moved. N-048
+     * RecursiveProjection tag 48, added additively under epoch 1, carries
+     * forward unchanged; the Q-049 `TypeParameter.bound` decision was
+     * deliberately not bundled and rides a future epoch.
+     */
+    const val EPOCH: Int = 2
 }

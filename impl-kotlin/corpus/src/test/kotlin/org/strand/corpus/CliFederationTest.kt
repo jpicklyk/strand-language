@@ -21,7 +21,13 @@ import java.nio.file.Path
  */
 class CliFederationTest {
 
-    private val incHashHex = "1e16f603b7c76b000f78d534a466d8099a7fa299877a755fdb80cd2eafc98adc8b"
+    // Content hash of corpus 76 lib.json's `inc` export (its root). Epoch-
+    // dependent (Q-062): this is the epoch-2 value. The same hash is bound by
+    // corpus 77's registry.json and is the `targetHash` of corpus 76 app.json's
+    // cross-store NodeRef — all three move together on an epoch advance.
+    // CorpusFederationTest derives it dynamically (lib.nodeIdToHash[lib.root]);
+    // it is pinned literally here because this test reads raw resources.
+    private val incHashHex = "1eb0b74ebbc9d9b895bf8733e7ada027f8df54c93266542a6d67824cd6749ca2fd"
 
     private fun resource(path: String): String =
         CliFederationTest::class.java.getResourceAsStream(path)

@@ -2,7 +2,7 @@
 
 **Document:** `design/canonical-encoding.md`
 **Status:** Normative specification, extracted from and continuously validated against the Kotlin reference implementation
-**Last revised:** 2026-06-13 (N-048 RecursiveProjection tag 48 specified per [Q-053](../open-questions.md#Q-053) / [`proposals/implemented/nested-recursive-types.md`](../proposals/implemented/nested-recursive-types.md): a new closed type-position node naming a component position inside a closed outer μ. Added additively — tag 48 is a fresh category, so no existing tag's layout changed and no existing hash moved; the encoding stays epoch 1. The chartered epoch-2 normalization and the epoch bump are a separate pass.) 2026-06-13 (Epoch log section added per [Q-062](../open-questions.md#Q-062): the pre-1.0 epoch policy and the epoch-1 baseline entry. No encoding rule changed and no hash moved — the addition names the encoding this document already specifies as epoch 1 and states how breaking changes are batched before the stability point.) 2026-06-10 (initial version — specifies the byte-level canonical encoding and hash construction implemented by `impl-kotlin/hashing`, precisely enough that a second implementation can reproduce identical hashes without reading the Kotlin source)
+**Last revised:** 2026-06-13 (epoch 2 shipped per [Q-062](../open-questions.md#Q-062) / [`proposals/implemented/encoding-epochs.md`](../proposals/implemented/encoding-epochs.md): the first deliberate breaking change. The two gated optional fields — FunctionType / ForeignNode `effectProjections` (Q-039) and EventStream `source` (Q-046) — were normalized from their epoch-1 gated-omit special cases to the uniform presence-prefix rule, so every FunctionType, ForeignNode, and EventStream hash moved and the goldens were regenerated in one sweep. N-048 RecursiveProjection tag 48, introduced additively under epoch 1, carries forward unchanged. The [Q-049](../open-questions.md#Q-049) `TypeParameter.bound` decision was deliberately not bundled — Q-049 is unresolved — and rides a future epoch.) 2026-06-13 (N-048 RecursiveProjection tag 48 specified per [Q-053](../open-questions.md#Q-053) / [`proposals/implemented/nested-recursive-types.md`](../proposals/implemented/nested-recursive-types.md): a new closed type-position node naming a component position inside a closed outer μ. Added additively — tag 48 is a fresh category, so no existing tag's layout changed and no existing hash moved.) 2026-06-13 (Epoch log section added per [Q-062](../open-questions.md#Q-062): the pre-1.0 epoch policy and the epoch-1 baseline entry. No encoding rule changed and no hash moved — the addition names the encoding this document already specifies as epoch 1 and states how breaking changes are batched before the stability point.) 2026-06-10 (initial version — specifies the byte-level canonical encoding and hash construction implemented by `impl-kotlin/hashing`, precisely enough that a second implementation can reproduce identical hashes without reading the Kotlin source)
 
 ## Summary
 
@@ -180,7 +180,7 @@ FloatLit encodes the *raw* bit pattern (`Double.toRawBits`), not a CBOR float: `
 | ProductTypeField (9) | `bytes(utf8(fieldName))`, `T(fieldType)` |
 | SumType (10) | `array(H(c_1), ..., H(c_n))` — cases sorted by `caseName` |
 | SumTypeCase (11) | `bytes(utf8(caseName))`, then `uint(0)` for a nullary case or `uint(1)` followed by `T(caseType)` |
-| FunctionType (12) | `array(T(p_1), ..., T(p_n))`, `T(result)`, `array(sorted H(effect)...)`; when `effectProjections` is non-empty, one additional projection-list field (§ Effect projections) |
+| FunctionType (12) | `array(T(p_1), ..., T(p_n))`, `T(result)`, `array(sorted H(effect)...)`, then the presence-prefixed `effectProjections` field (§ Effect projections) |
 | ForallType (35) | `uint(arity)` — the count of `typeParameters` — then `T(body)` with a frame of those parameters pushed |
 | RecursiveType (41) | `T(body)` with the recursive-binder counter incremented for the duration of the body |
 | RecursiveSelf (42) | `uint(depth)`, or the sentinel (§ Unbound sentinels) when out of range |
@@ -194,7 +194,7 @@ step = array( uint(0), bytes(utf8(caseName)) )    -- Case
      | array( uint(2) )                            -- Unfold
 ```
 
-The selector-tag discriminator (`Case 0, Field 1, Unfold 2`, § Discriminators) is frozen on assignment. Two RecursiveProjection nodes are the same node iff they have hash-identical `recursiveType` and identical `path`; reordering the path changes the hash. RecursiveProjection's tag 48 was added additively — a fresh category that no earlier hash depended on — and the encoding stays epoch 1; the chartered epoch-2 normalization of the gated optional fields and the epoch bump are a separate pass (§ Epoch log).
+The selector-tag discriminator (`Case 0, Field 1, Unfold 2`, § Discriminators) is frozen on assignment. Two RecursiveProjection nodes are the same node iff they have hash-identical `recursiveType` and identical `path`; reordering the path changes the hash. RecursiveProjection's tag 48 was added additively under epoch 1 — a fresh category that no earlier hash depended on — and its layout is unchanged by the epoch-2 normalization (§ Epoch log), which touched only the gated optional fields of FunctionType, ForeignNode, and EventStream.
 
 ForallType and TypeAbstraction encode only the *arity* of their binder list; the TypeParameter nodes themselves contribute nothing (their names and bounds are discarded), which is what makes alpha-equivalent quantified types hash identically. The bound-TypeParameter reference form under tag 13 is `uint(depth) uint(index)` and appears only inline at `T(...)` positions.
 
@@ -215,7 +215,7 @@ The Application `effectInstances` field is gated on `size > 0`: a pure or pre-Q-
 | Category | Fields |
 |----------|--------|
 | NodeRef (19) | `bytes(target)` — the referenced node's 33-byte multihash, computed under the empty binder context |
-| ForeignNode (20) | `bytes(utf8(target))` — the binding identifier string, e.g. `strand-builtin:Int.Add` — then `H(foreignType)`, `array(sorted H(effect)...)`; when `effectProjections` is non-empty, one additional projection-list field |
+| ForeignNode (20) | `bytes(utf8(target))` — the binding identifier string, e.g. `strand-builtin:Int.Add` — then `H(foreignType)`, `array(sorted H(effect)...)`, then the presence-prefixed `effectProjections` field (§ Effect projections) |
 
 A NodeRef's encoding is the same whether the implementation holds the target inline (a local reference resolved during finalization) or only its hash (a cross-store reference): the bytes are the target's multihash either way. ForeignNode's optional `binding → Provenance` edge is metadata and absent from the encoding.
 
@@ -230,16 +230,17 @@ A NodeRef's encoding is the same whether the implementation holds the target inl
 
 ### Effect projections
 
-When a FunctionType or ForeignNode carries a non-empty `effectProjections` list (Q-039), one additional field is appended after the effects array. Unlike the framing-level fields, this field and its contents are well-formed nested CBOR:
+A FunctionType or ForeignNode's optional `effectProjections` field (Q-039) is encoded after the effects array under the uniform presence-prefix rule (§ Per-category encodings — the same `0 = absent / 1 = present` convention as SumTypeCase, SumValue, the ConstructorPattern payload, and the Transition guard): the presence byte `uint(0)` when the list is empty, or `uint(1)` followed by the projection-list field when it is non-empty. The presence byte is always emitted. The projection-list field and its contents are well-formed nested CBOR:
 
 ```
-array( projection_1, ..., projection_n )            -- declaration order; entry i covers effects[i]
+uint(0)                                             -- no projections
+uint(1) array( projection_1, ..., projection_n )    -- projections present; declaration order, entry i covers effects[i]
 projection_i = array( H(category), array(source_1, ..., source_k) )   -- sources positional
 source       = array( uint(0), uint(index) )        -- ArgRef: the function's argument at index
              | array( uint(1), H(target) )          -- LiteralNode: a binding-controlled literal node
 ```
 
-The gate on non-empty preserves every pre-Q-039 hash. The projection list and each `sources` list are positional (their order parallels `effects` and the category's parameters respectively); only the `effects` array itself is hash-sorted.
+The projection list and each `sources` list are positional (their order parallels `effects` and the category's parameters respectively); only the `effects` array itself is hash-sorted. Epoch 2 (§ Epoch log) replaced the epoch-1 gated-omit form — the field was simply dropped when empty so a pre-Q-039 node hashed identically — with this presence-prefix form, so every FunctionType and ForeignNode hash moved.
 
 ### Control flow
 
@@ -277,7 +278,7 @@ Pattern (25) layouts share the tag and lead with a kind discriminator:
 | StateMachine (27) | `H(transitionFn)`, `H(initialState)`, `array(H(in)...)` positional, `array(H(out)...)` positional, `array(sorted H(effect)...)` |
 | Transition (29) | `uint(0)` for no guard or `uint(1)` followed by `H(guard)`, then `H(body)` |
 
-EventStream (28) carries the most intricate gating, accreted in two additive-versioning steps that each preserve all earlier hashes. The base fields are `H(eventType)` and `uint(streamKind)`. Three optional fields — `bufferSize`, `overflowPolicy`, `consumerMode` — are *all-default-omitted*: when `bufferSize` is unset, `overflowPolicy` is unset or `BlockProducer`, and `consumerMode` is unset or `Single`, none of the three is encoded. When at least one is set to a non-default value, **all three** are encoded in the order bufferSize, overflowPolicy, consumerMode, with sentinels for those left at default: `uint(bufferSize)` with `0` for unset, the overflow-policy tag (§ Discriminators) with the `Sample` variant followed by `uint(intervalNanos)`, and `uint(consumerMode)` with `0` (Single) for unset. Finally, the optional `source` edge (Q-046) is gated on non-null: when present, `H(source)` is appended as a single trailing field after whichever of the two layouts precedes it. The resulting field counts — 2 (all default), 3 (default plus source), 5 or 6 (non-default, Sample adding one), 6 or 7 (non-default plus source) — are collision-free: the only overlapping count pairs differ in the major type of the trailing field (byte string for `source` versus unsigned integer for `consumerMode`).
+EventStream (28) carries the most intricate gating. The base fields are `H(eventType)` and `uint(streamKind)`. Three optional fields — `bufferSize`, `overflowPolicy`, `consumerMode` — are *all-default-omitted*: when `bufferSize` is unset, `overflowPolicy` is unset or `BlockProducer`, and `consumerMode` is unset or `Single`, none of the three is encoded. When at least one is set to a non-default value, **all three** are encoded in the order bufferSize, overflowPolicy, consumerMode, with sentinels for those left at default: `uint(bufferSize)` with `0` for unset, the overflow-policy tag (§ Discriminators) with the `Sample` variant followed by `uint(intervalNanos)`, and `uint(consumerMode)` with `0` (Single) for unset. Finally, the optional `source` edge (Q-046) is encoded under the uniform presence-prefix rule as the last field, after whichever of the two buffer/policy/mode layouts precedes it: `uint(0)` when null, or `uint(1)` followed by `H(source)` when present. The presence byte is always emitted. Epoch 2 (§ Epoch log) replaced the epoch-1 gated-omit form of `source` — the trailing `H(source)` was simply dropped when null, and a set of field-count and trailing-major-type arguments kept the layouts collision-free — with this presence-prefix form, so every EventStream hash moved; the collision-avoidance reasoning the gated form depended on is no longer load-bearing.
 
 ### Structured outputs and agent-native capabilities
 
@@ -410,8 +411,9 @@ The encoding carries no in-band epoch marker. Two epochs' encodings of the same 
 | Epoch | In force since | Definition |
 |-------|----------------|------------|
 | 1 | 2026-06-10 (this document's adoption) | The baseline: the encoding exactly as this document specifies it. Named epoch 1 retroactively when the epoch policy was adopted; no encoding change accompanied the naming. |
+| 2 | 2026-06-13 | The first deliberate break. Normalizes the two gated optional fields to the uniform presence-prefix rule: FunctionType / ForeignNode `effectProjections` (Q-039) and EventStream `source` (Q-046) now encode a `uint(0)` presence byte when absent and `uint(1)` + content when present, where epoch 1 omitted the field entirely when empty/null so pre-Q-039/Q-046 nodes hashed identically. The presence byte is always emitted, so every FunctionType, ForeignNode, and EventStream hash moved and `corpus/golden-hashes.json`, `corpus/prelude-manifest.json`, and the bundled prelude snapshot were regenerated in one sweep. N-048 RecursiveProjection tag 48, introduced additively under epoch 1, is carried forward unchanged. The [Q-049](../open-questions.md#Q-049) `TypeParameter.bound` decision was deliberately **not** bundled — Q-049 (structural subtyping) is unresolved, so deciding the `bound` removal cold would prejudge it; it rides a future epoch once Q-049 resolves. The epoch policy explicitly permits multiple pre-1.0 epochs. |
 
-The epoch-2 charter — the [Q-053](../open-questions.md#Q-053) nested-recursive-type fix designed on its merits, normalization of the gated optional fields (`effectProjections`, the EventStream `source` edge) to the uniform presence-prefix rule, and the [Q-049](../open-questions.md#Q-049) `bound` decision if encoding-touching — is recorded in the Q-062 proposal ([`proposals/implemented/encoding-epochs.md`](../proposals/implemented/encoding-epochs.md)) and rides the Q-053 design work; it is chartered, not in force.
+The epoch-2 charter's remaining unbundled item — the [Q-049](../open-questions.md#Q-049) `TypeParameter.bound` decision, if it resolves to an encoding-touching change — rides a future epoch; it is recorded in the Q-062 proposal ([`proposals/implemented/encoding-epochs.md`](../proposals/implemented/encoding-epochs.md)). The [Q-053](../open-questions.md#Q-053) nested-recursive-type fix the charter also anticipated shipped additively under epoch 1 (N-048 RecursiveProjection), so it needed no epoch budget.
 
 ## References
 

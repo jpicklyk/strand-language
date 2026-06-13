@@ -80,7 +80,14 @@ MULTIHASH_PREFIX = b"\x1e"  # BLAKE3-256 per ADR-003
 # design/canonical-encoding.md "Epoch log"). Mirrors the Kotlin constant
 # org.strand.hashing.CanonicalEncoding.EPOCH; the pair advances together when
 # an epoch ships. --golden refuses to compare vectors from any other epoch.
-CANONICAL_ENCODING_EPOCH = 1
+#
+# Epoch 2 (2026-06-13) normalized the two gated optional fields — FunctionType
+# / ForeignNode `effectProjections` and EventStream `source` — to the uniform
+# presence-prefix rule (uint(0) absent / uint(1)+content present), so the
+# presence byte is now always emitted and those nodes hash differently than
+# under epoch 1. N-048 RecursiveProjection tag 48 was introduced additively
+# under epoch 1 and carries forward unchanged.
+CANONICAL_ENCODING_EPOCH = 2
 
 
 def multihash(encoding: bytes) -> bytes:
@@ -328,9 +335,7 @@ class Encoder:
             out = t + array_header(len(params)) + b"".join(self.T(p, ctx) for p in params)
             out += self.T(node["result"], ctx)
             out += self.sorted_hash_set(self._list(node, "effects"), ctx)
-            projections = self._list(node, "effectProjections")
-            if projections:
-                out += self.encode_projections(projections, ctx)
+            out += self.encode_optional_projections(self._list(node, "effectProjections"), ctx)
             return out
         if ntype == "ForallType":
             tps = self._list(node, "typeParameters")
@@ -414,9 +419,7 @@ class Encoder:
             out = t + cbor_bytes(node["target"].encode("utf-8"))
             out += self.H(node["foreignType"], ctx)
             out += self.sorted_hash_set(self._list(node, "effects"), ctx)
-            projections = self._list(node, "effectProjections")
-            if projections:
-                out += self.encode_projections(projections, ctx)
+            out += self.encode_optional_projections(self._list(node, "effectProjections"), ctx)
             return out
 
         # ----- effects and capabilities -----
@@ -530,6 +533,15 @@ class Encoder:
 
         raise EncoderError(f"node '{nid}': no encoding for category '{ntype}'")
 
+    def encode_optional_projections(self, projections, ctx) -> bytes:
+        """Optional `effectProjections` field under the uniform presence-prefix
+        rule (epoch 2, spec: Effect projections): uint(0) when absent, uint(1)
+        followed by the projection-list field when present. The presence byte
+        is always emitted — the epoch-1 gated-omit special case is gone."""
+        if not projections:
+            return uint(0)
+        return uint(1) + self.encode_projections(projections, ctx)
+
     def encode_projections(self, projections, ctx) -> bytes:
         """Effect-projection list (spec: Effect projections): nested CBOR,
         declaration order; sources positional."""
@@ -552,7 +564,9 @@ class Encoder:
         Base: H(eventType), uint(streamKind). The three optionals
         (bufferSize, overflowPolicy, consumerMode) are all-default-omitted;
         when any is non-default all three are encoded with default
-        sentinels. The optional source edge is a trailing H when present."""
+        sentinels. Epoch 2: the optional source edge follows the uniform
+        presence-prefix rule — a trailing uint(0) when null, uint(1) + H(source)
+        when present — always emitted as the last field."""
         out = self.H(node["eventType"], ctx)
         out += uint(STREAM_KINDS[node["streamKind"].lower()])
 
@@ -575,8 +589,10 @@ class Encoder:
             out += uint(CONSUMER_MODES[consumer_norm] if consumer_norm is not None else 0)
 
         source = self._opt(node, "source")
-        if source is not None:
-            out += self.H(source, ctx)
+        if source is None:
+            out += uint(0)
+        else:
+            out += uint(1) + self.H(source, ctx)
         return out
 
     @staticmethod

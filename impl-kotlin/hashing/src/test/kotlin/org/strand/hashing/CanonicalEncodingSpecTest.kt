@@ -286,16 +286,130 @@ class CanonicalEncodingSpecTest {
         assertArrayEquals(bytesTEncoding, encoder.encode(bytesT))
         val bytesTHash = multihash(bytesTEncoding)
 
-        // All-default stream: 2 fields only — [tag 28][H(eventType)][uint(0) External].
-        val expectedDefault = tag(28) + hashRef(bytesTHash) + byteArrayOf(0x00)
+        // All-default stream, no source: base fields plus the epoch-2 source
+        // presence byte — [tag 28][H(eventType)][uint(0) External][uint(0) no source].
+        val expectedDefault = tag(28) + hashRef(bytesTHash) + byteArrayOf(0x00, 0x00)
         assertArrayEquals(expectedDefault, encoder.encode(allDefault))
 
-        // Any non-default optional forces all three slice-3.1/3.6 fields:
+        // Any non-default optional forces all three slice-3.1/3.6 fields, then
+        // the source presence byte:
         // [tag 28][H(eventType)][uint(2) Output][uint(2) bufferSize]
-        // [uint(2) DropOldest][uint(0) consumerMode sentinel Single].
+        // [uint(2) DropOldest][uint(0) consumerMode sentinel Single][uint(0) no source].
         val expectedBuffered = tag(28) + hashRef(bytesTHash) +
-            byteArrayOf(0x02, 0x02, 0x02, 0x00)
+            byteArrayOf(0x02, 0x02, 0x02, 0x00, 0x00)
         assertArrayEquals(expectedBuffered, encoder.encode(withBuffer))
+    }
+
+    // ----- Trace 5b: EventStream with a source (epoch-2 presence prefix) -----
+
+    @Test
+    fun `EventStream source presence prefix - with and without source`() {
+        // Epoch 2 (Q-062): the optional Q-046 `source` edge is the last field
+        // under the uniform presence-prefix rule — uint(0) when null, uint(1)
+        // then H(source) when present.
+        val store = NodeStore()
+        val bytesT = store.add(Node.PrimitiveType(Primitive.Bytes))
+        // A stand-in source node — its only role here is to be a child the
+        // stream points at; the verifier's source-shape rules are exercised
+        // elsewhere. An IntLit suffices for the encoding trace.
+        val src = store.add(Node.IntLit(7))
+        val noSource = store.add(Node.EventStream(eventType = bytesT, streamKind = StreamKind.External))
+        val withSource = store.add(
+            Node.EventStream(eventType = bytesT, streamKind = StreamKind.External, source = src)
+        )
+        val encoder = newEncoder(store)
+
+        val bytesTHash = multihash(byteArrayOf(0x00, 0x00, 0x00, 0x07, 0x05))
+        val srcHash = multihash(byteArrayOf(0x00, 0x00, 0x00, 0x01, 0x07))  // IntLit 7
+
+        // No source: [tag 28][H(eventType)][uint(0) External][uint(0) absent].
+        val expectedNoSource = tag(28) + hashRef(bytesTHash) + byteArrayOf(0x00, 0x00)
+        assertArrayEquals(expectedNoSource, encoder.encode(noSource))
+
+        // With source: [tag 28][H(eventType)][uint(0) External][uint(1) present][H(source)].
+        val expectedWithSource = tag(28) + hashRef(bytesTHash) +
+            byteArrayOf(0x00, 0x01) + hashRef(srcHash)
+        assertArrayEquals(expectedWithSource, encoder.encode(withSource))
+
+        // The presence byte makes the two forms distinct: the sourceless
+        // stream is strictly shorter and ends in the uint(0) presence byte.
+        org.junit.jupiter.api.Assertions.assertFalse(
+            encoder.encode(noSource).contentEquals(encoder.encode(withSource))
+        )
+    }
+
+    // ----- Trace 5c: ForeignNode effectProjections (epoch-2 presence prefix) -----
+
+    @Test
+    fun `ForeignNode effectProjections presence prefix - with and without projections`() {
+        // Epoch 2 (Q-062): the optional Q-039 `effectProjections` field is
+        // encoded after the effects array under the uniform presence-prefix
+        // rule — uint(0) when empty, uint(1) then the projection-list array
+        // when non-empty. The presence byte is always emitted.
+        val store = NodeStore()
+        val stringT = store.add(Node.PrimitiveType(Primitive.String))
+        val unitT = store.add(Node.PrimitiveType(Primitive.Unit))
+        // ftype: (String) -> Unit, the foreignType for a one-arg writer.
+        val ftype = store.add(Node.FunctionType(parameters = listOf(stringT), result = unitT))
+        // An effect category writeFx{path: String} the projection covers.
+        val pathParam = store.add(Node.TypeParameter("path", bound = null))
+        val writeFx = store.add(Node.EffectCategory(categoryName = "writeFx", parameters = listOf(pathParam)))
+
+        // ForeignNode WITHOUT projections (but WITH the effect declared).
+        val plain = store.add(
+            Node.ForeignNode(target = "strand-builtin:Fs.Write", foreignType = ftype, effects = listOf(writeFx))
+        )
+        // ForeignNode WITH a projection pinning writeFx's path to ArgRef(0).
+        val projected = store.add(
+            Node.ForeignNode(
+                target = "strand-builtin:Fs.Write",
+                foreignType = ftype,
+                effects = listOf(writeFx),
+                effectProjections = listOf(
+                    org.strand.core.EffectProjection(
+                        category = writeFx,
+                        sources = listOf(org.strand.core.ProjectionSource.ArgRef(0)),
+                    )
+                ),
+            )
+        )
+        val encoder = newEncoder(store)
+
+        // target bytes: "strand-builtin:Fs.Write" is 23 chars -> CBOR bytes
+        // header 0x57 (major 2, length 23).
+        val targetBytes = "strand-builtin:Fs.Write".toByteArray(Charsets.UTF_8)
+        assertEquals(23, targetBytes.size)
+        val targetField = byteArrayOf(0x57) + targetBytes
+        val ftypeHash = multihash(encoder.encode(ftype))
+        val writeFxHash = multihash(encoder.encode(writeFx))
+        // effects array, one element (sorted set of one).
+        val effectsArray = byteArrayOf(0x81.toByte()) + hashRef(writeFxHash)
+
+        // Plain ForeignNode ends in the uint(0) projections-absent byte:
+        // [tag 20][bytes(target)][H(ftype)][array(1: H(writeFx))][uint(0)].
+        val expectedPlain = tag(20) + targetField + hashRef(ftypeHash) + effectsArray +
+            byteArrayOf(0x00)
+        assertArrayEquals(expectedPlain, encoder.encode(plain)) {
+            "ForeignNode (no projections): ${hex(encoder.encode(plain))}"
+        }
+
+        // Projected ForeignNode: ...[uint(1)][array(1: projection)] where
+        // projection = array(2)[ H(writeFx), array(1)[ array(2)[uint(0), uint(0)] ] ]
+        //   the inner array(2)[uint(0), uint(0)] is ArgRef(index 0).
+        val argRefSource = byteArrayOf(0x82.toByte(), 0x00, 0x00)        // array(2), uint(0) tag, uint(0) index
+        val sourcesArray = byteArrayOf(0x81.toByte()) + argRefSource     // array(1) of sources
+        val projection = byteArrayOf(0x82.toByte()) + hashRef(writeFxHash) + sourcesArray
+        val projectionList = byteArrayOf(0x81.toByte()) + projection     // array(1) of projections
+        val expectedProjected = tag(20) + targetField + hashRef(ftypeHash) + effectsArray +
+            byteArrayOf(0x01) + projectionList
+        assertArrayEquals(expectedProjected, encoder.encode(projected)) {
+            "ForeignNode (projected): ${hex(encoder.encode(projected))}"
+        }
+
+        // The presence byte distinguishes the two forms.
+        org.junit.jupiter.api.Assertions.assertFalse(
+            encoder.encode(plain).contentEquals(encoder.encode(projected))
+        )
     }
 
     // ----- Trace 6: Let + unbound-VarRef sentinel -----

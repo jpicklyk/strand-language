@@ -321,14 +321,14 @@ internal class CanonicalEncoder(
             encodeTypePositionChild(node.result, stack),
             CanonicalCbor.encodeArray(effectHashes),
         )
-        // Q-039: `effectProjections` is gated on non-empty — pre-Q-039
-        // FunctionTypes (no projections) hash byte-identically to their
-        // post-Q-039 form.
-        val allFields = if (node.effectProjections.isEmpty()) {
-            baseFields
-        } else {
-            baseFields + encodeEffectProjectionList(node.effectProjections, stack)
-        }
+        // Epoch 2 (Q-062): `effectProjections` follows the uniform
+        // presence-prefix rule — `uint(0)` when absent, `uint(1)` followed
+        // by the projection-list field when present — the same convention
+        // SumTypeCase / SumValue / ConstructorPattern / Transition use for
+        // their optional fields. The presence byte is always emitted, so a
+        // FunctionType with no projections no longer hashes identically to
+        // its pre-Q-039 form (the epoch-1 gated-omit special case is gone).
+        val allFields = baseFields + encodeOptionalProjections(node.effectProjections, stack)
         return encodeWithTag(CategoryTag.FunctionType, allFields)
     }
 
@@ -530,15 +530,17 @@ internal class CanonicalEncoder(
 
     private fun encodeForeignNode(node: Node.ForeignNode, stack: BinderStack): ByteArray {
         // [tag=20, target-utf8-bytes, foreignType-hash, sorted-effect-hashes,
-        //  effectProjections?]
+        //  presence-prefixed effectProjections]
         // The optional `binding → Provenance` edge is metadata-excluded and
         // therefore not present in the canonical encoding (Layer 4 step 1
         // does not yet model the binding edge in the in-memory ADT either).
         //
-        // Q-039: `effectProjections` is gated on non-empty — pre-Q-039
-        // ForeignNodes (no projections) hash byte-identically to their
-        // post-Q-039 form, so every existing corpus program's hash is
-        // unchanged.
+        // Epoch 2 (Q-062): `effectProjections` follows the uniform
+        // presence-prefix rule — `uint(0)` when absent, `uint(1)` followed by
+        // the projection-list field when present. The presence byte is always
+        // emitted, so a ForeignNode with no projections no longer hashes
+        // identically to its pre-Q-039 form (the epoch-1 gated-omit special
+        // case is gone).
         val effectHashes = node.effects
             .map { hash(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
@@ -548,19 +550,41 @@ internal class CanonicalEncoder(
             CanonicalCbor.encodeBytes(hash(node.foreignType, stack)),
             CanonicalCbor.encodeArray(effectHashes),
         )
-        val allFields = if (node.effectProjections.isEmpty()) {
-            baseFields
-        } else {
-            baseFields + encodeEffectProjectionList(node.effectProjections, stack)
-        }
+        val allFields = baseFields + encodeOptionalProjections(node.effectProjections, stack)
         return encodeWithTag(CategoryTag.ForeignNode, allFields)
     }
 
     /**
+     * Encode the optional `effectProjections` field under the uniform
+     * presence-prefix rule (epoch 2, Q-062). Returns a list of field bytes
+     * to append after the base fields of a FunctionType or ForeignNode:
+     *
+     *   - empty list  -> `[uint(0)]`               (absent)
+     *   - non-empty   -> `[uint(1), <projection-list array>]`  (present)
+     *
+     * This is the same `0 = absent / 1 = present` convention SumTypeCase,
+     * SumValue, ConstructorPattern, and Transition apply to their optional
+     * fields. It replaces the epoch-1 gated-omit special case (the field was
+     * simply dropped when empty so pre-Q-039 nodes hashed identically); the
+     * presence byte is now always emitted.
+     */
+    private fun encodeOptionalProjections(
+        projections: List<EffectProjection>,
+        stack: BinderStack,
+    ): List<ByteArray> =
+        if (projections.isEmpty()) {
+            listOf(CanonicalCbor.encodeUint(0L))
+        } else {
+            listOf(
+                CanonicalCbor.encodeUint(1L),
+                encodeEffectProjectionList(projections, stack),
+            )
+        }
+
+    /**
      * Encode a non-empty list of [EffectProjection] as a single CBOR field
-     * (per Q-039 § 4.2). Used by [encodeForeignNode] and
-     * [encodeFunctionType]; called only when the list is non-empty so the
-     * gate on the calling side preserves pre-Q-039 hashes.
+     * (per Q-039 § 4.2). Used by [encodeOptionalProjections] for both
+     * FunctionType and ForeignNode.
      *
      * The projection list is *positional* — its order matches the order of
      * the enclosing node's `effects` list (each projection covers the
@@ -856,40 +880,36 @@ internal class CanonicalEncoder(
         // Slice 3.1 / 3.6 additive-versioning rule: when bufferSize == null,
         // overflowPolicy is null or BlockProducer (the default), AND
         // consumerMode is null or Single (the default), the encoder emits no
-        // additional fields and the bytes are byte-identical to the
-        // pre-step-3 encoding. Pre-step-3 corpus EventStream hashes are
-        // therefore unchanged.
-        //
-        // When at least one of the three new fields is set to a non-default
-        // value, ALL THREE are emitted (with sentinels for fields left at
-        // default) so the encoding remains unambiguous. The ordering is
-        // bufferSize, overflowPolicy, consumerMode. The policy carries its
+        // additional buffer/policy/mode fields. When at least one is set to a
+        // non-default value, ALL THREE are emitted (with sentinels for fields
+        // left at default) so the encoding remains unambiguous. The ordering
+        // is bufferSize, overflowPolicy, consumerMode. The policy carries its
         // own tag (0=Block, 1=DropNew, 2=DropOld, 3=Sample), with the Sample
         // variant trailed by its intervalNanos parameter. ConsumerMode
         // ordinal: 0=Single, 1=Broadcast — stable forever.
-        // Q-046 additive-versioning rule: when source == null the encoding is
-        // byte-identical to the pre-Q-046 form in BOTH branches below (the
-        // all-default base-only case and the slice-3.1/3.6 some-non-default
-        // case). When source is set, its hash is appended as a single trailing
-        // field. This is collision-free: a source-only stream encodes to 3
-        // fields ([eventType, streamKind, source-hash]) — a length no pre-Q-046
-        // EventStream produces (those produce 2 or 5) — and the trailing field
-        // is a byte string, distinct in CBOR major type from the trailing uint
-        // (consumerMode) of the 5-field form.
+        //
+        // Epoch 2 (Q-062): the optional `source` edge (Q-046) follows the
+        // uniform presence-prefix rule — a trailing `uint(0)` when null,
+        // `uint(1)` followed by `H(source)` when present — emitted as the LAST
+        // field after whichever of the two buffer/policy/mode layouts precedes
+        // it. The presence byte is always emitted, so a sourceless EventStream
+        // no longer hashes identically to its pre-Q-046 form (the epoch-1
+        // gated-omit special case is gone, and with it the collision-avoidance
+        // reasoning the old trailing-hash form depended on).
         val baseFields = mutableListOf(
             CanonicalCbor.encodeBytes(hash(node.eventType, stack)),
             CanonicalCbor.encodeUint(node.streamKind.ordinal.toLong()),
         )
-        val sourceField: ByteArray? =
-            node.source?.let { CanonicalCbor.encodeBytes(hash(it, stack)) }
+        val sourceFields: List<ByteArray> = node.source?.let {
+            listOf(CanonicalCbor.encodeUint(1L), CanonicalCbor.encodeBytes(hash(it, stack)))
+        } ?: listOf(CanonicalCbor.encodeUint(0L))
         val hasNonDefaultBuffer = node.bufferSize != null
         val hasNonDefaultPolicy = node.overflowPolicy != null &&
             node.overflowPolicy !is OverflowPolicy.BlockProducer
         val hasNonDefaultMode = node.consumerMode != null &&
             node.consumerMode != ConsumerMode.Single
         if (!hasNonDefaultBuffer && !hasNonDefaultPolicy && !hasNonDefaultMode) {
-            val fields = if (sourceField != null) baseFields + sourceField else baseFields
-            return encodeWithTag(CategoryTag.EventStream, fields)
+            return encodeWithTag(CategoryTag.EventStream, baseFields + sourceFields)
         }
         // Slice 3.1 / 3.6 fields: bufferSize (sentinel 0 for unset / default),
         // policy tag + optional Sample param, then consumerMode (sentinel 0 =
@@ -901,8 +921,7 @@ internal class CanonicalEncoder(
         val policyFields = encodeOverflowPolicy(node.overflowPolicy ?: OverflowPolicy.BlockProducer)
         val modeEncoded = CanonicalCbor.encodeUint((node.consumerMode ?: ConsumerMode.Single).ordinal.toLong())
         val slice36 = baseFields + bufferEncoded + policyFields + modeEncoded
-        val fields = if (sourceField != null) slice36 + sourceField else slice36
-        return encodeWithTag(CategoryTag.EventStream, fields)
+        return encodeWithTag(CategoryTag.EventStream, slice36 + sourceFields)
     }
 
     /**
