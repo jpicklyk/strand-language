@@ -54,6 +54,18 @@ private val pluginHostProgramsDir =
 //     correct-by-construction structured-output demonstration
 private val outputByConstructionProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/output-by-construction/programs")
+//   - demos/agent-workflow/programs : the bounded-agent-workflow demonstration
+//     (per-provider LLM + ToolDef + Attempt retry under a surfaced effect bound)
+private val agentWorkflowProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/agent-workflow/programs")
+//   - demos/clean-room/programs : the proof-of-no-exfiltration demonstration
+//     (the effect closure with no egress category is a structural non-exfiltration proof)
+private val cleanRoomProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/clean-room/programs")
+//   - demos/mcp-tool-manifest/programs : the verifiable-tool-capability-manifest
+//     demonstration (an N-046 ModuleManifest whose declared effects are machine-checked)
+private val mcpToolManifestProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/mcp-tool-manifest/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(containmentProgramsDir) {
@@ -72,6 +84,18 @@ tasks.named<ProcessResources>("processTestResources") {
         include("*.json")
         into("demo/programs")
     }
+    from(agentWorkflowProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
+    from(cleanRoomProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
+    from(mcpToolManifestProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
 }
 
 tasks.test {
@@ -79,6 +103,9 @@ tasks.test {
     inputs.dir(replayProgramsDir)
     inputs.dir(pluginHostProgramsDir)
     inputs.dir(outputByConstructionProgramsDir)
+    inputs.dir(agentWorkflowProgramsDir)
+    inputs.dir(cleanRoomProgramsDir)
+    inputs.dir(mcpToolManifestProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -125,4 +152,37 @@ tasks.register<JavaExec>("outputByConstructionDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.OutputByConstructionDemo")
+}
+
+// Print the bounded-agent-workflow demonstration transcript. Like the others,
+// the driver lives in the test source set (it shares scenario code with
+// AgentWorkflowDemoTest). Usage: `./gradlew :runtime:agentWorkflowDemo -q`.
+tasks.register<JavaExec>("agentWorkflowDemo") {
+    group = "verification"
+    description = "Print the bounded-agent-workflow demonstration transcript (per-provider LLM + ToolDef + Attempt retry under a surfaced effect bound)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.AgentWorkflowDemo")
+}
+
+// Print the clean-room proof-of-no-exfiltration demonstration transcript. Like
+// the others, the driver lives in the test source set (it shares scenario code
+// with CleanRoomDemoTest). Usage: `./gradlew :runtime:cleanRoomDemo -q`.
+tasks.register<JavaExec>("cleanRoomDemo") {
+    group = "verification"
+    description = "Print the clean-room proof-of-no-exfiltration demonstration transcript (effect closure with no egress category = structural non-exfiltration proof)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.CleanRoomDemo")
+}
+
+// Print the MCP-tool verifiable-capability-manifest demonstration transcript.
+// Like the others, the driver lives in the test source set (it shares scenario
+// code with McpToolManifestDemoTest). Usage: `./gradlew :runtime:mcpToolManifestDemo -q`.
+tasks.register<JavaExec>("mcpToolManifestDemo") {
+    group = "verification"
+    description = "Print the MCP-tool verifiable-capability-manifest demonstration transcript (an N-046 ModuleManifest whose declared effects are machine-checked against the code)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.McpToolManifestDemo")
 }
