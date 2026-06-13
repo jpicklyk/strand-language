@@ -7,6 +7,11 @@ dependencies {
     api(project(":core"))
     api(project(":verifier"))
     api(project(":interpreter"))
+    // Q-054: the StrandRuntime facade runs the full verify -> schema-check ->
+    // evaluate pipeline, so it reaches the SchemaChecker. :schema sits on the
+    // same :interpreter -> :verifier -> :core spine as :runtime, so the edge is
+    // acyclic (the CLI already depends on both).
+    api(project(":schema"))
     // kotlinx-serialization-json is already brought in transitively via :core,
     // but the runtime's EventCodec uses the parser directly — declare it as a
     // compile-time dependency rather than relying on transitive resolution.
