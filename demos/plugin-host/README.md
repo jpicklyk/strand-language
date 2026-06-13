@@ -210,9 +210,9 @@ C4  Attenuation below the host -- least-privilege delegation
   GRANT/POLICY level (the host constructs a narrower CapabilitySet),
   NOT via the N-036 CapabilityScope node. CapabilityScope narrows
   which effect CATEGORIES survive into a subgraph, not a path
-  refinement -- refinement-narrowing CapabilityScope is the deferred
-  Q-031 follow-up. The category-level narrowing CapabilityScope does
-  provide is shown next.
+  refinement -- refinement-narrowing CapabilityScope is tracked as
+  Q-068 (the deferred Q-031 follow-up). The category-level narrowing
+  CapabilityScope does provide is shown next.
 
 C4'  Companion -- N-036 CapabilityScope category-level narrowing
 ------------------------------------------------------------------------
@@ -287,9 +287,10 @@ mechanisms deliver.
   match structurally, and the interpreter synthesizes the capability-check value
   from the actual evaluated argument.
 - [`proposals/implemented/refinement-lattice-capability-matching.md`](../../proposals/implemented/refinement-lattice-capability-matching.md)
-  — Q-031, how a refined capability matches or denies a concrete request (C3, C4),
-  and the deferred refinement-narrowing `CapabilityScope` the C4 narrative
-  distinguishes from grant-level narrowing.
+  — Q-031, how a refined capability matches or denies a concrete request (C3, C4).
+- [`open-questions.md`](../../open-questions.md#Q-068)
+  — Q-068, the deferred refinement-narrowing `CapabilityScope` extension the C4
+  narrative distinguishes from grant-level narrowing.
 - [`design/effects-and-capabilities.md`](../../design/effects-and-capabilities.md)
   — N-036 `CapabilityScope` (category-level narrowing, C4') and the confused-deputy
   mitigation framing.
