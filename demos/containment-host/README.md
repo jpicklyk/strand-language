@@ -86,10 +86,14 @@ categories. This is a sound upper bound on `closure(g)`: the verifier's mandator
 effect-closure rule (`UncoveredEffects`) guarantees no admitted graph performs an
 effect absent from its declarations, so every effect a run can reach corresponds
 to an `EffectCategory` reachable in the walk. The host re-derives this from the
-verified artifact because the verifier does not surface its own internally-computed
-closure on `VerifyResult.Ok` (see Follow-up gaps). The number is computed, not
-hardcoded; the test asserts the artifact reaches `Filesystem.Write` and that it
-lies beyond the `{Time.Now}` grant.
+artifact by structural walk because this submission is *rejected* at verification
+(`ProjectionMismatch`), and the verifier's own effect closure is populated only on
+a successful `VerifyResult.Ok` — a rejected program has no verifier closure to
+read. The walk is the sound pre-admission substitute for exactly this case; the
+clean-verifying scenario S3 instead reads the surfaced closure directly (see
+Q-067 and Follow-up gaps). The number is computed, not hardcoded; the test
+asserts the artifact reaches `Filesystem.Write` and that it lies beyond the
+`{Time.Now}` grant.
 
 ### S2 Concurrent isolation
 
@@ -136,6 +140,16 @@ requested parameters versus the held grant, the denying node, and the phase. A
 benign co-tenant submitted in the same batch completes to its correct result —
 one tenant's denial does not affect the other. This maps to the
 ungranted-capability harm class, bounded at runtime.
+
+Because this program verifies clean, S3 also exercises the Q-067 success path:
+the host reads the verifier's own effect closure off `VerifyResult.Ok`
+(`rootClosure`) rather than re-deriving it, displaying `{Filesystem.Write}`. The
+program has no Handler, so the surfaced closure equals what the structural walk
+would compute — but it came for free from the verifier, which is the point. The
+surfaced value is the closure the verifier actually enforced (Handler-aware: a
+Handler subtracts the category it intercepts), so for programs with handlers it
+is a tighter bound than the structural walk; that distinction does not bite here
+but is why the host prefers the surfaced value whenever the artifact verifies.
 
 ### S4 Run-by-hash
 
@@ -193,6 +207,11 @@ S3  Runtime denial -- contained at the foreign-call boundary
   Submission: runtime-denial-write (verifies clean; writes
               /tenant/secret.log). Host grants Filesystem.Write
               refined to /tenant/out.log -- a DIFFERENT path.
+  This program verifies clean, so the host reads the verifier's own
+  effect closure (Q-067) off the Ok result instead of re-deriving it:
+    surfaced closure (Ok)     = [Filesystem.Write]
+    host structural walk      = [Filesystem.Write]
+    surfaced == walk          = true
   Host decision: DENIED at runtime (RefinementViolation)
     DenialReport: category=Filesystem.Write requested=[/tenant/secret.log] held=[Filesystem.Write{/tenant/out.log}] node=#8 phase=expression
   Co-tenant submitted in the same batch (benign-sum): value = IntV(v=42) (completed normally)
@@ -240,27 +259,41 @@ property argued from the mechanisms, with executed witnesses as spot-checks; thi
 companion is one more set of executed witnesses, driving the containment
 mechanisms through the host boundary an orchestrating principal would actually use.
 
-## Follow-up gaps
+## Effect-closure surfacing (Q-067, resolved at the success-path level)
 
-One API gap surfaced while building the demonstration, worked around rather than
-closed (consistent with the demonstration's hard scope constraint of building only
-on shipped APIs). It is registered as [Q-067](../../open-questions.md#Q-067).
+[Q-067](../../open-questions.md#Q-067) surfaced while building this
+demonstration: the verifier computes a per-node effect closure internally
+(`VerifyState.nodeClosures`, the Handler-aware computation) but did not expose it
+on `VerifyResult.Ok`, so a host wanting the exact declared closure had to
+re-derive it by walking the graph.
 
-The verifier computes a per-node effect closure internally (`VerifyState.nodeClosures`,
-the Handler-aware computation) but does not surface it on `VerifyResult.Ok`. A host
-that wants the exact declared closure the verifier computed — rather than
-re-deriving a sound upper bound by walking the graph itself, as the demonstration
-does in `ContainmentDemo.declaredEffectClosure` — has no published accessor for it.
-The re-derivation is correct (the verifier's `UncoveredEffects` rule guarantees the
-walk is a sound over-approximation) but it duplicates work the verifier already did.
-A `nodeClosures` field on `VerifyResult.Ok`, keyed by node the way `nodeTypes`
-already is, would be a small additive change to the verify-result shape — no
-language change, no encoding or hash impact. It would not, however, remove this
-demonstration's walk: scenario S1 needs the harm bound for an over-reaching
-submission the verifier *rejects*, and the verifier populates its closure only on a
-successful `Ok`. Covering the rejected-artifact case — the pre-admission harm-bound
-use this demonstration exercises — is the broader design question Q-067 records.
-Until it is decided, the demonstration carries the sound walk above.
+It is now surfaced. `VerifyResult.Ok` carries a `nodeClosures` map keyed by
+NodeId exactly as `nodeTypes` is, with a `rootClosure(root)` accessor returning
+the program root's `EffectCategory` set — `closure(g)` in the Q-044 harm bound.
+This was an additive change to the verify-result shape with no language, encoding,
+or hash impact (`VerifyResult` is not part of the canonical node encoding). The
+surfaced value is the verifier's own closure-subtraction-aware computation, so it
+is Handler-aware: a Handler that intercepts an effect subtracts it, where a
+structural walk would not. Scenario S3 consumes the surfaced closure directly — it
+verifies clean, so the host reads `rootClosure` off the `Ok` result rather than
+walking.
+
+The pre-admission case is documented rather than mechanized, deliberately.
+Scenario S1 needs the harm bound for an over-reaching submission the verifier
+*rejects* (`ProjectionMismatch`), and the verifier's closure is populated only on
+a successful `Ok`. The closure computation cannot be cleanly separated to run on a
+rejected artifact: `VerifyState.nodeClosures` is filled only as a side-effect of
+full type inference (the Application closure adds the *resolved* callee's effect
+row; the Handler subtraction depends on resolved signatures), and verification
+aborts before the root closure is recorded on the first hard error — so a rejected
+program has no verifier closure, sound or otherwise. For that case the host
+re-derives a sound structural upper bound in `ContainmentDemo.declaredEffectClosure`,
+guaranteed sound by the mandatory `UncoveredEffects` rule (no admitted graph
+performs an effect absent from its declarations). Being Handler-unaware, the walk
+is a *looser* bound than the surfaced value where a Handler subtracts an effect —
+acceptable for an over-approximation, and exactly why S3 prefers the surfaced
+closure when the artifact verifies. Q-067 is resolved at the success-path level
+with this pre-admission re-derivation documented as the host's responsibility.
 
 ## References
 
@@ -281,7 +314,9 @@ Until it is decided, the demonstration carries the sound walk above.
 - [`proposals/implemented/capability-denial-observability.md`](../../proposals/implemented/capability-denial-observability.md)
   — Q-064, the `DenialReport` captured in S3.
 - [`open-questions.md`](../../open-questions.md#Q-067) — Q-067, the effect-closure
-  accessor gap the demonstration works around in `declaredEffectClosure`.
+  surfacing resolved at the success-path level: S3 reads the surfaced
+  `rootClosure`; S1's rejected artifact re-derives a sound upper bound in
+  `declaredEffectClosure`.
 
 **Incoming references:**
 - [`containment-results.md`](../../evaluation/containment-results.md) — points at this demonstration
