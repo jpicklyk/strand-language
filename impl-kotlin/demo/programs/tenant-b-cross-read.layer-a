@@ -1,0 +1,21 @@
+# tenant-b-cross-read.layer-a
+# Tenant B submission for S2 (concurrent mutual distrust).
+#
+# Intent: the mirror of tenant A. Tenant B is granted only its OWN workspace and
+# its OWN credential, and attempts to read tenant A's workspace file via
+# "../tenant-a/secret.txt". Under B's SECURE sandbox rooted at B's workspace the
+# path escapes, so the runtime denies it with SandboxViolation(FsPathEscape). The
+# two distrusting tenants run concurrently, each confined to its own workspace,
+# neither able to reach the other's files.
+@v=1 root=readApp
+strT PRM String
+bytesT PRM Bytes
+readFx EFC "Filesystem.Read" [strT]
+readT FNT [strT] bytesT
+readFn FN "strand-builtin:Fs.Read" readT [readFx] "readFx:0"
+rvT FNT [strT] strT
+rendezvous FN "strand-builtin:Test.Rendezvous" rvT
+crossPath STR "../tenant-a/secret.txt"
+syncedPath APP rendezvous [crossPath]
+readDecl EFD readFx [syncedPath]
+readApp APP readFn [syncedPath] [] [readDecl]

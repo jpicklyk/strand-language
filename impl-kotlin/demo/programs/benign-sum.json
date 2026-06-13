@@ -1,0 +1,1 @@
+{"version":1,"root":"sum","nodes":{"a":{"type":"IntLit","value":40},"b":{"type":"IntLit","value":2},"sum":{"type":"Application","function":"add","arguments":["a","b"]},"intT":{"type":"PrimitiveType","kind":"Int"},"addT":{"type":"FunctionType","result":"intT","parameters":["intT","intT"]},"add":{"type":"ForeignNode","target":"strand-builtin:Int.Add","foreignType":"addT"}}}

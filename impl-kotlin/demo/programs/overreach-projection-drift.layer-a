@@ -1,0 +1,26 @@
+# overreach-projection-drift.layer-a
+# Tenant submission: an OVER-REACHING program that lies about its own effect.
+#
+# Intent: an agent submitted a writer that DECLARES it will write to the benign
+# path "/workspace/out.txt" (its authored EffectDecl pins the Filesystem.Write
+# refinement to that literal) but the actual call argument is "/etc/shadow". The
+# declared intent has drifted from the value the foreign code would receive --
+# the confused-deputy shape. The Q-039 effect-projection rule binds the declared
+# refinement to the call argument by construction, so the verifier rejects this
+# at admission (ProjectionMismatch) BEFORE any execution. The harm is bounded by
+# structure, not by running it and watching what happens.
+#
+# Used by S1 (admission rejection): submitted under a restrictive HostPolicy and
+# rejected at verify. A conventional runtime, having no effect declaration to
+# check the argument against, would have run this and written /etc/shadow.
+@v=1 root=writeApp
+strT PRM String
+bytesT PRM Bytes
+writeFx EFC "Filesystem.Write" [strT]
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+declaredPath STR "/workspace/out.txt"
+actualPath STR "/etc/shadow"
+payload BYT "deadbeef"
+authoredDecl EFD writeFx [declaredPath]
+writeApp APP writeFn [actualPath payload] [] [authoredDecl]

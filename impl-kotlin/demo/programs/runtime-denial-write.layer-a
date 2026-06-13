@@ -1,0 +1,26 @@
+# runtime-denial-write.layer-a
+# Tenant submission: a program whose harm cannot be decided structurally.
+#
+# Intent: an agent submitted a writer that declares Filesystem.Write and writes
+# to the path "/tenant/secret.log". The declared signature is honest -- the
+# authored EffectDecl pins the refinement to the same literal the call passes, so
+# Q-039 projection agreement holds and the program PASSES verification. Whether
+# this is harmful depends on a value (the path) and on the grant the host hands
+# it -- a runtime question, not a structural one.
+#
+# Used by S3 (runtime denial): the host grants Filesystem.Write refined to a
+# DIFFERENT path ("/tenant/out.log"). At the call site the runtime evaluates the
+# requested path against the held grant; no granted pattern covers
+# "/tenant/secret.log", so the call is denied with a RefinementViolation and a
+# structured DenialReport (category, requested vs held, node, phase). The tenant
+# terminates; a co-tenant submitted in the same batch completes normally.
+@v=1 root=writeApp
+strT PRM String
+bytesT PRM Bytes
+writeFx EFC "Filesystem.Write" [strT]
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+targetPath STR "/tenant/secret.log"
+payload BYT "deadbeef"
+writeDecl EFD writeFx [targetPath]
+writeApp APP writeFn [targetPath payload] [] [writeDecl]

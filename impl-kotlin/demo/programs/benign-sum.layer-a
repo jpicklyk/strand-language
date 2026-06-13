@@ -1,0 +1,15 @@
+# benign-sum.layer-a
+# Tenant submission: a BENIGN pure-computation task.
+#
+# Intent: an agent submitted a program that computes 40 + 2 and returns the
+# result. It declares no effects, so its effect closure is empty: the host can
+# read from the artifact that the maximum harm this program can cause is
+# nothing -- no filesystem, no network, no credential access. It admits cleanly
+# under any policy (even the empty grant set) and runs to a correct result.
+#
+# Used by S4 (run-by-hash): ingested into a PersistentStore (admit-and-verify-
+# once), then re-run by root hash with no re-verification, producing 42.
+@v=1 root=sum
+a ILT 40
+b ILT 2
+sum APP add [a b]

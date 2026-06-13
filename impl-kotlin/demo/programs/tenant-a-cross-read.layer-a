@@ -1,0 +1,27 @@
+# tenant-a-cross-read.layer-a
+# Tenant A submission for S2 (concurrent mutual distrust).
+#
+# Intent: tenant A is granted only its OWN workspace and its OWN credential.
+# This program rendezvouses with the co-tenant (forcing genuine concurrent
+# overlap inside the effectful path) and then attempts to read tenant B's
+# workspace file via the relative escape "../tenant-b/secret.txt". Under A's
+# HostPolicy -- a SECURE sandbox rooted at A's workspace -- that path resolves
+# outside the workspace, so the runtime denies it with
+# SandboxViolation(FsPathEscape). A cannot reach B's files even though both
+# tenants are executing Fs.Read at the same instant.
+#
+# Test.Rendezvous(path) is host-side scaffolding: it blocks on a shared barrier
+# and returns its argument unchanged, so the two tenants provably overlap when
+# each reaches Fs.Read. The denial it surfaces is a real sandbox property.
+@v=1 root=readApp
+strT PRM String
+bytesT PRM Bytes
+readFx EFC "Filesystem.Read" [strT]
+readT FNT [strT] bytesT
+readFn FN "strand-builtin:Fs.Read" readT [readFx] "readFx:0"
+rvT FNT [strT] strT
+rendezvous FN "strand-builtin:Test.Rendezvous" rvT
+crossPath STR "../tenant-b/secret.txt"
+syncedPath APP rendezvous [crossPath]
+readDecl EFD readFx [syncedPath]
+readApp APP readFn [syncedPath] [] [readDecl]
