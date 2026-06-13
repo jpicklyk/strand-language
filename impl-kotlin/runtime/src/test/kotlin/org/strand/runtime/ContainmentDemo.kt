@@ -102,7 +102,8 @@ object ContainmentDemo {
      * The declared effect closure of [program]: the set of EffectCategory names
      * reachable from the root by structural induction over the graph. This is the
      * `closure(g)` half of the Q-044 harm bound `closure(g) ∩ C ∩ B ∩ P`,
-     * re-derived by the host from the verified artifact alone — no execution.
+     * re-derived by the host from the artifact alone — no execution, and crucially
+     * no requirement that the artifact type-check.
      *
      * It is a sound upper bound: the verifier's mandatory effect-closure rule
      * (`UncoveredEffects`) guarantees no admitted graph performs an effect absent
@@ -111,13 +112,22 @@ object ContainmentDemo {
      * cross-store subgraph the artifact references by hash); these demo programs
      * have none.
      *
-     * The verifier computes the same closure internally (`VerifyState.nodeClosures`,
-     * the Handler-aware computation) but does not surface it on `VerifyResult.Ok`,
-     * so the host re-derives it here. Q-067 (open-questions.md) tracks surfacing it.
-     * Surfacing it on `Ok` would not let this walk go away regardless: scenario S1
-     * needs the harm bound for an over-reaching submission the verifier *rejects*,
-     * and the verifier populates its closure only on a successful `Ok`. This
-     * re-derivation stays sound by the `UncoveredEffects` argument above.
+     * Q-067 resolution: the verifier now surfaces its own closure on
+     * `VerifyResult.Ok.nodeClosures` (read via [surfacedRootClosure]), and the
+     * clean-verifying scenario S3 consumes that surfaced value instead of walking.
+     * This walk is retained for scenario S1, whose whole point is the harm bound of
+     * an over-reaching submission the verifier *rejects* (`ProjectionMismatch`).
+     * The verifier's closure cannot cover that case: `VerifyState.nodeClosures` is
+     * populated only as a side-effect of full type inference (the Application
+     * closure adds the *resolved* callee's effect row; the Handler subtraction
+     * depends on resolved signatures), and `verify` aborts before recording the
+     * root's closure on the first hard error. A rejected program therefore has no
+     * verifier closure at all, sound or otherwise — so for the pre-admission case
+     * the host re-derives this sound structural upper bound, which the
+     * `UncoveredEffects` argument above guarantees. Being Handler-unaware, the walk
+     * is a *looser* bound than the surfaced value where a Handler subtracts an
+     * effect; that is acceptable for an over-approximation and is exactly why S3
+     * prefers the surfaced closure when the artifact verifies.
      */
     fun declaredEffectClosure(program: ProgramImage): Set<String> {
         val store = program.store
@@ -159,6 +169,22 @@ object ContainmentDemo {
             beyondGrant = reachable - grantedCategories,
         )
     }
+
+    /**
+     * Q-067: the verifier-computed effect closure of [program]'s root, read
+     * directly from [verify] (`VerifyResult.Ok.rootClosure`) and rendered to
+     * EffectCategory names. This is `closure(g)` exactly as the verifier
+     * enforced it — Handler-aware (a Handler subtracts the category it
+     * intercepts), unlike the Handler-unaware [declaredEffectClosure] walk. The
+     * host reads this on the success path rather than re-deriving; it is only
+     * available because [verify] succeeded (`nodeClosures` is populated only on a
+     * successful `Ok`), which is why the rejected-artifact scenario S1 still uses
+     * the walk.
+     */
+    fun surfacedRootClosure(program: ProgramImage, verify: VerifyResult.Ok): Set<String> =
+        verify.rootClosure(program.root)
+            .mapNotNull { (program.store.getOrNull(it) as? Node.EffectCategory)?.categoryName }
+            .toSortedSet()
 
     // ------------------------------------------------------------------
     // Rendering — the DenialReport as the host surfaces it.
@@ -399,12 +425,23 @@ object ContainmentDemo {
     /**
      * Result of S3. The denial tenant terminated with a structured
      * [DenialReport]; the co-tenant submitted in the same batch completed.
+     *
+     * [surfacedClosure] / [walkedClosure] are the Q-067 success-path
+     * demonstration: this program verifies clean (its Q-039 projection holds), so
+     * the host reads the verifier's own effect closure off `VerifyResult.Ok`
+     * rather than re-deriving it. The two agree here (the program has no Handler),
+     * so the surfaced value is exactly what the structural walk would compute —
+     * but it came for free from the verifier.
      */
     data class S3Result(
         val denialReport: DenialReport?,
         val denialError: InterpretError?,
         val coTenantValue: Value?,
-    )
+        val surfacedClosure: Set<String>,
+        val walkedClosure: Set<String>,
+    ) {
+        val surfacedEqualsWalk: Boolean get() = surfacedClosure == walkedClosure
+    }
 
     /**
      * Submit two programs in one batch: a writer that verifies clean but whose
@@ -431,6 +468,13 @@ object ContainmentDemo {
         )
         val host = StrandRuntime(HostPolicy.OPEN)
 
+        // Q-067 success path: this program verifies clean, so the host reads the
+        // verifier's own effect closure off the Ok result instead of re-deriving
+        // it. The structural walk is computed alongside only to show they agree.
+        val verify = host.verify(denialImg) as VerifyResult.Ok
+        val surfaced = surfacedRootClosure(denialImg, verify)
+        val walked = declaredEffectClosure(denialImg)
+
         val denialOutcome = runCatching { host.run(denialImg, grant) }
         val ex = denialOutcome.exceptionOrNull() as? InterpretException
         val error = ex?.error
@@ -445,7 +489,7 @@ object ContainmentDemo {
         val coOutcome = StrandRuntime(HostPolicy.OPEN).run(coImg)
         val coValue = (coOutcome as? RunOutcome.Ok)?.value
 
-        return S3Result(report, error, coValue)
+        return S3Result(report, error, coValue, surfaced, walked)
     }
 
     // ==================================================================
@@ -560,6 +604,11 @@ object ContainmentDemo {
         line("  Submission: runtime-denial-write (verifies clean; writes")
         line("              /tenant/secret.log). Host grants Filesystem.Write")
         line("              refined to /tenant/out.log -- a DIFFERENT path.")
+        line("  This program verifies clean, so the host reads the verifier's own")
+        line("  effect closure (Q-067) off the Ok result instead of re-deriving it:")
+        line("    surfaced closure (Ok)     = ${s3.surfacedClosure}")
+        line("    host structural walk      = ${s3.walkedClosure}")
+        line("    surfaced == walk          = ${s3.surfacedEqualsWalk}")
         if (s3.denialReport != null) {
             line("  Host decision: DENIED at runtime (${s3.denialError?.let { it::class.simpleName }})")
             line("    DenialReport: ${renderDenial(s3.denialReport)}")

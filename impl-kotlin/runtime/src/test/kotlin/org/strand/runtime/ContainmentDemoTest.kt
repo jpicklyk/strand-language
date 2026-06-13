@@ -124,6 +124,20 @@ class ContainmentDemoTest {
 
         // The co-tenant submitted in the same batch is unaffected.
         assertEquals(Value.IntV(42), s3.coTenantValue, "the benign co-tenant must complete to 42")
+
+        // Q-067 success path: this clean-verifying program lets the host read the
+        // verifier's own effect closure off VerifyResult.Ok rather than walking.
+        // The program reaches Filesystem.Write and has no Handler, so the surfaced
+        // closure is exactly {Filesystem.Write} and equals the structural walk.
+        assertEquals(
+            setOf("Filesystem.Write"), s3.surfacedClosure,
+            "the surfaced root closure must be the verifier-computed {Filesystem.Write}",
+        )
+        assertTrue(
+            s3.surfacedEqualsWalk,
+            "for this Handler-free program the surfaced closure must equal the structural walk; " +
+                "surfaced=${s3.surfacedClosure} walk=${s3.walkedClosure}",
+        )
     }
 
     // ------------------------------------------------------------------
