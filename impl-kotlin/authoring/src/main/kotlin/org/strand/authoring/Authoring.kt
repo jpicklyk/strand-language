@@ -21,6 +21,17 @@ import kotlinx.serialization.json.JsonObject
 object Authoring {
 
     /**
+     * Q-061: the authoring surface a [compile] input is written in.
+     * [LAYER_A] is the compact line-oriented projection (Q-034);
+     * [FAMILIAR] is the TypeScript-shaped Layer F dialect
+     * (proposals/familiar-surface-lowering.md). Both lower to the same
+     * canonical dag-json document model and share the Elaborator +
+     * DagJsonEmitter pipeline, so a Layer F program hashes identically
+     * to its Layer A equivalent.
+     */
+    enum class Surface { LAYER_A, FAMILIAR }
+
+    /**
      * Result of [compile]: the canonical dag-json text plus the diagnostic
      * side-channels a driver (the `strand author` CLI) uses to map
      * downstream verifier/interpreter errors back to what the agent wrote.
@@ -61,8 +72,25 @@ object Authoring {
      * annotation an inference case could not fill is frequently the
      * root cause of the emit failure).
      */
-    fun compile(text: String): CompileResult {
-        val result = Elaborator.elaborateWithGaps(parse(text))
+    fun compile(text: String): CompileResult = compile(text, Surface.LAYER_A)
+
+    /**
+     * Compile [text] written in [surface] into canonical dag-json plus
+     * the per-node source-line map (see [CompileResult]). The Layer F
+     * path parses the familiar dialect and lowers it to the same
+     * [LayerADocument] model the Layer A parser produces; both then run
+     * the unconditional Elaborator (prelude resolution, implicit dotted
+     * builtins, `@auto` effect synthesis, the 11 inference cases) and
+     * the DagJsonEmitter.
+     */
+    fun compile(text: String, surface: Surface): CompileResult {
+        val document = when (surface) {
+            Surface.LAYER_A -> parse(text)
+            Surface.FAMILIAR -> org.strand.authoring.familiar.FamiliarLowerer(
+                org.strand.authoring.familiar.FamiliarParser.parse(text),
+            ).lower()
+        }
+        val result = Elaborator.elaborateWithGaps(document)
         val elaborated = result.document
         val sourceLines = elaborated.nodes
             .filter { it.line > 0 }

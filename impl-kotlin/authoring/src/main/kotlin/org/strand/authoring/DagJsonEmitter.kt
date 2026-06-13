@@ -395,6 +395,32 @@ object DagJsonEmitter {
         // N-047 error recovery (Q-048) — RES Result-sum type sugar.
         if (node.code == "RES") return expandResSugar(node, errors, ctx)
 
+        // Q-061 Layer F — cross-store NodeRef by content hash. An NRF
+        // whose single argument is a STRING of the form "b3:<66 hex>"
+        // emits the Q-043 `targetHash` ingest form instead of a local
+        // `target` reference. Used by the familiar dialect's
+        // `use "b3:..." as name` hash imports; also legal in Layer A
+        // text (the generic parser already tokenizes the quoted form).
+        if (node.code == "NRF") {
+            val arg = node.args.firstOrNull()
+            if (arg is Arg.Str) {
+                val hex = arg.value.removePrefix("b3:")
+                if (hex.length != 66 || hex.any { it !in "0123456789abcdef" }) {
+                    errors += AuthoringError.ArgShapeMismatch(
+                        line = node.line, code = node.code, position = 0,
+                        expectedKind = "a node reference or \"b3:\" + 66 lowercase hex chars " +
+                            "(the BLAKE3-256 multihash)",
+                        actualKind = "string \"${arg.value.take(40)}\"",
+                    )
+                    return null
+                }
+                return buildJsonObject {
+                    put("type", "NodeRef")
+                    put("targetHash", hex)
+                }
+            }
+        }
+
         val fields = mutableMapOf<String, JsonElement>()
         fields["type"] = JsonPrimitive(schema.jsonType)
 
