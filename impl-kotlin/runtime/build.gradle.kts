@@ -12,6 +12,11 @@ dependencies {
     // same :interpreter -> :verifier -> :core spine as :runtime, so the edge is
     // acyclic (the CLI already depends on both).
     api(project(":schema"))
+    // Q-058: run-by-hash reads a ProgramImage from the on-disk PersistentStore
+    // and admits it through the federation path, both of which live in :hashing.
+    // :hashing depends only on :core, so the :runtime -> :hashing edge is acyclic
+    // (the CLI and the :corpus test sourceset already depend on :hashing).
+    api(project(":hashing"))
     // kotlinx-serialization-json is already brought in transitively via :core,
     // but the runtime's EventCodec uses the parser directly — declare it as a
     // compile-time dependency rather than relying on transitive resolution.
@@ -25,7 +30,6 @@ dependencies {
     // Layer 6 step 2: per-machine coroutine actors over Channel<Value>, plus
     // select-based multi-stream merge per Q-009's nondeterministic-merge default.
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    testImplementation(project(":hashing"))
     // Virtual-time test dispatcher for actor-loop assertions without wall-clock dependence.
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }

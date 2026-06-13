@@ -244,6 +244,107 @@ class StrandRuntime(private val policy: HostPolicy) {
     fun readSnapshot(path: java.nio.file.Path): Snapshot =
         SnapshotCodec.decode(java.nio.file.Files.readString(path))
 
+    // ------------------------------------------------------------------
+    // Q-058: persistent store — admit-and-verify-once and run-by-hash.
+    // ------------------------------------------------------------------
+
+    /**
+     * Q-058: read a [ProgramImage] from [store] by [rootHash], or null when the
+     * store does not hold the root. The subgraph is admitted into a fresh
+     * [org.strand.core.NodeStore] through the existing Q-043 federation
+     * admission ([org.strand.hashing.FederatedProgram.fetchAndAdmit]) over a
+     * [org.strand.hashing.DiskStoreResolver]; the admitted root's Merkle re-hash
+     * must equal [rootHash], so a corrupted or tampered store entry fails closed
+     * (a [org.strand.hashing.NodeResolverIntegrityViolation] propagates).
+     *
+     * The returned image carries the [org.strand.hashing.DiskStoreResolver] as
+     * its `resolveTarget`, so any cross-store NodeRef inside the program also
+     * dereferences against the same store. This is the run-by-hash entry point:
+     * the resulting image runs through [run] / [runMachine] / [runGroup]
+     * identically to one built from a file path — it never re-ingests or
+     * re-hashes the authored JSON.
+     */
+    fun loadImageFromStore(
+        store: org.strand.hashing.PersistentStore,
+        rootHash: Hash,
+    ): ProgramImage? {
+        if (!store.hasNode(rootHash)) return null
+        val resolver = org.strand.hashing.DiskStoreResolver(store)
+        val federated = org.strand.hashing.FederatedProgram(
+            store = org.strand.core.NodeStore(),
+            root = NodeId(-1),
+            nodeIdToHash = HashMap(),
+            hashToNodeId = HashMap(),
+            resolver = resolver,
+        )
+        val localRoot = federated.fetchAndAdmit(rootHash) ?: return null
+        return ProgramImage(
+            store = federated.store,
+            root = localRoot,
+            hashToNodeId = federated.hashToNodeId,
+            resolveTarget = federated::fetchAndAdmit,
+        )
+    }
+
+    /**
+     * Q-058: admit-and-verify-once. Write every reachable hashable node of
+     * [finalized] to [store] (dedup: a node already on disk is a no-op) and
+     * record the verify verdict keyed by the program's root hash. The first
+     * ingest is the one verify — admit-once means verification happened once and
+     * was recorded, never that it is skipped on first admission. [verify] is the
+     * verdict a prior [StrandRuntime.verify] produced for this program;
+     * [nodeIdToHash] is `finalized`'s forward map (used to key the verdict's
+     * per-node types by node hash). Returns the number of newly-written node
+     * records.
+     */
+    fun ingestToStore(
+        store: org.strand.hashing.PersistentStore,
+        finalized: org.strand.hashing.FinalizedProgram,
+        verify: VerifyResult,
+        nodeIdToHash: Map<NodeId, Hash>,
+    ): Int {
+        val written = store.writeProgram(finalized)
+        val rootHash = nodeIdToHash.getValue(finalized.root)
+        store.writeVerdict(rootHash, storedVerdictOf(verify, nodeIdToHash))
+        return written
+    }
+
+    /**
+     * Q-058: the cached verdict for [rootHash], or null when absent (or recorded
+     * under a different epoch — see [org.strand.hashing.PersistentStore.readVerdict]).
+     * Only consulted when the store also holds the node record for [rootHash];
+     * the caller guards on the image being loadable. Reusing this verdict skips
+     * the re-verify entirely on the decision path (Ok-with-rootType/warnings, or
+     * the recorded failure).
+     */
+    fun cachedVerdict(
+        store: org.strand.hashing.PersistentStore,
+        rootHash: Hash,
+    ): org.strand.hashing.StoredVerdict? =
+        if (store.hasNode(rootHash)) store.readVerdict(rootHash) else null
+
+    private fun storedVerdictOf(
+        verify: VerifyResult,
+        nodeIdToHash: Map<NodeId, Hash>,
+    ): org.strand.hashing.StoredVerdict = when (verify) {
+        is VerifyResult.Failed ->
+            org.strand.hashing.StoredVerdict.Failed(verify.errors.map { it.toString() })
+        is VerifyResult.Ok -> {
+            // Key the per-node types by node hash (stable across runs), keeping
+            // only nodes that have a standalone hash (bound nodes are absent
+            // from nodeIdToHash and carry no independently-meaningful type key).
+            val byHash = LinkedHashMap<String, String>()
+            for ((nid, t) in verify.nodeTypes) {
+                nodeIdToHash[nid]?.let { h -> byHash[h.toString()] = t.toString() }
+            }
+            org.strand.hashing.StoredVerdict.Ok(
+                rootType = verify.rootType.toString(),
+                nodeTypesByHash = byHash,
+                warnings = verify.warnings.map { it.toString() },
+            )
+        }
+    }
+
     private fun checkSchema(program: ProgramImage, verify: VerifyResult.Ok): SchemaCheckResult =
         SchemaChecker(
             program.store,
