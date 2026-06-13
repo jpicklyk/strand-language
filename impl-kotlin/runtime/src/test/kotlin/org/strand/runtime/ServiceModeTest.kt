@@ -13,7 +13,6 @@ import org.strand.core.EvaluationLimits
 import org.strand.core.JsonIngest
 import org.strand.core.Node
 import org.strand.hashing.Hasher
-import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.HostPolicy
 import org.strand.interpreter.Value
@@ -187,42 +186,36 @@ class ServiceModeTest {
         val inId = machineNode.inputStreams.single()
         val outId = machineNode.outputStreams.single()
 
-        // serveGroup installs the policy (without restoring, since the service
-        // is async); scope the restore around the suspend body manually here
-        // (the CLI uses withGroupInstalled + runBlocking, but a nested
-        // runBlocking deadlocks a TestScope).
-        val priorSingletons = Builtins.snapshot()
-        try {
-            val svc = rt.serveGroup(
-                program = image,
-                group = group,
-                scope = this,
-                inputStreamIds = mapOf("in" to inId),
-                outputStreamIds = mapOf("out" to outId),
-            )
+        // Q-054 follow-up: the policy now flows into the spawned actors as a
+        // HostContext value (serveGroup installs no singleton), so no
+        // save/restore guard is needed around the suspend body.
+        val svc = rt.serveGroup(
+            program = image,
+            group = group,
+            scope = this,
+            inputStreamIds = mapOf("in" to inId),
+            outputStreamIds = mapOf("out" to outId),
+        )
 
-            val out = svc.outputs("out")
-            val drained = mutableListOf<Value>()
-            val drainer = launch { for (v in out) drained.add(v) }
+        val out = svc.outputs("out")
+        val drained = mutableListOf<Value>()
+        val drainer = launch { for (v in out) drained.add(v) }
 
-            // Send an event, advance virtual time WELL past the 1ms lifetime
-            // wall-clock, send another. The service stays alive across the gap.
-            svc.send("in", Value.IntV(10L))
-            delay(60_000)  // 60 virtual seconds of idleness
-            svc.send("in", Value.IntV(5L))
+        // Send an event, advance virtual time WELL past the 1ms lifetime
+        // wall-clock, send another. The service stays alive across the gap.
+        svc.send("in", Value.IntV(10L))
+        delay(60_000)  // 60 virtual seconds of idleness
+        svc.send("in", Value.IntV(5L))
 
-            // Graceful stop: closes inputs and awaits natural halt.
-            svc.stop()
-            drainer.join()
+        // Graceful stop: closes inputs and awaits natural halt.
+        svc.stop()
+        drainer.join()
 
-            // Both events processed despite the idle gap and the tiny lifetime
-            // wall-clock; the accumulated state is 10 + 5 = 15.
-            assertEquals(listOf(Value.IntV(10L), Value.IntV(15L)), drained)
-            assertEquals(Value.IntV(15L), svc.instances.values.single().currentState)
-            assertFalse(svc.denials().isNotEmpty())
-        } finally {
-            Builtins.restore(priorSingletons)
-        }
+        // Both events processed despite the idle gap and the tiny lifetime
+        // wall-clock; the accumulated state is 10 + 5 = 15.
+        assertEquals(listOf(Value.IntV(10L), Value.IntV(15L)), drained)
+        assertEquals(Value.IntV(15L), svc.instances.values.single().currentState)
+        assertFalse(svc.denials().isNotEmpty())
     }
 
     @Test
@@ -232,20 +225,15 @@ class ServiceModeTest {
         val image = ProgramImage(store, machineId, h2n)
         val group = MachineGroup(store = store, hashToNodeId = h2n, machines = listOf(machineId))
         val machineNode = store.get(machineId) as Node.StateMachine
-        val priorSingletons = Builtins.snapshot()
-        try {
-            val svc = rt.serveGroup(
-                program = image, group = group, scope = this,
-                inputStreamIds = mapOf("in" to machineNode.inputStreams.single()),
-                outputStreamIds = mapOf("out" to machineNode.outputStreams.single()),
-            )
-            // outputs(...) is non-suspend, so the name-resolution guard (shared
-            // with send's guard) is exercised without a runBlocking nesting.
-            assertThrows(IllegalArgumentException::class.java) { svc.outputs("nope") }
-            svc.stopNow()
-        } finally {
-            Builtins.restore(priorSingletons)
-        }
+        val svc = rt.serveGroup(
+            program = image, group = group, scope = this,
+            inputStreamIds = mapOf("in" to machineNode.inputStreams.single()),
+            outputStreamIds = mapOf("out" to machineNode.outputStreams.single()),
+        )
+        // outputs(...) is non-suspend, so the name-resolution guard (shared
+        // with send's guard) is exercised without a runBlocking nesting.
+        assertThrows(IllegalArgumentException::class.java) { svc.outputs("nope") }
+        svc.stopNow()
     }
 
     companion object {

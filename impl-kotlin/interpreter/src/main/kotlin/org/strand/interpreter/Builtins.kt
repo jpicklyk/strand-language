@@ -4360,104 +4360,17 @@ object Builtins {
      */
     const val FIXED_REPLAY_TIMESTAMP: Long = 1_780_000_000_000L
 
-    /**
-     * Q-054: an immutable capture of every host-routed `@Volatile` field on
-     * this object — the fields a builtin lambda reads by bare name during a
-     * run. [snapshot] captures the current values, [install] sets a
-     * [org.strand.interpreter.HostPolicy]'s fields plus the per-program
-     * [verifierNodeTypes], and [restore] writes a snapshot back. The
-     * [org.strand.runtime.StrandRuntime] facade wraps each run in
-     * snapshot → install → run → restore so the install/restore discipline
-     * lives in exactly one place rather than scattered across CLI
-     * subcommands (it subsumes the CLI's former `withProgramEvaluationContext`).
-     *
-     * The set of fields captured here is the authoritative definition of
-     * "what must be saved and restored around a run"; keeping it next to the
-     * fields themselves means a future routed field cannot drift out of sync
-     * with the install/restore protocol.
-     *
-     * The `CredentialScrubber` registry is deliberately NOT part of this
-     * snapshot: it is repopulated as a side effect of
-     * [CredentialProvider.resolve] per run. Snapshotting it is part of the
-     * documented Q-054 follow-up (full singleton removal), not this slice.
-     */
-    data class Snapshot(
-        val sandboxPolicy: SandboxPolicy,
-        val clock: Clock,
-        val random: java.util.Random,
-        val credentialProvider: CredentialProvider,
-        val nameResolver: NameResolver,
-        val llmHttpClient: LlmHttpClient,
-        val vectorHttpTransport: VectorHttpTransport,
-        val logSink: LogSink,
-        val osEnv: OsEnv,
-        val exitHandler: ExitHandler,
-        val toolLoopLimit: Int,
-        val streamReceiveTimeoutMillis: Long,
-        val verifierNodeTypes: Map<org.strand.core.NodeId, org.strand.verifier.TypeExpr>?,
-    )
-
-    /** Q-054: capture the current values of every host-routed singleton. */
-    fun snapshot(): Snapshot = Snapshot(
-        sandboxPolicy = sandboxPolicy,
-        clock = clock,
-        random = random,
-        credentialProvider = credentialProvider,
-        nameResolver = nameResolver,
-        llmHttpClient = llmHttpClient,
-        vectorHttpTransport = vectorHttpTransport,
-        logSink = logSink,
-        osEnv = osEnv,
-        exitHandler = exitHandler,
-        toolLoopLimit = toolLoopLimit,
-        streamReceiveTimeoutMillis = streamReceiveTimeoutMillis,
-        verifierNodeTypes = verifierNodeTypes,
-    )
-
-    /**
-     * Q-054: install [policy]'s host-routed fields onto the singletons, plus
-     * the per-program [verifierNodeTypes] (the verifier's `nodeTypes` map the
-     * N-044/N-045 LLM schema-projection path reads — null when none is
-     * available, which degrades those projections to empty `{}` schemas).
-     * The per-read streaming-receive ceiling is taken from
-     * [HostPolicy.limits] (`EvaluationLimits.streamReceiveTimeoutMillis`),
-     * the single source of truth.
-     */
-    fun install(
-        policy: HostPolicy,
-        verifierNodeTypes: Map<org.strand.core.NodeId, org.strand.verifier.TypeExpr>?,
-    ) {
-        sandboxPolicy = policy.sandbox
-        clock = policy.clock
-        random = policy.random
-        credentialProvider = policy.credentialProvider
-        nameResolver = policy.nameResolver
-        llmHttpClient = policy.llmHttpClient
-        vectorHttpTransport = policy.vectorHttpTransport
-        logSink = policy.logSink
-        osEnv = policy.osEnv
-        exitHandler = policy.exitHandler
-        toolLoopLimit = policy.toolLoopLimit
-        streamReceiveTimeoutMillis = policy.limits.streamReceiveTimeoutMillis
-        this.verifierNodeTypes = verifierNodeTypes
-    }
-
-    /** Q-054: write a [Snapshot] back onto the singletons (the `finally` half of a run). */
-    fun restore(s: Snapshot) {
-        sandboxPolicy = s.sandboxPolicy
-        clock = s.clock
-        random = s.random
-        credentialProvider = s.credentialProvider
-        nameResolver = s.nameResolver
-        llmHttpClient = s.llmHttpClient
-        vectorHttpTransport = s.vectorHttpTransport
-        logSink = s.logSink
-        osEnv = s.osEnv
-        exitHandler = s.exitHandler
-        toolLoopLimit = s.toolLoopLimit
-        streamReceiveTimeoutMillis = s.streamReceiveTimeoutMillis
-        verifierNodeTypes = s.verifierNodeTypes
-    }
+    // Q-054 follow-up (concurrent isolation, completed): the
+    // `Snapshot`/`snapshot()`/`install()`/`restore()` protocol that the
+    // facade used to save/install/restore these singletons around each run is
+    // removed. Policy now flows through evaluation as an explicit
+    // [HostContext] value (derived via [HostContext.fromPolicy]); the
+    // `@Volatile` fields above are retained only as the single-tenant default
+    // source that [HostContext.processDefault] reads and as the test-injection
+    // seam (a test sets `Builtins.clock = FixedClock(...)` before constructing
+    // an interpreter, which captures it into its process-default context).
+    // They are no longer on the isolation-critical path: two runtimes with
+    // different policies run concurrently without touching them.
 }
 
 /**

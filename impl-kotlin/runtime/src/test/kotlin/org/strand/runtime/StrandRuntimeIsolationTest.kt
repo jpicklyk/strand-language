@@ -140,47 +140,46 @@ class StrandRuntimeIsolationTest {
         )
     }
 
-    // --- Scenario 5: singleton restoration ------------------------------------
+    // --- Scenario 5: the facade does not touch the host-routed singletons -----
+    // Q-054 follow-up: the facade no longer installs/restores. Policy flows as
+    // a HostContext value, so a SECURE run must leave the process-global
+    // Builtins.sandboxPolicy (an OPEN default in the test JVM) completely
+    // unchanged — there is nothing to restore because nothing was installed.
 
     @Test
-    fun `run restores every host-routed singleton it touched`() {
+    fun `run never mutates the process-global sandbox singleton`() {
         val prog = image(SUM_TO_TEN)
-        val before = Builtins.snapshot()
-        val rt = StrandRuntime(HostPolicy.SECURE)  // installs SECURE_DEFAULT sandbox
+        val before = Builtins.sandboxPolicy
+        val rt = StrandRuntime(HostPolicy.SECURE)  // SECURE_DEFAULT sandbox in the context
         rt.run(prog)
-        val after = Builtins.snapshot()
-        assertEquals(before, after, "post-run snapshot must equal pre-run snapshot")
-        // And the sandbox specifically returned to its pre-run value.
-        assertSame(before.sandboxPolicy, Builtins.sandboxPolicy)
+        assertSame(before, Builtins.sandboxPolicy, "the facade must not install the policy onto the singleton")
     }
 
     @Test
-    fun `run restores singletons even when evaluation throws`() {
+    fun `run leaves the sandbox singleton untouched even when evaluation throws`() {
         val prog = image(SUM_TO_TEN)
-        val before = Builtins.snapshot()
+        val before = Builtins.sandboxPolicy
         val tight = StrandRuntime(HostPolicy.SECURE.copy(limits = EvaluationLimits.DEFAULTS.copy(maxSteps = 5L)))
         assertThrows(InterpretException::class.java) { tight.run(prog) }
-        val after = Builtins.snapshot()
-        assertEquals(before, after, "snapshot must be restored on the finally path after a thrown evaluation")
+        assertSame(before, Builtins.sandboxPolicy)
     }
 
-    // --- Scenario 9: verify does no install -----------------------------------
+    // --- Scenario 9: verify touches no singleton ------------------------------
 
     @Test
     fun `verify leaves the host-routed singletons untouched`() {
         val prog = image(SUM_TO_TEN)
-        val before = Builtins.snapshot()
+        val before = Builtins.sandboxPolicy
         val rt = StrandRuntime(HostPolicy.SECURE)
         val result = rt.verify(prog)
         assertTrue(result is org.strand.verifier.VerifyResult.Ok)
-        val after = Builtins.snapshot()
-        assertEquals(before, after, "verify must not install any policy")
+        assertSame(before, Builtins.sandboxPolicy, "verify must not install any policy")
     }
 
     // --- Scenario 7: credential provider per runtime --------------------------
 
     @Test
-    fun `each runtime installs its own credential provider for the duration of a run`() {
+    fun `each runtime carries its own credential provider without touching the singleton`() {
         val prog = image(SUM_TO_TEN)
         // A sentinel provider distinguishable from the default.
         val sentinel = org.strand.interpreter.EnvCredentialProvider
@@ -189,11 +188,11 @@ class StrandRuntimeIsolationTest {
         }
         val rtCustom = StrandRuntime(HostPolicy.OPEN.copy(credentialProvider = custom))
 
-        val before = Builtins.snapshot()
-        // During the run the custom provider is installed; after, it is restored.
+        val before = Builtins.credentialProvider
+        // The runtime threads its own provider into the context; the
+        // process-global singleton is never installed or mutated.
         rtCustom.run(prog)
-        val after = Builtins.snapshot()
-        assertSame(before.credentialProvider, after.credentialProvider)
+        assertSame(before, Builtins.credentialProvider, "the facade must not install the credential provider")
         // The runtime carried its own provider, distinct from the default.
         assertNotEquals(sentinel, custom)
     }

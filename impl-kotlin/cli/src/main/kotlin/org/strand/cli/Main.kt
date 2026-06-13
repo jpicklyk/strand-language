@@ -857,11 +857,12 @@ private fun runGroup(args: Array<String>) {
     val nameByNodeId: Map<NodeId, String> = ingestNameMap.entries
         .associate { (name, id) -> id to name }
 
-    // Q-054: the facade scopes the host-context install/restore around the
-    // entire group lifecycle (the actors evaluate asynchronously, so the
-    // install must outlive `runGroup`'s return until the group halts). The CLI
-    // builds the policy + program image and drives the group through the
-    // facade's runGroup.
+    // Q-054 follow-up: the policy flows into the group's actors as a
+    // HostContext value (derived inside runGroup from the runtime's policy and
+    // the verifier node-types), so there is no longer a singleton install to
+    // scope around the asynchronous group lifecycle. `withGroupInstalled` is a
+    // pass-through retained for source compatibility. The CLI builds the policy
+    // + program image and drives the group through the facade's runGroup.
     val runtime = StrandRuntime(hostPolicyFor(sandboxPolicy, limits))
     val image = programImageOf(store, root, hashToNodeId, resolveCb)
     try {
