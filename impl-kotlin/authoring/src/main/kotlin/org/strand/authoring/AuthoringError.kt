@@ -51,6 +51,22 @@ sealed class AuthoringError {
         override val detail: String,
     ) : AuthoringError()
 
+    /**
+     * Q-061 Layer F: a construct the familiar dialect deliberately lacks
+     * (mutation, loops, classes, `any`, exceptions, arbitrary imports —
+     * proposal § 3). The [hint] names the dialect construct to use
+     * instead, so an agent writing real-TypeScript habits gets a
+     * corrective rather than silent acceptance or a bare syntax error.
+     */
+    data class DialectViolation(
+        override val line: Int,
+        val construct: String,
+        val hint: String,
+    ) : AuthoringError() {
+        override val detail: String
+            get() = "the familiar dialect has no $construct — $hint"
+    }
+
     data class HeaderError(
         override val line: Int,
         override val detail: String,
