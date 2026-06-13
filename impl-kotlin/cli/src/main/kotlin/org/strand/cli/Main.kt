@@ -283,6 +283,159 @@ private fun programImageOf(
 ): ProgramImage = ProgramImage(store, root, hashToNodeId, resolveTarget)
 
 /**
+ * Q-058: pull a single `--store <dir>` out of [flags], returning the path (or
+ * null for "no store, file-path mode") plus the residual flags. An absent flag
+ * falls back to the `STRAND_STORE` env var only when a store reference is
+ * actually used (the resolver consults it), so a plain `strand run app.json`
+ * with no flag and no env stays file-path mode.
+ */
+private fun extractStore(flags: List<String>): Pair<String?, List<String>> {
+    var path: String? = null
+    val rest = mutableListOf<String>()
+    var i = 0
+    while (i < flags.size) {
+        if (flags[i] == "--store") {
+            path = flags.getOrNull(i + 1) ?: run {
+                System.err.println("--store requires a directory argument")
+                exitProcess(2)
+            }
+            i += 2
+        } else {
+            rest += flags[i]
+            i++
+        }
+    }
+    return path to rest
+}
+
+/**
+ * Q-058: the effective store directory for a subcommand — the explicit
+ * `--store <dir>` flag if given, else the `STRAND_STORE` environment variable
+ * if set, else null (file-path mode, no store). A null result means a plain
+ * file-path invocation: the positional is always a file.
+ */
+private fun effectiveStoreDir(flagDir: String?): String? {
+    if (flagDir != null) return flagDir
+    val env = System.getenv("STRAND_STORE")
+    return if (env.isNullOrBlank()) null else env
+}
+
+/**
+ * Q-058: a program resolved for a subcommand — either ingested from a file (the
+ * pre-Q-058 path, [ingest] non-null) or loaded by root hash from the persistent
+ * store ([ingest] null, [cachedVerdict] possibly present). The store / root /
+ * hashToNodeId / resolveCb fields are what the verifier, schema-checker, and
+ * facade consume; [schemaProgram] is the FinalizedProgram view the SchemaChecker
+ * and grant-all need.
+ */
+private class ResolvedProgram(
+    val store: org.strand.core.NodeStore,
+    val root: NodeId,
+    val hashToNodeId: Map<Hash, NodeId>,
+    val resolveCb: ((Hash) -> NodeId?)?,
+    val nameMap: Map<String, NodeId>,
+    val schemaProgram: FinalizedProgram,
+    val cachedVerdict: org.strand.hashing.StoredVerdict?,
+    val rootHash: Hash?,
+)
+
+/**
+ * Q-058: resolve a subcommand's positional argument to a [ResolvedProgram].
+ *
+ * When [storeDir] is null, [positional] is a file path (pre-Q-058 behavior,
+ * preserved bit-for-bit): ingest + finalize + optional `--peer-store`
+ * federation. When [storeDir] is set:
+ *  - if [positional] names an existing file, it is still a file path (so an
+ *    invocation that passes both `--store` and a file keeps working);
+ *  - otherwise [positional] is a store reference — a root-hash hex, or a
+ *    registry name that resolves to one (Q-063 prelude defaults + the
+ *    `--registry` file underneath) — dereferenced against the local store.
+ *    A reference the store does not hold is a hard error.
+ *
+ * Run-by-hash never re-ingests or re-hashes the authored JSON; it admits the
+ * subgraph from the store (Merkle root re-hash fails closed on corruption).
+ */
+private fun resolveProgram(
+    positional: String,
+    storeDir: String?,
+    peerPaths: List<String>,
+    limits: EvaluationLimits,
+    noCache: Boolean,
+    registryFile: java.io.File,
+): ResolvedProgram {
+    val useStore = storeDir != null && !File(positional).isFile
+    if (!useStore) {
+        // ----- File-path mode (unchanged) -----
+        val text = File(positional).readText()
+        val (ingest, finalized) = try {
+            loadFinalizedWithIngest(text, limits)
+        } catch (e: IngestError) {
+            System.err.println("ingest failed: ${e.message}")
+            exitProcess(1)
+        }
+        val app = federateWithPeers(finalized, peerPaths, limits, noCache)
+        val store = app?.store ?: finalized.store
+        val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
+        val root = app?.root ?: finalized.root
+        val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
+        val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
+        return ResolvedProgram(store, root, hashToNodeId, resolveCb, ingest.nameMap, schemaProgram, cachedVerdict = null, rootHash = null)
+    }
+
+    // ----- Store-by-hash mode -----
+    val dir = java.nio.file.Paths.get(storeDir!!)
+    val persistent = try {
+        org.strand.hashing.PersistentStore.open(dir)
+    } catch (e: RuntimeException) {
+        System.err.println("store open failed ($dir): ${e.message}")
+        exitProcess(1)
+    }
+    val rootHash = resolveStoreReference(positional, registryFile)
+    if (rootHash == null) {
+        System.err.println(
+            "store: '$positional' is neither an existing file, a valid root-hash hex, nor a known registry name"
+        )
+        exitProcess(1)
+    }
+    val runtime = StrandRuntime(HostPolicy.OPEN.copy(limits = limits))
+    val image = try {
+        runtime.loadImageFromStore(persistent, rootHash)
+    } catch (e: org.strand.hashing.NodeResolverIntegrityViolation) {
+        System.err.println("store integrity violation reading $rootHash: ${e.message}")
+        exitProcess(1)
+    }
+    if (image == null) {
+        System.err.println("store: no program rooted at $rootHash held in $dir (ingest it with `strand store ingest`)")
+        exitProcess(1)
+    }
+    val cached = runtime.cachedVerdict(persistent, rootHash)
+    val schemaProgram = FinalizedProgram(image.store, image.root, emptyMap(), image.hashToNodeId)
+    return ResolvedProgram(
+        store = image.store,
+        root = image.root,
+        hashToNodeId = image.hashToNodeId,
+        resolveCb = image.resolveTarget,
+        nameMap = emptyMap(),
+        schemaProgram = schemaProgram,
+        cachedVerdict = cached,
+        rootHash = rootHash,
+    )
+}
+
+/**
+ * Resolve a store reference to a root hash: a 66-hex-char multihash parses
+ * directly; otherwise it is looked up as a registry name (the Q-063 prelude
+ * defaults beneath the `--registry` file's entries). Returns null when it is
+ * neither.
+ */
+private fun resolveStoreReference(reference: String, registryFile: java.io.File): Hash? {
+    // A literal hash hex.
+    runCatching { Hash.fromHex(reference) }.getOrNull()?.let { return it }
+    // A registry name (prelude defaults + file).
+    return effectiveRegistry(registryFile).resolve(reference)
+}
+
+/**
  * Build a permissive [CapabilitySet] that grants wildcard patterns for every
  * EffectCategory NodeId reachable in the verified store. Used by the
  * `--grant-all` CLI flag so capability-requiring corpus programs can run
@@ -330,6 +483,7 @@ fun main(args: Array<String>) {
         "author" -> runAuthor(args)
         "translate" -> runTranslate(args)
         "registry" -> runRegistry(args)
+        "store" -> runStore(args)
         "grammar" -> runGrammar(args)
         else -> {
             usage()
@@ -360,7 +514,9 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         exitProcess(2)
     }
     val path = args[1]
-    val (peerPaths, afterPeers) = extractPeerStores(args.drop(2))
+    val (storeDir, afterStore) = extractStore(args.drop(2))
+    val (registryPath, afterRegistry) = extractRegistryPath(afterStore)
+    val (peerPaths, afterPeers) = extractPeerStores(afterRegistry)
     val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
     val grantAll = "--grant-all" in remaining
     val noCache = "--no-cache" in remaining
@@ -372,29 +528,47 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
         exitProcess(2)
     }
     reportFederationFlags(peerPaths, noCache, strictIntegrity)
-    val text = File(path).readText()
-    val (ingest, finalized) = try {
-        loadFinalizedWithIngest(text, limits)
-    } catch (e: IngestError) {
-        System.err.println("ingest failed: ${e.message}")
-        exitProcess(1)
+    // Q-058: resolve the positional to a program — a file path (ingest +
+    // finalize + optional --peer-store federation) or, with --store, a root
+    // hash / registry name dereferenced against the local store.
+    val resolved = resolveProgram(
+        positional = path,
+        storeDir = effectiveStoreDir(storeDir),
+        peerPaths = peerPaths,
+        limits = limits,
+        noCache = noCache,
+        registryFile = File(registryPath ?: DEFAULT_REGISTRY_FILE),
+    )
+    val store = resolved.store
+    val hashToNodeId = resolved.hashToNodeId
+    val root = resolved.root
+    val resolveCb = resolved.resolveCb
+    val schemaProgram = resolved.schemaProgram
+    // Error rendering: map opaque #N NodeIds back to author ids (empty for
+    // store-by-hash loads, which carry no author names).
+    val annotator = NodeRefAnnotator(resolved.nameMap)
+
+    // Q-058: admit-and-verify-once. For the `verify` command on a store-by-hash
+    // load with a cached verdict, reuse the recorded verdict and skip the live
+    // verifier entirely — the recorded rootType/warnings/failure stand. `run`
+    // falls through to the live path (the facade re-derives the structured
+    // schema obligations from the admitted local store).
+    val cached = resolved.cachedVerdict
+    if (command == "verify" && cached != null) {
+        when (cached) {
+            is org.strand.hashing.StoredVerdict.Failed -> {
+                System.err.println("verification failed (cached verdict):")
+                for (e in cached.errors) System.err.println("  $e")
+                exitProcess(1)
+            }
+            is org.strand.hashing.StoredVerdict.Ok -> {
+                println("type: ${cached.rootType}")
+                for (w in cached.warnings) System.err.println("warning: $w")
+                System.err.println("note: reused cached verify verdict for ${resolved.rootHash}")
+                return
+            }
+        }
     }
-    // Error rendering: map opaque #N NodeIds in verifier/interpreter/schema
-    // output back to the author ids the agent wrote.
-    val annotator = NodeRefAnnotator(ingest.nameMap)
-    // Q-043: with --peer-store programs, federate so cross-store NodeRefs
-    // resolve through the peer chain (fetched + re-based into the shared
-    // store); without, stay single-store (no resolver callback, behaviour
-    // preserved bit-for-bit). `store` / `hashToNodeId` / `root` and the
-    // `resolveCb` are taken from the FederatedProgram when present.
-    val app = federateWithPeers(finalized, peerPaths, limits, noCache)
-    val store = app?.store ?: finalized.store
-    val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
-    val root = app?.root ?: finalized.root
-    val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
-    // SchemaChecker / grant-all view: when federated, the mutable maps carry
-    // any nodes admitted during verification.
-    val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
 
     val verifier = Verifier(store, hashToNodeId, resolveCb)
     when (val result = verifier.verify(root)) {
@@ -497,7 +671,9 @@ private fun runMachine(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val (peerPaths, afterPeers) = extractPeerStores(args.drop(4))
+    val (storeDir, afterStore) = extractStore(args.drop(4))
+    val (registryPath, afterRegistry) = extractRegistryPath(afterStore)
+    val (peerPaths, afterPeers) = extractPeerStores(afterRegistry)
     val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
     val grantAll = "--grant-all" in remaining
     val noCache = "--no-cache" in remaining
@@ -510,23 +686,14 @@ private fun runMachine(args: Array<String>) {
     }
     reportFederationFlags(peerPaths, noCache, strictIntegrity)
 
-    val programText = File(programPath).readText()
-    val (ingest, finalized) = try {
-        loadFinalizedWithIngest(programText, limits)
-    } catch (e: IngestError) {
-        System.err.println("ingest failed: ${e.message}")
-        exitProcess(1)
-    }
-    val annotator = NodeRefAnnotator(ingest.nameMap)
-    // Q-043: federate over --peer-store programs (single-store when none),
-    // threading the resolver into the verifier, SchemaChecker, and runtime so a
-    // transition function may reference a cross-store helper by targetHash.
-    val app = federateWithPeers(finalized, peerPaths, limits, noCache)
-    val store = app?.store ?: finalized.store
-    val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
-    val root = app?.root ?: finalized.root
-    val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
-    val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
+    // Q-058: file path or store-by-hash, per --store.
+    val resolved = resolveProgram(programPath, effectiveStoreDir(storeDir), peerPaths, limits, noCache, File(registryPath ?: DEFAULT_REGISTRY_FILE))
+    val store = resolved.store
+    val hashToNodeId = resolved.hashToNodeId
+    val root = resolved.root
+    val resolveCb = resolved.resolveCb
+    val schemaProgram = resolved.schemaProgram
+    val annotator = NodeRefAnnotator(resolved.nameMap)
 
     val verifier = Verifier(store, hashToNodeId, resolveCb)
     when (val result = verifier.verify(root)) {
@@ -610,7 +777,9 @@ private fun runGroup(args: Array<String>) {
     }
     val programPath = args[1]
     val eventsPath = args[3]
-    val (peerPaths, afterPeers) = extractPeerStores(args.drop(4))
+    val (storeDir, afterStore) = extractStore(args.drop(4))
+    val (registryPath, afterRegistry) = extractRegistryPath(afterStore)
+    val (peerPaths, afterPeers) = extractPeerStores(afterRegistry)
     val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
     val grantAll = "--grant-all" in remaining
     val emitMetrics = "--metrics" in remaining
@@ -624,24 +793,18 @@ private fun runGroup(args: Array<String>) {
     }
     reportFederationFlags(peerPaths, noCache, strictIntegrity)
 
-    val programText = File(programPath).readText()
-    val (ingest, finalized) = try {
-        loadFinalizedWithIngest(programText, limits)
-    } catch (e: IngestError) {
-        System.err.println("ingest failed: ${e.message}")
-        exitProcess(1)
-    }
-    // Q-043: federate over --peer-store programs (single-store when none),
-    // threading the resolver through the verifier, SchemaChecker, MachineGroup,
-    // and runtime so a machine may reference a cross-store helper by targetHash.
-    val app = federateWithPeers(finalized, peerPaths, limits, noCache)
-    val store = app?.store ?: finalized.store
-    val hashToNodeId = app?.hashToNodeId ?: finalized.hashToNodeId
-    val root = app?.root ?: finalized.root
-    val resolveCb = app?.let { fp -> fp::fetchAndAdmit }
-    val schemaProgram = app?.let { FinalizedProgram(it.store, it.root, it.nodeIdToHash, it.hashToNodeId) } ?: finalized
+    // Q-058: file path or store-by-hash, per --store. Routed events name input
+    // streams by author id; a store-by-hash group carries no author names (the
+    // nameMap is empty), so routed-event invocations require the file path.
+    val resolved = resolveProgram(programPath, effectiveStoreDir(storeDir), peerPaths, limits, noCache, File(registryPath ?: DEFAULT_REGISTRY_FILE))
+    val store = resolved.store
+    val hashToNodeId = resolved.hashToNodeId
+    val root = resolved.root
+    val resolveCb = resolved.resolveCb
+    val schemaProgram = resolved.schemaProgram
+    val ingestNameMap = resolved.nameMap
 
-    val annotator = NodeRefAnnotator(ingest.nameMap)
+    val annotator = NodeRefAnnotator(ingestNameMap)
     val verifier = Verifier(store, hashToNodeId, resolveCb)
     val verifyResult = verifier.verify(root)
     if (verifyResult is VerifyResult.Failed) {
@@ -670,11 +833,12 @@ private fun runGroup(args: Array<String>) {
     val eventsText = File(eventsPath).readText()
     val routedEvents = parseRoutedEvents(eventsText)
     val resolvedRouted = routedEvents.map { (streamName, payload) ->
-        val streamId = ingest.nameMap[streamName]
+        val streamId = ingestNameMap[streamName]
             ?: run {
                 System.err.println(
                     "group: routed event names unknown stream '$streamName'; " +
-                        "known names: ${ingest.nameMap.keys.sorted().joinToString(", ")}"
+                        "known names: ${ingestNameMap.keys.sorted().joinToString(", ")}" +
+                        if (ingestNameMap.isEmpty()) " (a store-by-hash group carries no author names; route by file path)" else ""
                 )
                 exitProcess(1)
             }
@@ -690,7 +854,7 @@ private fun runGroup(args: Array<String>) {
     )
 
     // Inverse name map for nicer output labelling (NodeId → author name).
-    val nameByNodeId: Map<NodeId, String> = ingest.nameMap.entries
+    val nameByNodeId: Map<NodeId, String> = ingestNameMap.entries
         .associate { (name, id) -> id to name }
 
     // Q-054: the facade scopes the host-context install/restore around the
@@ -1116,16 +1280,94 @@ private fun loadRegistryFile(file: File): NameRegistry {
 private fun effectiveRegistry(file: File): NameRegistry =
     NameRegistry(preludeRegistryDefaults.entries + loadRegistryFile(file).entries)
 
+/**
+ * Q-058 `strand store` subcommands. The persistent store makes content
+ * addressing operative across runs: a program ingested once is runnable by its
+ * root hash from any later invocation, with the verify verdict recorded
+ * (admit-and-verify-once) and shared subgraphs stored once (dedup).
+ *
+ *   strand store ingest <file.json> [--store <dir>]   ingest + verify, write nodes + verdict, print the root hash
+ *
+ * The default store directory is `$STRAND_STORE` if set, else `~/.strand/store`.
+ */
+private fun runStore(args: Array<String>) {
+    if (args.size < 2) {
+        System.err.println("usage: strand store ingest <file.json> [--store <dir>]")
+        exitProcess(2)
+    }
+    val (storeDir, rest) = extractStore(args.drop(2))
+    when (val sub = args[1]) {
+        "ingest" -> {
+            if (rest.size != 1) {
+                System.err.println("usage: strand store ingest <file.json> [--store <dir>]")
+                exitProcess(2)
+            }
+            val dirArg = effectiveStoreDir(storeDir)
+                ?: org.strand.hashing.PersistentStore.defaultDir().toString()
+            val store = try {
+                org.strand.hashing.PersistentStore.open(java.nio.file.Paths.get(dirArg))
+            } catch (e: RuntimeException) {
+                System.err.println("store open failed ($dirArg): ${e.message}")
+                exitProcess(1)
+            }
+            val text = File(rest[0]).readText()
+            val (ingest, finalized) = try {
+                loadFinalizedWithIngest(text)
+            } catch (e: IngestError) {
+                System.err.println("ingest failed: ${e.message}")
+                exitProcess(1)
+            }
+            // Admit-and-verify-once: the first ingest is the one verify, recorded.
+            val runtime = StrandRuntime(HostPolicy.OPEN)
+            val verify = runtime.verify(programImageOf(finalized.store, finalized.root, finalized.hashToNodeId, null))
+            val written = runtime.ingestToStore(store, finalized, verify, finalized.nodeIdToHash)
+            val rootHash = finalized.nodeIdToHash.getValue(finalized.root)
+            val annotator = NodeRefAnnotator(ingest.nameMap)
+            when (verify) {
+                is VerifyResult.Failed -> {
+                    System.err.println("ingested $rootHash with a FAILED verdict ($written new node(s)):")
+                    for (e in verify.errors) System.err.println("  ${annotator.annotate(e.toString())}")
+                    // The program and its failed verdict are recorded; a later
+                    // run-by-hash reports the cached failure. Exit non-zero so a
+                    // script sees the verify failure.
+                    println(rootHash)
+                    exitProcess(1)
+                }
+                is VerifyResult.Ok -> {
+                    System.err.println(
+                        "store: ingested $rootHash into $dirArg ($written new node record(s); verdict: Ok, type ${verify.rootType})"
+                    )
+                    println(rootHash)
+                }
+            }
+        }
+        else -> {
+            System.err.println("unknown store subcommand: '$sub' (expected 'ingest')")
+            exitProcess(2)
+        }
+    }
+}
+
 private fun usage() {
     System.err.println("usage:")
-    System.err.println("  strand verify    <file.json> [--peer-store <lib.json>]... [<federation>...]")
-    System.err.println("  strand run       <file.json> [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
-    System.err.println("  strand machine   <file.json> --events <events.json> [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
-    System.err.println("  strand group     <file.json> --events <events.json> [--peer-store <lib.json>]... [--grant-all] [--metrics] [<federation>...] [<limits>...]")
+    System.err.println("  strand verify    <file.json|root-hash|name> [--store <dir>] [--peer-store <lib.json>]... [<federation>...]")
+    System.err.println("  strand run       <file.json|root-hash|name> [--store <dir>] [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
+    System.err.println("  strand machine   <file.json|root-hash|name> --events <events.json> [--store <dir>] [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
+    System.err.println("  strand group     <file.json|root-hash|name> --events <events.json> [--store <dir>] [--peer-store <lib.json>]... [--grant-all] [--metrics] [<federation>...] [<limits>...]")
+    System.err.println("  strand store     ingest <file.json> [--store <dir>]  → admit + verify-once, print the root hash")
     System.err.println("  strand author    <file.layer-a|file.familiar> [--emit-json] [--surface layer-a|familiar]")
     System.err.println("  strand translate <file.json>  → emit Layer A reverse projection (Q-036)")
     System.err.println("  strand registry  resolve <name> | put <name> <hash> | list  [--registry <file>]")
     System.err.println("  strand grammar                → emit Layer B constraint grammar (GBNF)")
+    System.err.println()
+    System.err.println("  Q-058 persistent store (verify / run / machine / group):")
+    System.err.println("  --store <dir>: dereference the positional against an on-disk hash-keyed store")
+    System.err.println("               (default \$STRAND_STORE, else ~/.strand/store). With --store, a positional")
+    System.err.println("               that is not an existing file is treated as a root-hash hex or a registry")
+    System.err.println("               name (Q-063 prelude defaults + the --registry file) and run by hash — no")
+    System.err.println("               re-ingest, no re-hash; admission fails closed on a corrupted entry. A plain")
+    System.err.println("               file path with no --store stays file-path mode, unchanged. `strand store")
+    System.err.println("               ingest` populates the store and records the verify verdict (admit-once).")
     System.err.println()
     System.err.println("  Q-043 federation (verify / run / machine / group):")
     System.err.println("  --peer-store <file.json>: (repeatable) add a peer store to the federation resolver")
