@@ -542,7 +542,9 @@ The Layer A bare-dotted-name expansion is backed by an authoritative
 Kotlin-side signature table (`BuiltinSignatures.kt`) expressing 83
 non-prelude registry signatures parameterized over type variables, with
 structural macros for the canonical `List<T>` / `Option<T>` shapes, the
-corpus-66 JsonValueFull tower, and the corpus-61 MarkdownDocument
+precise N-048 JsonValue tower (a `JsonArray` over a real `List<JsonValue>`
+and a `JsonObject` over a real entry list, the model corpus 88/89
+construct), and the corpus-61 MarkdownDocument
 tower; `Map<K,V>` / `Set<T>` follow the documented opaque-`bytesT`
 surface convention. The table carries each builtin's effects and Q-039
 projections, so the synthesized ForeignNode is byte-identical to the

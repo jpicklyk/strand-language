@@ -107,7 +107,7 @@ parts APP split [input ", "]
 
 ## JSON — declare explicitly
 
-`Json.Parse` and `Json.Stringify` are typed against a specific JsonValue schema. Pick from corpus 54 (flat JsonValue) or corpus 66 (JsonValueFull with array + object recursion).
+`Json.Parse` and `Json.Stringify` are typed against the precise N-048 JsonValue: a `JsonArray` over a real `List<JsonValue>` and a `JsonObject` over a real entry list (the model corpus 88/89 construct). The bare-dotted-name form (`Json.Parse`) synthesizes this tower automatically; declare it explicitly only if you want to inspect or constrain the shape. (A primitives-only program can use corpus 54's flat JsonValue.)
 
 ```layer-a
 parseT FNT [stringT] (RT jsonValueT)

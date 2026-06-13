@@ -1,10 +1,25 @@
 # Json.* on the N-048 precise model
 
-**Document:** `proposals/json-precise-model.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/json-precise-model.md`
+**Status:** Implemented (2026-06-13) — Q-069 in the Kotlin/JVM reference implementation
 **Date:** 2026-06-13
-**Concerns:** [`proposals/implemented/nested-recursive-types.md`](implemented/nested-recursive-types.md) (Q-053, N-048), [`proposals/implemented/json-blessed-library.md`](implemented/json-blessed-library.md) (Q-026), [`proposals/implemented/stdlib-expansion-round-2.md`](implemented/stdlib-expansion-round-2.md), [Q-053](../open-questions.md#Q-053), [Q-026](../open-questions.md#Q-026), [Q-069](../open-questions.md#Q-069)
+**Concerns:** [`proposals/implemented/nested-recursive-types.md`](nested-recursive-types.md) (Q-053, N-048), [`proposals/implemented/json-blessed-library.md`](json-blessed-library.md) (Q-026), [`proposals/implemented/stdlib-expansion-round-2.md`](stdlib-expansion-round-2.md), [Q-053](../../open-questions.md#Q-053), [Q-026](../../open-questions.md#Q-026), [Q-069](../../open-questions.md#Q-069)
 **Scope:** small-medium
+
+## Implementation note
+
+Shipped in the Kotlin/JVM reference implementation on 2026-06-13, substantially as designed below. What shipped:
+
+- **`Json.Parse` and `Json.Stringify` migrated in place to the precise model.** The two converter helpers in `interpreter/Builtins.kt` (`jsonElementToValue` / `jsonValueToText`) now produce and consume the precise shape: an array is `SumV("JsonArray", <Cons/Nil list>)`, an object `SumV("JsonObject", <Cons/Nil entry list>)` whose cell head is a `{key, value}` product. The four primitive cases are byte-identical, so primitive-only programs are unchanged. **Wider than the proposal's narrow scope:** the Q-037 LLM tool-loop converter pair (`strandJsonValueToElement` / `jsonElementToStrand`, which translate a Strand `JsonValue` tool-input / `providerExtras` to/from host JSON) was migrated too — they are the same `JsonValue` model and must not diverge from one canonical model. No new builtin, no registry signature change.
+- **The agent-facing `Sig.JsonValue` tower re-expressed as the precise six-case model.** `authoring/ImplicitBuiltinExpansion.kt`'s `synthJsonValueTower` now emits the precise tower (the model corpus 88/89 construct). To express the depth-1 self-references the inner lists need, the Layer A `RS` code gained an optional `depth` INT field (default 0); an absent depth arg still emits a bare depth-0 `RecursiveSelf`, so every existing `RS` use is byte-unchanged. The tower is only a type the elaborator synthesizes for a builtin signature, so it never appears in a golden corpus program and no corpus golden moved.
+- **Corpus 66 retired and replaced.** The spliced `66-json-value-nested.json` is removed; `66-json-roundtrip-via-builtins.json` reuses the slot — a precise `JsonArray [1, 2]` built via `RecursiveProjection` (corpus 88's construction) passed through `Json.Stringify`, evaluating to `"[1,2]"`. This is the one deliberate golden regeneration: corpus 66's slot is the only hash that moved; every other golden is byte-identical and the epoch stays 2 (no encoding change). The independent Python encoder reproduces all 91 goldens including the new 66.
+- **The output-by-construction demo's W4 round-trip closed.** `OutputByConstructionDemo` W1 now renders its array through the shipped `Json.Stringify` builtin (wrapping the produced inner list in the precise-model `JsonArray` case) instead of a driver-side walk; the demo README's note-on-serialization is rewritten to record the closed round-trip.
+
+**The blessed-schema re-expression was deferred as the proposal § 3.3 / § 8 specify.** `UniqueKeyJsonObject` (corpus 55/56) builds its `JsonObject` on a standalone entry list whose entry values are corpus 54's flat (primitives-only) `JsonValue`; re-expressing it over the precise `jsonValueT`'s projected entry list is a self-contained corpus rewrite that would deliberately move corpus 55/56's goldens, independent of the builtin migration. Deferred to keep this slice's golden churn to the single corpus-66 slot, with the unblocker recorded in § 8. Float support, value-domain invariants, schema-claimed `Json.Parse` results, and elaborator tower hoisting (Q-063) remain deferred as the proposal states.
+
+Full suite 2356 tests green (2355 baseline + 1 new), 0 failures, 3 expected skips.
+
+---
 
 Migrates the `Json.Parse` / `Json.Stringify` builtins and the agent-facing JSON type model from the corpus-66 *spliced* `JsonValueFull` to the N-048 *precise* model, closing the inconsistency the N-048 work opened. N-048 `RecursiveProjection` lets an agent build a genuine precise JSON value — a `JsonArray` carrying a real `List<JsonValue>`, a `JsonObject` carrying a real entry list — but `Json.Parse` produces and `Json.Stringify` consumes only the old spliced shape, so a program that builds JSON the precise way cannot round-trip it through the builtins. This is the follow-up the N-048 proposal § 8 names explicitly ("migrating corpus 66 / `Json.Parse` / `Json.Stringify` to the precise model").
 
@@ -209,12 +224,12 @@ The only runtime change is the two builtins' value shapes (§ 4.2, § 4.3). Both
 ## References
 
 **Outgoing references:**
-- [`proposals/implemented/nested-recursive-types.md`](implemented/nested-recursive-types.md) — N-048 `RecursiveProjection`, the mechanism the precise model is built on; § 8 names this migration as the deferred follow-up; corpus 88/89 are the precise construction references
-- [`proposals/implemented/json-blessed-library.md`](implemented/json-blessed-library.md) — the original flat `JsonValue` (corpus 54), the `UniqueKeyJsonObject` Schema (corpus 55/56), and § 3's full-JSON shape this proposal finally realizes
-- [`proposals/implemented/stdlib-expansion-round-2.md`](implemented/stdlib-expansion-round-2.md) — the spliced `JsonValueFull` (corpus 66) and the `Json.Parse`/`Json.Stringify` rewrite that produced it
-- [`open-questions.md`](../open-questions.md) — Q-069 (this proposal resolves it), Q-053, Q-026
+- [`proposals/implemented/nested-recursive-types.md`](nested-recursive-types.md) — N-048 `RecursiveProjection`, the mechanism the precise model is built on; § 8 names this migration as the deferred follow-up; corpus 88/89 are the precise construction references
+- [`proposals/implemented/json-blessed-library.md`](json-blessed-library.md) — the original flat `JsonValue` (corpus 54), the `UniqueKeyJsonObject` Schema (corpus 55/56), and § 3's full-JSON shape this proposal finally realizes
+- [`proposals/implemented/stdlib-expansion-round-2.md`](stdlib-expansion-round-2.md) — the spliced `JsonValueFull` (corpus 66) and the `Json.Parse`/`Json.Stringify` rewrite that produced it
+- [`open-questions.md`](../../open-questions.md) — Q-069 (this proposal resolves it), Q-053, Q-026
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-069 points at this proposal
-- [`proposals/README.md`](README.md)
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section
+- [`open-questions.md`](../../open-questions.md) — Q-069 points at this proposal
+- [`proposals/README.md`](../README.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section

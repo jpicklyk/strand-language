@@ -189,8 +189,9 @@ or taking List<Int>),
 `Url.Parse` (Option<{scheme, host, port, path, query, fragment}>),
 `Csv.Parse` / `Csv.Stringify` / `Tsv.Parse` / `Tsv.Stringify`
 (take or return List<List<String>>),
-`Json.Parse` / `Json.Stringify` (typed against a specific JsonValue schema
-— corpus 54 flat or corpus 66 JsonValueFull), `Markdown.Parse` /
+`Json.Parse` / `Json.Stringify` (typed against the precise N-048 JsonValue
+— a JsonArray over a real List<JsonValue> and a JsonObject over a real entry
+list, the model corpus 88/89 construct), `Markdown.Parse` /
 `Markdown.Stringify` (typed against the corpus 61 MarkdownDocument schema),
 `Regex.Match` (Option<String>) /
 `Regex.FindAll` (List<String>) / `Regex.Split` (List<String>),

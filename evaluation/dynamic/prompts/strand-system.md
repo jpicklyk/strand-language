@@ -51,8 +51,8 @@ batch related names into one request. Topics:
     llm-vector       per-provider LLM (Anthropic / OpenAI / Gemini),
                      ToolDef, response schemas, streaming I/O, and the
                      Pinecone / Chroma vector stores
-    formats          format libraries: Json / JsonValueFull, Markdown,
-                     Csv / Tsv
+    formats          format libraries: Json / JsonValue (precise N-048),
+                     Markdown, Csv / Tsv
     state-machines   SM / ESE / ESI / ESO / TR detail, stream kinds, and
                      transition-function shapes
     errors           error-model deep-dive: the TRY `kind` vocabulary, the
