@@ -1,10 +1,27 @@
 # Persistent local store and run-by-hash
 
-**Document:** `proposals/persistent-store.md`
-**Status:** Draft proposal
+**Document:** `proposals/implemented/persistent-store.md`
+**Status:** Implemented (2026-06-13, Kotlin/JVM reference implementation)
 **Date:** 2026-06-13
-**Concerns:** [`decisions/ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md), [`design/canonical-encoding.md`](../design/canonical-encoding.md) (the Epoch log), [Q-058](../open-questions.md#Q-058), [Q-043](../open-questions.md#Q-043) (federation: `NodeResolver` chain, `NameRegistry`, `--peer-store`), [Q-024](../open-questions.md#Q-024) (versioning, which this makes load-bearing), [Q-054](../open-questions.md#Q-054) (the `StrandRuntime` facade and `ProgramImage`), [Q-063](../open-questions.md#Q-063) (the bundled prelude module the registry resolves against)
+**Concerns:** [`decisions/ADR-003-content-addressing.md`](../../decisions/ADR-003-content-addressing.md), [`design/canonical-encoding.md`](../../design/canonical-encoding.md) (the Epoch log), [Q-058](../../open-questions.md#Q-058), [Q-043](../../open-questions.md#Q-043) (federation: `NodeResolver` chain, `NameRegistry`, `--peer-store`), [Q-024](../../open-questions.md#Q-024) (versioning, which this makes load-bearing), [Q-054](../../open-questions.md#Q-054) (the `StrandRuntime` facade and `ProgramImage`), [Q-063](../../open-questions.md#Q-063) (the bundled prelude module the registry resolves against)
 **Scope:** Medium
+
+## Implementation note
+
+Implemented 2026-06-13 across four commits, no canonical-encoding or golden-hash change, full suite 2278 tests green (2255 baseline + 23 new), zero regressions.
+
+- **Store (`hashing/PersistentStore.kt`).** A directory with `store.json` recording `storeFormatVersion` (the on-disk codec version, 1) and `encodingEpoch` (= `CanonicalEncoding.EPOCH`); `nodes/<shard>/<hash>.json` sharded by the leading multihash byte; `verdicts/<shard>/<rootHash>.json`. `open` fails closed on a higher format version (`StoreFormatError`), an epoch mismatch (`StoreEpochMismatch`), or a `nodes/` directory beside an unparseable/absent header. `writeProgram` walks the finalized program's `hashToNodeId` and writes each hashable node's `LocalProgramResolver` subgraph fetch, dedup-skipping any already on disk. Atomic writes (tmp + move).
+- **Node codec (`hashing/NodeStoreCodec.kt` + `hashing/StoreJson.kt`).** A context-free `Node`↔JSON codec over the full node surface: hashable children as within-record local indices, bound nodes (`ParameterDecl`/`TypeParameter`/`RecursiveSelf`) inline, `NodeRef`/`ManifestExport` targets as hashes. The persisted unit is the `SubgraphFetch` the Q-043 `LocalProgramResolver` already produces and `FederatedProgram.fetchAndAdmit` already admits, so the read path is bit-identical to a cross-store fetch — no second, divergent re-base. `StoreJson` is a small self-contained JSON layer so `:hashing` stays free of the kotlinx-serialization dependency. `FloatLit` is stored as raw IEEE-754 bits.
+- **Integrity (fail closed, two layers).** A per-node decode check (the record's declared `rootHash` must equal the requested hash) plus the existing Merkle root re-hash on admission. A tampered node record or a mismatched key raises `NodeResolverIntegrityViolation` — never returns the corrupted node.
+- **Facade (`runtime/StrandRuntime.kt`).** `loadImageFromStore(store, rootHash)` admits the root's subgraph through `DiskStoreResolver` + `fetchAndAdmit` into a fresh `NodeStore` and returns a `ProgramImage` whose `resolveTarget` is the same store. `ingestToStore` writes nodes + the verdict keyed by root hash. `cachedVerdict` reads the recorded verdict (only when the node is held). The verdict keys per-node types by node hash. `:runtime` gained a `:hashing` `api` edge (acyclic — `:hashing` depends only on `:core`).
+- **CLI (`cli/Main.kt`).** `--store <dir>` (default `STRAND_STORE`, else `~/.strand/store`) on `verify`/`run`/`machine`/`group`; with it, a positional that is not an existing file is a root-hash hex or a registry name dereferenced against the store. `strand store ingest <file>` admits + verifies-once and prints the root hash. `verify --store <hash>` reuses the cached verdict. A plain file path with no `--store` is unchanged; a file path *with* `--store` is still a file.
+
+**Deviations from the proposal, recorded:**
+
+1. **Verdict-cache `nodeTypes` is the conservative fallback (proposal § 4.4 / § 8).** The cached verdict stores the *rendered* per-node types keyed by node hash, not a structured `TypeExpr` round-trip. The facade's `run` re-verifies the admitted *local* store for the structured schema obligations it needs (still skipping re-ingest and re-hashing, the expensive steps); `verify --store` reuses the cached verdict directly with no live verifier. The structured `TypeExpr` JSON codec remains the deferred refinement named in § 8.
+2. **Run-by-hash reads the root's self-contained subgraph file.** Each `nodes/<hash>.json` is the whole subgraph rooted at that hash (the `LocalProgramResolver` walk, stopping at NodeRef boundaries), so loading by root hash reads the root file; resolution chains into other node files only across NodeRef boundaries. Dedup is by-file (a shared hashable node is one file), which is what the dedup tests assert; whole-program records duplicate the inlined interior across roots that share no NodeRef boundary. This matches the federation model exactly and keeps the read path single.
+3. **Routed-event groups by hash carry no author names.** `strand group <hash> --store` has an empty author-id name map (names are not content), so routed events that address streams by author id require the file-path form; the CLI reports this. Run-by-hash for the pure `run` and single-`machine` paths is unaffected.
+4. **No `verifierVersion` field this slice (§ 8 real research question).** A cached verdict is scoped to the epoch and the build; a verifier-logic change that is not an encoding change is not invalidated by the epoch alone. The conservative fallback (re-verify the admitted store on the `run` path) covers correctness; an explicit `verifierVersion` beside `encodingEpoch` is the named follow-up.
 
 This proposal closes the gap that the content-addressed store is an in-memory map per CLI invocation. It defines an on-disk, hash-keyed store; admit-and-verify-once semantics with cached verdicts and read-back integrity; a run-by-hash path on the Q-054 facade and the CLI; and registry integration so a name resolved through `strand registry` dereferences against the local store. It composes with the Q-043 federation machinery rather than duplicating it: the persistent store is exposed as a `NodeResolver` that slots into the existing resolver chain, and admission reuses the existing trust-minimizing Merkle re-hash.
 
@@ -164,7 +181,7 @@ The `NameRegistry` and `NodeResolver` chain are composed, not duplicated: the re
 `strand store ingest app.json --store ~/.strand/store` where `app.json` is the corpus "add 40 + 2" program:
 
 - Finalize → root hash `1eADD…`, plus hashes for the two `IntLit`s, the `Application`, the `Int.Add` ForeignNode, etc.
-- Write `nodes/1e/1eADD….json` (the Application, children as `$ref`s), `nodes/1e/1e2A….json` (IntLit 42 — wait, 40), and so on. Bound nodes (none here) would be inlined.
+- Write `nodes/1e/1eADD….json` (the Application's subgraph, children as local-index refs), `nodes/1e/1e2A….json` (the `IntLit` leaves), and so on; a hashable node already present is a no-op. Bound nodes (none here) would be inlined into their owner's record.
 - Verify → Ok, `rootType = Int`. Write `verdicts/1e/1eADD….json`.
 
 Then `strand run --store ~/.strand/store 1eADD…`:
@@ -237,13 +254,13 @@ The `DiskStoreResolver` is a `NodeResolver`, so it composes into the existing ch
 ## References
 
 **Outgoing references:**
-- [`decisions/ADR-003-content-addressing.md`](../decisions/ADR-003-content-addressing.md) — the multihash discipline the store keys on and records.
-- [`design/canonical-encoding.md`](../design/canonical-encoding.md) — the Epoch log; the store records `CanonicalEncoding.EPOCH` and fails closed on mismatch.
-- [`proposals/cross-store-federation.md`](cross-store-federation.md) — the `NodeResolver` chain, `SubgraphFetch`, `FederatedProgram.fetchAndAdmit` Merkle integrity, `NameRegistry`, and `--peer-store` this proposal reuses.
-- [`proposals/implemented/embeddable-runtime.md`](implemented/embeddable-runtime.md) — the Q-054 `StrandRuntime` facade and `ProgramImage` the run-by-hash path extends.
-- [`proposals/implemented/prelude-as-module.md`](implemented/prelude-as-module.md) — the bundled prelude snapshot the registry's resolved names dereference against.
+- [`decisions/ADR-003-content-addressing.md`](../../decisions/ADR-003-content-addressing.md) — the multihash discipline the store keys on and records.
+- [`design/canonical-encoding.md`](../../design/canonical-encoding.md) — the Epoch log; the store records `CanonicalEncoding.EPOCH` and fails closed on mismatch.
+- [`proposals/cross-store-federation.md`](../cross-store-federation.md) — the `NodeResolver` chain, `SubgraphFetch`, `FederatedProgram.fetchAndAdmit` Merkle integrity, `NameRegistry`, and `--peer-store` this proposal reuses.
+- [`proposals/implemented/embeddable-runtime.md`](embeddable-runtime.md) — the Q-054 `StrandRuntime` facade and `ProgramImage` the run-by-hash path extends.
+- [`proposals/implemented/prelude-as-module.md`](prelude-as-module.md) — the bundled prelude snapshot the registry's resolved names dereference against.
 
 **Incoming references:**
-- [`open-questions.md`](../open-questions.md) — Q-058 points at this proposal.
-- [`proposals/README.md`](README.md)
-- [`impl-kotlin/CLAUDE.md`](../impl-kotlin/CLAUDE.md) — Known gaps section.
+- [`open-questions.md`](../../open-questions.md) — Q-058 points at this proposal.
+- [`proposals/README.md`](../README.md)
+- [`impl-kotlin/CLAUDE.md`](../../impl-kotlin/CLAUDE.md) — Known gaps section.
