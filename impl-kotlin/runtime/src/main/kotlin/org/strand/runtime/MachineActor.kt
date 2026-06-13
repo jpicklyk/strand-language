@@ -55,6 +55,13 @@ internal class MachineActor(
      * exhausting one actor's step budget does not affect another. The
      * counter accumulates across the actor's events (one logical
      * lifetime, one budget) per the proposal's contract.
+     *
+     * Q-059: this lifetime counter is used only when
+     * [org.strand.core.EvaluationLimits.perEventStepBudget] is null (the
+     * batch model). When a per-event budget is configured, [stepOnce]
+     * allocates a FRESH counter per event instead, so a long-lived
+     * service-shaped actor is not killed by the lifetime wall-clock /
+     * step budget for being alive.
      */
     private val evalCounters: Interpreter.EvalCounters = Interpreter.EvalCounters()
 
@@ -159,6 +166,14 @@ internal class MachineActor(
      */
     private suspend fun stepOnce(event: Value) {
         val startNanos = System.nanoTime()
+        // Q-059: when a per-event budget is configured, derive a fresh
+        // per-event EvaluationLimits and a fresh EvalCounters for THIS event,
+        // so the actor's lifetime does not accumulate toward the cumulative
+        // wall-clock / step caps. When null (the batch default), use the
+        // lifetime counter and the actor's lifetime limits unchanged.
+        val perEvent = instance.limits.perEventStepBudget != null
+        val eventLimits = if (perEvent) instance.limits.perEvent() else instance.limits
+        val counters = if (perEvent) Interpreter.EvalCounters() else evalCounters
         // Track A.4: dispatch through the per-instance dispatcher when
         // one was supplied (VM-backed in test scenarios, etc.); fall
         // through to the legacy interpreter.applyCallable on the cached
@@ -169,8 +184,8 @@ internal class MachineActor(
                 fn = instance.transitionFnValue,
                 args = listOf(instance.currentState, event),
                 capabilities = instance.capabilities,
-                counters = evalCounters,
-                limits = instance.limits,
+                counters = counters,
+                limits = eventLimits,
             )
         // Slice 3.4 metrics: record transition latency immediately after the
         // interpreter call returns; counter increment is paired so a snapshot

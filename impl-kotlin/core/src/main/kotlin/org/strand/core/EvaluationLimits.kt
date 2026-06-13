@@ -59,6 +59,30 @@ package org.strand.core
  *    the centralised `CredentialScrubber` before exposure. Production
  *    deployments stay on this default; dev environments may opt up to
  *    [ErrorVerbosity.Full] with the understood leakage risk.
+ *  - [perEventStepBudget] (Q-059): an opt-in per-event step ceiling for
+ *    the async state-machine actor path. When null (the default), an
+ *    actor accumulates [maxSteps] / [maxAllocatedValues] / the
+ *    [wallClockBudgetMillis] across its WHOLE lifetime — the batch model,
+ *    where one `runGroup`/`runMachine` is one logical evaluation. That
+ *    model kills a long-lived service-shaped actor at the 30 s wall-clock
+ *    for being alive, even when each event does trivial work. When
+ *    non-null, the actor allocates a FRESH budget per event (its own
+ *    step / allocation / wall-clock counters reset between events), so a
+ *    server processing one small event per minute is never killed for
+ *    uptime, while each event's processing stays independently bounded.
+ *    Idle blocking `select` waits between events advance no step and so
+ *    consume no budget under either model — the same property
+ *    [streamReceiveTimeoutMillis] gives blocking receives. The Q-044 harm
+ *    bound is preserved: a per-event budget still bounds the work any one
+ *    event can do, and capabilities still gate every effect. The
+ *    synchronous fold (`runMachine` / `resume`) ignores this field —
+ *    it is batch by definition. Like every other field here it is host
+ *    policy, never a builtin argument.
+ *  - [perEventWallClockBudgetMillis] (Q-059): the per-event wall-clock
+ *    ceiling that pairs with [perEventStepBudget]. Used only when
+ *    [perEventStepBudget] is non-null; null falls back to
+ *    [wallClockBudgetMillis] for the per-event budget (now interpreted
+ *    per event rather than per lifetime).
  */
 data class EvaluationLimits(
     val maxSteps: Long = 10_000_000L,
@@ -71,7 +95,30 @@ data class EvaluationLimits(
     val maxNodeCount: Int = 100_000,
     val maxIngestBytes: Long = 64L * 1024L * 1024L,
     val errorVerbosity: ErrorVerbosity = ErrorVerbosity.Redacted,
+    val perEventStepBudget: Long? = null,
+    val perEventWallClockBudgetMillis: Long? = null,
 ) {
+    /**
+     * Q-059: the per-event [EvaluationLimits] an async actor uses for one
+     * event's processing when [perEventStepBudget] is set. Derives a fresh
+     * budget — [maxSteps] becomes the per-event step ceiling and
+     * [wallClockBudgetMillis] becomes the per-event wall-clock ceiling
+     * (falling back to the lifetime wall-clock when no per-event wall-clock
+     * is given). All other dimensions (stack depth, allocation, sampling,
+     * verbosity) carry through unchanged. Returns `this` untouched when
+     * [perEventStepBudget] is null, so callers can derive unconditionally.
+     */
+    fun perEvent(): EvaluationLimits {
+        val budget = perEventStepBudget ?: return this
+        return copy(
+            maxSteps = budget,
+            wallClockBudgetMillis = perEventWallClockBudgetMillis ?: wallClockBudgetMillis,
+            // A fresh budget per event also means the allocation counter
+            // resets per event; cap it at the per-event step budget so a
+            // single event cannot allocate the whole lifetime ceiling.
+            maxAllocatedValues = minOf(maxAllocatedValues, budget),
+        )
+    }
     companion object {
         /**
          * The shipping defaults: pass every existing corpus program under

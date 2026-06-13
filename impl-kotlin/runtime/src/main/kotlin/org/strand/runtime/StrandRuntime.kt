@@ -166,6 +166,39 @@ class StrandRuntime(private val policy: HostPolicy) {
     ): T = policy.withInstalled(verifierNodeTypes, block)
 
     /**
+     * Q-059: spawn [group] in SERVICE mode and return a [GroupService] the host
+     * drives over time. Unlike the batch [runGroup] usage (send routed events,
+     * close inputs, drain to halt), the service keeps external inputs open and
+     * runs until the host calls `stop()` or a real halt occurs — the server
+     * shape that `Http.Listen` / `Http.Accept` invite.
+     *
+     * Like [runGroup], this installs the policy WITHOUT restoring on return (the
+     * service runs asynchronously past this call); the caller scopes the restore
+     * around the whole service lifetime via [withGroupInstalled].
+     *
+     * The long-running limits model is host policy: set
+     * [org.strand.core.EvaluationLimits.perEventStepBudget] on the runtime's
+     * [HostPolicy] so a long-lived actor is bounded per event rather than by the
+     * whole-run wall-clock. [serveGroup] does not change the limits — it only
+     * declines to close the inputs.
+     *
+     * [inputStreamIds] / [outputStreamIds] map the host-facing stream names the
+     * caller uses with [GroupService.send] / [GroupService.outputs] to the
+     * EventStream NodeIds (the CLI passes its ingest author-id name map).
+     */
+    fun serveGroup(
+        program: ProgramImage,
+        group: MachineGroup,
+        scope: CoroutineScope,
+        inputStreamIds: Map<String, NodeId> = emptyMap(),
+        outputStreamIds: Map<String, NodeId> = emptyMap(),
+        verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
+    ): GroupService {
+        val handle = runGroup(program, group, scope, verifierNodeTypes)
+        return GroupService(handle, inputStreamIds, outputStreamIds)
+    }
+
+    /**
      * Q-059: resume a [machine] from a [snapshot] over [additionalEvents] under
      * this runtime's policy. The synchronous-fold analogue of [runMachine] that
      * starts from a checkpointed state instead of the machine's declared
