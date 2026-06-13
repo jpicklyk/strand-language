@@ -39,8 +39,15 @@ data class HostContext(
     val clock: Builtins.Clock,
     /** Randomness source for the `Random.*` builtins. */
     val random: java.util.Random,
-    /** Q-041 sandbox policy mediating every `Fs.*` / `Net.Connect` / `Http.Request` foreign call. */
-    val sandbox: SandboxPolicy,
+    /**
+     * Q-041 sandbox policy mediating every `Fs.*` / `Net.Connect` /
+     * `Http.Request` foreign call. Named [sandboxPolicy] (not `sandbox`) to
+     * match the bare-name reads in the builtin lambdas: those lambdas now run
+     * with this [HostContext] as receiver, so `sandboxPolicy.fs` /
+     * `sandboxPolicy.net` resolve to this field rather than the
+     * `Builtins.sandboxPolicy` singleton.
+     */
+    val sandboxPolicy: SandboxPolicy,
     /** Q-041 DNS resolver used by the network sandbox. */
     val nameResolver: NameResolver,
     /** Q-045 per-read blocking-receive ceiling (millis) for streaming sockets / SSE reads. */
@@ -85,22 +92,30 @@ data class HostContext(
         fun fromPolicy(
             policy: HostPolicy,
             verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
-        ): HostContext = HostContext(
-            clock = policy.clock,
-            random = policy.random,
-            sandbox = policy.sandbox,
-            nameResolver = policy.nameResolver,
-            streamReceiveTimeoutMillis = policy.limits.streamReceiveTimeoutMillis,
-            credentialProvider = policy.credentialProvider,
-            llmHttpClient = policy.llmHttpClient,
-            vectorHttpTransport = policy.vectorHttpTransport,
-            verifierNodeTypes = verifierNodeTypes,
-            logSink = policy.logSink,
-            osEnv = policy.osEnv,
-            exitHandler = policy.exitHandler,
-            toolLoopLimit = policy.toolLoopLimit,
-            scrubber = Scrubber(),
-        )
+        ): HostContext {
+            // Allocate the per-context scrubber first, then wrap the policy's
+            // credential provider so every credential it resolves registers
+            // into THIS context's scrubber (not the process-global default).
+            // This is what makes a tenant's resolved key redactable in that
+            // tenant's error text and absent from another tenant's scrubbing.
+            val scrubber = Scrubber()
+            return HostContext(
+                clock = policy.clock,
+                random = policy.random,
+                sandboxPolicy = policy.sandbox,
+                nameResolver = policy.nameResolver,
+                streamReceiveTimeoutMillis = policy.limits.streamReceiveTimeoutMillis,
+                credentialProvider = ScrubberRegisteringCredentialProvider(policy.credentialProvider, scrubber),
+                llmHttpClient = policy.llmHttpClient,
+                vectorHttpTransport = policy.vectorHttpTransport,
+                verifierNodeTypes = verifierNodeTypes,
+                logSink = policy.logSink,
+                osEnv = policy.osEnv,
+                exitHandler = policy.exitHandler,
+                toolLoopLimit = policy.toolLoopLimit,
+                scrubber = scrubber,
+            )
+        }
 
         /**
          * The single-tenant process default: reads the current [Builtins]
@@ -119,7 +134,7 @@ data class HostContext(
         fun processDefault(): HostContext = HostContext(
             clock = Builtins.clock,
             random = Builtins.random,
-            sandbox = Builtins.sandboxPolicy,
+            sandboxPolicy = Builtins.sandboxPolicy,
             nameResolver = Builtins.nameResolver,
             streamReceiveTimeoutMillis = Builtins.streamReceiveTimeoutMillis,
             credentialProvider = Builtins.credentialProvider,
@@ -133,4 +148,21 @@ data class HostContext(
             scrubber = CredentialScrubber.default,
         )
     }
+}
+
+/**
+ * Q-054 follow-up: a [CredentialProvider] decorator that registers every
+ * resolved [Credential] into a specific [Scrubber] before returning it. Wraps
+ * the host policy's provider in [HostContext.fromPolicy] so a tenant's
+ * resolved credentials become redactable in that tenant's error text without
+ * touching the process-global [CredentialScrubber]. The delegate already
+ * registers into the global default (the existing provider contract); the
+ * extra per-context registration is additive and harmless.
+ */
+private class ScrubberRegisteringCredentialProvider(
+    private val delegate: CredentialProvider,
+    private val scrubber: Scrubber,
+) : CredentialProvider {
+    override fun resolve(provider: String, credentialKey: String): Credential? =
+        delegate.resolve(provider, credentialKey)?.also { scrubber.register(it) }
 }

@@ -59,8 +59,11 @@ object PineconeProvider {
      * `pinecone_index`. No probe request is issued — Phase 1 assumes
      * the index already exists (the agent created it out of band).
      */
-    fun open(config: PineconeIndexConfig): Value.Resource {
-        val apiCredential = Builtins.credentialProvider.resolve(PROVIDER_NAME, "api_key")
+    fun open(
+        config: PineconeIndexConfig,
+        credentialProvider: CredentialProvider = Builtins.credentialProvider,
+    ): Value.Resource {
+        val apiCredential = credentialProvider.resolve(PROVIDER_NAME, "api_key")
             ?: throw IoFailure("pinecone-open", "no PINECONE_API_KEY configured")
         val baseUrl = config.host
             ?: "https://${config.indexName}-${config.environment}.svc.pinecone.io"
@@ -81,7 +84,11 @@ object PineconeProvider {
      * (Pinecone upsert semantics, matching the cross-provider
      * idempotency decision in proposal § 3.4.7).
      */
-    fun upsert(handle: Value.Resource, items: List<UpsertItem>) {
+    fun upsert(
+        handle: Value.Resource,
+        items: List<UpsertItem>,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ) {
         if (items.isEmpty()) return
         val h = ResourceTable.get(handle, "pinecone_index") as PineconeIndexHandle
         val body = buildJsonObject {
@@ -95,7 +102,7 @@ object PineconeProvider {
                 }
             }
         }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "POST",
                 url = "${h.baseUrl}/vectors/upsert",
@@ -112,7 +119,11 @@ object PineconeProvider {
     }
 
     /** Run a vector similarity query. */
-    fun query(handle: Value.Resource, request: QueryRequest): List<QueryHit> {
+    fun query(
+        handle: Value.Resource,
+        request: QueryRequest,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ): List<QueryHit> {
         if (request.metric != null) {
             throw IoFailure(
                 "vector-metric-fixed",
@@ -129,7 +140,7 @@ object PineconeProvider {
                 put("filter", request.filter)
             }
         }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "POST",
                 url = "${h.baseUrl}/query",
@@ -151,7 +162,11 @@ object PineconeProvider {
     }
 
     /** Delete vectors by id. */
-    fun delete(handle: Value.Resource, ids: List<String>) {
+    fun delete(
+        handle: Value.Resource,
+        ids: List<String>,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ) {
         if (ids.isEmpty()) return
         val h = ResourceTable.get(handle, "pinecone_index") as PineconeIndexHandle
         val body = buildJsonObject {
@@ -159,7 +174,7 @@ object PineconeProvider {
                 for (id in ids) add(JsonPrimitive(id))
             }
         }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "POST",
                 url = "${h.baseUrl}/vectors/delete",
@@ -176,12 +191,16 @@ object PineconeProvider {
     }
 
     /** Fetch vectors by id (no similarity search). */
-    fun fetch(handle: Value.Resource, ids: List<String>): List<QueryHit> {
+    fun fetch(
+        handle: Value.Resource,
+        ids: List<String>,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ): List<QueryHit> {
         if (ids.isEmpty()) return emptyList()
         val h = ResourceTable.get(handle, "pinecone_index") as PineconeIndexHandle
         // Build the query string: ids=...&ids=...  (Pinecone's REST shape).
         val query = ids.joinToString("&") { "ids=" + java.net.URLEncoder.encode(it, "UTF-8") }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "GET",
                 url = "${h.baseUrl}/vectors/fetch?$query",

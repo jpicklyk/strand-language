@@ -61,11 +61,15 @@ object ChromaProvider {
      * Resolve the collection id and return a [ResourceTable]-registered
      * handle of kind `chroma_collection`.
      */
-    fun open(config: ChromaCollectionConfig): Value.Resource {
-        val apiCredential = Builtins.credentialProvider.resolve(PROVIDER_NAME, "api_key")
+    fun open(
+        config: ChromaCollectionConfig,
+        credentialProvider: CredentialProvider = Builtins.credentialProvider,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ): Value.Resource {
+        val apiCredential = credentialProvider.resolve(PROVIDER_NAME, "api_key")
         // Resolve the collection id by name. Chroma's REST returns
         // {"id": "...", "name": "...", ...} on success.
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "GET",
                 url = "${normalizeUrl(config.serverUrl)}/api/v1/collections/${config.collectionName}",
@@ -98,7 +102,11 @@ object ChromaProvider {
      * idempotent insert-or-replace semantics matching the cross-
      * provider commitment in proposal § 3.4.7.
      */
-    fun add(handle: Value.Resource, items: List<UpsertItem>) {
+    fun add(
+        handle: Value.Resource,
+        items: List<UpsertItem>,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ) {
         if (items.isEmpty()) return
         val h = ResourceTable.get(handle, "chroma_collection") as ChromaCollectionHandle
         val body = buildJsonObject {
@@ -112,7 +120,7 @@ object ChromaProvider {
                 for (item in items) add(item.metadata)
             })
         }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "upsert"),
@@ -129,7 +137,11 @@ object ChromaProvider {
     }
 
     /** Run a vector similarity query. */
-    fun query(handle: Value.Resource, request: QueryRequest): List<QueryHit> {
+    fun query(
+        handle: Value.Resource,
+        request: QueryRequest,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ): List<QueryHit> {
         if (request.metric != null) {
             throw IoFailure(
                 "vector-metric-fixed",
@@ -152,7 +164,7 @@ object ChromaProvider {
             }
             put("include", include)
         }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "query"),
@@ -185,7 +197,11 @@ object ChromaProvider {
     }
 
     /** Delete items by id. */
-    fun delete(handle: Value.Resource, ids: List<String>) {
+    fun delete(
+        handle: Value.Resource,
+        ids: List<String>,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ) {
         if (ids.isEmpty()) return
         val h = ResourceTable.get(handle, "chroma_collection") as ChromaCollectionHandle
         val body = buildJsonObject {
@@ -193,7 +209,7 @@ object ChromaProvider {
                 for (id in ids) add(JsonPrimitive(id))
             })
         }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "delete"),
@@ -213,7 +229,11 @@ object ChromaProvider {
      * Fetch items by id (no similarity search). Chroma names this
      * `get`; the cross-provider name in the proposal is `Get`.
      */
-    fun get(handle: Value.Resource, ids: List<String>): List<QueryHit> {
+    fun get(
+        handle: Value.Resource,
+        ids: List<String>,
+        transport: VectorHttpTransport = Builtins.vectorHttpTransport,
+    ): List<QueryHit> {
         if (ids.isEmpty()) return emptyList()
         val h = ResourceTable.get(handle, "chroma_collection") as ChromaCollectionHandle
         val body = buildJsonObject {
@@ -225,7 +245,7 @@ object ChromaProvider {
                 add(JsonPrimitive("embeddings"))
             })
         }
-        val response = Builtins.vectorHttpTransport.execute(
+        val response = transport.execute(
             HttpRequest(
                 method = "POST",
                 url = collectionUrl(h, "get"),

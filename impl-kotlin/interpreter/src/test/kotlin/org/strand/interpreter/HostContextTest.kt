@@ -38,8 +38,17 @@ class HostContextTest {
 
         assertSame(clock, ctx.clock)
         assertSame(random, ctx.random)
-        assertSame(sandbox, ctx.sandbox)
-        assertSame(provider, ctx.credentialProvider)
+        assertSame(sandbox, ctx.sandboxPolicy)
+        // The credential provider is wrapped so resolved credentials register
+        // into this context's scrubber; it delegates to the policy's provider
+        // and, as a side effect, registers the resolved value into ctx.scrubber.
+        val cred = ctx.credentialProvider.resolve("anthropic", "api_key")
+        assertEquals("sk-ant-fromPolicy", cred?.reveal())
+        assertEquals(
+            "key=[REDACTED:anthropic:api_key]",
+            ctx.scrubber.scrub("key=sk-ant-fromPolicy"),
+            "resolving through the context provider registers the credential in the context scrubber",
+        )
         assertEquals(4321L, ctx.streamReceiveTimeoutMillis)
         assertSame(nodeTypes, ctx.verifierNodeTypes)
         assertEquals(7, ctx.toolLoopLimit)

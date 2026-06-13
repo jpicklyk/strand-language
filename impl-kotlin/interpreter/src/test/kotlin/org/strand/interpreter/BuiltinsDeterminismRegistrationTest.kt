@@ -18,7 +18,7 @@ import org.junit.jupiter.api.assertThrows
  */
 class BuiltinsDeterminismRegistrationTest {
 
-    private val unitFn = Builtins.Fn { Value.UnitV }
+    private val unitFn = Builtins.Fn { _, _ -> Value.UnitV }
 
     @AfterEach
     fun teardown() {

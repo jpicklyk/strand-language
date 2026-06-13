@@ -122,6 +122,21 @@ class Interpreter(
      * under test.
      */
     private val schemaObligations: Map<NodeId, org.strand.verifier.TypeExpr.SchemaType> = emptyMap(),
+    /**
+     * Q-054 follow-up: the host policy this interpreter evaluates under,
+     * projected to a [HostContext]. Every builtin invocation receives this
+     * context; effectful builtins read their clock / random / sandbox /
+     * credentials / etc. from it rather than from the [Builtins] process-global
+     * singletons. Two interpreters constructed with different contexts run
+     * effectful programs concurrently in one JVM without clobbering each other.
+     *
+     * Default [HostContext.processDefault] reads the current [Builtins]
+     * singletons, so a direct `Interpreter(store, ...)` construction (every
+     * pre-Q-054-follow-up test, the SchemaChecker's internal interpreter)
+     * behaves exactly as before — including honouring a `Builtins.clock =
+     * FixedClock(...)` a test installs before constructing the interpreter.
+     */
+    private val hostContext: HostContext = HostContext.processDefault(),
 ) {
 
     /**
@@ -307,8 +322,14 @@ class Interpreter(
         io: IoFailure,
         limits: EvaluationLimits,
     ): InterpretError.IoFailure {
+        // Q-054 follow-up: the Redacted detail is scrubbed against THIS
+        // interpreter's per-context scrubber, so the redaction uses the active
+        // tenant's resolved credentials — never another concurrent tenant's.
+        // The scrubber the IoFailure constructor already applied (the
+        // process-default) is bypassed here by scrubbing the unscrubbed detail
+        // afresh.
         val detail = when (limits.errorVerbosity) {
-            org.strand.core.ErrorVerbosity.Redacted -> io.detail
+            org.strand.core.ErrorVerbosity.Redacted -> hostContext.scrubber.scrub(io.unscrubbedDetail)
             org.strand.core.ErrorVerbosity.Full -> io.unscrubbedDetail
             org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
         }
@@ -334,7 +355,7 @@ class Interpreter(
         limits: EvaluationLimits,
     ): InterpretError.SandboxViolation {
         val detail = when (limits.errorVerbosity) {
-            org.strand.core.ErrorVerbosity.Redacted -> sv.detail
+            org.strand.core.ErrorVerbosity.Redacted -> hostContext.scrubber.scrub(sv.unscrubbedDetail)
             org.strand.core.ErrorVerbosity.Full -> sv.unscrubbedDetail
             org.strand.core.ErrorVerbosity.RedactedWithKindOnly -> "(detail suppressed)"
         }
@@ -956,7 +977,7 @@ class Interpreter(
                     InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
                 )
             try {
-                builtin.invoke(args)
+                builtin.invoke(hostContext, args)
             } catch (io: IoFailure) {
                 throw InterpretException(translateIoFailure(id, io, limits))
             } catch (sv: SandboxViolation) {
@@ -1114,7 +1135,7 @@ class Interpreter(
                 applyValueToArgs(id, callable, callbackArgs, context, handlers, counters, limits)
             }
             return try {
-                higherOrder.invoke(args, apply)
+                higherOrder.invoke(hostContext, args, apply)
             } catch (io: IoFailure) {
                 throw InterpretException(translateIoFailure(id, io, limits))
             } catch (sv: SandboxViolation) {
@@ -1138,7 +1159,7 @@ class Interpreter(
                 InterpretError.UnknownForeignTarget(at = id, target = fn.node.target)
             )
         return try {
-            builtin.invoke(args)
+            builtin.invoke(hostContext, args)
         } catch (io: IoFailure) {
             // Translate runtime IoFailure (thrown by Layer 4 step 2
             // builtins on actual OS failures) into a structured
@@ -1253,7 +1274,7 @@ class Interpreter(
                         InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
                     )
                 try {
-                    builtin.invoke(args)
+                    builtin.invoke(hostContext, args)
                 } catch (io: IoFailure) {
                     throw InterpretException(translateIoFailure(id, io, limits))
                 } catch (sv: SandboxViolation) {

@@ -27,9 +27,17 @@ import kotlin.math.pow
  */
 object Builtins {
 
-    /** A single foreign callable: takes the evaluated argument list and returns a value. */
+    /**
+     * A single foreign callable: takes the active [HostContext] and the
+     * evaluated argument list, returns a value. Q-054 follow-up: the context
+     * is the per-invocation projection of the host policy — effectful builtins
+     * read their clock / random / sandbox / credentials / etc. from it rather
+     * than from the [Builtins] process-global singletons, which is what makes
+     * two runtimes concurrently isolated in one JVM. Pure builtins ignore it
+     * (their registration helper [det] hides the parameter entirely).
+     */
     fun interface Fn {
-        fun invoke(args: List<Value>): Value
+        fun invoke(ctx: HostContext, args: List<Value>): Value
     }
 
     /**
@@ -58,7 +66,7 @@ object Builtins {
      * the callback through.
      */
     fun interface FnH {
-        fun invoke(args: List<Value>, apply: ApplyFn): Value
+        fun invoke(ctx: HostContext, args: List<Value>, apply: ApplyFn): Value
     }
 
     /**
@@ -143,25 +151,41 @@ object Builtins {
     ): Map<String, Entry<F>> =
         registrations.mapValues { (target, reg) -> resolveRegistration(target, reg) }
 
-    /** Registration helper: effect-free, explicitly Deterministic. */
-    private fun det(fn: Fn): Registration<Fn> =
-        Registration(fn, effectful = false, declared = Determinism.Deterministic)
+    /**
+     * Registration helper: effect-free, explicitly Deterministic. Pure
+     * builtins read no host state, so the lambda keeps the legacy
+     * `(List<Value>) -> Value` shape and the [HostContext] is discarded by the
+     * adapter — no edit to the ~153 `det { args -> }` sites.
+     */
+    private fun det(fn: (List<Value>) -> Value): Registration<Fn> =
+        Registration(Fn { _, args -> fn(args) }, effectful = false, declared = Determinism.Deterministic)
 
-    /** Registration helper: effect-declaring, defaults Stateful. */
-    private fun fx(fn: Fn): Registration<Fn> =
-        Registration(fn, effectful = true)
+    /**
+     * Registration helper: effect-declaring, defaults Stateful. The lambda is
+     * a [HostContext] receiver, so a bare read of `clock` / `sandboxPolicy` /
+     * `random` / `credentialProvider` / … inside the body resolves to the
+     * active context's field rather than the [Builtins] singleton (Q-054
+     * concurrent isolation). The `{ args -> }` lambda shape is unchanged at
+     * the ~44 `fx { args -> }` sites.
+     */
+    private fun fx(fn: HostContext.(List<Value>) -> Value): Registration<Fn> =
+        Registration(Fn { ctx, args -> ctx.fn(args) }, effectful = true)
 
-    /** Registration helper: effect-declaring and Nondeterministic (the Random.* family). */
-    private fun nondet(fn: Fn): Registration<Fn> =
-        Registration(fn, effectful = true, declared = Determinism.Nondeterministic)
+    /** Registration helper: effect-declaring and Nondeterministic (the Random.* family); [HostContext] receiver. */
+    private fun nondet(fn: HostContext.(List<Value>) -> Value): Registration<Fn> =
+        Registration(Fn { ctx, args -> ctx.fn(args) }, effectful = true, declared = Determinism.Nondeterministic)
 
-    /** Registration helper: effect-free higher-order, explicitly Deterministic. */
-    private fun detH(fn: FnH): Registration<FnH> =
-        Registration(fn, effectful = false, declared = Determinism.Deterministic)
+    /**
+     * Registration helper: effect-free higher-order, explicitly Deterministic.
+     * The List.* combinators read no host state; the lambda keeps the legacy
+     * `(List<Value>, ApplyFn) -> Value` shape with the context discarded.
+     */
+    private fun detH(fn: (List<Value>, ApplyFn) -> Value): Registration<FnH> =
+        Registration(FnH { _, args, apply -> fn(args, apply) }, effectful = false, declared = Determinism.Deterministic)
 
-    /** Registration helper: effect-declaring higher-order, defaults Stateful. */
-    private fun fxH(fn: FnH): Registration<FnH> =
-        Registration(fn, effectful = true)
+    /** Registration helper: effect-declaring higher-order, defaults Stateful; [HostContext] receiver. */
+    private fun fxH(fn: HostContext.(List<Value>, ApplyFn) -> Value): Registration<FnH> =
+        Registration(FnH { ctx, args, apply -> ctx.fn(args, apply) }, effectful = true)
 
     /**
      * Pluggable clock for the `Time.*` builtins. Default is [SystemClock]
@@ -1096,7 +1120,7 @@ object Builtins {
             // an empty header list (the legacy signature had none).
             val componentRequest = lookup("strand-builtin:Http.Request")
                 ?: throw IoFailure("http-request", "internal: Http.Request not registered")
-            val response = componentRequest.invoke(listOf(
+            val response = componentRequest.invoke(this, listOf(
                 Value.StringV(host),
                 Value.IntV(effectivePort.toLong()),
                 Value.StringV(scheme),
@@ -2614,7 +2638,7 @@ object Builtins {
                 "Pinecone.Index.Open expects 1 arg (config: PineconeIndexConfig), got ${args.size}"
             }
             val config = VectorValueMarshal.toPineconeConfig(args[0])
-            PineconeProvider.open(config)
+            PineconeProvider.open(config, credentialProvider)
         },
 
         "strand-builtin:Pinecone.Index.Close" to det { args ->
@@ -2638,7 +2662,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-upsert",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val items = VectorValueMarshal.toUpsertItems(args[1])
-            PineconeProvider.upsert(handle, items)
+            PineconeProvider.upsert(handle, items, vectorHttpTransport)
             Value.UnitV
         },
 
@@ -2652,7 +2676,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-query",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val request = VectorValueMarshal.toQueryRequest(args[1])
-            VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request))
+            VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request, vectorHttpTransport))
         },
 
         "strand-builtin:Pinecone.Index.Delete" to fx { args ->
@@ -2665,7 +2689,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-delete",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            PineconeProvider.delete(handle, ids)
+            PineconeProvider.delete(handle, ids, vectorHttpTransport)
             Value.UnitV
         },
 
@@ -2679,7 +2703,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-fetch",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            VectorValueMarshal.fromQueryHits(PineconeProvider.fetch(handle, ids))
+            VectorValueMarshal.fromQueryHits(PineconeProvider.fetch(handle, ids, vectorHttpTransport))
         },
 
         // Q-038 Phase 1 — Chroma vector-store builtins. Same shape
@@ -2695,7 +2719,7 @@ object Builtins {
                 "Chroma.Collection.Open expects 1 arg (config: ChromaCollectionConfig), got ${args.size}"
             }
             val config = VectorValueMarshal.toChromaConfig(args[0])
-            ChromaProvider.open(config)
+            ChromaProvider.open(config, credentialProvider, vectorHttpTransport)
         },
 
         "strand-builtin:Chroma.Collection.Close" to det { args ->
@@ -2719,7 +2743,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-upsert",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val items = VectorValueMarshal.toUpsertItems(args[1])
-            ChromaProvider.add(handle, items)
+            ChromaProvider.add(handle, items, vectorHttpTransport)
             Value.UnitV
         },
 
@@ -2733,7 +2757,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-query",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val request = VectorValueMarshal.toQueryRequest(args[1])
-            VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request))
+            VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request, vectorHttpTransport))
         },
 
         "strand-builtin:Chroma.Collection.Delete" to fx { args ->
@@ -2746,7 +2770,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-delete",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            ChromaProvider.delete(handle, ids)
+            ChromaProvider.delete(handle, ids, vectorHttpTransport)
             Value.UnitV
         },
 
@@ -2761,7 +2785,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-get",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids))
+            VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids, vectorHttpTransport))
         },
 
         // ===== Stdlib expansion round 4 (2026-05-27) =====
@@ -3872,7 +3896,7 @@ object Builtins {
      * would have fired at admission), so we treat the static rejection
      * as defensive and fall back to an empty schema.
      */
-    private fun parseStrandTools(listValue: Value): List<LlmToolDef> {
+    private fun HostContext.parseStrandTools(listValue: Value): List<LlmToolDef> {
         val out = mutableListOf<LlmToolDef>()
         var cur = listValue
         while (cur is Value.SumV && cur.case == "Cons") {
@@ -3900,7 +3924,7 @@ object Builtins {
      * so the loop can still proceed and the failure surfaces as a
      * provider-side rejection rather than a runtime crash.
      */
-    private fun toolDefFrom(t: Value.ToolDefV): LlmToolDef {
+    private fun HostContext.toolDefFrom(t: Value.ToolDefV): LlmToolDef {
         // Look up the Schema's TypeExpr.SchemaType in the verifier's
         // nodeTypes map (carried by the Interpreter via verifierContext).
         // The SchemaChecker uses the same lookup; we treat the absence
@@ -4020,7 +4044,7 @@ object Builtins {
      * supply the pre-N-045 shape; the legacy fallback is removed when
      * the next major version of the request shape is cut.
      */
-    private fun parseGenerateRequest(p: Value.ProductV): GenerateRequest {
+    private fun HostContext.parseGenerateRequest(p: Value.ProductV): GenerateRequest {
         val model = (reqField(p, "model", "llm-generate") as Value.StringV).v
         val messages = parseStrandMessages(reqField(p, "messages", "llm-generate"))
         val system = (optField(p, "system") as? Value.StringV)?.v
@@ -4062,7 +4086,7 @@ object Builtins {
      * agent sees a clear diagnostic at the provider boundary rather
      * than a Kotlin-side cast exception.
      */
-    private fun parseResponseSchemaField(payload: Value?): kotlinx.serialization.json.JsonElement? {
+    private fun HostContext.parseResponseSchemaField(payload: Value?): kotlinx.serialization.json.JsonElement? {
         if (payload == null) return null
         val spec = payload as? Value.ResponseSchemaSpecV
             ?: throw IoFailure(
@@ -4176,7 +4200,7 @@ object Builtins {
      * through `toString()`. The agent author can wrap a richer result
      * in their tool implementation.
      */
-    private fun runGenerateLoop(
+    private fun HostContext.runGenerateLoop(
         requestProduct: Value.ProductV,
         generate: (GenerateRequest, LlmHttpClient, CredentialProvider) -> GenerateResult,
         apply: ApplyFn,
@@ -4243,7 +4267,7 @@ object Builtins {
      * the single point at which they happen — subsequent
      * `LLM.Stream.Receive` drains carry only the transport effect E-004.
      */
-    private fun openLlmStream(
+    private fun HostContext.openLlmStream(
         requestProduct: Value.ProductV,
         provider: String,
         open: (GenerateRequest, LlmHttpClient, CredentialProvider) -> LlmHttpClient.LlmStream,
@@ -4435,3 +4459,22 @@ object Builtins {
         verifierNodeTypes = s.verifierNodeTypes
     }
 }
+
+/**
+ * Q-054 follow-up: convenience invocation that supplies a
+ * [HostContext.processDefault] (reading the current [Builtins] singletons at
+ * call time). It exists so the many unit tests that drive a builtin directly
+ * via `Builtins.lookup(target)!!.invoke(args)` keep working unchanged after
+ * the [Builtins.Fn] signature gained an explicit [HostContext] parameter — a
+ * test that installs `Builtins.credentialProvider = ...` /
+ * `Builtins.clock = ...` in `@BeforeEach` and then invokes a builtin directly
+ * sees those installed values through the process-default context. Production
+ * dispatch (the [Interpreter] / [org.strand.vm.Vm] / actor runtime) always
+ * passes an explicit context and never routes through this overload.
+ */
+fun Builtins.Fn.invoke(args: List<Value>): Value =
+    invoke(HostContext.processDefault(), args)
+
+/** Q-054 follow-up: process-default-context convenience for higher-order builtins. See [Builtins.Fn.invoke]. */
+fun Builtins.FnH.invoke(args: List<Value>, apply: Builtins.ApplyFn): Value =
+    invoke(HostContext.processDefault(), args, apply)
