@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "root": "handler",
+  "nodes": {
+    "strT":      { "type": "PrimitiveType", "kind": "String" },
+
+    "llmGenerateFx": { "type": "EffectCategory", "categoryName": "LLM.Generate" },
+
+    "modelT":    { "type": "FunctionType", "parameters": ["strT"], "result": "strT",
+                   "effects": ["llmGenerateFx"] },
+    "model":     { "type": "ForeignNode", "target": "strand-builtin:Demo.LlmGenerate",
+                   "foreignType": "modelT", "effects": ["llmGenerateFx"] },
+
+    "promptLit": { "type": "StringLit", "value": "Summarize the meeting note in one line." },
+
+    "callModel": { "type": "Application", "function": "model", "arguments": ["promptLit"] },
+
+    "promptParam": { "type": "ParameterDecl", "name": "prompt", "paramType": "strT" },
+    "cannedLit":   { "type": "StringLit", "value": "Meeting is at 3pm." },
+    "handle":      { "type": "Lambda", "parameters": ["promptParam"], "body": "cannedLit" },
+
+    "handler":     { "type": "Handler", "intercept": "llmGenerateFx",
+                     "handle": "handle", "body": "callModel" }
+  }
+}

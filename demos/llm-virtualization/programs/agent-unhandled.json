@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "root": "callModel",
+  "nodes": {
+    "strT":      { "type": "PrimitiveType", "kind": "String" },
+
+    "llmGenerateFx": { "type": "EffectCategory", "categoryName": "LLM.Generate" },
+
+    "modelT":    { "type": "FunctionType", "parameters": ["strT"], "result": "strT",
+                   "effects": ["llmGenerateFx"] },
+    "model":     { "type": "ForeignNode", "target": "strand-builtin:Demo.LlmGenerate",
+                   "foreignType": "modelT", "effects": ["llmGenerateFx"] },
+
+    "promptLit": { "type": "StringLit", "value": "Summarize the meeting note in one line." },
+
+    "callModel": { "type": "Application", "function": "model", "arguments": ["promptLit"] }
+  }
+}
