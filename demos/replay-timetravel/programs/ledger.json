@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "root": "machine",
+  "nodes": {
+    "intT":         { "type": "PrimitiveType", "kind": "Int" },
+
+    "amountField":  { "type": "ProductTypeField", "name": "amount", "fieldType": "intT" },
+    "stampField":   { "type": "ProductTypeField", "name": "stamp", "fieldType": "intT" },
+    "eventT":       { "type": "ProductType", "fields": ["amountField", "stampField"] },
+
+    "balanceField": { "type": "ProductTypeField", "name": "balance", "fieldType": "intT" },
+    "lastStampField": { "type": "ProductTypeField", "name": "lastStamp", "fieldType": "intT" },
+    "countField":   { "type": "ProductTypeField", "name": "count", "fieldType": "intT" },
+    "stateT":       { "type": "ProductType", "fields": ["balanceField", "lastStampField", "countField"] },
+
+    "someCase":     { "type": "SumTypeCase", "name": "Some", "caseType": "intT" },
+    "noneCase":     { "type": "SumTypeCase", "name": "None", "caseType": null },
+    "optionInt":    { "type": "SumType", "cases": ["someCase", "noneCase"] },
+    "output0Field": { "type": "ProductTypeField", "name": "output_0", "fieldType": "optionInt" },
+    "outputBatchT": { "type": "ProductType", "fields": ["output0Field"] },
+
+    "stateField":   { "type": "ProductTypeField", "name": "state", "fieldType": "stateT" },
+    "outputsField": { "type": "ProductTypeField", "name": "outputs", "fieldType": "outputBatchT" },
+    "resultType":   { "type": "ProductType", "fields": ["stateField", "outputsField"] },
+
+    "addT":         { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":        { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "oneLit":       { "type": "IntLit", "value": 1 },
+
+    "sParam":       { "type": "ParameterDecl", "name": "s", "paramType": "stateT" },
+    "eParam":       { "type": "ParameterDecl", "name": "e", "paramType": "eventT" },
+    "sRef":         { "type": "VarRef", "binder": "sParam" },
+    "eRef":         { "type": "VarRef", "binder": "eParam" },
+
+    "oldBalance":   { "type": "ProductFieldGet", "target": "sRef", "fieldName": "balance" },
+    "oldCount":     { "type": "ProductFieldGet", "target": "sRef", "fieldName": "count" },
+    "evAmount":     { "type": "ProductFieldGet", "target": "eRef", "fieldName": "amount" },
+    "evStamp":      { "type": "ProductFieldGet", "target": "eRef", "fieldName": "stamp" },
+
+    "newBalance":   { "type": "Application", "function": "addFn", "arguments": ["oldBalance", "evAmount"] },
+    "newCount":     { "type": "Application", "function": "addFn", "arguments": ["oldCount", "oneLit"] },
+
+    "newBalanceFV": { "type": "ProductFieldValue", "fieldName": "balance", "value": "newBalance" },
+    "newLastStampFV": { "type": "ProductFieldValue", "fieldName": "lastStamp", "value": "evStamp" },
+    "newCountFV":   { "type": "ProductFieldValue", "fieldName": "count", "value": "newCount" },
+    "newStateV":    { "type": "ProductValue", "ofType": "stateT", "fields": ["newBalanceFV", "newLastStampFV", "newCountFV"] },
+
+    "someNewBalance": { "type": "SumValue", "ofType": "optionInt", "caseName": "Some", "payload": "newBalance" },
+    "output0Value": { "type": "ProductFieldValue", "fieldName": "output_0", "value": "someNewBalance" },
+    "outputBatchValue": { "type": "ProductValue", "ofType": "outputBatchT", "fields": ["output0Value"] },
+
+    "stateFV":      { "type": "ProductFieldValue", "fieldName": "state", "value": "newStateV" },
+    "outputsFV":    { "type": "ProductFieldValue", "fieldName": "outputs", "value": "outputBatchValue" },
+    "resultValue":  { "type": "ProductValue", "ofType": "resultType", "fields": ["stateFV", "outputsFV"] },
+
+    "transitionLambda": { "type": "Lambda", "parameters": ["sParam", "eParam"], "body": "resultValue" },
+
+    "zeroLit":      { "type": "IntLit", "value": 0 },
+    "initBalanceFV": { "type": "ProductFieldValue", "fieldName": "balance", "value": "zeroLit" },
+    "initLastStampFV": { "type": "ProductFieldValue", "fieldName": "lastStamp", "value": "zeroLit" },
+    "initCountFV":  { "type": "ProductFieldValue", "fieldName": "count", "value": "zeroLit" },
+    "initialState": { "type": "ProductValue", "ofType": "stateT", "fields": ["initBalanceFV", "initLastStampFV", "initCountFV"] },
+
+    "inputStream":  { "type": "EventStream", "eventType": "eventT", "streamKind": "external" },
+    "outputStream": { "type": "EventStream", "eventType": "intT", "streamKind": "output" },
+    "receiveFx":    { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "sendFx":       { "type": "EffectCategory", "categoryName": "StateMachine.Send" },
+
+    "machine": {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": ["outputStream"],
+      "effects": ["receiveFx", "sendFx"]
+    }
+  }
+}

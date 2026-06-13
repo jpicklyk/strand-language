@@ -1,0 +1,89 @@
+# ledger.layer-a
+# Subject of the replay / time-travel / restart-resume demonstration.
+#
+# An event-sourced ledger: a state machine whose state is a running balance
+# over a sequence of deposit/withdraw events. State is the product
+#   { balance: Int, lastStamp: Int, count: Int }
+# and each input event is the product
+#   { amount: Int, stamp: Int }
+# where `amount` is the signed delta (positive deposit, negative withdrawal)
+# and `stamp` is a recorded IO value -- a timestamp the DRIVER read from the
+# host clock at the moment the event was admitted, then stamped INTO the event
+# payload before feeding it to the machine.
+#
+# The transition is PURE. It calls only Int.Add (a Q-065 Deterministic builtin)
+# and reads no clock, no filesystem, no network of its own:
+#   transition(s, e) =
+#     { state:   { balance:   s.balance + e.amount,
+#                  lastStamp: e.stamp,
+#                  count:     s.count + 1 },
+#       outputs: { output_0: Some(s.balance + e.amount) } }
+#
+# This is the soundness basis for replay (Q-065): because the transition
+# references only deterministic builtins and the only "world" it sees arrives
+# AS DATA on the event (the timestamp travels on an effect edge, not via a
+# Time.Now call inside the transition), re-folding the recorded event sequence
+# reproduces the trajectory bit-identically with zero live IO. The verifier
+# emits no NondeterministicInReplayContext warning for this machine.
+#
+# This Layer A source compiles to ledger.json beside it byte-for-byte (same
+# canonical dag-json, same root hash); the demo driver loads the .json. It is
+# authored in the explicit one-node-per-line form rather than density sugar so
+# the StateMachine + OutputBatch + multi-field product shape reads plainly.
+@v=1 root=machine
+
+# --- types ---
+intT          PRM Int
+amountField   PRF "amount" intT
+stampField    PRF "stamp" intT
+eventT        PRD [amountField stampField]
+balanceField  PRF "balance" intT
+lastStampField PRF "lastStamp" intT
+countField    PRF "count" intT
+stateT        PRD [balanceField lastStampField countField]
+someCase      SCS "Some" intT
+noneCase      SCS "None" _
+optionInt     SUM [someCase noneCase]
+output0Field  PRF "output_0" optionInt
+outputBatchT  PRD [output0Field]
+stateField    PRF "state" stateT
+outputsField  PRF "outputs" outputBatchT
+resultType    PRD [stateField outputsField]
+
+# --- transition: (stateT, eventT) -> resultType, pure, Int.Add only ---
+addT          FNT [intT intT] intT
+addFn         FN "strand-builtin:Int.Add" addT
+oneLit        ILT 1
+sParam        PRC "s" stateT
+eParam        PRC "e" eventT
+sRef          VAR sParam
+eRef          VAR eParam
+oldBalance    PFG sRef "balance"
+oldCount      PFG sRef "count"
+evAmount      PFG eRef "amount"
+evStamp       PFG eRef "stamp"
+newBalance    APP addFn [oldBalance evAmount]
+newCount      APP addFn [oldCount oneLit]
+newBalanceFV  PFV "balance" newBalance
+newLastStampFV PFV "lastStamp" evStamp
+newCountFV    PFV "count" newCount
+newStateV     PV stateT [newBalanceFV newLastStampFV newCountFV]
+someNewBalance SV optionInt "Some" newBalance
+output0Value  PFV "output_0" someNewBalance
+outputBatchValue PV outputBatchT [output0Value]
+stateFV       PFV "state" newStateV
+outputsFV     PFV "outputs" outputBatchValue
+resultValue   PV resultType [stateFV outputsFV]
+transitionLambda LAM [sParam eParam] resultValue
+
+# --- machine ---
+zeroLit       ILT 0
+initBalanceFV PFV "balance" zeroLit
+initLastStampFV PFV "lastStamp" zeroLit
+initCountFV   PFV "count" zeroLit
+initialState  PV stateT [initBalanceFV initLastStampFV initCountFV]
+inputStream   ESE eventT
+outputStream  ESO intT
+receiveFx     EFC "StateMachine.Receive"
+sendFx        EFC "StateMachine.Send"
+machine       SM transitionLambda initialState [inputStream] [outputStream] [receiveFx sendFx]

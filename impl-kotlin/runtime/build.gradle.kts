@@ -34,24 +34,33 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
 
-// The containment-demonstration tenant programs (compiled canonical dag-json)
-// live at the top-level demos/containment-host/programs/ as a single source of
-// truth (the demo is self-contained and discoverable there). Copy them onto the
-// test classpath under /demo/programs/ so ContainmentDemo and ContainmentDemoTest
-// load them via getResourceAsStream without duplicating the JSON in git or
-// depending on a fragile relative working-directory path.
-private val demoProgramsDir =
+// The demonstration programs (compiled canonical dag-json) live at the
+// top-level demos/<demo>/programs/ as a single source of truth (each demo is
+// self-contained and discoverable there). Copy them onto the test classpath
+// under /demo/programs/ so the driver/test pairs load them via
+// getResourceAsStream without duplicating the JSON in git or depending on a
+// fragile relative working-directory path.
+//   - demos/containment-host/programs : the Q-044 containment demonstration
+//   - demos/replay-timetravel/programs : the Q-059/Q-065 replay demonstration
+private val containmentProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/containment-host/programs")
+private val replayProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/replay-timetravel/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
-    from(demoProgramsDir) {
+    from(containmentProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
+    from(replayProgramsDir) {
         include("*.json")
         into("demo/programs")
     }
 }
 
 tasks.test {
-    inputs.dir(demoProgramsDir)
+    inputs.dir(containmentProgramsDir)
+    inputs.dir(replayProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -63,4 +72,15 @@ tasks.register<JavaExec>("containmentDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.ContainmentDemo")
+}
+
+// Print the replay / time-travel / restart-resume demonstration transcript.
+// Like containmentDemo, the driver lives in the test source set (it shares
+// scenario code with ReplayDemoTest). Usage: `./gradlew :runtime:replayDemo -q`.
+tasks.register<JavaExec>("replayDemo") {
+    group = "verification"
+    description = "Print the sound deterministic replay / time-travel / restart-resume demonstration transcript."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.ReplayDemo")
 }
