@@ -78,6 +78,14 @@ private val boundedRagProgramsDir =
 //     demonstration (untrusted model decisions as data into a verified bounded actuator)
 private val skillWorkflowProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/skill-workflow/programs")
+//   - demos/multi-agent-supervisor/programs : the supervised multi-agent group
+//     demonstration (concurrent per-agent-bounded actors; a rogue agent is contained)
+private val multiAgentSupervisorProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/multi-agent-supervisor/programs")
+//   - demos/verified-llm-output/programs : the constrain-then-verify structured-output
+//     demonstration (N-045 response-schema constraint + Q-047 runtime invariant check)
+private val verifiedLlmOutputProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/verified-llm-output/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(containmentProgramsDir) {
@@ -120,6 +128,14 @@ tasks.named<ProcessResources>("processTestResources") {
         include("*.json")
         into("demo/programs")
     }
+    from(multiAgentSupervisorProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
+    from(verifiedLlmOutputProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
 }
 
 tasks.test {
@@ -133,6 +149,8 @@ tasks.test {
     inputs.dir(llmVirtualizationProgramsDir)
     inputs.dir(boundedRagProgramsDir)
     inputs.dir(skillWorkflowProgramsDir)
+    inputs.dir(multiAgentSupervisorProgramsDir)
+    inputs.dir(verifiedLlmOutputProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -245,4 +263,26 @@ tasks.register<JavaExec>("skillWorkflowDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.SkillWorkflowDemo")
+}
+
+// Print the supervised multi-agent group demonstration transcript. Like the
+// others, the driver lives in the test source set (it shares scenario code with
+// MultiAgentSupervisorDemoTest). Usage: `./gradlew :runtime:multiAgentSupervisorDemo -q`.
+tasks.register<JavaExec>("multiAgentSupervisorDemo") {
+    group = "verification"
+    description = "Print the supervised multi-agent group demonstration transcript (concurrent per-agent-bounded actors as a verified orchestration; a rogue agent's over-reach is contained and the group survives)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.MultiAgentSupervisorDemo")
+}
+
+// Print the constrain-then-verify structured-output demonstration transcript.
+// Like the others, the driver lives in the test source set (it shares scenario
+// code with VerifiedLlmOutputDemoTest). Usage: `./gradlew :runtime:verifiedLlmOutputDemo -q`.
+tasks.register<JavaExec>("verifiedLlmOutputDemo") {
+    group = "verification"
+    description = "Print the constrain-then-verify structured-output demonstration transcript (N-045 ResponseSchemaSpec constrains the model; Q-047 runtime invariant verifies what it returns)."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.VerifiedLlmOutputDemo")
 }

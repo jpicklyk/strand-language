@@ -277,3 +277,56 @@ Run the assertion-backed test that pins every property, from `impl-kotlin/`:
 ```sh
 ./gradlew :runtime:test --tests "org.strand.runtime.SkillWorkflowDemoTest"
 ```
+
+### multi-agent-supervisor
+
+A supervised multi-agent group — concurrent agents as a verified orchestration,
+each with its own effect bound. A supervisor and several worker agents run as a
+`MachineGroup` of coroutine actors wired through content-addressed streams; the
+orchestration itself is a verified graph (topology validated, each agent
+type-checked), not trusted glue code. The distinctive property is supervised
+isolation: when one worker reaches an effect beyond the group's grant it is denied
+at the actor boundary with a `DenialReport`, that actor halts cleanly, and the
+other agents keep running and complete — a rogue or compromised agent is contained
+without taking down the multi-agent system. This is the actor-model substrate
+(arguably a sounder foundation for concurrent multi-agent than a state-graph
+simulation) with per-agent harm bounds. The Kotlin driver and its assertion test
+live in the `:runtime` test source set; the programs and narrative live under
+[`multi-agent-supervisor/`](multi-agent-supervisor/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:multiAgentSupervisorDemo -q
+```
+
+Run the assertion-backed test that pins every property, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.MultiAgentSupervisorDemoTest"
+```
+
+### verified-llm-output
+
+Constrain the model, then verify what it returns — two complementary layers,
+because constraining is not guaranteeing. An LLM `Generate` call carries an N-045
+`ResponseSchemaSpec` that projects to the provider's structured-output JSON schema
+(the constraint on what the model may emit), and the returned value flows into a
+Strand `Schema`-typed position whose invariant is checked at runtime (Q-047): a
+structurally-typed-but-semantically-invalid response — a constrained model can
+still return one — raises `SchemaInvariantViolation` before it reaches output, so
+malformed model output never escapes. Deterministic via a mock LLM transport. The
+Kotlin driver and its assertion test live in the `:runtime` test source set; the
+programs and narrative live under [`verified-llm-output/`](verified-llm-output/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:verifiedLlmOutputDemo -q
+```
+
+Run the assertion-backed test that pins every property, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.VerifiedLlmOutputDemoTest"
+```
