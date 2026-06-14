@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "root": "recordCall",
+  "nodes": {
+    "intT":  { "type": "PrimitiveType", "kind": "Int" },
+    "boolT": { "type": "PrimitiveType", "kind": "Bool" },
+    "strT":  { "type": "PrimitiveType", "kind": "String" },
+
+    "zero":      { "type": "IntLit", "value": 0 },
+    "hundred":   { "type": "IntLit", "value": 100 },
+    "sParam":    { "type": "ParameterDecl", "name": "s", "paramType": "intT" },
+    "sRef":      { "type": "VarRef", "binder": "sParam" },
+
+    "geT":       { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "ge":        { "type": "ForeignNode", "target": "strand-builtin:Int.Ge", "foreignType": "geT" },
+    "leT":       { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "le":        { "type": "ForeignNode", "target": "strand-builtin:Int.Le", "foreignType": "leT" },
+    "andT":      { "type": "FunctionType", "parameters": ["boolT", "boolT"], "result": "boolT" },
+    "and":       { "type": "ForeignNode", "target": "strand-builtin:Bool.And", "foreignType": "andT" },
+
+    "lowerOk":   { "type": "Application", "function": "ge", "arguments": ["sRef", "zero"] },
+    "upperOk":   { "type": "Application", "function": "le", "arguments": ["sRef", "hundred"] },
+    "inRange":   { "type": "Application", "function": "and", "arguments": ["lowerOk", "upperOk"] },
+    "boundedPred": { "type": "Lambda", "parameters": ["sParam"], "body": "inRange" },
+
+    "boundedInvariant": {
+      "type": "Invariant",
+      "invariantName": "score_in_0_100",
+      "targetSchema": "boundedScore",
+      "body": "boundedPred"
+    },
+    "boundedScore": {
+      "type": "Schema",
+      "schemaName": "BoundedScore",
+      "valueType": "intT",
+      "invariants": ["boundedInvariant"]
+    },
+
+    "scoreSpec": { "type": "ResponseSchemaSpec", "schema": "boundedScore" },
+
+    "scoreParam": { "type": "ParameterDecl", "name": "score", "paramType": "boundedScore" },
+    "scoreParamRef": { "type": "VarRef", "binder": "scoreParam" },
+    "recordScore": { "type": "Lambda", "parameters": ["scoreParam"], "body": "scoreParamRef" },
+
+    "llmGenFx":  { "type": "EffectCategory", "categoryName": "LLM.Generate", "parameters": ["strT", "strT"] },
+    "modelT":    { "type": "FunctionType", "parameters": ["strT"], "result": "intT", "effects": ["llmGenFx"] },
+    "model":     { "type": "ForeignNode", "target": "strand-builtin:Demo.ScoreModel",
+                   "foreignType": "modelT", "effects": ["llmGenFx"] },
+
+    "promptLit": { "type": "StringLit", "value": "Rate the relevance of doc D to query Q on a 0-100 scale." },
+    "providerLit": { "type": "StringLit", "value": "demo" },
+    "modelNameLit": { "type": "StringLit", "value": "demo-scorer-v1" },
+    "modelDecl": { "type": "EffectDecl", "effectType": "llmGenFx",
+                   "parameters": ["providerLit", "modelNameLit"] },
+    "modelCall": { "type": "Application", "function": "model",
+                   "arguments": ["promptLit"], "effectInstances": ["modelDecl"] },
+
+    "recordCall": { "type": "Application", "function": "recordScore", "arguments": ["modelCall"] }
+  }
+}
