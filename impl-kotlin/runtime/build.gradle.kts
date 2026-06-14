@@ -86,6 +86,10 @@ private val multiAgentSupervisorProgramsDir =
 //     demonstration (N-045 response-schema constraint + Q-047 runtime invariant check)
 private val verifiedLlmOutputProgramsDir =
     projectDir.parentFile.parentFile.resolve("demos/verified-llm-output/programs")
+//   - demos/agent-platform/programs : the end-to-end lifecycle narrative
+//     (admit -> run -> verify -> withstand -> audit, tying the suite into a platform)
+private val agentPlatformProgramsDir =
+    projectDir.parentFile.parentFile.resolve("demos/agent-platform/programs")
 
 tasks.named<ProcessResources>("processTestResources") {
     from(containmentProgramsDir) {
@@ -136,6 +140,10 @@ tasks.named<ProcessResources>("processTestResources") {
         include("*.json")
         into("demo/programs")
     }
+    from(agentPlatformProgramsDir) {
+        include("*.json")
+        into("demo/programs")
+    }
 }
 
 tasks.test {
@@ -151,6 +159,7 @@ tasks.test {
     inputs.dir(skillWorkflowProgramsDir)
     inputs.dir(multiAgentSupervisorProgramsDir)
     inputs.dir(verifiedLlmOutputProgramsDir)
+    inputs.dir(agentPlatformProgramsDir)
 }
 
 // Print the containment-demonstration transcript. The driver lives in the test
@@ -285,4 +294,15 @@ tasks.register<JavaExec>("verifiedLlmOutputDemo") {
     dependsOn("testClasses", "processTestResources")
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("org.strand.runtime.VerifiedLlmOutputDemo")
+}
+
+// Print the end-to-end agent-platform lifecycle narrative transcript. Like the
+// others, the driver lives in the test source set (it shares scenario code with
+// AgentPlatformDemoTest). Usage: `./gradlew :runtime:agentPlatformDemo -q`.
+tasks.register<JavaExec>("agentPlatformDemo") {
+    group = "verification"
+    description = "Print the end-to-end agent-platform narrative transcript: one untrusted agent task walked through admit -> run -> verify -> withstand -> audit, each guarantee drawn from the demo suite."
+    dependsOn("testClasses", "processTestResources")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("org.strand.runtime.AgentPlatformDemo")
 }

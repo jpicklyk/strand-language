@@ -7,7 +7,42 @@ it. Demonstrations are distinct from the `corpus/` conformance programs and the
 `evaluation/` measurements: a demonstration shows a capability working end to end,
 where the measurements quantify it and the corpus pins its hashes.
 
+**Start here:** [`agent-platform/`](agent-platform/README.md) is the end-to-end
+narrative — it walks one untrusted, agent-generated task through the full platform
+lifecycle (admit it under a provable harm bound, run it bounded, verify its output,
+withstand attacks, audit the run) and draws each guarantee from one of the
+demonstrations below. Read it first for the whole story; the rest are the
+individual mechanisms it composes.
+
 ## Index
+
+### agent-platform
+
+The end-to-end narrative — the spine that ties the suite into a platform. One
+untrusted, agent-generated task (a retrieval-backed support agent) is walked
+through the full lifecycle of running it on Strand: **admit** it only after
+computing its maximum harm from the artifact and confirming it is within the
+tenant's grant and free of egress; **run** it bounded, retrieving from a refined
+index and calling the model under exactly its declared capabilities; **verify**
+the model's structured output at runtime before it is used; **withstand** attacks
+— an over-reaching capability is denied, a poisoned input is contained as data,
+an out-of-range model response is rejected; and **audit** the run, which is
+content-addressed and replays deterministically. Each stage draws its guarantee
+from one of the demonstrations below, narrated as a single task's journey. The
+Kotlin driver and its assertion test live in the `:runtime` test source set; the
+narrative lives under [`agent-platform/`](agent-platform/README.md).
+
+Run the transcript, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:agentPlatformDemo -q
+```
+
+Run the assertion-backed test that pins every stage, from `impl-kotlin/`:
+
+```sh
+./gradlew :runtime:test --tests "org.strand.runtime.AgentPlatformDemoTest"
+```
 
 ### containment-host
 
