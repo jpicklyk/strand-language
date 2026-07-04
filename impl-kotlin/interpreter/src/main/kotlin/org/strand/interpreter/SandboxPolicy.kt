@@ -36,6 +36,7 @@ import java.nio.file.Paths
 data class SandboxPolicy(
     val fs: FsPolicy,
     val net: NetPolicy,
+    val process: ProcessPolicy = ProcessPolicy(),
 ) {
     companion object {
         /**
@@ -105,6 +106,7 @@ data class SandboxPolicy(
         val OPEN_DEFAULT = SandboxPolicy(
             fs = FsPolicy(workspaceRoot = null, escape = EscapePolicy.Allow, followSymlinks = true),
             net = NetPolicy(defaultDeny = false, allowedHosts = emptyList(), blockedRanges = emptyList()),
+            process = ProcessPolicy(defaultDeny = false, allowedCommands = emptyList()),
         )
 
         /**
@@ -130,6 +132,10 @@ data class SandboxPolicy(
                 blockedRanges = SECURE_DEFAULT_BLOCKED_RANGES,
                 blockedHostnames = SECURE_DEFAULT_BLOCKED_HOSTNAMES,
                 dnsPolicy = DnsPolicy.PinAtCheck,
+            ),
+            process = ProcessPolicy(
+                defaultDeny = true,
+                allowedCommands = emptyList(),
             ),
         )
     }
@@ -192,6 +198,34 @@ data class NetPolicy(
 )
 
 enum class DnsPolicy { PinAtCheck, RecheckAtConnect, RequireIpLiteral }
+
+/**
+ * Q-041 follow-up: process-spawn sandbox policy. Mirrors the shape of
+ * [FsPolicy] / [NetPolicy] — a default-deny toggle plus an allowlist of
+ * permitted commands.
+ *
+ * `Process.Spawn` shells out to an arbitrary executable, which is the
+ * broadest single capability a host can grant: the child process runs
+ * outside every Strand sandbox and outside the effect-closure guarantees
+ * (its transitive effects are opaque). This policy is the runtime gate on
+ * that call, analogous to [FsSandbox] for `Fs.*` and [NetSandbox] for the
+ * network builtins.
+ *
+ * @property defaultDeny when true, only commands matching an entry in
+ *   [allowedCommands] may spawn; every other command raises
+ *   [SandboxViolationKind.ProcessSpawnBlocked]. When false, every command
+ *   is admitted — the open library default, matching the pre-policy
+ *   behaviour so the existing test baseline stays green.
+ * @property allowedCommands the set of permitted executables. A command
+ *   argument matches when it equals an entry exactly, or when its
+ *   filename component (the last path segment) equals an entry — so a
+ *   host may allowlist either a bare name (`git`) or an absolute path
+ *   (`/usr/bin/git`). Only consulted when [defaultDeny] is true.
+ */
+data class ProcessPolicy(
+    val defaultDeny: Boolean = false,
+    val allowedCommands: List<String> = emptyList(),
+)
 
 /**
  * Pluggable name resolver used by [NetSandbox]. The production
@@ -541,5 +575,38 @@ object NetSandbox {
             }
         }
         return false
+    }
+}
+
+/**
+ * Process-side sandbox enforcer. The `Process.Spawn` builtin calls
+ * [check] with the command string before invoking `ProcessBuilder.start`.
+ *
+ *  1. If `policy.defaultDeny` is false, no constraint — the host opted
+ *     out (the [SandboxPolicy.OPEN_DEFAULT] library default).
+ *  2. Otherwise the command must match an entry in
+ *     `policy.allowedCommands`, either exactly or by filename component
+ *     (last path segment), so a host may allowlist a bare name or an
+ *     absolute path. A non-match raises
+ *     [SandboxViolation(ProcessSpawnBlocked)].
+ */
+object ProcessSandbox {
+    fun check(policy: ProcessPolicy, cmd: String) {
+        if (!policy.defaultDeny) return
+
+        val cmdFileName = Paths.get(cmd).fileName?.toString()
+        val permitted = policy.allowedCommands.any { allowed ->
+            allowed == cmd || allowed == cmdFileName
+        }
+        if (!permitted) {
+            throw SandboxViolation(
+                SandboxViolationKind.ProcessSpawnBlocked,
+                if (policy.allowedCommands.isEmpty())
+                    "command '$cmd' is blocked (process spawning is denied by default and no command is allowlisted)"
+                else
+                    "command '$cmd' is not in the process allowlist " +
+                        "(${policy.allowedCommands.joinToString(", ")})",
+            )
+        }
     }
 }

@@ -347,6 +347,60 @@ class SandboxPolicyTest {
         assertEquals(SandboxViolationKind.HttpSchemeRejected, ex.kind)
     }
 
+    // ---------- Process-spawn scenarios (Q-041 follow-up) ----------
+
+    @Test
+    fun `ProcessSandbox under OPEN policy permits a benign spawn`() {
+        // OPEN_DEFAULT's ProcessPolicy has defaultDeny=false, so the
+        // check is a no-op regardless of the command — matching the
+        // pre-policy behaviour that keeps the existing baseline green.
+        ProcessSandbox.check(SandboxPolicy.OPEN_DEFAULT.process, "git")
+        ProcessSandbox.check(SandboxPolicy.OPEN_DEFAULT.process, "/bin/rm")
+        // No exception thrown == permitted.
+    }
+
+    @Test
+    fun `ProcessSandbox under SECURE policy denies a non-allowlisted command with ProcessSpawnBlocked`() {
+        val ex = org.junit.jupiter.api.assertThrows<SandboxViolation> {
+            ProcessSandbox.check(SandboxPolicy.SECURE_DEFAULT.process, "curl")
+        }
+        assertEquals(SandboxViolationKind.ProcessSpawnBlocked, ex.kind)
+    }
+
+    @Test
+    fun `ProcessSandbox under SECURE policy permits an allowlisted command`() {
+        val policy = ProcessPolicy(defaultDeny = true, allowedCommands = listOf("git"))
+        // Exact-name match.
+        ProcessSandbox.check(policy, "git")
+        // Filename-component match against an absolute path.
+        ProcessSandbox.check(policy, "/usr/bin/git")
+        // A different command is still denied.
+        val ex = org.junit.jupiter.api.assertThrows<SandboxViolation> {
+            ProcessSandbox.check(policy, "sh")
+        }
+        assertEquals(SandboxViolationKind.ProcessSpawnBlocked, ex.kind)
+    }
+
+    @Test
+    fun `Process Spawn builtin under SECURE policy denies before spawning`() {
+        // Drive the actual builtin: under a deny-by-default process
+        // policy the SandboxViolation fires BEFORE ProcessBuilder.start,
+        // so no child process is ever created.
+        Builtins.sandboxPolicy = SandboxPolicy(
+            fs = FsPolicy(workspaceRoot = null, escape = EscapePolicy.Allow),
+            net = NetPolicy(defaultDeny = false),
+            process = ProcessPolicy(defaultDeny = true, allowedCommands = emptyList()),
+        )
+        val fn = Builtins.lookup("strand-builtin:Process.Spawn")!!
+        val ex = org.junit.jupiter.api.assertThrows<SandboxViolation> {
+            fn.invoke(listOf(
+                Value.StringV("some-command-that-must-not-run"),
+                Value.SumV("Nil", null),
+            ))
+        }
+        assertEquals(SandboxViolationKind.ProcessSpawnBlocked, ex.kind)
+    }
+
     // ---------- Auxiliary policy primitive tests ----------
 
     @Test
