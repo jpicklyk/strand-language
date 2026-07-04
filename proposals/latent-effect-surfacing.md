@@ -53,3 +53,22 @@ Small to medium. One accumulator and one additive surfacing on `VerifyResult`, v
 - [`decisions/ADR-004-effects-as-edges.md`](../decisions/ADR-004-effects-as-edges.md) — the effect closure this extends
 - [`open-questions.md`](../open-questions.md) — Q-070 (resolved via direction 1), Q-071 (registered), Q-067, Q-044, Q-039
 - [`demos/agent-workflow/README.md`](../demos/agent-workflow/README.md) — the ToolDef over-reach shape this surfaces statically
+
+## Implementation note
+
+Built on branch `reason-first` in `impl-kotlin/`. Additive and hash-neutral, verifier-only; the interpreter, VM, runtime, canonical encoder, epoch constant, and prelude are untouched. `CorpusGoldenHashTest` moved no hash (117 tests, 0 failures).
+
+Surfacing (`verifier/src/main/kotlin/org/strand/verifier/VerifyError.kt`):
+- `VerifyResult.Ok` gains `latentClosures: Map<NodeId, Set<NodeId>> = emptyMap()` (default-empty, so every existing construction site and consumer compiles and behaves unchanged), plus accessors `VerifyResult.Ok.rootLatentClosure(root)` and `VerifyResult.Ok.totalClosure(root) = rootClosure(root) ∪ rootLatentClosure(root)`.
+
+Accumulation (`verifier/src/main/kotlin/org/strand/verifier/Verifier.kt`):
+- `VerifyState.latentClosures` — the parallel per-site accumulator, mirroring `VerifyState.nodeClosures`.
+- `VerifyState.addLatent(id, surface)` — folds a surface into the site's latent entry (union, no-op on empty).
+- `VerifyState.effectSurfaceOf(type)` — the effect surface of a value is the `TypeExpr.Fun` effect row (empty for any other shape). This covers both contributors uniformly: a Lambda implementation's declared effects and a ForeignNode's declared effects (which `inferForeignNode` folds into the returned `Fun.effects`).
+- Contributor 1 (Q-070), in `inferToolDef`: after `recordClosure(id, emptySet())`, `addLatent(id, effectSurfaceOf(implFun))` — the tool implementation's effect surface, keyed by the ToolDef NodeId, kept out of the root closure.
+- Contributor 2 (Q-071), in `inferApplication`: after the direct-closure `recordClosure`, each `node.arguments[i]` folds `effectSurfaceOf(argTypes[i])` into `latentClosures` keyed by the argument NodeId, plus a `resolveProjectedForeignNode(argId)` fallback that adds the resolved ForeignNode's declared `effects` (for a callback whose reference-site type row is empty but which resolves through the NodeRef/VarRef/Let chain to an effect-bearing ForeignNode).
+- Root aggregate: computed at the single `VerifyResult.Ok` construction site in `Verifier.verify` (the same site Q-067 populates `nodeClosures`) as the union of every per-site contribution, unioned into the root's entry. `infer` is not threaded with the root NodeId, so the aggregate is assembled once here rather than during the recursive walk.
+
+Deviations from the spec: none material. The proposal's sketch said "at ToolDef admission … and into the root's latent set" and "record its effect surface into `latentClosures`" at Application inference — implemented as per-site keying plus a root aggregate computed at the Ok site (equivalent, and it keeps `infer` root-agnostic). The projected-ForeignNode fallback reads the resolved node's already-validated `effects` directly rather than re-running edge validation (the argument was inferred earlier in the same pass, so `inferForeignNode` already validated those edges).
+
+Tests: `corpus/src/test/kotlin/org/strand/corpus/LatentEffectClosureTest.kt`, 4 tests, all passing — (1) an effectful-ToolDef program (verify-only inline fixture) handing a `Filesystem.Write` tool to an Anthropic Generate call surfaces `{LLM.Generate}` in root and `{Filesystem.Write}` in latent (and asserts the write is absent from root, and `totalClosure` is their union, and the ToolDef site is keyed individually); (2) a higher-order `Filesystem.Write` callback passed as an Application argument (verify-only inline fixture, `List.Map`-shaped) surfaces `{Filesystem.Write}` in latent with an empty root closure; (3) corpus 67's pure-Lambda ToolDef contributes an empty latent channel; (4) benign corpus 16 surfaces an empty latent channel with `totalClosure == rootClosure`. The two effectful programs are inline fixtures (not files in the golden corpus) so no golden hash is added. Full suite: 2404 tests, 3 skipped, 0 failures.

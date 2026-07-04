@@ -100,6 +100,22 @@ class Verifier(
         // may sit alongside the program it documents.
         state.checkManifests()
         if (state.errors.isNotEmpty()) return VerifyResult.Failed(state.errors)
+        // Q-070 / Q-071: surface the latent effect channel keyed by NodeId as
+        // the per-site map, plus the program root's aggregate latent set — the
+        // union of every recorded contribution (ToolDef implementations and
+        // higher-order callback arguments). The root aggregate is computed here,
+        // the single Ok construction site, rather than threaded through the
+        // recursive `infer` (which does not carry the root NodeId). If the root
+        // already has a per-site entry (it is itself an effectful ToolDef or
+        // Application argument — not a shape any current program takes, but
+        // defensively handled) it is unioned in rather than overwritten.
+        val latentBySite = state.latentClosures.toMap()
+        val rootLatentAggregate = latentBySite.values.flatten().toSet()
+        val latentClosures = if (rootLatentAggregate.isEmpty()) {
+            latentBySite
+        } else {
+            latentBySite + (root to ((latentBySite[root] ?: emptySet()) + rootLatentAggregate))
+        }
         return VerifyResult.Ok(
             rootType,
             state.nodeTypes.toMap(),
@@ -109,6 +125,9 @@ class Verifier(
             // UncoveredEffects) so a host reads the harm bound's `closure(g)`
             // instead of re-deriving it. `VerifyResult` is not encoded — hash-neutral.
             nodeClosures = state.nodeClosures.toMap(),
+            // Q-070 / Q-071: the parallel latent-effect channel (indirectly-
+            // reachable effect surface). Also not encoded — hash-neutral.
+            latentClosures = latentClosures,
         )
     }
 
@@ -267,6 +286,21 @@ class Verifier(
         val nodeClosures = mutableMapOf<NodeId, Set<NodeId>>()
 
         /**
+         * Q-070 / Q-071: latent effect surface — the union of effect surfaces
+         * reachable only through indirect invocation, keyed by NodeId exactly as
+         * [nodeClosures] is. Distinct from [nodeClosures], which holds the
+         * directly-performed closure the verifier walks through Application
+         * edges. Two contributors fold in during [infer]: N-044 ToolDef
+         * implementations (at [inferToolDef]) and higher-order callbacks — any
+         * effectful value in argument position (at [inferApplication]). Every
+         * contribution is also unioned into the program root's entry via
+         * [addLatent], so [VerifyResult.Ok.rootLatentClosure] reads the whole
+         * latent surface off the root. Surfaced on [VerifyResult.Ok] additively;
+         * [VerifyResult] is not encoded, so this is hash-neutral.
+         */
+        val latentClosures = mutableMapOf<NodeId, Set<NodeId>>()
+
+        /**
          * Q-039: per-verification structural-equality cache for
          * [ProjectionSource.LiteralNode] targets and the EffectDecl
          * literal parameters they're matched against. Keyed by the
@@ -284,6 +318,30 @@ class Verifier(
         fun recordClosure(id: NodeId, c: Set<NodeId>) {
             nodeClosures[id] = c
         }
+
+        /**
+         * Q-070 / Q-071: fold a latent effect surface [surface] into the
+         * latent channel at site [id]. No-op for an empty surface. The
+         * per-site entry accumulates (unions) across multiple contributions
+         * at the same NodeId; the program root's aggregate latent set is
+         * computed at the single [VerifyResult.Ok] construction site as the
+         * union of every recorded contribution (see [verify]).
+         */
+        fun addLatent(id: NodeId, surface: Set<NodeId>) {
+            if (surface.isEmpty()) return
+            latentClosures[id] = (latentClosures[id] ?: emptySet()) + surface
+        }
+
+        /**
+         * Q-070 / Q-071: the effect surface of a value whose inferred type is
+         * [type] — the effect row of a [TypeExpr.Fun] (empty for any other
+         * shape). For both a Lambda and a ForeignNode implementation the
+         * inferred value type is a `Fun` whose `effects` set is the surface
+         * (ForeignNode folds its declared effects into that row, see
+         * [inferForeignNode]).
+         */
+        fun effectSurfaceOf(type: TypeExpr): Set<NodeId> =
+            (type as? TypeExpr.Fun)?.effects ?: emptySet()
 
         /**
          * Type-compatibility for value-flow positions (Application argument
@@ -878,6 +936,32 @@ class Verifier(
             for (argId in node.arguments) closure += closureOf(argId)
             closure += funType.effects
             recordClosure(id, closure)
+
+            // Q-071: higher-order callbacks. Any effectful value passed as an
+            // ARGUMENT (not as the applied function `node.function`) may be
+            // invoked indirectly inside the callee — e.g. a `List.Map` over an
+            // effectful callback releases the callback's effects at a call site
+            // the verifier never walks. Its effect surface is therefore absent
+            // from the closure above and folds into the latent channel instead.
+            // A value that is BOTH an argument here and directly applied
+            // elsewhere already contributes its direct use to `closure`; this
+            // adds only its indirect reach. Two shapes are surfaced: (a) an
+            // argument whose inferred type carries a non-empty effect row, and
+            // (b) an argument that resolves through the projected-ForeignNode
+            // chain to an effect-bearing ForeignNode (whose type-level effect
+            // row may be empty at the reference site but whose declared effects
+            // are the surface the runtime releases).
+            for ((i, argId) in node.arguments.withIndex()) {
+                val surface = effectSurfaceOf(argTypes[i]).toMutableSet()
+                // The projected-ForeignNode fallback reads the already-validated
+                // declared effects off the resolved node (the argument was
+                // inferred above, so `inferForeignNode` has already checked those
+                // edges — we only read them here).
+                resolveProjectedForeignNode(argId)?.let { foreign ->
+                    surface += foreign.effects
+                }
+                addLatent(argId, surface)
+            }
 
             return funType.result
         }
@@ -2034,6 +2118,13 @@ class Verifier(
             // sites during the provider's loop; the surrounding
             // capability context covers them there.
             recordClosure(id, emptySet())
+            // Q-070: the implementation's effect surface — the FunctionType
+            // effect row (a Lambda's declared effects, or a ForeignNode's
+            // declared effects folded into its returned Fun) — is reachable
+            // only through the model's indirect tool-use invocation, so it
+            // belongs in the latent channel keyed by this ToolDef's NodeId,
+            // NOT in the (directly-performed) root closure above.
+            addLatent(id, effectSurfaceOf(implFun))
             // Surface type: opaque Bytes (Strand-side opaque-handle
             // convention, matching Resource / MapV).
             return TypeExpr.Prim(Primitive.Bytes)

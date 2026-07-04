@@ -1202,6 +1202,25 @@ sealed class VerifyResult {
      * subtracts the category it intercepts), so it is the exact closure the
      * verifier enforced rather than a looser upper bound. [VerifyResult] is not
      * part of the canonical node encoding, so carrying it moves no hash.
+     *
+     * [latentClosures] (Q-070 / Q-071) is the parallel channel for the effect
+     * surface reachable only through *indirect* invocation — effects the model
+     * or a higher-order builtin may release at runtime, which therefore never
+     * reach an Application the verifier walks and so are absent from
+     * [nodeClosures]. Two contributors fold into it: (a) N-044 ToolDef
+     * implementations, whose effect surface fires only inside the provider's
+     * tool-use loop (keyed by the ToolDef NodeId, and unioned into the root's
+     * latent set); (b) higher-order callbacks — any effectful value passed as an
+     * *argument* into an Application (a value whose inferred type is a
+     * FunctionType with a non-empty effect row, or which resolves to an
+     * effect-bearing ForeignNode), which the callee may invoke indirectly. Read
+     * the program root's latent surface via [rootLatentClosure], and the total
+     * pre-execution reach an orchestrating principal reasons about via
+     * [totalClosure] = [rootClosure] ∪ [rootLatentClosure]. Keeping the two
+     * channels distinguishable leaves the Q-044 harm-bound arithmetic and the
+     * Handler closure-subtraction semantics of `closure(g)` (directly performed)
+     * undisturbed. Like [nodeClosures], this lives on the verify result only —
+     * [VerifyResult] is not encoded, so it is hash-neutral.
      */
     data class Ok(
         val rootType: TypeExpr,
@@ -1209,6 +1228,7 @@ sealed class VerifyResult {
         val deferredChecks: List<VerifyError.SchemaInvariantDeferred> = emptyList(),
         val warnings: List<VerifyWarning> = emptyList(),
         val nodeClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
+        val latentClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
     ) : VerifyResult() {
         /**
          * Q-067: the effect closure of the program [root] — the set of
@@ -1217,6 +1237,27 @@ sealed class VerifyResult {
          * no effects, and (defensively) empty if [root] has no recorded closure.
          */
         fun rootClosure(root: NodeId): Set<NodeId> = nodeClosures[root] ?: emptySet()
+
+        /**
+         * Q-070 / Q-071: the latent effect surface of the program [root] — the
+         * union of effect surfaces reachable only through indirect invocation
+         * (ToolDef implementations and higher-order callbacks). Empty for a
+         * program that constructs no effectful tool and passes no effectful
+         * value in argument position. This is NOT part of the directly-performed
+         * `closure(g)`; it is the additional reach a latent capability could
+         * exercise if invoked.
+         */
+        fun rootLatentClosure(root: NodeId): Set<NodeId> = latentClosures[root] ?: emptySet()
+
+        /**
+         * Q-070 / Q-071: the total pre-execution effect reach of [root] — the
+         * union of the directly-performed [rootClosure] and the indirectly-
+         * reachable [rootLatentClosure]. This is the value the reasoning surface
+         * (ADR-010) reports when a host must reason about everything a program
+         * could reach, latent capabilities included.
+         */
+        fun totalClosure(root: NodeId): Set<NodeId> =
+            rootClosure(root) + rootLatentClosure(root)
     }
     data class Failed(val errors: List<VerifyError>) : VerifyResult()
 }
