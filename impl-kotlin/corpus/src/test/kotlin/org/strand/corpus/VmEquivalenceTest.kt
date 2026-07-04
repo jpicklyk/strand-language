@@ -16,30 +16,43 @@ import org.strand.interpreter.Interpreter
 import org.strand.verifier.VerifyResult
 import org.strand.verifier.Verifier
 import org.strand.vm.Vm
+import java.nio.file.Files
 
 /**
- * Q-017 step 1 corpus equivalence test. For every Layer 1 + Layer 4
- * corpus program below, the test asserts the bytecode VM produces the
- * same result as the tree-walking interpreter.
+ * Q-017 step 1 corpus equivalence test. For every value-path corpus
+ * program, the test asserts the bytecode VM produces the same result as
+ * the tree-walking interpreter.
  *
- * The fixture list grows as each layer's lowering rules land: it now
- * spans Layer 1 (literals, lambda, application, let, varref, NodeRef,
- * TypeAbstraction, ForeignNode), Layer 3 (capabilities, handlers), and
- * Layer 5 (Match, Fixpoint, Product/SumValue, ConstructorPattern,
- * recursive types). State-machine and async programs are covered by
- * [VmMachineEquivalenceTest] / [VmAsyncMachineEquivalenceTest]; the
- * static schema-invariant dispatch is covered by
- * [VmSchemaEquivalenceTest]. A schema-bearing program is admissible here
- * when its *value path* stays within the lowerer's scope — the Schema /
- * Invariant nodes are reachable only through type edges, which the
- * lowerer erases (see corpus 82 below). The lowerer raises
- * [org.strand.bytecode.LoweringNotImplemented] for any category still out
- * of scope.
+ * The program set is DERIVED from a directory scan of the shared
+ * top-level `../corpus/` directory (via [GoldenHashes.enumerateProgramFiles],
+ * the same enumeration [CorpusGoldenHashTest] uses) MINUS the explicit
+ * [EXCLUSIONS] set below. This closes the silent-coverage gap the old
+ * hand-maintained `listOf(...)` left: a newly-added value-path corpus
+ * program is now equivalence-tested automatically rather than being
+ * omitted until someone remembers to append it.
  *
- * The corpus programs 08-product-type-decl and 09-sum-type-decl are
- * type-declaration only — their root nodes evaluate to a runtime Value
- * the verifier classifies as a Type, but the interpreter declines to
- * evaluate them. They're excluded here because the interpreter throws.
+ * Every exclusion carries a documented reason. The three categories:
+ *
+ *  - **Not a value path.** State-machine, async-actor, and stream-bridge
+ *    programs are covered by [VmMachineEquivalenceTest] /
+ *    [VmAsyncMachineEquivalenceTest]; the lowerer raises
+ *    [org.strand.bytecode.LoweringNotImplemented] for StateMachine and
+ *    friends, so they cannot run here. Multi-store composition programs
+ *    reference sibling stores this single-store harness does not wire up.
+ *  - **Schema / rejection semantics.** Schema-invariant programs are
+ *    covered by [VmSchemaEquivalenceTest]; the schema-violation-by-design
+ *    programs (e.g. corpus 83) diverge on purpose because the VM erases
+ *    schemas pre-bytecode while the interpreter enforces them at runtime.
+ *    Programs whose canonical *root* fails to verify or evaluate (the
+ *    type-declaration-only 08/09) are also excluded.
+ *  - **Representation inequality.** Corpus 05 returns a bare closure; the
+ *    interpreter's [org.strand.interpreter.Value.Closure] and the VM's
+ *    `VmClosure` are behaviorally equivalent but not Kotlin-equal (one
+ *    captures its environment by reference, the other by content array).
+ *
+ * The state-machine / async / schema equivalence suites are left as-is;
+ * they are covered by their own directory-aware or hand-maintained
+ * fixtures.
  */
 class VmEquivalenceTest {
 
@@ -61,114 +74,120 @@ class VmEquivalenceTest {
         fun restoreSystemClock() {
             Builtins.clock = Builtins.SystemClock
         }
+
+        /**
+         * Corpus-relative program paths excluded from the value-path
+         * equivalence scan, each with the reason it is not admissible
+         * here. Keyed by the same corpus-relative path
+         * [GoldenHashes.enumerateProgramFiles] yields (forward slashes).
+         */
+        private val EXCLUSIONS: Map<String, String> = mapOf(
+            // --- Type-declaration-only roots: the interpreter declines to
+            // evaluate a root that is a Type, so there is no value to compare.
+            "08-product-type-decl.json" to
+                "type-declaration only; root evaluates to a Type the interpreter declines to run",
+            "09-sum-type-decl.json" to
+                "type-declaration only; root evaluates to a Type the interpreter declines to run",
+
+            // --- Representation inequality: bare-closure result.
+            "05-s-combinator-typed.json" to
+                "returns a bare closure; Value.Closure (env by reference) and VmClosure " +
+                    "(captures by content array) are behaviorally equivalent but not Kotlin-equal",
+
+            // --- State-machine / sync-trace programs: covered by
+            // VmMachineEquivalenceTest; the lowerer has no StateMachine rule.
+            "41-toggle-machine.json" to "state machine — covered by VmMachineEquivalenceTest",
+            "42-counter-machine.json" to "state machine — covered by VmMachineEquivalenceTest",
+            "43-counter-with-overflow-output.json" to "state machine — covered by VmMachineEquivalenceTest",
+            "44-request-response-echo.json" to "state machine — covered by VmMachineEquivalenceTest",
+            "45-bank-account-machine.json" to "state machine — covered by VmMachineEquivalenceTest",
+
+            // --- Async actor / stream programs: covered by
+            // VmAsyncMachineEquivalenceTest; not a synchronous value path.
+            "46-async-single-machine-counter.json" to "async actor group — covered by VmAsyncMachineEquivalenceTest",
+            "47-async-multi-input-merge.json" to "async actor group — covered by VmAsyncMachineEquivalenceTest",
+            "48-async-supervisor-one-for-one.json" to "async actor group — covered by VmAsyncMachineEquivalenceTest",
+            "49-async-tagged-output-list.json" to "async actor group — covered by VmAsyncMachineEquivalenceTest",
+            "57-dropoldest-overflow.json" to "async overflow-policy state machine — not a value path",
+            "67-llm-state-machine-with-tool.json" to
+                "state machine (LLM tool loop) — root is a StateMachine the interpreter declines to apply " +
+                    "(NotCallable gotKind=StateMachine); covered by the machine-equivalence suites",
+            "81-llm-stream-drain.json" to "stream-drain state machine — not a value path",
+            "84-bridged-stream.json" to "actor-runtime stream bridge — not a value path",
+
+            // --- Foreign-transport programs: the value path issues a real
+            // provider call that needs an injected mock HTTP/vector transport
+            // this single-store harness does not install.
+            "68-vector-pinecone-upsert-query.json" to
+                "Pinecone vector-store call needs an injected mock vectorHttpTransport " +
+                    "(raises IoFailure vector-bad-pinecone-config without one); not a self-contained value path",
+
+            // --- Non-terminating-by-design fixture: an intentionally
+            // base-caseless Fixpoint that overflows before any comparison
+            // (a resource-limits / rejection fixture, not an equivalence case).
+            "71-fixpoint-no-base-case.json" to
+                "intentionally base-caseless Fixpoint — recurses to StackOverflowError before producing a value",
+
+            // --- Schema-invariant programs: covered by VmSchemaEquivalenceTest,
+            // or reject at verify (the *-fail siblings), or diverge by design.
+            "50-positive-int-schema-pass.json" to "schema-invariant program — covered by VmSchemaEquivalenceTest",
+            "51-positive-int-schema-fail.json" to "schema-invariant rejection program — verifier rejects the root",
+            "52-non-empty-list-schema-pass.json" to "schema-invariant program — covered by VmSchemaEquivalenceTest",
+            "53-non-empty-list-schema-fail.json" to "schema-invariant rejection program — verifier rejects the root",
+            "55-json-object-unique-keys.json" to "schema-invariant program — covered by VmSchemaEquivalenceTest",
+            "56-json-object-duplicate-keys-fail.json" to "schema-invariant rejection program — verifier rejects the root",
+            "59-non-empty-text-pass.json" to "schema-invariant program — covered by VmSchemaEquivalenceTest",
+            "60-non-empty-text-fail.json" to "schema-invariant rejection program — verifier rejects the root",
+            "62-non-empty-markdown-pass.json" to "schema-invariant program — covered by VmSchemaEquivalenceTest",
+            "63-non-empty-markdown-fail.json" to "schema-invariant rejection program — verifier rejects the root",
+            "83-runtime-schema-dynamic-violation.json" to
+                "schema-violation-by-design: the VM erases schemas pre-bytecode while the " +
+                    "interpreter enforces the runtime obligation, so the two diverge on purpose",
+
+            // --- Manifest / composition / verifier-fixture programs: no
+            // single-store runnable value path here.
+            "69-response-schema-spec.json" to "ResponseSchemaSpec verifier fixture — not a runnable value path",
+            "79-module-manifest-with-effects.json" to "ModuleManifest — informational, no runtime evaluation",
+            "80-manifest-effect-mismatch-rejected.json" to "ModuleManifest rejection program — verifier rejects the root",
+            "76-multi-store-composition/app.json" to
+                "multi-store composition — references a sibling store this single-store harness does not wire up",
+            "76-multi-store-composition/lib.json" to "library store for corpus 76 — no standalone root value",
+            "77-name-registry-resolution/registry.json" to
+                "name-registry resolution fixture — cross-store, not a single-store value path",
+            "prelude-manifest.json" to "implicit-prelude manifest — a name registry, not a runnable program",
+
+            // --- Sandbox-rejection programs: the value path is a deliberate
+            // SandboxViolation, not a comparable value.
+            "73-fs-write-projection-drift.json" to
+                "projection-drift rejection program — verifier rejects the root (ProjectionMismatch)",
+            "74-fs-write-escape-rejected.json" to
+                "workspace-escape rejection — raises SandboxViolation under a secure policy, not a value",
+            "75-http-metadata-rejected.json" to
+                "SSRF-rejection program — raises SandboxViolation under a secure policy, not a value",
+        )
     }
 
-    private data class Layer14Pair(val baseName: String)
+    private val corpusDir by lazy { GoldenHashes.findCorpusDir() }
 
-    private val pairs = listOf(
-        Layer14Pair("01-int-literal"),
-        Layer14Pair("02-identity-applied"),
-        Layer14Pair("03-let-identity"),
-        Layer14Pair("04-k-combinator"),
-        // 05-s-combinator-typed returns a closure (the S combinator as a
-        // value, not applied). The interpreter returns Value.Closure and
-        // the VM returns VmClosure — equivalent in behavior but not in
-        // Kotlin equality (Value.Closure uses reference equality on the
-        // captured environment; VmClosure uses content equality on its
-        // captures array — the two are structurally different
-        // representations of the same callable). Excluded from the
-        // strict equality test; behavioral equivalence is implicitly
-        // covered by every Application that calls into a closure.
-        Layer14Pair("06-let-polymorphic"),
-        Layer14Pair("07-higher-order"),
-        Layer14Pair("10-noderef-shared"),
-        Layer14Pair("11-higher-rank-apply"),
-        Layer14Pair("15-builtin-add"),
-        // Layer 3: effect-declared / capability-granted programs.
-        // Both runs grant ALL effect categories in the store (mirrors
-        // CLI --grant-all). Refinement-bearing programs (33-35) pass
-        // because CapabilitySet.ofCategories produces wildcards that
-        // cover any refinement, and the VM does category-only checks.
-        Layer14Pair("12-effect-declared-and-granted"),
-        Layer14Pair("13-capability-scope-narrow-then-call"),
-        Layer14Pair("14-multi-effect-lambda"),
-        Layer14Pair("14-pure-lambda-with-overdeclared-effect"),
-        Layer14Pair("16-builtin-time-now-under-capability"),
-        Layer14Pair("17-builtin-compose-pure-and-effectful"),
-        Layer14Pair("33-refined-network-connect"),
-        Layer14Pair("34-refined-wildcard-port"),
-        Layer14Pair("35-refined-logger-authorized-path"),
-        // Layer 3: handler-intercepted effectful calls.
-        Layer14Pair("36-handler-mock-time-now"),
-        Layer14Pair("37-handler-captures-outer-let"),
-        Layer14Pair("38-handler-nested-innermost-wins"),
-        Layer14Pair("39-handler-itself-performs-effect"),
-        Layer14Pair("40-handler-fires-through-fixpoint"),
-        // Layer 5 step 1: Match + literal/variable/wildcard patterns.
-        Layer14Pair("18-match-int-literal-with-wildcard"),
-        Layer14Pair("19-match-on-comparison-result"),
-        Layer14Pair("20-match-variable-binding"),
-        // Layer 5 step 2: Fixpoint (which uses Match for base cases).
-        Layer14Pair("21-fixpoint-factorial"),
-        Layer14Pair("22-fixpoint-sum-to-n"),
-        // Layer 5 step 3a/3b: ProductValue + SumValue + ProductFieldGet.
-        Layer14Pair("23-product-construct-and-access"),
-        Layer14Pair("24-product-sum-fields-via-lambda"),
-        // Layer 5 — ConstructorPattern over sum values.
-        Layer14Pair("25-option-some-unwrap"),
-        Layer14Pair("26-option-none-default"),
-        Layer14Pair("27-result-ok-or-err"),
-        Layer14Pair("28-safe-divide-success"),
-        Layer14Pair("29-safe-divide-by-zero"),
-        // Layer 4 — additional foreign builtins (String.Concat etc.).
-        Layer14Pair("30-string-concat"),
-        // Layer 5 — Recursive types (lists) + ConstructorPattern.
-        Layer14Pair("31-recursive-list-head"),
-        Layer14Pair("32-recursive-list-sum"),
-        // Q-047 (Layer 7 step 2) — a schema-bearing program on its value
-        // path. The PositiveInt Schema/Invariant nodes are reachable only
-        // through the parameter's type edge (erased at lowering and not
-        // consulted by the obligation-free interpreter run here), so the
-        // value path — identityOfPositiveInt(Int.Sub(5,3)) — lowers and
-        // evaluates to IntV(2) identically under both engines. This is the
-        // non-violating case: runtime schema enforcement is interpreter-
-        // only (the VM erases schemas pre-bytecode), so the *violation*
-        // sibling (corpus 83) is deliberately NOT here — it would diverge
-        // by design. CorpusRuntimeSchemaTest cross-checks that the VM
-        // value agrees with the interpreter-WITH-obligations result for
-        // this pass case.
-        Layer14Pair("82-runtime-schema-dynamic-pass"),
-        // N-047 Attempt (Q-048). 85 (Ok passthrough — a pure TRY) and 86
-        // (Fs.Read fallback — the catchable IoFailure path) hold VM
-        // equivalence: the Err payload excludes NodeIds, so both backends
-        // construct identical Err values from the same Builtins IoFailure. 87
-        // (retry-with-backoff) also holds — the file is deterministically
-        // missing and Time.Sleep(0) is a no-op delay, so the retry loop is
-        // identical under both engines.
-        Layer14Pair("85-attempt-ok-passthrough"),
-        Layer14Pair("86-attempt-fs-read-fallback"),
-        Layer14Pair("87-attempt-retry-with-backoff"),
-        // N-048 RecursiveProjection (Q-053). RecursiveProjection is a
-        // type-position node, erased before lowering — the lowerer never
-        // sees it. The value path (SumValue/ProductValue towers, Match,
-        // Fixpoint folds) lowers and evaluates identically on both engines,
-        // so interpreter==VM holds for the precise nested-μ shapes.
-        Layer14Pair("88-json-array-via-projection"),
-        Layer14Pair("89-json-object-via-projection"),
-        Layer14Pair("90-ast-child-list-via-projection"),
-        Layer14Pair("91-element-tree-via-projection"),
-    )
+    /**
+     * The derived value-path program set: every enumerated corpus program
+     * not in [EXCLUSIONS]. `.events.json` companion files are not program
+     * documents (no `root`/`nodes`) and are excluded by the enumeration.
+     */
+    private fun valuePathPrograms(): List<String> =
+        GoldenHashes.enumerateProgramFiles(corpusDir)
+            .filter { it !in EXCLUSIONS }
 
     @TestFactory
-    fun vmEquivalentToInterpreter(): List<DynamicTest> = pairs.map { pair ->
-        DynamicTest.dynamicTest(pair.baseName) {
-            val canonicalText = loadResource("/corpus/${pair.baseName}.json")
+    fun vmEquivalentToInterpreter(): List<DynamicTest> = valuePathPrograms().map { relPath ->
+        DynamicTest.dynamicTest(relPath) {
+            val canonicalText = Files.readString(corpusDir.resolve(relPath))
             val ingest = JsonIngest.parse(canonicalText)
             val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
             val verifyResult = Verifier(finalized.store, finalized.hashToNodeId)
                 .verify(finalized.root)
             assertTrue(verifyResult is VerifyResult.Ok) {
-                "${pair.baseName}: verifier failed: $verifyResult"
+                "$relPath: verifier failed: $verifyResult"
             }
 
             // Grant all EffectCategory NodeIds (mirrors CLI --grant-all)
@@ -186,14 +205,8 @@ class VmEquivalenceTest {
             val vmValue = Vm(table).run(initialCaps = effectCategoryIds.map { it.value }.toSet())
 
             assertEquals(interpValue, vmValue) {
-                "${pair.baseName}: VM=${vmValue} interpreter=${interpValue}"
+                "$relPath: VM=$vmValue interpreter=$interpValue"
             }
         }
-    }
-
-    private fun loadResource(resource: String): String {
-        val stream = VmEquivalenceTest::class.java.getResourceAsStream(resource)
-            ?: error("missing resource $resource")
-        return stream.bufferedReader().readText()
     }
 }
