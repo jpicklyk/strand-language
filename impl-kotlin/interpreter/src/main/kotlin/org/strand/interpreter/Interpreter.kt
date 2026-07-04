@@ -965,7 +965,24 @@ class Interpreter(
             eval(callable.lambda.body, callEnv, context, handlers, counters, limits)
         }
         is Value.ForeignFn -> {
-            checkCapabilities(id, callable.node.effects, emptyMap(), context, limits)
+            // Q-070: a projected ForeignNode invoked as a VALUE (not via a
+            // direct Application node) must still refinement-check. Without
+            // this, a projected fsWrite whose path refinement is ArgRef(0),
+            // when passed as a callback or Handler handle and invoked here,
+            // would have only category-presence enforced (emptyMap skips
+            // refinement matching). Synthesize the instances map from the
+            // projections + the pre-evaluated args, exactly as the direct
+            // applyForeign path does. env is empty: ArgRef sources index
+            // `args` (the security-critical case) and LiteralNode sources
+            // eval closed literals, so no binder env is needed here.
+            val instances = if (callable.node.effectProjections.isNotEmpty()) {
+                synthesizeProjectedInstances(
+                    emptyMap(), context, handlers, callable.node, args, counters, limits,
+                )
+            } else {
+                emptyMap()
+            }
+            checkCapabilities(id, callable.node.effects, instances, context, limits)
             try {
                 foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
             } catch (io: IoFailure) {
@@ -1263,6 +1280,23 @@ class Interpreter(
                 // callbacks (passing e.g. Bool.Not as a List.Map fn) are
                 // rare but legitimate — and they don't recurse into the
                 // higher-order machinery because Bool.Not is a standard Fn.
+                //
+                // Q-070: a projected ForeignNode reaching here as a
+                // higher-order callback (List.Map/Fold/Filter fn) must
+                // refinement-check against the surrounding context — the
+                // callback's per-element argument values are the projection
+                // sources, so an ArgRef(0) path refinement is enforced
+                // against the actual value the foreign code receives. Pure
+                // callbacks (empty projections, e.g. Bool.Not) skip the
+                // check as before. env is empty for the same reason as the
+                // applyValue ForeignFn site: ArgRef indexes `args`,
+                // LiteralNode evals closed literals.
+                if (callable.node.effectProjections.isNotEmpty()) {
+                    val instances = synthesizeProjectedInstances(
+                        emptyMap(), context, handlers, callable.node, args, counters, limits,
+                    )
+                    checkCapabilities(id, callable.node.effects, instances, context, limits)
+                }
                 try {
                     foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
                 } catch (io: IoFailure) {
