@@ -52,3 +52,41 @@ Medium. A pure query layer over data the verify result already carries, a facade
 - [`open-questions.md`](../open-questions.md) — Q-072 (registered), Q-067, Q-044, Q-054, Q-031, Q-023
 - [`implemented/latent-effect-surfacing.md`](implemented/latent-effect-surfacing.md) — the latent-effect channel the total closure reads
 - [`evaluation/containment-results.md`](../evaluation/containment-results.md) — the harm bound `harmBound` computes
+
+## Implementation note
+
+Built on branch `reason-first` in `impl-kotlin/`, on top of the just-landed latent-effect surfacing. Pure query layer over the verify result; hash-neutral and side-effect-free. The interpreter, VM, runtime evaluators, canonical encoder, epoch constant, and prelude are untouched. `CorpusGoldenHashTest` moved no hash (117 tests, 0 failures).
+
+Query surface (`verifier/src/main/kotlin/org/strand/verifier/ProgramAnalysis.kt`, in `:verifier` — depends only on `:core`, no circular dependency on `:interpreter`/`:runtime`):
+
+```
+class ProgramAnalysis(store: NodeStore, verify: VerifyResult.Ok, root: NodeId)
+  fun effectClosure(node: NodeId = root): Set<NodeId>
+  fun latentEffectClosure(node: NodeId = root): Set<NodeId>
+  fun totalClosure(node: NodeId = root): Set<NodeId>
+  fun reachesEffect(category: NodeId, node: NodeId = root): Boolean
+  fun egressSet(watched: Set<NodeId>, node: NodeId = root): Set<NodeId>
+  fun harmBound(granted: Set<NodeId>, node: NodeId = root): Set<NodeId>
+  fun capabilityRequirement(node: NodeId = root): CapabilityRequirement
+  fun capabilityDiff(other: ProgramAnalysis): Set<NodeId>
+```
+
+The closure queries read the verifier's own `VerifyResult.Ok.nodeClosures` / `latentClosures` verbatim, so they are Handler-aware by construction (the closures already applied the closure-subtraction) — no structural re-derivation. `egressSet`/`harmBound`/`reachesEffect` are intersections/membership over `totalClosure`.
+
+Capability-requirement modeling (verifier-local structured types, since `CapabilitySet`/`CapabilityPattern` live downstream in `:interpreter`):
+
+```
+data class CapabilityRequirement(perCategory: Map<NodeId, RefinementRequirement>) { val categories: Set<NodeId> }
+sealed class RefinementRequirement { object Wildcard; data class Refined(patterns: List<List<RefinementValue>>) }
+sealed class RefinementValue { IntValue | FloatValue | StringValue | BoolValue | UnitValue | Dynamic }
+```
+
+`capabilityRequirement` starts from `totalClosure` (every category whose presence a caller must grant), then walks the reachable Applications within the subgraph (same non-binder child edges the closure walk uses; NodeRef targets are a boundary) and reads each EffectDecl in `effectInstances`: a statically-known literal parameter tower becomes a concrete `RefinementValue` pattern; a non-literal (forwarded runtime value) is `RefinementValue.Dynamic`. A category reached only at refinement-free / propagating sites, or reached only through latent/indirect invocation, stays `Wildcard`. `capabilityDiff` is category-level (`this.categories - other.categories`); refinement-level diffing is deferred.
+
+Facade (`runtime/src/main/kotlin/org/strand/runtime/StrandRuntime.kt`): `analyze(image): AnalysisOutcome` and a `verifyAndAnalyze(image): AnalysisOutcome` convenience (it delegates to `analyze`). `AnalysisOutcome` is a sealed class with `Ok(analysis: ProgramAnalysis)` and `VerifyFailed(errors)` — verifies first, wraps the verified artifact, never prints or exits, mirroring the `verify`/`run` outcome shape.
+
+Deviations:
+- **CLI `analyze` subcommand deferred.** The facade API is the required deliverable and is complete; the CLI dispatcher is a substantial per-command rendering pipeline and a machine-readable JSON emitter for the typed analysis (hash-keying NodeIds for cross-store meaning, mirroring the verdict serialization) is more than a small addition, so it is deferred per the proposal's own "CLI is a thin client" framing.
+- **capabilityRequirement refinement modeling** uses a verifier-local `CapabilityRequirement`/`RefinementRequirement`/`RefinementValue` triple rather than the interpreter's `CapabilitySet`, to keep `:verifier` free of a `:interpreter` dependency (the guardrail against a circular module dependency). `RefinementValue.Dynamic` records a forwarded/computed refinement the analysis cannot statically pin.
+
+Tests: `corpus/src/test/kotlin/org/strand/corpus/ProgramAnalysisTest.kt` (8 tests — effect/latent/total separation on the effectful-ToolDef fixture; egress empty for a filesystem-only program against a network watched-set and non-empty for a reaching category; harmBound narrowing under a partial grant; reachesEffect true/false across both channels; capabilityRequirement pinning literal refinements vs wildcarding refinement-free and latent-only categories; capabilityDiff between two programs; a higher-order-callback latent-only requirement) and `runtime/src/test/kotlin/org/strand/runtime/StrandRuntimeAnalyzeTest.kt` (3 tests — `analyze` returns the surface for a verifying program, `verifyAndAnalyze` mirrors it, `analyze` returns a `VerifyFailed` outcome for a non-verifying program). All 11 pass. Full suite: 2415 tests, 3 skipped, 0 failures.

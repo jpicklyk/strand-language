@@ -10,6 +10,7 @@ import org.strand.interpreter.Interpreter
 import org.strand.interpreter.Value
 import org.strand.schema.SchemaCheckResult
 import org.strand.schema.SchemaChecker
+import org.strand.verifier.ProgramAnalysis
 import org.strand.verifier.TypeExpr
 import org.strand.verifier.Verifier
 import org.strand.verifier.VerifyResult
@@ -104,6 +105,33 @@ class StrandRuntime(private val policy: HostPolicy) {
         val value = interp.eval(program.root, capabilities, policy.limits)
         return RunOutcome.Ok(verify, schema, value)
     }
+
+    /**
+     * Q-072 (ADR-010): the third first-class entry point alongside [verify]
+     * and [run]. Verify [program], then wrap the verified artifact in a pure
+     * [ProgramAnalysis] query surface. On a verify failure the outcome carries
+     * the diagnostics and no analysis; the facade never prints or exits.
+     *
+     * Reads only the verify result and the store — no evaluation, no policy
+     * install, hash-neutral. The returned [ProgramAnalysis] answers the
+     * machine-facing reasoning queries (effect / latent / total closure,
+     * capability requirement, egress set, harm bound, reachability, cross-
+     * program diff) as typed data.
+     */
+    fun analyze(program: ProgramImage): AnalysisOutcome {
+        val verify = verify(program)
+        if (verify is VerifyResult.Failed) return AnalysisOutcome.VerifyFailed(verify.errors)
+        verify as VerifyResult.Ok
+        return AnalysisOutcome.Ok(ProgramAnalysis(program.store, verify, program.root))
+    }
+
+    /**
+     * Convenience: verify [program] and return both the raw [VerifyResult.Ok]
+     * and its [ProgramAnalysis] in one call, or the verify diagnostics. A
+     * caller that wants the inferred types *and* the reasoning surface avoids
+     * verifying twice.
+     */
+    fun verifyAndAnalyze(program: ProgramImage): AnalysisOutcome = analyze(program)
 
     /**
      * Drive a single verified [machine] over [events] under this runtime's
@@ -397,6 +425,15 @@ sealed class RunOutcome {
         val verify: VerifyResult.Ok,
         val schema: SchemaCheckResult,
     ) : RunOutcome()
+}
+
+/** Outcome of [StrandRuntime.analyze] / [StrandRuntime.verifyAndAnalyze] (Q-072). */
+sealed class AnalysisOutcome {
+    /** The program verified; [analysis] is the reasoning query surface over it. */
+    data class Ok(val analysis: ProgramAnalysis) : AnalysisOutcome()
+
+    /** Verification failed; no analysis was produced. */
+    data class VerifyFailed(val errors: List<org.strand.verifier.VerifyError>) : AnalysisOutcome()
 }
 
 /** Convenience: the Ok form of a [VerifyResult], or null. */
