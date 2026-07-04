@@ -42,3 +42,93 @@ Small. A facade method and two outcome types over the existing analysis and run 
 - [`decisions/ADR-010-reasoning-surface.md`](../decisions/ADR-010-reasoning-surface.md) — the self-gating commitment this realizes
 - [`implemented/reasoning-api.md`](implemented/reasoning-api.md) — the `harmBound` / `totalClosure` the gate consumes
 - [`open-questions.md`](../open-questions.md) — Q-073 (registered), Q-044, Q-054, Q-068, Q-064
+
+## Implementation note
+
+Built on branch `reason-first` in `impl-kotlin/`, on top of the just-landed
+`ProgramAnalysis` reasoning API. A facade composition over verify + analyze +
+run; hash-neutral and side-effect-free on the refusal path. The interpreter,
+VM, canonical encoder, epoch constant, prelude, and `ProgramAnalysis`'s query
+logic are untouched. `CorpusGoldenHashTest` moved no hash (117 tests, 0
+failures).
+
+Method (`runtime/src/main/kotlin/org/strand/runtime/StrandRuntime.kt`, in
+`:runtime`):
+
+```
+fun StrandRuntime.runGuarded(program: ProgramImage, budget: CapabilitySet): GuardedOutcome
+```
+
+`budget` mirrors the existing `run(program, capabilities: CapabilitySet)`
+convention — `StrandRuntime` already carries the `HostPolicy` as a
+constructor field, so unlike the proposal's illustrative `(image, policy,
+budget)` sketch, no separate `policy` parameter is needed; the method takes
+exactly the two parameters `analyze` and `run` each take, one of image and one
+of capability/query input.
+
+Outcome and report types (same file, alongside `RunOutcome` / `AnalysisOutcome`):
+
+```
+sealed class GuardedOutcome {
+    data class Ran(val outcome: RunOutcome) : GuardedOutcome()
+    data class Refused(val report: RefusalReport) : GuardedOutcome()
+    data class VerifyFailed(val errors: List<VerifyError>) : GuardedOutcome()
+}
+
+enum class EffectChannel { DIRECT, LATENT, BOTH }
+
+data class RefusalReport(
+    val exceeding: Map<NodeId, EffectChannel>,
+    val requested: Set<NodeId>,
+    val granted: Set<NodeId>,
+)
+```
+
+`exceeding` is keyed by the exceeding EffectCategory NodeId (structural, not
+prose) to the channel it was reached through — `DIRECT` (in `rootClosure`),
+`LATENT` (in `rootLatentClosure` but not `rootClosure`), or `BOTH`. `requested`
+is the program's full `totalClosure(root)` and `granted` is `budget.grants.keys`,
+both carried in full (not just the exceeding subset) so the report is
+self-contained: a caller can recompute `requested - granted`, diff two
+refusals, or render a complete picture without a second call into
+`ProgramAnalysis`.
+
+Implementation: verify the image (the existing `verify` path); on failure
+return `VerifyFailed`. On success, build a `ProgramAnalysis` exactly as
+`analyze` does and read `rootClosure` / `rootLatentClosure` from the
+`VerifyResult.Ok` plus `totalClosure(root)` from the `ProgramAnalysis` (used
+verbatim, not re-derived). Compare `totalClosure - budget.grants.keys`; a
+non-empty difference returns `Refused` with the per-category channel
+classification, *before* `run` is invoked — no effect occurs. An empty
+difference calls the existing `run(program, budget)` path, so runtime
+refinement enforcement remains the backstop for parameter-level bounds this
+category-level gate does not statically prove, and returns `Ran`.
+
+Deviations:
+- **Only the plain `run` entry point is guarded.** `runMachine` / `runGroup`
+  gating is deferred — each has a materially different shape (an explicit
+  `machine` NodeId plus an event list, or an async `MachineGroup` with a
+  `CoroutineScope`) where "the whole program" is ambiguous (gate one machine?
+  the whole group's reachable closure?) and is more than the small addition
+  the proposal's own scope calls for. `runGuarded` composes with `run` alone;
+  a state-machine-shaped self-gate is future work under its own item.
+- **Category-level only**, per the proposal: no refinement-level (parameter)
+  pre-execution proof. Refinement enforcement stays with the runtime
+  (`RefinementViolation`) as the mid-execution backstop; Q-068 is the
+  refinement-narrowing extension this would need.
+
+Tests: `runtime/src/test/kotlin/org/strand/runtime/StrandRuntimeRunGuardedTest.kt`
+(4 tests) — (a) a `Time.Now` program within budget runs and returns `Ran` with
+its `IntV` value; (b) a program that directly performs `Filesystem.Write`
+(reaches the walked `Application`) under an empty budget is `Refused` before
+execution with the category marked `DIRECT`, and the test asserts the target
+file was never created; (c) the effectful-ToolDef fixture (shared shape with
+`LatentEffectClosureTest`/`ProgramAnalysisTest`) — a `Generate` call handed a
+`Filesystem.Write`-implementing `ToolDef` — under a budget granting only
+`LLM.Generate` is `Refused` with `Filesystem.Write` marked `LATENT`, the key
+case a direct-closure-only gate would miss; (d) a non-verifying program
+(`Application` of a non-function) returns `VerifyFailed`. All 4 pass.
+
+Full suite after this change: 2419 tests, 3 skipped, 0 failures (up from 2415
+in the reasoning-api implementation note by exactly these 4 new tests). No
+golden hash moved.
