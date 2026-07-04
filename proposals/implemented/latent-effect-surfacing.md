@@ -1,16 +1,16 @@
 # Latent effect surfacing
 
 **Document:** `proposals/latent-effect-surfacing.md`
-**Status:** Draft
-**Question:** [Q-070](../open-questions.md#Q-070) (resolves, adopting candidate direction 1), [Q-071](../open-questions.md#Q-071) (registers the higher-order-callback instance)
-**Related:** [ADR-010](../decisions/ADR-010-reasoning-surface.md), [ADR-004](../decisions/ADR-004-effects-as-edges.md), [Q-067](../open-questions.md#Q-067), [Q-044](../open-questions.md#Q-044), N-044 ToolDef, [Q-039](../open-questions.md#Q-039)
+**Status:** Implemented 2026-07-04 (commit `cb2b110` on `reason-first`)
+**Question:** [Q-070](../../open-questions.md#Q-070) (resolves, adopting candidate direction 1), [Q-071](../../open-questions.md#Q-071) (registers the higher-order-callback instance)
+**Related:** [ADR-010](../../decisions/ADR-010-reasoning-surface.md), [ADR-004](../../decisions/ADR-004-effects-as-edges.md), [Q-067](../../open-questions.md#Q-067), [Q-044](../../open-questions.md#Q-044), N-044 ToolDef, [Q-039](../../open-questions.md#Q-039)
 **Drafted:** 2026-07-04
 
 ## Problem
 
-The static effect closure — `VerifyState.nodeClosures`, surfaced on the verify result as `rootClosure` ([Q-067](../open-questions.md#Q-067)) — is the pre-execution harm bound of [Q-044](../open-questions.md#Q-044) and the value the reasoning surface of [ADR-010](../decisions/ADR-010-reasoning-surface.md) reports. It is sound for directly-invoked effects, which reach the closure through the Application edges the verifier walks. It is incomplete for effects reachable only through indirect invocation, of which there are two instances of one shape.
+The static effect closure — `VerifyState.nodeClosures`, surfaced on the verify result as `rootClosure` ([Q-067](../../open-questions.md#Q-067)) — is the pre-execution harm bound of [Q-044](../../open-questions.md#Q-044) and the value the reasoning surface of [ADR-010](../../decisions/ADR-010-reasoning-surface.md) reports. It is sound for directly-invoked effects, which reach the closure through the Application edges the verifier walks. It is incomplete for effects reachable only through indirect invocation, of which there are two instances of one shape.
 
-The first is the N-044 ToolDef ([Q-070](../open-questions.md#Q-070)): a ToolDef bundles a parameter Schema with an implementation the model may choose to invoke during a Generate call. The implementation can carry effects — a tool whose body performs `Filesystem.Write`. Because the tool is invoked by the model at runtime rather than through an Application the verifier walks, the implementation's effects are absent from the program's root closure. A program that constructs a file-writing tool and hands it to Generate has root closure `{LLM.Generate}`, identical to a benign program's.
+The first is the N-044 ToolDef ([Q-070](../../open-questions.md#Q-070)): a ToolDef bundles a parameter Schema with an implementation the model may choose to invoke during a Generate call. The implementation can carry effects — a tool whose body performs `Filesystem.Write`. Because the tool is invoked by the model at runtime rather than through an Application the verifier walks, the implementation's effects are absent from the program's root closure. A program that constructs a file-writing tool and hands it to Generate has root closure `{LLM.Generate}`, identical to a benign program's.
 
 The second is the higher-order callback, which Q-070's own text names as the recurring shape: an effectful value — a projected ForeignNode, or an effectful Lambda — passed as an argument to a higher-order builtin such as `List.Map`, `List.Fold`, or `List.Filter`, then invoked inside the builtin. Its effects reach no Application the verifier walks, so they too are absent from the closure. This instance has no identifier of its own and is registered here as Q-071.
 
@@ -49,10 +49,10 @@ Small to medium. One accumulator and one additive surfacing on `VerifyResult`, v
 ## References
 
 **Outgoing references:**
-- [`decisions/ADR-010-reasoning-surface.md`](../decisions/ADR-010-reasoning-surface.md) — the reasoning surface whose soundness this closes
-- [`decisions/ADR-004-effects-as-edges.md`](../decisions/ADR-004-effects-as-edges.md) — the effect closure this extends
-- [`open-questions.md`](../open-questions.md) — Q-070 (resolved via direction 1), Q-071 (registered), Q-067, Q-044, Q-039
-- [`demos/agent-workflow/README.md`](../demos/agent-workflow/README.md) — the ToolDef over-reach shape this surfaces statically
+- [`decisions/ADR-010-reasoning-surface.md`](../../decisions/ADR-010-reasoning-surface.md) — the reasoning surface whose soundness this closes
+- [`decisions/ADR-004-effects-as-edges.md`](../../decisions/ADR-004-effects-as-edges.md) — the effect closure this extends
+- [`open-questions.md`](../../open-questions.md) — Q-070 (resolved via direction 1), Q-071 (registered), Q-067, Q-044, Q-039
+- [`demos/agent-workflow/README.md`](../../demos/agent-workflow/README.md) — the ToolDef over-reach shape this surfaces statically
 
 ## Implementation note
 
