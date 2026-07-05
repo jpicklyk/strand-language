@@ -13,6 +13,7 @@ import org.strand.hashing.Hasher
 import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.Interpreter
+import org.strand.interpreter.SandboxPolicy
 import org.strand.verifier.VerifyResult
 import org.strand.verifier.Verifier
 import org.strand.vm.Vm
@@ -68,11 +69,18 @@ class VmEquivalenceTest {
         @BeforeAll
         fun installFixedClock() {
             Builtins.clock = Builtins.FixedClock(Builtins.FIXED_REPLAY_TIMESTAMP)
+            // Corpus 70 performs a real Fs.Write to the absolute literal path
+            // '/safe' on both the interpreter and VM paths — admissible only
+            // under the open sandbox this class ran under implicitly before
+            // Q-075 flipped the library default to SECURE_DEFAULT. Opt in
+            // explicitly (the Q-075 pattern), restoring the default after.
+            Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
         }
         @JvmStatic
         @AfterAll
         fun restoreSystemClock() {
             Builtins.clock = Builtins.SystemClock
+            Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         }
 
         /**
@@ -93,6 +101,9 @@ class VmEquivalenceTest {
             "05-s-combinator-typed.json" to
                 "returns a bare closure; Value.Closure (env by reference) and VmClosure " +
                     "(captures by content array) are behaviorally equivalent but not Kotlin-equal",
+            "92-utf8-sort-divergence.json" to
+                "verify-only epoch-3 divergence pin (Q-074); the root is a bare Lambda over the " +
+                    "non-ASCII ProductType, so it returns a bare closure like corpus 05",
 
             // --- State-machine / sync-trace programs: covered by
             // VmMachineEquivalenceTest; the lowerer has no StateMachine rule.
