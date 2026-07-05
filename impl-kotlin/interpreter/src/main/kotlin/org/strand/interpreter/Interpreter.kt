@@ -1462,17 +1462,21 @@ class Interpreter(
             // category is absent, the context holds nothing for it.
             val missingInOrder = declared.filter { it in missing }.distinct()
             val requestedValues = missingInOrder.flatMap { instances[it].orEmpty() }
+            val report = buildDenialReport(
+                at = at,
+                categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
+                requested = requestedValues,
+                held = emptyList(),
+                heldCategoryName = "",
+                limits = limits,
+            )
+            // Q-055: emit the denied audit record reusing the Q-064 report so
+            // the two reconcile.
+            emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
             throw InterpretException(InterpretError.CapabilityViolation(
                 at = at,
                 missing = missing,
-                report = buildDenialReport(
-                    at = at,
-                    categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
-                    requested = requestedValues,
-                    held = emptyList(),
-                    heldCategoryName = "",
-                    limits = limits,
-                ),
+                report = report,
             ))
         }
         // Second pass: per-category refinement check. Only fires when the
@@ -1483,25 +1487,83 @@ class Interpreter(
             val requirement = instances[category] ?: continue
             val grants = context.grants[category]!! // non-null: first pass filtered missing
             val matched = grants.any { covers(it, requirement) }
+            val name = categoryNameOf(category)
             if (!matched) {
-                val name = categoryNameOf(category)
+                val report = buildDenialReport(
+                    at = at,
+                    categoryName = name,
+                    requested = requirement,
+                    held = grants,
+                    heldCategoryName = name,
+                    limits = limits,
+                )
+                emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
                 throw InterpretException(InterpretError.RefinementViolation(
                     at = at,
                     category = category,
                     requirement = requirement,
                     available = grants,
-                    report = buildDenialReport(
-                        at = at,
-                        categoryName = name,
-                        requested = requirement,
-                        held = grants,
-                        heldCategoryName = name,
-                        limits = limits,
-                    ),
+                    report = report,
                 ))
             }
+            // Q-055: the capability check passed for a category the call site
+            // concretely exercised (an EffectDecl instance was present). Emit
+            // an Allowed record — the new information the audit log adds over
+            // the always-on denial surface. Refinement values are rendered and
+            // scrubbed through the per-context Scrubber, exactly as the denial
+            // report scrubs its requested list.
+            emitAudit(AuditRecord(
+                callSiteNodeId = at.takeIf { it.value != -1 },
+                effectCategory = name,
+                refinementParameters = requirement.map { renderAuditParameter(it) },
+                outcome = AuditOutcome.Allowed,
+                phase = if (inInvariant) DenialPhase.Invariant else DenialPhase.Expression,
+            ))
         }
     }
+
+    /**
+     * Q-055: emit [record] to the per-context audit sink. The default
+     * [NoOpAuditSink] discards it, so every non-auditing run is unaffected.
+     */
+    private fun emitAudit(record: AuditRecord) {
+        hostContext.auditSink.record(record)
+    }
+
+    /**
+     * Q-055: build the denied [AuditRecord] from a reused Q-064 [DenialReport]
+     * so the audit log and denial surface carry the same call-site, category,
+     * scrubbed refinement values, instance/event, and phase.
+     */
+    private fun auditRecordFor(report: DenialReport, outcome: AuditOutcome): AuditRecord =
+        AuditRecord(
+            callSiteNodeId = report.node,
+            effectCategory = report.category,
+            refinementParameters = report.requested ?: emptyList(),
+            outcome = outcome,
+            instanceId = report.instanceId,
+            eventIndex = report.eventIndex,
+            phase = report.phase,
+        )
+
+    /**
+     * Q-055: render one refinement parameter value for an allowed audit
+     * record, scrubbing through the per-context [Scrubber] (a credential-
+     * bearing value cannot leak through the audit surface). Mirrors
+     * [DenialReport.renderParameter]'s primitive rendering but scrubs with the
+     * active tenant's scrubber rather than the process-global one.
+     */
+    private fun renderAuditParameter(v: Value): String = hostContext.scrubber.scrub(
+        when (v) {
+            is Value.StringV -> v.v
+            is Value.IntV -> v.v.toString()
+            is Value.FloatV -> v.v.toString()
+            is Value.BoolV -> v.v.toString()
+            Value.UnitV -> "()"
+            is Value.BytesV -> "bytes[${v.v.size}]"
+            else -> v.toString()
+        }
+    )
 
     /** The EffectCategory's declared name, falling back to the `#N` NodeId rendering. */
     private fun categoryNameOf(id: NodeId): String =
