@@ -95,7 +95,8 @@
     "89-json-object-via-projection.json": "1e6913314e7e719333322b5c44e0e7d5d3792401f241350814cfcb2283531a5250",
     "90-ast-child-list-via-projection.json": "1eab7c141923795bd8fbbe19b195c607246d6461cfcc27b59ddd25fe55d8a5b1ae",
     "91-element-tree-via-projection.json": "1e85ddd20f9599291c672d1a373428778e622403640707ce2c786f480c429f2450",
-    "92-utf8-sort-divergence.json": "1e5c6b16e3656cd015133d0ec091570470589c901e960d55e18bf7cd65b0c757df"
+    "92-utf8-sort-divergence.json": "1e5c6b16e3656cd015133d0ec091570470589c901e960d55e18bf7cd65b0c757df",
+    "93-pure-callback-into-effectful-param.json": "1e00a14b837a4f509519d9bcf77d914b6cfc083e666dfe32bb32f430f92e9f2cb4"
   },
   "layerA": {
     "layer-a/density-v1.5/21-fixpoint-factorial-if.layer-a": "1e75bdddf7f2306d7165d9bc9d7036564bad197fd8b9f567680bf99855c200dfae",

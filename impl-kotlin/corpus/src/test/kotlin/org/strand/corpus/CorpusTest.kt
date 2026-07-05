@@ -295,6 +295,18 @@ class CorpusTest {
         // run pin cross-implementation agreement on the exact divergence case.
         Case("/corpus/92-utf8-sort-divergence.json", null,
             "Epoch 3 (Q-074) verify-only: a ProductType whose two field names straddle the UTF-16-vs-UTF-8 name-sort divergence — Ａ (U+FF21) and 𐀀 (U+10000). Under UTF-8 byte order the U+FF21 field sorts first; UTF-16 code-unit order would put the supplementary field first. Pins the cross-implementation encoding choice on the one construct where the two orders differ."),
+
+        // Q-049 effect-set inclusion at value-flow arrows. A higher-order
+        // apply2((Int) -> Int ! {Time.Now}, Int) -> Int invokes its callback
+        // parameter (declared type carries a Time.Now effect row); the program
+        // passes a PURE (Int) -> Int lambda into that effectful callback
+        // position. Effect-set inclusion accepts the pure lambda at the
+        // outermost arrow (∅ ⊆ {Time.Now}); a function with fewer effects than
+        // the position declares is always safe. Runs under a {Time.Now} grant
+        // (the callback's declared row is what the runtime gates on) to
+        // apply2(pureInc, 41) = 42.
+        Case("/corpus/93-pure-callback-into-effectful-param.json", Value.IntV(42),
+            "Q-049 effect-set inclusion at value-flow arrows: a pure (Int) -> Int lambda flows into a callback parameter declared (Int) -> Int ! {Time.Now}. The verifier accepts the pure lambda by outermost-arrow effect-set inclusion (∅ ⊆ {Time.Now}); the reverse direction and nested-arrow differences stay rejected (EffectSetInclusionTest). Runs under a {Time.Now} grant and evaluates to 42."),
     )
 
     /**
@@ -318,6 +330,11 @@ class CorpusTest {
         // call is authorized and attempted).
         "/corpus/86-attempt-fs-read-fallback.json" to listOf("readFx"),
         "/corpus/87-attempt-retry-with-backoff.json" to listOf("readFx", "sleepFx"),
+        // Q-049: apply2 declares Time.Now (its callback parameter's declared
+        // row), so invoking apply2 at runtime gates on a Time.Now grant. The
+        // pure callback itself performs no effect — the grant covers apply2's
+        // declared row, not the pure lambda.
+        "/corpus/93-pure-callback-into-effectful-param.json" to listOf("timeFx"),
     )
 
     /**

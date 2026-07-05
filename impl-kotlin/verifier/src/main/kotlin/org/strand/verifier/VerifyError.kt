@@ -109,6 +109,24 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * A [Node.TypeParameter] carries a non-null `bound`. Bounded polymorphism
+     * is not implemented: the verifier neither checks the bound at
+     * instantiation sites nor uses it during compatibility, so a bounded
+     * parameter would be silently unchecked. Per Q-049 a silently-ignored
+     * bound is worse than rejection — an agent writing bounded polymorphism
+     * receives no error and no checking — so a non-null bound is a hard
+     * verify error. The `bound` field stays on the ADT (and in ingest) so this
+     * error can fire with a good message; it is not part of the canonical
+     * encoding (TypeParameter encodes as positional (depth, index) refs only),
+     * so its presence is hash-neutral. Schema-level removal of the field
+     * rides a future encoding epoch (Q-062).
+     */
+    data class TypeParameterBoundUnsupported(
+        override val at: NodeId,
+        val bound: NodeId
+    ) : VerifyError()
+
+    /**
      * Application of a polymorphic value yielded a residual ForallType after
      * type-argument substitution. Partial instantiation is not supported in
      * Layer 1: every Application of a Forall must supply enough type
