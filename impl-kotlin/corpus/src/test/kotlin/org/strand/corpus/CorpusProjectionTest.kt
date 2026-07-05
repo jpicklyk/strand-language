@@ -1,14 +1,18 @@
 package org.strand.corpus
 
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.strand.core.JsonIngest
 import org.strand.hashing.Hasher
+import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilityArgument
 import org.strand.interpreter.CapabilityPattern
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.Interpreter
+import org.strand.interpreter.SandboxPolicy
 import org.strand.interpreter.Value
 import org.strand.verifier.VerifyError
 import org.strand.verifier.VerifyResult
@@ -35,8 +39,24 @@ import org.strand.verifier.Verifier
  * programs occupy slots 70 / 73. The semantics are identical to
  * the orchestrator's request — the slot shift is a registry
  * coordination detail.
+ *
+ * Q-075: corpus 70's `Fs.Write("/safe", ...)` targets an absolute path
+ * outside any workspace, which the library's SECURE_DEFAULT sandbox
+ * correctly rejects as a workspace escape — this test cares about the
+ * projection/capability mechanism, not the sandbox, so it installs
+ * [SandboxPolicy.OPEN_DEFAULT] for the duration.
  */
 class CorpusProjectionTest {
+
+    @BeforeEach
+    fun setUp() {
+        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+    }
+
+    @AfterEach
+    fun tearDown() {
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
+    }
 
     private fun load(resource: String): String {
         val stream = CorpusProjectionTest::class.java.getResourceAsStream(resource)
