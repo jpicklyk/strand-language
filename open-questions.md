@@ -503,7 +503,7 @@ Previously NodeIds were raw ingest indices with no rendered mapping back to Laye
 
 ### Q-057: Layer A grammar parity with the node algebra {#Q-057}
 
-**Status:** Open
+**Status:** Open; the N-046 ModuleManifest / ManifestExport gap is addressed by [`proposals/layer-a-capability-manifest.md`](proposals/layer-a-capability-manifest.md) (MFT / MEX codes), the other four surfaces remain
 **Concerns:** [Q-034](#Q-034), [Q-036](#Q-036), authoring module (`LayerAGrammar`), [`evaluation/dynamic/prompts/strand-system.md`](evaluation/dynamic/prompts/strand-system.md)
 
 Five implemented surfaces are unauthorable in Layer A and require hand-written canonical dag-json: ModuleManifest and ManifestExport (N-046 — modules cannot be authored at all), the EventStream `source` edge (Q-046 — the IO-backed stream bridge), `OverflowPolicy.Sample`, the external-hash NodeRef form (`targetHash`, Q-043 — the federation surface), and `RecursiveProjection` (N-048 — composite recursive value construction; corpus 88 through 91 are hand-written as dag-json). Two surfaces this question originally listed have since become authorable: `effectProjections` on ForeignNode and FunctionType, via the effect-projection DSL string added to the Layer A `FN` code during the Q-060 density-v5 work, and `RecursiveSelf` with `depth > 0`, via the optional `depth` field added to the `RS` code during the Q-069 Json precise-model migration. The agent-facing documentation teaches only Layer A; canonical dag-json is not taught. Surfaces absent from the grammar are therefore not merely awkward but unreachable through the documented authoring interface, and the authoring layer has trailed the algebra for several features shipped since Q-039.
