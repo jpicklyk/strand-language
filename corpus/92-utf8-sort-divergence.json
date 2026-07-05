@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "root": "lambda",
+  "nodes": {
+    "intT":       { "type": "PrimitiveType", "kind": "Int" },
+    "boolT":      { "type": "PrimitiveType", "kind": "Bool" },
+    "fieldBmp":   { "type": "ProductTypeField", "name": "Ａ", "fieldType": "intT" },
+    "fieldSupp":  { "type": "ProductTypeField", "name": "𐀀", "fieldType": "boolT" },
+    "recordType": { "type": "ProductType", "fields": ["fieldBmp", "fieldSupp"] },
+
+    "r":          { "type": "ParameterDecl", "name": "r", "paramType": "recordType" },
+    "rRef":       { "type": "VarRef", "binder": "r" },
+    "lambda":     { "type": "Lambda", "parameters": ["r"], "body": "rRef" }
+  }
+}

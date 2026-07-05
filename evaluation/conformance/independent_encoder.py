@@ -87,7 +87,14 @@ MULTIHASH_PREFIX = b"\x1e"  # BLAKE3-256 per ADR-003
 # presence byte is now always emitted and those nodes hash differently than
 # under epoch 1. N-048 RecursiveProjection tag 48 was introduced additively
 # under epoch 1 and carries forward unchanged.
-CANONICAL_ENCODING_EPOCH = 2
+#
+# Epoch 3 (2026-07-05, Q-074) switches the three name-keyed edge-list sorts
+# (ProductType fields, SumType cases, ProductValue fields) from UTF-16
+# code-unit order to UTF-8 byte lexicographic order (= Unicode code-point
+# order). The two orders diverge only for names mixing U+E000..U+FFFF with
+# supplementary characters (>= U+10000), so the all-ASCII corpus moved no
+# hash — only this constant and the fixtures' epoch field advance.
+CANONICAL_ENCODING_EPOCH = 3
 
 
 def multihash(encoding: bytes) -> bytes:
@@ -174,9 +181,12 @@ RECURSIVE_SENTINEL = 9223372036854775807  # Long.MAX_VALUE
 
 
 def name_sort_key(s: str) -> bytes:
-    """Lexicographic over UTF-16 code units (spec: Set-like and positional
-    edge lists). UTF-16-BE byte comparison equals code-unit comparison."""
-    return s.encode("utf-16-be")
+    """Lexicographic over UTF-8 bytes — equivalently, Unicode code-point order
+    (spec: Set-like and positional edge lists; epoch 3, Q-074). Epoch <= 2
+    sorted over UTF-16 code units (`s.encode("utf-16-be")`), a JVM-ism; the two
+    orders diverge only when a supplementary character (>= U+10000) is compared
+    against a character in U+E000..U+FFFF."""
+    return s.encode("utf-8")
 
 
 class EncoderError(Exception):

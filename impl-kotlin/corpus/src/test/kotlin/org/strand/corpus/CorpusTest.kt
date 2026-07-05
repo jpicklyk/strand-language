@@ -283,6 +283,18 @@ class CorpusTest {
             "N-048: an AST whose Node case carries a child LIST. astT = μ a. Lit(Int) | Node(μ. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil) — the child-list element type is the outer ast, so a Node holds a list of asts. Two mutually-recursive Fixpoints (eval an ast; sum a child list) — the inner list fold lexically captures the ast evaluator — recursively sum the Lit leaves of Node([Lit(2), Lit(3)]) → 5. The child-list type is named via RecursiveProjection(astT, [Case Node, Unfold])."),
         Case("/corpus/91-element-tree-via-projection.json", Value.IntV(2),
             "N-048: an HTML/SVG-style element tree — the canonical tree-of-lists shape Q-026/Q-047 deferred. elT = μ el. Text(String) | Element({tag: String, children: μ. Cons(head: RecursiveSelf 1, tail: RecursiveSelf 0) | Nil}) — Element carries a tag plus a child list of elements. Counts the Text leaves of div([text \"a\", span([text \"b\"])]) → 2. The children list is reached by a three-step path RecursiveProjection(elT, [Case Element, Field children, Unfold]) — exercising all three selector kinds (Case, Field, Unfold) in one path."),
+
+        // Epoch 3 (Q-074) cross-implementation divergence pin. A verify-only
+        // Lambda over a ProductType with two non-ASCII field names chosen to
+        // straddle the UTF-16 / UTF-8 sort-order divergence: "Ａ" (U+FF21,
+        // in U+E000..U+FFFF) and "𐀀" (U+10000, supplementary plane). Under
+        // epoch 3's UTF-8 byte order the U+FF21 field sorts FIRST (utf8:
+        // ef bc a1 < f0 90 80 80); under the retired epoch-<= 2 UTF-16
+        // code-unit order the supplementary field sorted first (utf16-be:
+        // d8 00 dc 00 < ff 21). The golden entry plus the Python conformance
+        // run pin cross-implementation agreement on the exact divergence case.
+        Case("/corpus/92-utf8-sort-divergence.json", null,
+            "Epoch 3 (Q-074) verify-only: a ProductType whose two field names straddle the UTF-16-vs-UTF-8 name-sort divergence — Ａ (U+FF21) and 𐀀 (U+10000). Under UTF-8 byte order the U+FF21 field sorts first; UTF-16 code-unit order would put the supplementary field first. Pins the cross-implementation encoding choice on the one construct where the two orders differ."),
     )
 
     /**
