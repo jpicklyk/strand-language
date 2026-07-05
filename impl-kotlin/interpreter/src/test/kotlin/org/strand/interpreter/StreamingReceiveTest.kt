@@ -22,11 +22,17 @@ import org.junit.jupiter.api.assertThrows
  * capability / sandbox / wall-clock scenarios (5–8) are exercised at
  * their own layers (the effect closure is the existing E-004 machinery;
  * the corpus exemplar positively exercises the happy-path closure).
+ *
+ * Q-075: the "Option-EOF over a real socket" scenario connects to a real
+ * loopback [java.net.ServerSocket], which the library's SECURE_DEFAULT
+ * sandbox denies. This class installs [SandboxPolicy.OPEN_DEFAULT] for the
+ * duration — an explicit opt-in for the one scenario that needs it.
  */
 class StreamingReceiveTest {
 
     private val savedClient = Builtins.llmHttpClient
     private val savedCredentials = Builtins.credentialProvider
+    private val savedSandbox = Builtins.sandboxPolicy
 
     @BeforeEach
     fun setUp() {
@@ -35,12 +41,14 @@ class StreamingReceiveTest {
         Builtins.credentialProvider = StaticCredentialProvider(
             mapOf("anthropic" to "sk-test-key", "openai" to "sk-test-openai", "gemini" to "test-gemini"),
         )
+        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
     }
 
     @AfterEach
     fun tearDown() {
         Builtins.llmHttpClient = savedClient
         Builtins.credentialProvider = savedCredentials
+        Builtins.sandboxPolicy = savedSandbox
         ResourceTable.resetForTest()
         CredentialScrubber.resetForTesting()
     }
