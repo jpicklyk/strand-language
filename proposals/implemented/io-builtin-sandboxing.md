@@ -30,6 +30,16 @@ zero failures, zero regressions across the 895 pre-Q-041 baseline.
    policies in `@BeforeEach` and reset in `@AfterEach`. Documented in
    `SandboxPolicy.OPEN_DEFAULT` KDoc.
 
+   **2026-07-05 update (Q-075):** this inversion was removed. The
+   original justification — protecting the 895-test pre-Q-041 baseline
+   from breaking outright — expired once that baseline's IO-touching
+   tests gained explicit sandbox-awareness. `Builtins.sandboxPolicy`
+   now defaults to `SandboxPolicy.SECURE_DEFAULT` (via the new
+   `Builtins.DEFAULT_SANDBOX_POLICY` constant), matching the CLI
+   default; `OPEN_DEFAULT` is an explicit opt-in a test or embedder
+   installs deliberately. See
+   [`implemented/secure-by-default.md`](secure-by-default.md).
+
 2. **`httpReq` prelude entry points at the legacy wrapper.** § 4.3 calls
    the new seven-arg signature canonical and the single-URL wrapper
    "legacy." The implementation keeps the prelude name `httpReq` but
