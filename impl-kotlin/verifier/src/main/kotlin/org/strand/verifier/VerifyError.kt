@@ -1171,6 +1171,43 @@ sealed class VerifyError {
         val rejectedType: TypeExpr,
         val reason: String,
     ) : VerifyError()
+
+    /**
+     * Q-056: a `strand-builtin:` [Node.ForeignNode]'s declared effect set
+     * does not equal the co-resident registry's ground-truth effect-category
+     * name set for [target]. [declared] is the set of category names the
+     * ForeignNode's `effects` edges resolve to; [actual] is the registry's
+     * known set; [missing] = [actual] − [declared] is the soundness-critical
+     * under-declaration (effects the builtin really has but the ForeignNode
+     * omits, which would shrink the ADR-010 effect closure below the truth).
+     * Over-declaration ([declared] − [actual] non-empty with [missing] empty)
+     * is also a mismatch, matching the N-046 ModuleManifest exact-surface
+     * precedent. Emitted only when the [BuiltinSignatureOracle] is resolvable;
+     * with no oracle the check degrades to skip.
+     */
+    data class BuiltinEffectMismatch(
+        override val at: NodeId,
+        val target: String,
+        val declared: Set<String>,
+        val actual: Set<String>,
+        val missing: Set<String>,
+    ) : VerifyError()
+
+    /**
+     * Q-056: a monomorphic `strand-builtin:` [Node.ForeignNode]'s declared
+     * `foreignType` does not structurally equal the co-resident registry's
+     * canonical signature shape for [target]. [declared] and [actual] are the
+     * canonicalized [BuiltinShape] forms. Emitted only for builtins the oracle
+     * models as monomorphic; polymorphic and agent-typed families are checked
+     * for arity only and never raise this variant. Emitted only when the
+     * [BuiltinSignatureOracle] is resolvable.
+     */
+    data class BuiltinSignatureMismatch(
+        override val at: NodeId,
+        val target: String,
+        val declared: BuiltinShape,
+        val actual: BuiltinShape,
+    ) : VerifyError()
 }
 
 /** Outcome of verification: either a successful inference or one or more structured errors. */

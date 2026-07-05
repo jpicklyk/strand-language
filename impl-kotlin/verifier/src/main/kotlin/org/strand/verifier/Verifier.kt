@@ -1723,6 +1723,11 @@ class Verifier(
                 effectProjections = node.effectProjections,
                 signatureParameterTypes = fType.parameters,
             )
+            // Q-056: for a `strand-builtin:` target the truth is co-resident.
+            // Cross-check the declared effects and (for monomorphic targets)
+            // the declared signature against the registry oracle. Degrades to
+            // skip when no oracle is registered.
+            checkBuiltinSignatureAndEffects(id, node, fType, declaredEffects)
             // Evaluating a ForeignNode produces a callable value — no effects
             // fire at construction. Effects release at call sites (handled
             // in inferApplication via the function's type effects).
@@ -1732,6 +1737,113 @@ class Verifier(
                 result = fType.result,
                 effects = fType.effects + declaredEffects,
             )
+        }
+
+        /**
+         * Q-056: cross-check a `strand-builtin:` ForeignNode's declared
+         * effects and signature against the co-resident registry oracle.
+         *
+         * Effects: the declared [declaredEffects] are resolved to their
+         * EffectCategory NAME set and required to EQUAL the oracle's name
+         * set. Under-declaration (a category the builtin really has but the
+         * ForeignNode omits) is the soundness-critical case for ADR-010's
+         * effect closure; over-declaration is also rejected, matching the
+         * N-046 ModuleManifest exact-surface precedent.
+         *
+         * Signature: for a monomorphic target the declared [fType] must
+         * structurally equal the oracle's canonical shape. For polymorphic /
+         * agent-typed families the oracle returns no monomorphic shape and
+         * only the parameter arity is checked — the structural remainder is
+         * deferred so a legitimate polymorphic use is never over-rejected.
+         *
+         * The whole check degrades to skip when no oracle is registered
+         * (a verifier-only classpath with no builtin table), and when the
+         * target is not a `strand-builtin:` string or is unknown to the
+         * oracle (a `wasm:` / `process:` binding, or a test-only builtin).
+         */
+        private fun checkBuiltinSignatureAndEffects(
+            id: NodeId,
+            node: Node.ForeignNode,
+            fType: TypeExpr.Fun,
+            declaredEffects: Set<NodeId>,
+        ) {
+            if (!node.target.startsWith("strand-builtin:")) return
+            if (!BuiltinSignatures.oracleAvailable()) return
+            val actualEffectNames = BuiltinSignatures.effectNamesFor(node.target)
+                ?: return  // unknown to the oracle (e.g. test-only builtin) — skip
+            val target = node.target
+
+            // Effect cross-check. Resolve declared EffectCategory NodeIds to
+            // their category names (validateEffectCategoryEdges already
+            // confirmed each is a well-formed EffectCategory).
+            val declaredEffectNames = declaredEffects.mapNotNull { effectId ->
+                (store.getOrNull(effectId) as? Node.EffectCategory)?.categoryName
+            }.toSet()
+            if (declaredEffectNames != actualEffectNames) {
+                report(VerifyError.BuiltinEffectMismatch(
+                    at = id,
+                    target = target,
+                    declared = declaredEffectNames,
+                    actual = actualEffectNames,
+                    missing = actualEffectNames - declaredEffectNames,
+                ))
+                throw VerifyAbort()
+            }
+
+            // Signature cross-check.
+            val canonicalShape = BuiltinSignatures.signatureShapeFor(target)
+            if (canonicalShape != null) {
+                // Monomorphic: require exact structural equality.
+                val declaredShape = builtinShapeOf(fType)
+                if (declaredShape != canonicalShape) {
+                    report(VerifyError.BuiltinSignatureMismatch(
+                        at = id,
+                        target = target,
+                        declared = declaredShape,
+                        actual = canonicalShape,
+                    ))
+                    throw VerifyAbort()
+                }
+            }
+            // Polymorphic / agent-typed targets (canonicalShape == null but
+            // known to the oracle): parameter arity is checked at each
+            // Application site by the standard ArityMismatch rule; the
+            // structural signature remainder is deferred rather than
+            // over-rejected here, per the proposal's polymorphic scope.
+        }
+
+        /**
+         * Q-056: canonicalize a resolved [TypeExpr] into the oracle-comparable
+         * [BuiltinShape]. Effects on function types are dropped (the effect
+         * surface is cross-checked separately via the ForeignNode's declared
+         * `effects`, not via the FunctionType's effect row). Product/Sum
+         * origin NodeIds are dropped (structural identity), matching
+         * [TypeExpr]'s own equality. Recursive self-references use the same
+         * positional depth [TypeExpr.RecursiveSelf] carries.
+         */
+        private fun builtinShapeOf(t: TypeExpr): BuiltinShape = when (t) {
+            is TypeExpr.Prim -> BuiltinShape.Prim(t.kind.name)
+            is TypeExpr.Fun -> BuiltinShape.Fun(
+                parameters = t.parameters.map { builtinShapeOf(it) },
+                result = builtinShapeOf(t.result),
+            )
+            is TypeExpr.Product -> BuiltinShape.Product(
+                fields = t.fields.map { it.name to builtinShapeOf(it.type) },
+            )
+            is TypeExpr.Sum -> BuiltinShape.Sum(
+                cases = t.cases.map { it.name to it.type?.let { ty -> builtinShapeOf(ty) } },
+            )
+            is TypeExpr.Recursive -> BuiltinShape.Recursive(builtinShapeOf(t.body))
+            is TypeExpr.RecursiveSelf -> BuiltinShape.RecSelf(t.depth)
+            // A monomorphic builtin's foreignType mentions no type parameter,
+            // Forall, or SchemaType. If one appears the target is not the
+            // monomorphic shape the oracle claimed; encode it as an unshared
+            // primitive marker so structural equality fails cleanly rather
+            // than throwing (the resulting BuiltinSignatureMismatch is the
+            // right diagnostic).
+            is TypeExpr.Param -> BuiltinShape.Prim("<param#${t.origin.value}>")
+            is TypeExpr.Forall -> BuiltinShape.Prim("<forall>")
+            is TypeExpr.SchemaType -> builtinShapeOf(t.valueType)
         }
 
         private fun inferCapabilityScope(

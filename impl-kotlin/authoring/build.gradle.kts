@@ -18,6 +18,12 @@ dependencies {
     api(project(":core"))
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     implementation(project(":hashing"))
+    // Q-056: the BuiltinsSignatureOracle implements the verifier's
+    // BuiltinSignatureOracle interface and is published to it through
+    // META-INF/services (mirroring the interpreter's BuiltinsDeterminismOracle
+    // seam). authoring -> verifier -> core is acyclic — the verifier does not
+    // depend on authoring.
+    implementation(project(":verifier"))
     testImplementation(project(":hashing"))
     testImplementation(project(":verifier"))
 }
