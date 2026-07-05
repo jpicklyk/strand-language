@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":     { "type": "PrimitiveType", "kind": "Int" },
+    "timeFx":   { "type": "EffectCategory", "categoryName": "Time.Now" },
+    "callbackT":{ "type": "FunctionType", "parameters": ["intT"], "result": "intT", "effects": ["timeFx"] },
+
+    "cb":       { "type": "ParameterDecl", "name": "cb", "paramType": "callbackT" },
+    "ax":       { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+    "cbRef":    { "type": "VarRef", "binder": "cb" },
+    "axRef":    { "type": "VarRef", "binder": "ax" },
+    "cbCall":   { "type": "Application", "function": "cbRef", "arguments": ["axRef"] },
+    "apply2":   { "type": "Lambda", "parameters": ["cb", "ax"], "body": "cbCall", "effects": ["timeFx"] },
+
+    "px":       { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+    "pxRef":    { "type": "VarRef", "binder": "px" },
+    "one":      { "type": "IntLit", "value": 1 },
+    "addFnT":   { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "addFn":    { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addFnT" },
+    "incBody":  { "type": "Application", "function": "addFn", "arguments": ["pxRef", "one"] },
+    "pureInc":  { "type": "Lambda", "parameters": ["px"], "body": "incBody", "effects": [] },
+
+    "forty":    { "type": "IntLit", "value": 41 },
+    "app":      { "type": "Application", "function": "apply2", "arguments": ["pureInc", "forty"] }
+  }
+}
