@@ -498,4 +498,19 @@ class SandboxPolicyTest {
                 "expected $ip to be NetHostBlocked")
         }
     }
+
+    // ---------- Q-075 default-pin regression guard ----------
+
+    @Test
+    fun `Builtins DEFAULT_SANDBOX_POLICY is SECURE_DEFAULT`() {
+        // Q-075: the library default is SECURE_DEFAULT, not OPEN_DEFAULT. This
+        // is the single source of truth every test-reset path (this class's
+        // own @BeforeEach/@AfterEach included) restores to. Asserting the
+        // constant directly — rather than the mutable `Builtins.sandboxPolicy`
+        // singleton, which any test in the suite may have mutated mid-run —
+        // makes a regression toward OPEN_DEFAULT fail here regardless of test
+        // execution order or other tests' singleton mutations.
+        assertEquals(SandboxPolicy.SECURE_DEFAULT, Builtins.DEFAULT_SANDBOX_POLICY)
+        assertNotEquals(SandboxPolicy.OPEN_DEFAULT, Builtins.DEFAULT_SANDBOX_POLICY)
+    }
 }

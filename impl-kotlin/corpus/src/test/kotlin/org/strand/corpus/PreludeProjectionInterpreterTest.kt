@@ -3,16 +3,19 @@ package org.strand.corpus
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.strand.authoring.Authoring
 import org.strand.core.JsonIngest
 import org.strand.hashing.Hasher
+import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilityArgument
 import org.strand.interpreter.CapabilityPattern
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.ResourceTable
+import org.strand.interpreter.SandboxPolicy
 import org.strand.interpreter.Value
 import org.strand.verifier.VerifyResult
 import org.strand.verifier.Verifier
@@ -34,11 +37,21 @@ import java.nio.file.Path
  * Capability grants use wildcard patterns (one slot per category parameter,
  * [CapabilityArgument.Concrete]) matching the call-site values; this mirrors
  * the pattern established in [CorpusProjectionTest].
+ *
+ * Q-075: every `Fs.*` scenario here targets a `@TempDir` path, outside the
+ * library's SECURE_DEFAULT workspace root. Install [SandboxPolicy.OPEN_DEFAULT]
+ * for the duration.
  */
 class PreludeProjectionInterpreterTest {
 
+    @BeforeEach
+    fun setUp() {
+        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+    }
+
     @AfterEach
     fun cleanupResourceTable() {
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         ResourceTable.resetForTest()
     }
 
