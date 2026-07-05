@@ -64,6 +64,13 @@ data class HostPolicy(
     val exitHandler: Builtins.ExitHandler,
     /** Q-037 maximum tool-use iterations per per-provider Generate call. */
     val toolLoopLimit: Int,
+    /**
+     * Q-055 effect-audit sink. Emits a structured [AuditRecord] at every
+     * foreign-dispatch capability boundary (allowed and denied). Defaults to
+     * the [NoOpAuditSink] so the audit log is opt-in and per-tenant — a host
+     * that wants a log installs one via `.copy(auditSink = ...)`.
+     */
+    val auditSink: AuditSink = NoOpAuditSink,
 ) {
     companion object {
         /**

@@ -238,4 +238,7 @@ enum class SandboxViolationKind {
 
     /** `Http.Request` saw a scheme other than `http` or `https`. */
     HttpSchemeRejected,
+
+    /** `Process.Spawn` was invoked with a command not permitted by the process policy. */
+    ProcessSpawnBlocked,
 }

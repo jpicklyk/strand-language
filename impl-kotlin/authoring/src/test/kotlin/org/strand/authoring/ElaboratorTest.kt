@@ -51,6 +51,31 @@ class ElaboratorTest {
     }
 
     @Test
+    fun `a normal document converges and elaboration returns without throwing`() {
+        // Regression net for the non-convergence guard: a realistic
+        // document reaches the fixed point (a no-change pass) well within
+        // the iteration bound, so `elaborate` returns normally rather than
+        // throwing ElaborationDidNotConverge. Constructing a genuinely
+        // non-converging document is impractical — the inference passes
+        // are monotone rewrites that stabilize in 2-3 iterations by
+        // design — so this asserts the convergent path stays intact.
+        val text = """
+            @v=1 root=lam
+            intT PRM Int
+            timeFx EFC "Time.Now"
+            nowT FNT [] intT
+            now FN "strand-builtin:Time.Now" nowT [timeFx]
+            callNow APP now []
+            lam LAM [] callNow
+        """.trimIndent()
+
+        val doc = LayerAParser.parse(text)
+        // Should not throw AuthoringException(ElaborationDidNotConverge).
+        val elaborated = Elaborator.elaborate(doc)
+        assertTrue(elaborated.nodes.isNotEmpty())
+    }
+
+    @Test
     fun `Lambda with no effects and pure body is left unchanged`() {
         val text = """
             @v=1 root=lam

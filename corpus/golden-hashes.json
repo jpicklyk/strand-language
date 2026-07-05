@@ -119,6 +119,8 @@
     "layer-a/density-v5/list-map-double-explicit.layer-a": "1e61cc92ee187bcb5bd5e6933b8087abcb9ae202f2015cacf2c475f40fbe25ca9f",
     "layer-a/density-v5/list-map-double.layer-a": "1e61cc92ee187bcb5bd5e6933b8087abcb9ae202f2015cacf2c475f40fbe25ca9f",
     "layer-a/density-v5/string-split-join-explicit.layer-a": "1ed9f238694277db35a77cfdbfd00fd10d59acfcb6282e7c7ed3c3a43b7870ecf3",
-    "layer-a/density-v5/string-split-join.layer-a": "1ed9f238694277db35a77cfdbfd00fd10d59acfcb6282e7c7ed3c3a43b7870ecf3"
+    "layer-a/density-v5/string-split-join.layer-a": "1ed9f238694277db35a77cfdbfd00fd10d59acfcb6282e7c7ed3c3a43b7870ecf3",
+    "layer-a/manifest/79-module-manifest-with-effects.layer-a": "1e8da1b61b51796f5d4724a803ad5077c147ee385ee510c44ffc89bcf17e1c3aac",
+    "layer-a/manifest/80-manifest-effect-mismatch-rejected.layer-a": "1ea5a57f54d3d1056e1594a8255549a0834c83791f8563aca4d6963ec9896f7552"
   }
 }

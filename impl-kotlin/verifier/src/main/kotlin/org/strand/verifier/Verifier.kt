@@ -100,6 +100,22 @@ class Verifier(
         // may sit alongside the program it documents.
         state.checkManifests()
         if (state.errors.isNotEmpty()) return VerifyResult.Failed(state.errors)
+        // Q-070 / Q-071: surface the latent effect channel keyed by NodeId as
+        // the per-site map, plus the program root's aggregate latent set — the
+        // union of every recorded contribution (ToolDef implementations and
+        // higher-order callback arguments). The root aggregate is computed here,
+        // the single Ok construction site, rather than threaded through the
+        // recursive `infer` (which does not carry the root NodeId). If the root
+        // already has a per-site entry (it is itself an effectful ToolDef or
+        // Application argument — not a shape any current program takes, but
+        // defensively handled) it is unioned in rather than overwritten.
+        val latentBySite = state.latentClosures.toMap()
+        val rootLatentAggregate = latentBySite.values.flatten().toSet()
+        val latentClosures = if (rootLatentAggregate.isEmpty()) {
+            latentBySite
+        } else {
+            latentBySite + (root to ((latentBySite[root] ?: emptySet()) + rootLatentAggregate))
+        }
         return VerifyResult.Ok(
             rootType,
             state.nodeTypes.toMap(),
@@ -109,6 +125,9 @@ class Verifier(
             // UncoveredEffects) so a host reads the harm bound's `closure(g)`
             // instead of re-deriving it. `VerifyResult` is not encoded — hash-neutral.
             nodeClosures = state.nodeClosures.toMap(),
+            // Q-070 / Q-071: the parallel latent-effect channel (indirectly-
+            // reachable effect surface). Also not encoded — hash-neutral.
+            latentClosures = latentClosures,
         )
     }
 
@@ -267,6 +286,21 @@ class Verifier(
         val nodeClosures = mutableMapOf<NodeId, Set<NodeId>>()
 
         /**
+         * Q-070 / Q-071: latent effect surface — the union of effect surfaces
+         * reachable only through indirect invocation, keyed by NodeId exactly as
+         * [nodeClosures] is. Distinct from [nodeClosures], which holds the
+         * directly-performed closure the verifier walks through Application
+         * edges. Two contributors fold in during [infer]: N-044 ToolDef
+         * implementations (at [inferToolDef]) and higher-order callbacks — any
+         * effectful value in argument position (at [inferApplication]). Every
+         * contribution is also unioned into the program root's entry via
+         * [addLatent], so [VerifyResult.Ok.rootLatentClosure] reads the whole
+         * latent surface off the root. Surfaced on [VerifyResult.Ok] additively;
+         * [VerifyResult] is not encoded, so this is hash-neutral.
+         */
+        val latentClosures = mutableMapOf<NodeId, Set<NodeId>>()
+
+        /**
          * Q-039: per-verification structural-equality cache for
          * [ProjectionSource.LiteralNode] targets and the EffectDecl
          * literal parameters they're matched against. Keyed by the
@@ -284,6 +318,30 @@ class Verifier(
         fun recordClosure(id: NodeId, c: Set<NodeId>) {
             nodeClosures[id] = c
         }
+
+        /**
+         * Q-070 / Q-071: fold a latent effect surface [surface] into the
+         * latent channel at site [id]. No-op for an empty surface. The
+         * per-site entry accumulates (unions) across multiple contributions
+         * at the same NodeId; the program root's aggregate latent set is
+         * computed at the single [VerifyResult.Ok] construction site as the
+         * union of every recorded contribution (see [verify]).
+         */
+        fun addLatent(id: NodeId, surface: Set<NodeId>) {
+            if (surface.isEmpty()) return
+            latentClosures[id] = (latentClosures[id] ?: emptySet()) + surface
+        }
+
+        /**
+         * Q-070 / Q-071: the effect surface of a value whose inferred type is
+         * [type] — the effect row of a [TypeExpr.Fun] (empty for any other
+         * shape). For both a Lambda and a ForeignNode implementation the
+         * inferred value type is a `Fun` whose `effects` set is the surface
+         * (ForeignNode folds its declared effects into that row, see
+         * [inferForeignNode]).
+         */
+        fun effectSurfaceOf(type: TypeExpr): Set<NodeId> =
+            (type as? TypeExpr.Fun)?.effects ?: emptySet()
 
         /**
          * Type-compatibility for value-flow positions (Application argument
@@ -947,6 +1005,32 @@ class Verifier(
             for (argId in node.arguments) closure += closureOf(argId)
             closure += funType.effects
             recordClosure(id, closure)
+
+            // Q-071: higher-order callbacks. Any effectful value passed as an
+            // ARGUMENT (not as the applied function `node.function`) may be
+            // invoked indirectly inside the callee — e.g. a `List.Map` over an
+            // effectful callback releases the callback's effects at a call site
+            // the verifier never walks. Its effect surface is therefore absent
+            // from the closure above and folds into the latent channel instead.
+            // A value that is BOTH an argument here and directly applied
+            // elsewhere already contributes its direct use to `closure`; this
+            // adds only its indirect reach. Two shapes are surfaced: (a) an
+            // argument whose inferred type carries a non-empty effect row, and
+            // (b) an argument that resolves through the projected-ForeignNode
+            // chain to an effect-bearing ForeignNode (whose type-level effect
+            // row may be empty at the reference site but whose declared effects
+            // are the surface the runtime releases).
+            for ((i, argId) in node.arguments.withIndex()) {
+                val surface = effectSurfaceOf(argTypes[i]).toMutableSet()
+                // The projected-ForeignNode fallback reads the already-validated
+                // declared effects off the resolved node (the argument was
+                // inferred above, so `inferForeignNode` has already checked those
+                // edges — we only read them here).
+                resolveProjectedForeignNode(argId)?.let { foreign ->
+                    surface += foreign.effects
+                }
+                addLatent(argId, surface)
+            }
 
             return funType.result
         }
@@ -1708,6 +1792,11 @@ class Verifier(
                 effectProjections = node.effectProjections,
                 signatureParameterTypes = fType.parameters,
             )
+            // Q-056: for a `strand-builtin:` target the truth is co-resident.
+            // Cross-check the declared effects and (for monomorphic targets)
+            // the declared signature against the registry oracle. Degrades to
+            // skip when no oracle is registered.
+            checkBuiltinSignatureAndEffects(id, node, fType, declaredEffects)
             // Evaluating a ForeignNode produces a callable value — no effects
             // fire at construction. Effects release at call sites (handled
             // in inferApplication via the function's type effects).
@@ -1717,6 +1806,113 @@ class Verifier(
                 result = fType.result,
                 effects = fType.effects + declaredEffects,
             )
+        }
+
+        /**
+         * Q-056: cross-check a `strand-builtin:` ForeignNode's declared
+         * effects and signature against the co-resident registry oracle.
+         *
+         * Effects: the declared [declaredEffects] are resolved to their
+         * EffectCategory NAME set and required to EQUAL the oracle's name
+         * set. Under-declaration (a category the builtin really has but the
+         * ForeignNode omits) is the soundness-critical case for ADR-010's
+         * effect closure; over-declaration is also rejected, matching the
+         * N-046 ModuleManifest exact-surface precedent.
+         *
+         * Signature: for a monomorphic target the declared [fType] must
+         * structurally equal the oracle's canonical shape. For polymorphic /
+         * agent-typed families the oracle returns no monomorphic shape and
+         * only the parameter arity is checked — the structural remainder is
+         * deferred so a legitimate polymorphic use is never over-rejected.
+         *
+         * The whole check degrades to skip when no oracle is registered
+         * (a verifier-only classpath with no builtin table), and when the
+         * target is not a `strand-builtin:` string or is unknown to the
+         * oracle (a `wasm:` / `process:` binding, or a test-only builtin).
+         */
+        private fun checkBuiltinSignatureAndEffects(
+            id: NodeId,
+            node: Node.ForeignNode,
+            fType: TypeExpr.Fun,
+            declaredEffects: Set<NodeId>,
+        ) {
+            if (!node.target.startsWith("strand-builtin:")) return
+            if (!BuiltinSignatures.oracleAvailable()) return
+            val actualEffectNames = BuiltinSignatures.effectNamesFor(node.target)
+                ?: return  // unknown to the oracle (e.g. test-only builtin) — skip
+            val target = node.target
+
+            // Effect cross-check. Resolve declared EffectCategory NodeIds to
+            // their category names (validateEffectCategoryEdges already
+            // confirmed each is a well-formed EffectCategory).
+            val declaredEffectNames = declaredEffects.mapNotNull { effectId ->
+                (store.getOrNull(effectId) as? Node.EffectCategory)?.categoryName
+            }.toSet()
+            if (declaredEffectNames != actualEffectNames) {
+                report(VerifyError.BuiltinEffectMismatch(
+                    at = id,
+                    target = target,
+                    declared = declaredEffectNames,
+                    actual = actualEffectNames,
+                    missing = actualEffectNames - declaredEffectNames,
+                ))
+                throw VerifyAbort()
+            }
+
+            // Signature cross-check.
+            val canonicalShape = BuiltinSignatures.signatureShapeFor(target)
+            if (canonicalShape != null) {
+                // Monomorphic: require exact structural equality.
+                val declaredShape = builtinShapeOf(fType)
+                if (declaredShape != canonicalShape) {
+                    report(VerifyError.BuiltinSignatureMismatch(
+                        at = id,
+                        target = target,
+                        declared = declaredShape,
+                        actual = canonicalShape,
+                    ))
+                    throw VerifyAbort()
+                }
+            }
+            // Polymorphic / agent-typed targets (canonicalShape == null but
+            // known to the oracle): parameter arity is checked at each
+            // Application site by the standard ArityMismatch rule; the
+            // structural signature remainder is deferred rather than
+            // over-rejected here, per the proposal's polymorphic scope.
+        }
+
+        /**
+         * Q-056: canonicalize a resolved [TypeExpr] into the oracle-comparable
+         * [BuiltinShape]. Effects on function types are dropped (the effect
+         * surface is cross-checked separately via the ForeignNode's declared
+         * `effects`, not via the FunctionType's effect row). Product/Sum
+         * origin NodeIds are dropped (structural identity), matching
+         * [TypeExpr]'s own equality. Recursive self-references use the same
+         * positional depth [TypeExpr.RecursiveSelf] carries.
+         */
+        private fun builtinShapeOf(t: TypeExpr): BuiltinShape = when (t) {
+            is TypeExpr.Prim -> BuiltinShape.Prim(t.kind.name)
+            is TypeExpr.Fun -> BuiltinShape.Fun(
+                parameters = t.parameters.map { builtinShapeOf(it) },
+                result = builtinShapeOf(t.result),
+            )
+            is TypeExpr.Product -> BuiltinShape.Product(
+                fields = t.fields.map { it.name to builtinShapeOf(it.type) },
+            )
+            is TypeExpr.Sum -> BuiltinShape.Sum(
+                cases = t.cases.map { it.name to it.type?.let { ty -> builtinShapeOf(ty) } },
+            )
+            is TypeExpr.Recursive -> BuiltinShape.Recursive(builtinShapeOf(t.body))
+            is TypeExpr.RecursiveSelf -> BuiltinShape.RecSelf(t.depth)
+            // A monomorphic builtin's foreignType mentions no type parameter,
+            // Forall, or SchemaType. If one appears the target is not the
+            // monomorphic shape the oracle claimed; encode it as an unshared
+            // primitive marker so structural equality fails cleanly rather
+            // than throwing (the resulting BuiltinSignatureMismatch is the
+            // right diagnostic).
+            is TypeExpr.Param -> BuiltinShape.Prim("<param#${t.origin.value}>")
+            is TypeExpr.Forall -> BuiltinShape.Prim("<forall>")
+            is TypeExpr.SchemaType -> builtinShapeOf(t.valueType)
         }
 
         private fun inferCapabilityScope(
@@ -2103,6 +2299,13 @@ class Verifier(
             // sites during the provider's loop; the surrounding
             // capability context covers them there.
             recordClosure(id, emptySet())
+            // Q-070: the implementation's effect surface — the FunctionType
+            // effect row (a Lambda's declared effects, or a ForeignNode's
+            // declared effects folded into its returned Fun) — is reachable
+            // only through the model's indirect tool-use invocation, so it
+            // belongs in the latent channel keyed by this ToolDef's NodeId,
+            // NOT in the (directly-performed) root closure above.
+            addLatent(id, effectSurfaceOf(implFun))
             // Surface type: opaque Bytes (Strand-side opaque-handle
             // convention, matching Resource / MapV).
             return TypeExpr.Prim(Primitive.Bytes)

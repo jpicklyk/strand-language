@@ -1165,6 +1165,13 @@ object Builtins {
                 cur = payload.fields["tail"]
                     ?: throw IoFailure("process-spawn", "Process.Spawn args list missing tail")
             }
+            // Q-041 follow-up: process-spawn sandbox gate. Under the CLI's
+            // SECURE_DEFAULT this denies any non-allowlisted command; under
+            // the library OPEN_DEFAULT it is a no-op. Runs before the JVM
+            // spawn, mirroring FsSandbox.resolve / NetSandbox.checkConnect.
+            // The SandboxViolation propagates to applyForeign, which
+            // translates it to InterpretError.SandboxViolation.
+            ProcessSandbox.check(sandboxPolicy.process, cmd)
             try {
                 val builder = ProcessBuilder(listOf(cmd) + argList).inheritIO()
                 val proc = builder.start()

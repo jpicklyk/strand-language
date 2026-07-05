@@ -81,3 +81,4 @@ The node algebra becomes load-bearing. Because the graph is the source represent
 - [`ADR-008-compilation-target.md`](ADR-008-compilation-target.md) — graph foundation
 - [`design/node-algebra.md`](../design/node-algebra.md) — graph foundation for node algebra
 - [`design/distribution-model.md`](../design/distribution-model.md) — graph as dependency structure
+- [`ADR-010-reasoning-surface.md`](ADR-010-reasoning-surface.md) — reasoning attaches to the graph, refining this decision

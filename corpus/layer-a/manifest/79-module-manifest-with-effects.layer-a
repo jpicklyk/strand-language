@@ -1,0 +1,28 @@
+@v=1 root=lib
+
+# Q-057 MFT/MEX byte-identity fixture, mirrors corpus 79
+# module-manifest-with-effects.json exactly (same node shapes, explicit
+# form — no density sugar — so the MFT/MEX emission path is exercised in
+# isolation from the other Layer A shorthand forms).
+
+intT PRM Int
+strT PRM String
+bytesT PRM Bytes
+
+writeFx EFC "Filesystem.Write" [strT]
+
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+
+idParam PRC "x" intT
+idBody VAR idParam
+idFn LAM [idParam] idBody
+
+wPath PRC "path" strT
+wData PRC "data" bytesT
+wBody APP writeFn [wPath wData]
+writer LAM [wPath wData] wBody [writeFx]
+
+idExport MEX idFn [] "Int.identity"
+writerExport MEX writer [writeFx] "Fs.writeFile"
+lib MFT [idExport writerExport]

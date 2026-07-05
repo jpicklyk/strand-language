@@ -1,0 +1,25 @@
+@v=1 root=lib
+
+# Q-057 MFT/MEX byte-identity fixture, mirrors corpus 80
+# manifest-effect-mismatch-rejected.json exactly. The export under-declares
+# writer's effect surface (declaredEffects: [] when writer actually
+# performs Filesystem.Write) — the verifier rejects this with
+# ManifestExportEffectMismatch; this fixture exercises the emitter path,
+# not the verifier rejection (see CorpusManifestTest for that).
+
+intT PRM Int
+strT PRM String
+bytesT PRM Bytes
+
+writeFx EFC "Filesystem.Write" [strT]
+
+writeT FNT [strT bytesT] intT
+writeFn FN "strand-builtin:Fs.Write" writeT [writeFx] "writeFx:0"
+
+wPath PRC "path" strT
+wData PRC "data" bytesT
+wBody APP writeFn [wPath wData]
+writer LAM [wPath wData] wBody [writeFx]
+
+writerExport MEX writer [] "Fs.writeFile"
+lib MFT [writerExport]
