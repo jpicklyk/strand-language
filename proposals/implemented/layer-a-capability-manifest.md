@@ -1,14 +1,14 @@
 # Layer A authoring for capability manifests (MFT / MEX)
 
-**Document:** `proposals/layer-a-capability-manifest.md`
-**Status:** Draft
-**Question:** [Q-057](../open-questions.md#Q-057) (advances — closes the N-046 ModuleManifest / ManifestExport authoring gap; the other four gaps stay open)
-**Related:** [ADR-010](../decisions/ADR-010-reasoning-surface.md), N-046 ModuleManifest ([`implemented/cross-store-federation` / `cross-store-federation.md`](cross-store-federation.md)), [Q-034](../open-questions.md#Q-034) (Layer A), [`implemented/reasoning-api.md`](implemented/reasoning-api.md) (Q-072)
+**Document:** `proposals/implemented/layer-a-capability-manifest.md`
+**Status:** Implemented 2026-07-04 (commit `5065e42` on `reason-first`)
+**Question:** [Q-057](../../open-questions.md#Q-057) (advances — closes the N-046 ModuleManifest / ManifestExport authoring gap; the other four gaps stay open)
+**Related:** [ADR-010](../../decisions/ADR-010-reasoning-surface.md), N-046 ModuleManifest ([`cross-store-federation.md`](../cross-store-federation.md)), [Q-034](../../open-questions.md#Q-034) (Layer A), [`reasoning-api.md`](reasoning-api.md) (Q-072)
 **Drafted:** 2026-07-04
 
 ## Problem
 
-[ADR-010](../decisions/ADR-010-reasoning-surface.md) makes reasoning a first-class capability, and the create-to-reason loop requires that an agent can author, through the documented Layer A interface, the constructs the reason layer analyzes. The N-046 ModuleManifest is the capability-statement construct: it bundles exports with per-export declared effects, the machine-checked statement of what a module can do (the subject of the mcp-tool-manifest demonstration, and the reason a client can trust a module's capabilities by verification rather than by reading prose). Yet per [Q-057](../open-questions.md#Q-057) it is unauthorable in Layer A — modules require hand-written canonical dag-json, and corpus 79/80 and the mcp-tool-manifest demo manifests are all hand-authored. An agent cannot create a bounded, effect-declaring capability manifest through the interface it is taught, so the create end of the loop is broken for exactly the reason-relevant construct. Q-057 names the blocker precisely: ManifestExport is an inline sub-object list, and no current Layer A ArgKind emits inline object arrays.
+[ADR-010](../../decisions/ADR-010-reasoning-surface.md) makes reasoning a first-class capability, and the create-to-reason loop requires that an agent can author, through the documented Layer A interface, the constructs the reason layer analyzes. The N-046 ModuleManifest is the capability-statement construct: it bundles exports with per-export declared effects, the machine-checked statement of what a module can do (the subject of the mcp-tool-manifest demonstration, and the reason a client can trust a module's capabilities by verification rather than by reading prose). Yet per [Q-057](../../open-questions.md#Q-057) it is unauthorable in Layer A — modules require hand-written canonical dag-json, and corpus 79/80 and the mcp-tool-manifest demo manifests are all hand-authored. An agent cannot create a bounded, effect-declaring capability manifest through the interface it is taught, so the create end of the loop is broken for exactly the reason-relevant construct. Q-057 names the blocker precisely: ManifestExport is an inline sub-object list, and no current Layer A ArgKind emits inline object arrays.
 
 ## Recommended approach
 
@@ -108,6 +108,6 @@ existing "every Layer A code" description already covers the addition).
 ## References
 
 **Outgoing references:**
-- [`decisions/ADR-010-reasoning-surface.md`](../decisions/ADR-010-reasoning-surface.md) — the create-to-reason loop this restores for the manifest construct
-- [`cross-store-federation.md`](cross-store-federation.md) — N-046 ModuleManifest, the construct being made authorable
-- [`open-questions.md`](../open-questions.md) — Q-057 (advanced), Q-034, Q-036
+- [`decisions/ADR-010-reasoning-surface.md`](../../decisions/ADR-010-reasoning-surface.md) — the create-to-reason loop this restores for the manifest construct
+- [`cross-store-federation.md`](../cross-store-federation.md) — N-046 ModuleManifest, the construct being made authorable
+- [`open-questions.md`](../../open-questions.md) — Q-057 (advanced), Q-034, Q-036
