@@ -395,6 +395,21 @@ object DagJsonEmitter {
         // N-047 error recovery (Q-048) — RES Result-sum type sugar.
         if (node.code == "RES") return expandResSugar(node, errors, ctx)
 
+        // Q-057 capability manifests (N-046). MEX (ManifestExport) has no
+        // standalone canonical dag-json node — it is always inlined into
+        // the referencing MFT's `exports` array (see the LayerAGrammar.codes
+        // "MEX"/"MFT" doc comment). A MEX line is validated for arity above
+        // but otherwise swallowed here: it contributes nothing to
+        // `emittedUser` on its own, and is resolved + inlined only when an
+        // MFT line references its id.
+        if (node.code == "MEX") return null
+
+        // Q-057 capability manifests (N-046) — MFT (ModuleManifest). Each
+        // `exports` id must name a MEX NodeDecl; expandManifestSugar
+        // resolves it to an inline `{target, declaredEffects, displayName}`
+        // object, matching the hand-authored corpus 79/80 JSON shape.
+        if (node.code == "MFT") return expandManifestSugar(node, errors, ctx)
+
         // Q-061 Layer F — cross-store NodeRef by content hash. An NRF
         // whose single argument is a STRING of the form "b3:<66 hex>"
         // emits the Q-043 `targetHash` ingest form instead of a local
@@ -624,6 +639,146 @@ object DagJsonEmitter {
         return buildJsonObject {
             put("type", "SumType")
             put("cases", JsonArray(listOf(JsonPrimitive(okCaseId), JsonPrimitive(errCaseId))))
+        }
+    }
+
+    /**
+     * Q-057 capability manifests (N-046) — MFT (ModuleManifest) expansion.
+     *
+     * Takes the user's `lib MFT [exp1 exp2 ...] ["<hex signature>"]` and
+     * produces the canonical `ModuleManifest` object directly:
+     *
+     *     { "type": "ModuleManifest",
+     *       "exports": [ { "target": <id>, "declaredEffects": [...], "displayName": <string> }, ... ],
+     *       "manifestSignature": <hex string>?  }
+     *
+     * matching the JsonIngest / `StoredNode.RawModuleManifest` shape (and
+     * the hand-authored corpus 79/80 JSON) byte-for-byte. Each `exports`
+     * entry must name a `MEX` NodeDecl declared elsewhere in the document;
+     * ManifestExport has no canonical dag-json node of its own (see the
+     * `LayerAGrammar.codes["MEX"]` doc comment), so this function resolves
+     * each referenced MEX id to its three fields and inlines them —
+     * MEX itself never appears in the emitted `nodes` map.
+     *
+     * The MEX's `target` field resolves as a structural (non-value-
+     * position) reference — like NodeRef's `target` — so inline literals
+     * and `@last` compose but auto-VarRef does not fire. `declaredEffects`
+     * resolves like an ordinary LIST_REF slot (each element may be an
+     * inline literal, nested expression, or bare EffectCategory
+     * reference). `displayName` is a plain quoted string.
+     */
+    private fun expandManifestSugar(
+        node: NodeDecl,
+        errors: MutableList<AuthoringError>,
+        ctx: EmitContext,
+    ): JsonObject? {
+        val exportsArg = node.args[0]
+        val exportIds = (exportsArg as? Arg.Listing)?.items ?: run {
+            shapeMismatch(node.line, "MFT", 0, "[MEX ref ...] list", exportsArg, errors)
+            return null
+        }
+        if (exportIds.isEmpty()) {
+            errors += AuthoringError.ArgShapeMismatch(
+                line = node.line, code = "MFT", position = 0,
+                expectedKind = "at least one MEX export reference",
+                actualKind = "empty exports list",
+            )
+            return null
+        }
+
+        val exportObjs = exportIds.map { elt ->
+            val exportId = (elt as? Arg.Bare)?.text ?: run {
+                shapeMismatch(node.line, "MFT", 0, "bare MEX reference", elt, errors)
+                return null
+            }
+            val mexDecl = ctx.document.nodes.firstOrNull { it.id == exportId } ?: run {
+                errors += AuthoringError.ArgShapeMismatch(
+                    line = node.line, code = "MFT", position = 0,
+                    expectedKind = "a declared MEX node",
+                    actualKind = "undeclared id '$exportId'",
+                )
+                return null
+            }
+            if (mexDecl.code != "MEX") {
+                errors += AuthoringError.ArgShapeMismatch(
+                    line = node.line, code = "MFT", position = 0,
+                    expectedKind = "a MEX (ManifestExport) node",
+                    actualKind = "'$exportId' is a ${mexDecl.code} node",
+                )
+                return null
+            }
+            val mexSchema = LayerAGrammar.codes.getValue("MEX")
+            if (mexDecl.args.size !in mexSchema.required.size..mexSchema.required.size) {
+                errors += AuthoringError.ArityMismatch(
+                    line = mexDecl.line, code = "MEX",
+                    expected = mexSchema.required.size..mexSchema.required.size,
+                    actual = mexDecl.args.size,
+                )
+                return null
+            }
+
+            // `target` is a NodeRef-style content reference (Node.ManifestExport.target
+            // hashes the export's target directly), not a value-position use — the
+            // same distinction NRF's `target` field makes (see
+            // isValuePositionRefSlot's "MEX" absence, which resolves to its
+            // `else -> false` branch). Inline literals and `@last` still compose;
+            // auto-VarRef intentionally does not fire here.
+            val targetArg = mexDecl.args[0]
+            val targetId = synthesizeLiteralIfLiteral(targetArg, ctx)
+                ?: synthesizeNestedIfNested(targetArg, "MEX", 0, mexDecl.line, errors, ctx)
+                ?: run {
+                    if (targetArg is Arg.Nested) return null  // error already recorded
+                    val text = (targetArg as? Arg.Bare)?.text ?: run {
+                        shapeMismatch(mexDecl.line, "MEX", 0, "bare reference", targetArg, errors)
+                        return null
+                    }
+                    resolveAtLast(text, mexDecl.line, "MEX", errors, ctx) ?: return null
+                }
+
+            val effectsArg = mexDecl.args[1]
+            val effectsList = (effectsArg as? Arg.Listing)?.items ?: run {
+                shapeMismatch(mexDecl.line, "MEX", 1, "[effectCategory ref ...] list", effectsArg, errors)
+                return null
+            }
+            val effectIds = effectsList.map { effectElt ->
+                val litId = synthesizeLiteralIfLiteral(effectElt, ctx)
+                if (litId != null) return@map litId
+                val nestedId = synthesizeNestedIfNested(effectElt, "MEX", 1, mexDecl.line, errors, ctx)
+                if (nestedId != null) return@map nestedId
+                if (effectElt is Arg.Nested) return null
+                val text = (effectElt as? Arg.Bare)?.text ?: run {
+                    shapeMismatch(mexDecl.line, "MEX", 1, "list of bare references", effectElt, errors)
+                    return null
+                }
+                resolveAtLast(text, mexDecl.line, "MEX", errors, ctx) ?: return null
+            }
+            if (effectIds.any { it == null }) return null
+
+            val displayNameArg = mexDecl.args[2]
+            val displayName = (displayNameArg as? Arg.Str)?.value ?: run {
+                shapeMismatch(mexDecl.line, "MEX", 2, "quoted string", displayNameArg, errors)
+                return null
+            }
+
+            buildJsonObject {
+                put("target", targetId)
+                put("declaredEffects", JsonArray(effectIds.filterNotNull().map { JsonPrimitive(it) }))
+                put("displayName", displayName)
+            }
+        }
+        if (exportObjs.any { it == null }) return null
+
+        return buildJsonObject {
+            put("type", "ModuleManifest")
+            put("exports", JsonArray(exportObjs.filterNotNull()))
+            val signatureArg = node.args.getOrNull(1)
+            if (signatureArg != null) {
+                val hex = (signatureArg as? Arg.Str)?.value ?: run {
+                    shapeMismatch(node.line, "MFT", 1, "hex string", signatureArg, errors)
+                    return null
+                }
+                put("manifestSignature", hex)
+            }
         }
     }
 

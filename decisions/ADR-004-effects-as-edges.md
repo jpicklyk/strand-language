@@ -86,3 +86,4 @@ The foreign-effect trust problem is not eliminated. A foreign binding can lie ab
 - [`design/distribution-model.md`](../design/distribution-model.md) — effect-driven placement
 - [`ADR-009-structured-outputs.md`](ADR-009-structured-outputs.md) — output emission uses existing effect categories
 - [`design/rendering-and-views.md`](../design/rendering-and-views.md) — emission as the only effectful step in rendering
+- [`ADR-010-reasoning-surface.md`](ADR-010-reasoning-surface.md) — the effect closure this ADR computes is what the reasoning surface reports

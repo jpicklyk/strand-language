@@ -81,6 +81,14 @@ data class HostContext(
      * interpreter's error-translation point.
      */
     val scrubber: Scrubber,
+    /**
+     * Q-055 per-context effect-audit sink. The interpreter emits an
+     * [AuditRecord] to this sink at every foreign-dispatch capability
+     * boundary (allowed and denied). Defaults to [NoOpAuditSink]; the runtime
+     * facade threads the [HostPolicy.auditSink] here via [fromPolicy], so a
+     * multi-tenant host's per-tenant sink collects only that tenant's records.
+     */
+    val auditSink: AuditSink = NoOpAuditSink,
 ) {
     companion object {
         /**
@@ -114,6 +122,7 @@ data class HostContext(
                 exitHandler = policy.exitHandler,
                 toolLoopLimit = policy.toolLoopLimit,
                 scrubber = scrubber,
+                auditSink = policy.auditSink,
             )
         }
 

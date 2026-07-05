@@ -309,6 +309,30 @@ private fun extractStore(flags: List<String>): Pair<String?, List<String>> {
 }
 
 /**
+ * Q-055: extract the `--audit <file>` flag (the effect-audit-log target for
+ * `strand run`). Mirrors [extractStore]. Returns the file path (or null when
+ * the flag is absent) and the remaining flags.
+ */
+private fun extractAuditPath(flags: List<String>): Pair<String?, List<String>> {
+    var path: String? = null
+    val rest = mutableListOf<String>()
+    var i = 0
+    while (i < flags.size) {
+        if (flags[i] == "--audit") {
+            path = flags.getOrNull(i + 1) ?: run {
+                System.err.println("--audit requires a file argument")
+                exitProcess(2)
+            }
+            i += 2
+        } else {
+            rest += flags[i]
+            i++
+        }
+    }
+    return path to rest
+}
+
+/**
  * Q-058: the effective store directory for a subcommand — the explicit
  * `--store <dir>` flag if given, else the `STRAND_STORE` environment variable
  * if set, else null (file-path mode, no store). A null result means a plain
@@ -517,7 +541,8 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
     val (storeDir, afterStore) = extractStore(args.drop(2))
     val (registryPath, afterRegistry) = extractRegistryPath(afterStore)
     val (peerPaths, afterPeers) = extractPeerStores(afterRegistry)
-    val (limits, sandboxPolicy, remaining) = parseLimits(afterPeers)
+    val (auditPath, afterAudit) = extractAuditPath(afterPeers)
+    val (limits, sandboxPolicy, remaining) = parseLimits(afterAudit)
     val grantAll = "--grant-all" in remaining
     val noCache = "--no-cache" in remaining
     val strictIntegrity = "--strict-integrity" in remaining
@@ -598,7 +623,17 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                 // re-schema-checks internally; the CLI's earlier passes above
                 // produced the warning/diagnostic rendering and the exit on a
                 // static violation — by here both are known clean.)
-                val runtime = StrandRuntime(hostPolicyFor(sandboxPolicy, limits))
+                // Q-055: opt-in effect-audit log. When --audit <file> is
+                // given, install a per-run FileAuditSink writing one NDJSON
+                // record per foreign-dispatch capability boundary (allowed and
+                // denied). Absent the flag the policy carries the default
+                // NoOpAuditSink and the run behaves identically.
+                val auditSink = auditPath?.let { p ->
+                    FileAuditSink(File(p).bufferedWriter(), annotator)
+                }
+                var basePolicy = hostPolicyFor(sandboxPolicy, limits)
+                if (auditSink != null) basePolicy = basePolicy.copy(auditSink = auditSink)
+                val runtime = StrandRuntime(basePolicy)
                 val image = programImageOf(store, root, hashToNodeId, resolveCb)
                 val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
                 try {
@@ -626,6 +661,8 @@ private fun runVerifyOrEval(command: String, args: Array<String>) {
                     DenialLine.emitIfDenial(e.error, annotator)
                     System.err.println("interpretation failed: ${annotator.annotate(e.error.toString())}")
                     exitProcess(1)
+                } finally {
+                    auditSink?.close()
                 }
             }
         }
@@ -1352,7 +1389,7 @@ private fun runStore(args: Array<String>) {
 private fun usage() {
     System.err.println("usage:")
     System.err.println("  strand verify    <file.json|root-hash|name> [--store <dir>] [--peer-store <lib.json>]... [<federation>...]")
-    System.err.println("  strand run       <file.json|root-hash|name> [--store <dir>] [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
+    System.err.println("  strand run       <file.json|root-hash|name> [--store <dir>] [--peer-store <lib.json>]... [--grant-all] [--audit <file>] [<federation>...] [<limits>...]")
     System.err.println("  strand machine   <file.json|root-hash|name> --events <events.json> [--store <dir>] [--peer-store <lib.json>]... [--grant-all] [<federation>...] [<limits>...]")
     System.err.println("  strand group     <file.json|root-hash|name> --events <events.json> [--store <dir>] [--peer-store <lib.json>]... [--grant-all] [--metrics] [<federation>...] [<limits>...]")
     System.err.println("  strand store     ingest <file.json> [--store <dir>]  → admit + verify-once, print the root hash")
