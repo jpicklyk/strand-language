@@ -366,6 +366,65 @@ class Verifier(
             return false
         }
 
+        /**
+         * Value-flow compatibility: the check used where a *value* flows into
+         * an *expected position* (Application argument, ProductFieldValue,
+         * SumValue payload). It is [typesCompatible] plus one further
+         * relaxation, Q-049 effect-set inclusion at the outermost arrow.
+         *
+         * When a function-typed value flows into a function-typed expected
+         * position, the position is accepted if the parameter types and result
+         * type are strictly equal (existing discipline — with the SchemaType
+         * and equirecursive relaxations that already apply at
+         * [typesCompatible]) AND the actual function's effect set is a *subset*
+         * of the expected function's effect set. A function with FEWER effects
+         * than the position declares is always safe: the canonical friction
+         * case is a pure lambda flowing into a callback parameter declared with
+         * an effect row. The reverse (actual effects ⊃ expected) stays
+         * rejected, and any structural difference in parameters or result is
+         * rejected exactly as before.
+         *
+         * The relaxation is applied only at the OUTERMOST arrow of the compared
+         * types. Nested arrows — a function type inside a product field of the
+         * compared types, or in the parameter position of the compared arrows —
+         * keep strict equality this slice; variance machinery (contravariant
+         * argument / covariant result positions) is explicitly deferred to a
+         * future Q-049 increment. Only value-flow sites call this; the
+         * structural-equivalence sites (Match case-body divergence, Fixpoint
+         * body shape, Handler signature agreement, StateMachine transition
+         * shape, ToolDef implementation type) stay on strict [typesCompatible]
+         * (or `==`), so effect-exact equality is preserved wherever structural
+         * equivalence — not assignment-compatibility — is what matters.
+         *
+         * Soundness: this does not weaken the Q-044 effect-closure bound.
+         * `inferApplication` adds the *declared* effect row of the resolved
+         * callee/parameter type at each call site, so when a pure function is
+         * accepted at an effectful position the closure keeps the position's
+         * (larger) declared row — the closure over-approximates rather than
+         * under-approximates.
+         */
+        fun typesCompatibleAtValueFlow(expected: TypeExpr, actual: TypeExpr): Boolean {
+            if (typesCompatible(expected, actual)) return true
+            // Q-049: outermost-arrow effect-set inclusion. Strip a SchemaType
+            // wrapper on either side to its valueType first (value-flow already
+            // permits T ↔ Schema<T>), so an effectful callback carried through
+            // a schema position is still compared arrow-to-arrow.
+            val e = if (expected is TypeExpr.SchemaType) expected.valueType else expected
+            val a = if (actual is TypeExpr.SchemaType) actual.valueType else actual
+            if (e is TypeExpr.Fun && a is TypeExpr.Fun) {
+                // Parameters and result stay strict (equality via typesCompatible
+                // preserves the existing SchemaType / equirecursive relaxations
+                // but adds no variance). Only the outermost effect row is
+                // relaxed to subset inclusion.
+                val paramsEqual = e.parameters.size == a.parameters.size &&
+                    e.parameters.indices.all { typesCompatible(e.parameters[it], a.parameters[it]) }
+                val resultEqual = typesCompatible(e.result, a.result)
+                val effectsIncluded = e.effects.containsAll(a.effects)
+                if (paramsEqual && resultEqual && effectsIncluded) return true
+            }
+            return false
+        }
+
         fun closureOf(id: NodeId): Set<NodeId> =
             nodeClosures[id] ?: emptySet()
 
@@ -709,6 +768,16 @@ class Verifier(
                     ))
                     throw VerifyAbort()
                 }
+                // Q-049: reject a bounded abstracted parameter at the
+                // declaration site (the body may never reference it, so
+                // resolveType alone would not fire on the bound).
+                val tpBound = tpNode.bound
+                if (tpBound != null) {
+                    report(VerifyError.TypeParameterBoundUnsupported(
+                        at = tpId, bound = tpBound
+                    ))
+                    throw VerifyAbort()
+                }
             }
             val extendedTypeParams = typeParams + node.typeParameters
             val bodyType = infer(node.body, scope, extendedTypeParams)
@@ -787,7 +856,7 @@ class Verifier(
             for (i in funType.parameters.indices) {
                 val expected = funType.parameters[i]
                 val actual = argTypes[i]
-                if (!typesCompatible(expected, actual)) {
+                if (!typesCompatibleAtValueFlow(expected, actual)) {
                     report(VerifyError.ParameterTypeMismatch(
                         at = id,
                         parameterIndex = i,
@@ -1322,7 +1391,7 @@ class Verifier(
                     throw VerifyAbort()
                 }
                 val actualType = infer(fieldNode.value, scope, typeParams)
-                if (!typesCompatible(expectedType, actualType)) {
+                if (!typesCompatibleAtValueFlow(expectedType, actualType)) {
                     report(VerifyError.ProductFieldValueTypeMismatch(
                         at = id,
                         fieldName = fieldNode.fieldName,
@@ -1415,7 +1484,7 @@ class Verifier(
                     ))
                 expectedPayloadType != null && payload != null -> {
                     val actualType = infer(payload, scope, typeParams)
-                    if (!typesCompatible(expectedPayloadType, actualType)) {
+                    if (!typesCompatibleAtValueFlow(expectedPayloadType, actualType)) {
                         reportAndAbort(VerifyError.SumPayloadTypeMismatch(
                             at = id, caseName = node.caseName,
                             expected = expectedPayloadType,
@@ -3130,6 +3199,24 @@ class Verifier(
                     TypeExpr.Sum(origin = typeId, cases = cases)
                 }
                 is Node.TypeParameter -> {
+                    // Q-049: bounded polymorphism is unimplemented. A non-null
+                    // `bound` is silently ignored today (the verifier neither
+                    // checks it at instantiation sites nor consults it during
+                    // compatibility), which is worse than rejection — an agent
+                    // writing a bounded parameter gets no error and no
+                    // checking. Reject it with a specific error before the
+                    // unbound-scope check, so the diagnostic names the agent's
+                    // actual intent even when the parameter is also unbound.
+                    // Hash-neutral: `bound` is not part of the canonical
+                    // encoding (TypeParameter encodes positional (depth, index)
+                    // refs only).
+                    val boundNode = node.bound
+                    if (boundNode != null) {
+                        report(VerifyError.TypeParameterBoundUnsupported(
+                            at = typeId, bound = boundNode
+                        ))
+                        throw VerifyAbort()
+                    }
                     if (typeId !in typeParams) {
                         report(VerifyError.UnboundTypeParameter(at = typeId, typeParameter = typeId))
                         throw VerifyAbort()
@@ -3151,6 +3238,17 @@ class Verifier(
                                 at = typeId, field = "ForallType.typeParameters[$i]",
                                 expectedCategory = "TypeParameter",
                                 actualCategory = categoryName(tpNode)
+                            ))
+                            throw VerifyAbort()
+                        }
+                        // Q-049: reject a bounded quantified parameter at the
+                        // declaration site — resolveType would only fire on a
+                        // bound if the body references the parameter, so an
+                        // unreferenced bounded parameter must be caught here.
+                        val tpBound = tpNode.bound
+                        if (tpBound != null) {
+                            report(VerifyError.TypeParameterBoundUnsupported(
+                                at = tpId, bound = tpBound
                             ))
                             throw VerifyAbort()
                         }
