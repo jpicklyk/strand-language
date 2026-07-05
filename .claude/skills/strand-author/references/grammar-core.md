@@ -116,3 +116,16 @@ The invariant body must be a pure `(valueType) -> Bool` Lambda. Effectful bodies
 - `RSC schema:ref` — ResponseSchemaSpec.
 
 Both wrap a Schema (N-032) reference; the verifier projects the schema's valueType to JSON Schema for the provider library.
+
+## Capability manifests (N-046 ModuleManifest)
+
+- `MEX target:ref declaredEffects:[refs] displayName:String` — ManifestExport. Not a standalone node — always inlined into the referencing `MFT`'s `exports` array; a MEX line never appears in the emitted dag-json on its own.
+- `MFT exports:[MEX refs] [signature:String]` — ModuleManifest. `exports` names MEX lines by id; each is resolved and inlined as `{target, declaredEffects, displayName}`. Optional `signature` is a hex string (`manifestSignature`).
+
+```layer-a
+idExport MEX idFn [] "Int.identity"
+writerExport MEX writer [writeFx] "Fs.writeFile"
+lib MFT [idExport writerExport]
+```
+
+The verifier certifies each export's `declaredEffects` exactly equals its target's effect closure — under- or over-declaration is `ManifestExportEffectMismatch`. `displayName` and `signature` are metadata, excluded from the canonical hash.

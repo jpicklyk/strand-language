@@ -35,6 +35,76 @@ New `MFT` and `MEX` `CodeSchema`s in `LayerAGrammar`; `DagJsonEmitter` support e
 
 Small to medium. Two grammar codes, emitter support for the raw-manifest shape, a byte-identity test authoring corpus 79/80, and system-prompt documentation. Hash-neutral — an authoring path onto an unchanged encoding.
 
+## Implementation note
+
+Landed 2026-07-04 on branch `reason-first`. `MEX` and `MFT` `CodeSchema`s in
+`LayerAGrammar.codes` (`impl-kotlin/authoring/src/main/kotlin/org/strand/authoring/LayerAGrammar.kt`):
+`MEX <target> <declaredEffects> <displayName>` and `MFT <exports> [<signature>]`,
+matching the recommended-approach shape exactly.
+
+One deviation from the recommended approach's framing, discovered at Step 0
+(reading the corpus JSON and `:core` ingest before writing any code): the
+recommended approach describes `ManifestExport` as "a separate raw node that
+the manifest references," parallel to `RawNodeRef`. That is not what the
+implementation carries. `org.strand.core.StoredNode.RawManifestExport` and
+the canonical `org.strand.core.Node.ManifestExport` are plain data records
+embedded directly in `RawModuleManifest.exports` / `ModuleManifest.exports`
+— they never occupy their own slot in the `RawNodeStore`, never get their
+own `NodeId`, and never appear as a `"type": "ManifestExport"` entry in the
+`nodes` map. Corpus 79 and 80's hand-authored JSON confirm this: `exports`
+is an array of inline `{target, declaredEffects, displayName}` objects
+nested inside the single `ModuleManifest` entry, not a list of ids pointing
+at sibling nodes. So `MEX` **inlines** rather than becoming a node: the new
+`DagJsonEmitter.emitNode` dispatch returns `null` for a top-level `MEX`
+line (arity is still validated, but it contributes nothing to the emitted
+`nodes` map on its own), and a new `expandManifestSugar` function — invoked
+only when a `MFT` line is emitted — looks up each of `MFT`'s `exports` ids
+as `MEX` `NodeDecl`s in the parsed document, resolves their three fields
+through the same argument-resolution helpers ordinary REFERENCE/LIST_REF/
+STRING slots use (so inline literals and `@last` compose inside a `MEX`
+line), and builds the inline export object directly inside the
+`ModuleManifest`'s `exports` array. This still "sidesteps inline object
+arrays" the way the recommended approach intended (no new inline-object
+`ArgKind` was added) — it just does so by inlining at the code-dispatch
+level rather than by `ManifestExport` being ingest-visible as a node.
+
+A second, narrower deviation: `MEX`'s `target` field resolves as a
+*structural* reference (matching `NRF`'s `target`, `isValuePositionRefSlot`'s
+`else -> false` branch) rather than through the value-position
+`resolveExpressionRef` helper IF/WHEN/RES sugar uses — auto-VarRef
+intentionally does not fire on a MEX `target`, since the field is a
+NodeRef-style content-hash edge, not an evaluated value. This has no
+observable effect on the two corpus fixtures (their targets are Lambda
+ids, never PRC/LET binders), but is the semantically correct choice for
+the general case.
+
+Byte-identity result: `impl-kotlin/corpus/src/test/kotlin/org/strand/corpus/LayerAManifestTest.kt`
+authors corpus 79 (`module-manifest-with-effects`) and corpus 80
+(`manifest-effect-mismatch-rejected`) through the new `MFT`/`MEX` codes
+(`corpus/layer-a/manifest/79-module-manifest-with-effects.layer-a` and
+`corpus/layer-a/manifest/80-manifest-effect-mismatch-rejected.layer-a`) and
+asserts the compiled root hash equals the corresponding golden hash from
+`corpus/golden-hashes.json`. Both are hash-equal, byte-identical — confirmed
+independently via a manual JSON diff during development (the only
+divergence found before the fixtures matched was an initially-omitted
+Q-039 `effectProjections` DSL string on the `writeFn` ForeignNode line, an
+unrelated existing feature, not a defect in the new MFT/MEX emission path).
+The two new Layer A fixtures were added to `corpus/golden-hashes.json`'s
+`layerA` section (additive only — every pre-existing entry, including
+corpus 79/80's own `programs` section entries, is unchanged; verified by
+diff). No change to `CanonicalEncoder`, the epoch, the N-046 tag-46
+encoding, or `JsonIngest`. Full test suite: 2448 tests, 0 failures, 0
+errors, 3 pre-existing skips, across all modules.
+
+Docs added: a "Capability manifests" section in
+`.claude/skills/strand-author/references/grammar-core.md` and
+`.claude/skills/strand-author/references/foreign-nodes.md` (mirroring the
+adjacent ToolDef/ResponseSchemaSpec sections), and in
+`evaluation/dynamic/prompts/references/grammar-codes.md` (the agent-facing
+on-demand full code table `strand-system.md` already points to as
+`grammar-codes`— no change needed to the topic index itself, since its
+existing "every Layer A code" description already covers the addition).
+
 ## References
 
 **Outgoing references:**
