@@ -74,12 +74,15 @@ data class HostPolicy(
 ) {
     companion object {
         /**
-         * Library / test surface: the current [Builtins] singleton defaults.
-         * Open sandbox (no workspace constraint, no network default-deny),
-         * default evaluation limits, system clock, a cryptographically-secure
-         * RNG, environment-variable credentials, and the default real
-         * transports. A library or test caller that wants the pre-Q-054
-         * behaviour passes this.
+         * Explicit open-sandbox surface: matches the [Builtins] singleton
+         * defaults for every field *except* the sandbox, which this
+         * companion pins to [SandboxPolicy.OPEN_DEFAULT] regardless of the
+         * Q-075 library default — an explicit opt-in, not an ambient
+         * default. Default evaluation limits, system clock, a
+         * cryptographically-secure RNG, environment-variable credentials,
+         * and the default real transports. A library or test caller that
+         * deliberately wants the open sandbox surface (real IO against
+         * `@TempDir` paths or loopback sockets) passes this.
          *
          * The [random] field is a fresh [java.security.SecureRandom] captured
          * at companion access; a test that needs a reproducible sequence
@@ -101,11 +104,11 @@ data class HostPolicy(
         )
 
         /**
-         * Agent-facing surface: the [SandboxPolicy.SECURE_DEFAULT] sandbox
+         * Agent-facing surface, and (Q-075) the actual library / CLI
+         * default: the [SandboxPolicy.SECURE_DEFAULT] sandbox
          * (workspace-rooted filesystem, default-deny network with the full
-         * blocked-range list), everything else as [OPEN]. Mirrors the CLI's
-         * "install SECURE_DEFAULT at startup" stance — and differs from [OPEN]
-         * only in the [sandbox] field.
+         * blocked-range list), everything else as [OPEN]. Differs from
+         * [OPEN] only in the [sandbox] field.
          */
         val SECURE: HostPolicy = OPEN.copy(sandbox = SandboxPolicy.SECURE_DEFAULT)
     }

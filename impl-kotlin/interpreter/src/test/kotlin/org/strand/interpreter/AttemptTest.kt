@@ -3,6 +3,7 @@ package org.strand.interpreter
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.strand.core.EvaluationLimits
 import org.strand.core.Hash
@@ -19,14 +20,22 @@ import org.strand.hashing.Hasher
  *
  * These tests bypass the verifier (the interpreter trusts verified input) and
  * exercise the eval-level catch/Ok-Err shaping directly. The `Fs.Read`-based
- * tests run under the test JVM's default [SandboxPolicy.OPEN_DEFAULT] (escape
- * allowed, workspace unrooted), so a relative path that cannot exist surfaces
- * as a catchable `filesystem-read` [InterpretError.IoFailure].
+ * tests explicitly install [SandboxPolicy.OPEN_DEFAULT] (Q-075: the library
+ * default is now [SandboxPolicy.SECURE_DEFAULT], so a test that wants the
+ * open surface must opt in) so a relative path that cannot exist surfaces as
+ * a catchable `filesystem-read` [InterpretError.IoFailure] rather than a
+ * workspace-escape [SandboxViolation].
  */
 class AttemptTest {
 
+    @BeforeEach
+    fun setUp() {
+        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+    }
+
     @AfterEach
     fun cleanup() {
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         ResourceTable.resetForTest()
     }
 
