@@ -45,12 +45,12 @@ class CorpusSandboxTest {
 
     @BeforeEach
     fun setUp() {
-        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
     }
 
     @AfterEach
     fun tearDown() {
-        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
     }
 
     private fun load(resource: String): String {

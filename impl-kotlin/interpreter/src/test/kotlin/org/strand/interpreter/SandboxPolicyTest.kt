@@ -33,22 +33,25 @@ import java.nio.file.Path
  *  12. `file://` scheme rejected (HttpSchemeRejected).
  *
  * Each test installs its own SandboxPolicy in `@BeforeEach` and resets
- * to [SandboxPolicy.OPEN_DEFAULT] in `@AfterEach` per the singleton
+ * to [Builtins.DEFAULT_SANDBOX_POLICY] in `@AfterEach` per the singleton
  * isolation discipline shared with [clock] / [credentialProvider].
  */
 class SandboxPolicyTest {
 
     @BeforeEach
     fun setUp() {
-        // Each test installs the policy it needs; the default at
-        // entry is the open-default so a misconfigured test is loud.
-        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+        // Each test installs the policy it needs explicitly (many install
+        // SandboxPolicy.OPEN_DEFAULT to exercise real IO against @TempDir
+        // paths or loopback sockets); the value at entry is the library
+        // default so a misconfigured test is loud rather than silently
+        // permissive.
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         Builtins.nameResolver = SystemNameResolver
     }
 
     @AfterEach
     fun tearDown() {
-        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         Builtins.nameResolver = SystemNameResolver
         ResourceTable.resetForTest()
     }
