@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "root": "bomb",
+  "nodes": {
+    "strT": { "type": "PrimitiveType", "kind": "String" },
+    "intT": { "type": "PrimitiveType", "kind": "Int" },
+    "repeatT": { "type": "FunctionType", "parameters": ["strT", "intT"], "result": "strT" },
+    "repeat": { "type": "ForeignNode", "target": "strand-builtin:String.Repeat", "foreignType": "repeatT" },
+    "x": { "type": "StringLit", "value": "x" },
+    "huge": { "type": "IntLit", "value": 2000000000 },
+    "bomb": { "type": "Application", "function": "repeat", "arguments": ["x", "huge"] }
+  }
+}

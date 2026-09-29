@@ -62,11 +62,17 @@ object PineconeProvider {
     fun open(
         config: PineconeIndexConfig,
         credentialProvider: CredentialProvider = Builtins.credentialProvider,
+        hostCheck: (String) -> Unit = {},
     ): Value.Resource {
-        val apiCredential = credentialProvider.resolve(PROVIDER_NAME, "api_key")
-            ?: throw IoFailure("pinecone-open", "no PINECONE_API_KEY configured")
         val baseUrl = config.host
             ?: "https://${config.indexName}-${config.environment}.svc.pinecone.io"
+        // Review H4: the host is program-chosen; [hostCheck] (the network
+        // sandbox, supplied by the builtin) runs before the credential is
+        // resolved. Every later request is re-checked by the sandboxed
+        // transport the builtins pass in.
+        hostCheck(baseUrl)
+        val apiCredential = credentialProvider.resolve(PROVIDER_NAME, "api_key")
+            ?: throw IoFailure("pinecone-open", "no PINECONE_API_KEY configured")
         return ResourceTable.register(
             "pinecone_index",
             PineconeIndexHandle(config, apiCredential, baseUrl),

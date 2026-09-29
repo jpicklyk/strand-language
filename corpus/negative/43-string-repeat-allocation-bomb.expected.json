@@ -1,0 +1,6 @@
+{
+  "stage": "evaluate",
+  "family": "ResourceExhaustion",
+  "exhaustionKind": "AllocatedValues",
+  "notes": "An effect-free String.Repeat asks for a 2e9-character string under an empty capability grant. The single JVM allocation is invisible to the per-value allocation counter, so the builtin checks the requested length against the host's per-call byte cap (BuiltinLimits.maxBuiltinBytes) before allocating and fails with an uncatchable ResourceExhaustion rather than exhausting the host (review H7)."
+}

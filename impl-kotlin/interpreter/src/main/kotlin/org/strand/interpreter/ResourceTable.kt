@@ -238,4 +238,19 @@ enum class SandboxViolationKind {
 
     /** `Http.Request` saw a scheme other than `http` or `https`. */
     HttpSchemeRejected,
+
+    /**
+     * Review H1: `Http.Request` saw a path that could escape the path
+     * component (no leading `/`, `@`, `\`, `#`, whitespace, control or
+     * non-URI characters), or the built URI's authority did not equal the
+     * policy-approved address and port.
+     */
+    HttpPathRejected,
+
+    /**
+     * `System.Exit` was called under a host policy whose exit handler
+     * refuses to terminate the host process ([Builtins.RefusingExitHandler],
+     * installed by [HostPolicy.SECURE]).
+     */
+    SystemExitRefused,
 }

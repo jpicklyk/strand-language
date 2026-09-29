@@ -81,6 +81,13 @@ data class HostContext(
      * interpreter's error-translation point.
      */
     val scrubber: Scrubber,
+    /**
+     * Review H7 / M2: per-call bounds applied inside builtins (HTTP
+     * connect/read timeouts, response-body cap, sleep cap, collection and
+     * byte caps). Derived from the policy's [org.strand.core.EvaluationLimits]
+     * in [fromPolicy]; [BuiltinLimits.DEFAULT] otherwise.
+     */
+    val builtinLimits: BuiltinLimits = BuiltinLimits.DEFAULT,
 ) {
     companion object {
         /**
@@ -114,6 +121,7 @@ data class HostContext(
                 exitHandler = policy.exitHandler,
                 toolLoopLimit = policy.toolLoopLimit,
                 scrubber = scrubber,
+                builtinLimits = BuiltinLimits.from(policy.limits),
             )
         }
 

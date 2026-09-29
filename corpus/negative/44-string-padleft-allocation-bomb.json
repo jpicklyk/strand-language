@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "root": "bomb",
+  "nodes": {
+    "strT": { "type": "PrimitiveType", "kind": "String" },
+    "intT": { "type": "PrimitiveType", "kind": "Int" },
+    "padT": { "type": "FunctionType", "parameters": ["strT", "intT", "strT"], "result": "strT" },
+    "pad": { "type": "ForeignNode", "target": "strand-builtin:String.PadLeft", "foreignType": "padT" },
+    "empty": { "type": "StringLit", "value": "" },
+    "fill": { "type": "StringLit", "value": "x" },
+    "huge": { "type": "IntLit", "value": 2000000000 },
+    "bomb": { "type": "Application", "function": "pad", "arguments": ["empty", "huge", "fill"] }
+  }
+}
