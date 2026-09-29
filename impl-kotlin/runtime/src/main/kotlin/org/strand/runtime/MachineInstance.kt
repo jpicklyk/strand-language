@@ -127,6 +127,14 @@ internal class MachineInstance(
      */
     var denialHalt: org.strand.interpreter.DenialReport? = null,
     /**
+     * Why this async instance halted, set once when the actor leaves its
+     * event loop: [HaltReason.EventsExhausted] when every input closed,
+     * [HaltReason.ResourceExhaustion], [HaltReason.CapabilityDenial], or
+     * [HaltReason.InstanceFailure] (review M6). Null while running and for
+     * a cancelled (terminated) instance.
+     */
+    var haltReason: HaltReason? = null,
+    /**
      * Per-instance counter cells for Layer 6 step 3 slice 3.4 metrics. Updated
      * by [MachineActor] on every event dequeued and on every completed
      * transition; snapshot read by [MachineGroupHandle.metrics]. Always non-null

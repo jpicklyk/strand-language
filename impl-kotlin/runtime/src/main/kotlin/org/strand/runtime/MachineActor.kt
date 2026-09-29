@@ -1,5 +1,6 @@
 package org.strand.runtime
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.selects.select
@@ -31,7 +32,11 @@ import org.strand.interpreter.Value
  *     examining the `outputs` field type.
  *  6. Send each emitted payload to the corresponding output channel.
  *  7. When all input channels close, halt and close output channels.
- *  8. On an abnormal halt (denial, exhaustion) signal the output buses, then
+ *  8. A throwable that is neither a denial nor an exhaustion halts THIS
+ *     instance with [HaltReason.InstanceFailure] (review M6): the actor is
+ *     its own supervision boundary, so one failing actor never cancels its
+ *     siblings or the caller's scope. Cancellation still propagates.
+ *  9. On an abnormal halt (denial, exhaustion) signal the output buses, then
  *     keep draining and discarding the inputs until their producers close
  *     them, so an upstream producer never blocks on a halted consumer
  *     (review H1). Discards are counted in
@@ -99,7 +104,9 @@ internal class MachineActor(
                     // actors in the same group keep running. The actor
                     // breaks out of its event loop and the `finally` block
                     // closes outputs through the bus producer-halt counter.
-                    if (e.error is InterpretError.ResourceExhaustion) {
+                    val err = e.error
+                    if (err is InterpretError.ResourceExhaustion) {
+                        instance.haltReason = HaltReason.ResourceExhaustion(err.kind, eventIndex)
                         instance.halted = true
                         break
                     }
@@ -112,13 +119,26 @@ internal class MachineActor(
                     // observable to the evaluating graph.
                     val denial = denialReportOf(e.error)
                     if (denial != null) {
-                        instance.denialHalt = denial.atTransition(instance.instanceId, eventIndex)
+                        val report = denial.atTransition(instance.instanceId, eventIndex)
+                        instance.denialHalt = report
+                        instance.haltReason = HaltReason.CapabilityDenial(report)
                         instance.halted = true
                         break
                     }
+                    failInstance(e, eventIndex, err)
+                    break
+                } catch (e: CancellationException) {
                     throw e
+                } catch (e: Throwable) {
+                    // Review M6: the actor is its own supervision boundary.
+                    // An unexpected throwable halts THIS instance with a
+                    // typed reason instead of escaping the coroutine and
+                    // cancelling every sibling and the caller's scope.
+                    failInstance(e, eventIndex, null)
+                    break
                 }
             }
+            if (instance.haltReason == null) instance.haltReason = HaltReason.EventsExhausted
             instance.halted = true
         } finally {
             signalOutputsHalted()
@@ -131,6 +151,16 @@ internal class MachineActor(
         // closes, so the rest of the group runs to completion. Reached only
         // on a normal exit from the loop — a cancelled actor does not drain.
         if (openChannels.isNotEmpty()) discardUntilClosed(openChannels)
+    }
+
+    private fun failInstance(e: Throwable, eventIndex: Int, err: InterpretError?) {
+        instance.haltReason = HaltReason.InstanceFailure(
+            throwableClass = e::class.java.name,
+            message = e.message,
+            atEventIndex = eventIndex,
+            interpretError = err,
+        )
+        instance.halted = true
     }
 
     private suspend fun discardUntilClosed(openChannels: MutableMap<NodeId, Channel<Value>>) {

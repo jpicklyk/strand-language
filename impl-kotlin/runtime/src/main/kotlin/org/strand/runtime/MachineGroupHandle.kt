@@ -119,6 +119,16 @@ class MachineGroupHandle internal constructor(
         } ?: instances
 
     /**
+     * Review M6: every instance (initial or dynamically spawned) that halted
+     * with [HaltReason.InstanceFailure] — an unexpected throwable contained
+     * at its actor boundary while the rest of the group kept running.
+     */
+    fun failedInstances(): Map<InstanceId, HaltReason.InstanceFailure> =
+        allInstances.mapNotNull { (id, handle) ->
+            (handle.haltReason as? HaltReason.InstanceFailure)?.let { id to it }
+        }.toMap()
+
+    /**
      * Spawn a new [MachineInstance] for the supplied StateMachine
      * [machineId] (Layer 6 step 3 slice 3.2 supervision — host-driven API).
      * Returns the new InstanceId. The spawned actor begins running
@@ -246,6 +256,14 @@ class MachineInstanceHandle internal constructor(
      * of the sync fold's [HaltReason.CapabilityDenial].
      */
     val denialReport: org.strand.interpreter.DenialReport? get() = instance.denialHalt
+
+    /**
+     * Why this instance halted ([HaltReason.EventsExhausted],
+     * [HaltReason.ResourceExhaustion], [HaltReason.CapabilityDenial] or
+     * [HaltReason.InstanceFailure]); null while it is still running or when
+     * it was cancelled.
+     */
+    val haltReason: HaltReason? get() = instance.haltReason
 
     fun recordedEvents(): List<Value>? = instance.recorder?.snapshot()
 
