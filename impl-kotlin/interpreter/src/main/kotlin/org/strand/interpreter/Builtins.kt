@@ -258,6 +258,34 @@ object Builtins {
         fun hostname(): String
         fun platform(): String
         fun cwd(): String
+
+        /**
+         * Review H5 / M1: the environment-variable table visible to the
+         * program (`Process.EnvVar`) and handed to spawned children
+         * (`Process.Spawn`). The default is EMPTY: an [OsEnv] exposes the
+         * host environment only by overriding this ([SystemOsEnv] does),
+         * so a custom or test source never leaks the JVM's variables by
+         * accident.
+         */
+        fun environment(): Map<String, String> = emptyMap()
+
+        /** One variable from [environment]; null when unset. */
+        fun envVar(name: String): String? = environment()[name]
+    }
+
+    /**
+     * Review H5: the [HostPolicy.SECURE] environment. Delegates hostname /
+     * platform / cwd to [delegate] but exposes no environment variables,
+     * so `OS.Read` granted for `OS.Platform` does not also grant
+     * `Process.EnvVar("ANTHROPIC_API_KEY")`. A host that wants to expose
+     * specific variables supplies its own [OsEnv] with a scrubbed table.
+     */
+    class EmptyEnvOsEnv(private val delegate: OsEnv) : OsEnv {
+        override fun hostname(): String = delegate.hostname()
+        override fun platform(): String = delegate.platform()
+        override fun cwd(): String = delegate.cwd()
+        override fun environment(): Map<String, String> = emptyMap()
+        override fun envVar(name: String): String? = null
     }
     object SystemOsEnv : OsEnv {
         override fun hostname(): String =
@@ -274,6 +302,8 @@ object Builtins {
                 }
             }
         override fun cwd(): String = System.getProperty("user.dir", ".")
+        override fun environment(): Map<String, String> = System.getenv()
+        override fun envVar(name: String): String? = System.getenv(name)
     }
     @Volatile
     var osEnv: OsEnv = SystemOsEnv
@@ -1219,7 +1249,10 @@ object Builtins {
             }
             val name = (args[0] as? Value.StringV)?.v
                 ?: throw IoFailure("process-envvar", "expected StringV name, got ${args[0]::class.simpleName}")
-            val value = System.getenv(name)
+            // Review H5: read the tenant's host environment, never the JVM's
+            // directly, so a HostPolicy can supply a scrubbed or empty table
+            // (HostPolicy.SECURE exposes none).
+            val value = osEnv.envVar(name)
             if (value != null) Value.SumV(case = "Some", payload = Value.StringV(value))
             else Value.SumV(case = "None", payload = null)
         },
