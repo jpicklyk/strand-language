@@ -8,13 +8,19 @@ dag-json, Strand Layer A) and is not part of the reference runtime; the
 proposal at [`proposals/implemented/llm-authoring-layer.md`](../proposals/implemented/llm-authoring-layer.md)
 §7 places this work in Phase 1.
 
-The MVP shipped here covers: 3 tasks × 3 baselines × 3 measurable
-metrics. Real model-API integration (tokens-per-successful-task across
-the agent's retry loop, first-pass verification rate) is a follow-up
-that needs API access to GPT/Claude/etc.; this MVP measures the
-**static** per-emission cost of each representation. The dynamic cost
-(retry economics under verifier feedback) needs the static cost as its
-baseline anyway.
+Two frameworks live here. The static MVP (`measure.sh`, `tasks/`,
+`results.md`) covers 3 tasks × 3 baselines × 3 measurable metrics and
+measures the **static** per-emission cost of each representation. The
+dynamic framework under [`dynamic/`](dynamic/README.md) drives a model
+through the verifier-feedback retry loop and records
+tokens-per-successful-task and first-pass verification rate; its runs
+to date (Runs 1–8, sub-agent dispatch with byte-proxy token counts,
+N=1 per cell) are reported in [`dynamic-results.md`](dynamic-results.md),
+and the API-backed multi-sample sweep with real tokenizer counts is the
+remaining Q-021 work. The containment measurement (Q-044) is in
+[`containment-results.md`](containment-results.md). The dynamic cost
+(retry economics under verifier feedback) uses the static cost as its
+baseline.
 
 ## Layout
 

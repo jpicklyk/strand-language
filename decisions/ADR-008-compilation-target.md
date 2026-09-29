@@ -76,6 +76,7 @@ The compilation target choice does not block other decisions. The bytecode and M
 - [`open-questions.md`](../open-questions.md) — Q-017, Q-018, Q-019
 
 **Incoming references:**
+- [`01-prior-art.md`](../01-prior-art.md) — the WebAssembly component model as the anticipated foreign-binding target
 - [`02-core-thesis.md`](../02-core-thesis.md) — execution model referenced from integration section
 - [`design/state-machines.md`](../design/state-machines.md) — runtime execution requirements
 - [`research-plan.md`](../research-plan.md) — VM and MLIR milestones
