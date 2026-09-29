@@ -158,22 +158,58 @@ internal class CanonicalEncoder(
         currentRecDepth--
     }
 
+    /**
+     * Run [block] in the EMPTY binder context: no enclosing recursive
+     * binders (`currentRecDepth` saved, zeroed, and restored). The binder
+     * stack is not ambient state — callers pass `emptyList()` explicitly.
+     *
+     * Per design/canonical-encoding.md (References) a local NodeRef target
+     * and a ModuleManifest export target are hashed under the empty context,
+     * independent of where the reference sits. [Hasher.walk] uses this when
+     * descending through such a boundary so its per-node hashes agree with
+     * the bytes the encoder emits for the reference.
+     */
+    internal fun <T> inEmptyContext(block: () -> T): T {
+        val saved = currentRecDepth
+        currentRecDepth = 0
+        try {
+            return block()
+        } finally {
+            currentRecDepth = saved
+        }
+    }
+
+    /**
+     * The hash of a reference target ([StoredNode.RawNodeRef.targetId] or a
+     * raw ModuleManifest export target), computed under the empty binder
+     * context regardless of the reference's own position.
+     */
+    internal fun hashReferenceTarget(targetId: NodeId): ByteArray =
+        inEmptyContext { hash(targetId, emptyList()) }
+
     private fun encodeDispatch(id: NodeId, stored: StoredNode, stack: BinderStack): ByteArray =
         when (stored) {
-            is StoredNode.RawNodeRef -> encodeRawNodeRef(stored.targetId, stack)
+            is StoredNode.RawNodeRef -> encodeRawNodeRef(stored.targetId)
             is StoredNode.RawModuleManifest -> encodeRawModuleManifest(stored, stack)
             is StoredNode.Canonical -> encodeCanonicalNode(id, stored.node, stack)
         }
 
-    private fun encodeRawNodeRef(targetId: NodeId, stack: BinderStack): ByteArray =
+    private fun encodeRawNodeRef(targetId: NodeId): ByteArray =
         // Raw form: target's hash is not yet known. Recurse to compute it, then
         // emit (NodeRef tag, target-hash-bytes). The resulting canonical bytes
         // are byte-identical to those produced for the canonical Node.NodeRef
         // form (which carries the pre-computed hash directly) — that identity
         // is what preserves hash compatibility across the Layer 2 step 2
         // rewrite.
+        //
+        // The target is hashed under the EMPTY binder context (no binder
+        // frames, no enclosing recursive binders), per the spec — not the
+        // context the NodeRef itself sits in. For a closed target the two
+        // coincide; for a target the verifier does not check for closedness
+        // (type-position NodeRefs) hashing in the enclosing context made the
+        // result depend on where the reference was first visited.
         encodeWithTag(CategoryTag.NodeRef, listOf(
-            CanonicalCbor.encodeBytes(hash(targetId, stack)),
+            CanonicalCbor.encodeBytes(hashReferenceTarget(targetId)),
         ))
 
     private fun encodeCanonicalNode(id: NodeId, node: Node, stack: BinderStack): ByteArray = when (node) {
@@ -1047,7 +1083,7 @@ internal class CanonicalEncoder(
      */
     private fun encodeRawModuleManifest(stored: StoredNode.RawModuleManifest, stack: BinderStack): ByteArray {
         val exportEntries = stored.exports.map { export ->
-            encodeManifestExportEntry(hash(export.target, stack), export.declaredEffects, stack)
+            encodeManifestExportEntry(hashReferenceTarget(export.target), export.declaredEffects, stack)
         }
         return encodeWithTag(CategoryTag.ModuleManifest, listOf(
             CanonicalCbor.encodeArray(exportEntries),
