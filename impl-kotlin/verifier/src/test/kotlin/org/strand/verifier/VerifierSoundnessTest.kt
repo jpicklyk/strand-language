@@ -32,6 +32,97 @@ class VerifierSoundnessTest {
             ?: error("expected ${E::class.simpleName}, got ${f.errors}")
     }
 
+    // ---- A5: shared DAGs verify in linear time ------------------------------
+
+    /** `x_0 = 1; x_i = Int.Add(x_{i-1}, x_{i-1})`, optionally threading each level through a Let. */
+    private fun sharedChain(n: Int, viaLet: Boolean): String {
+        val nodes = StringBuilder()
+        nodes.append(""""intT": { "type": "PrimitiveType", "kind": "Int" },""")
+        nodes.append(""""addT": { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },""")
+        nodes.append(""""add": { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },""")
+        nodes.append(""""x0": { "type": "IntLit", "value": 1 },""")
+        for (i in 1..n) {
+            val prev = "x${i - 1}"
+            if (viaLet) {
+                nodes.append(""""a$i": { "type": "Application", "function": "add", "arguments": ["$prev", "$prev"] },""")
+                nodes.append(""""x$i": { "type": "Let", "name": "l$i", "value": "$prev", "body": "a$i" },""")
+            } else {
+                nodes.append(""""x$i": { "type": "Application", "function": "add", "arguments": ["$prev", "$prev"] },""")
+            }
+        }
+        return """{ "version": 1, "root": "x$n", "nodes": { ${nodes.toString().trimEnd(',')} } }"""
+    }
+
+    @Test
+    fun `a 40-node shared application chain verifies in under two seconds`() {
+        val json = sharedChain(40, viaLet = false)
+        val start = System.nanoTime()
+        val r = verify(json)
+        val ms = (System.nanoTime() - start) / 1_000_000
+        assertTrue(r is VerifyResult.Ok) { "got $r" }
+        assertTrue(ms < 2_000) { "40-node shared chain took $ms ms" }
+    }
+
+    /**
+     * Verifies [json] over a NodeStore built directly from the ingest's raw
+     * store (no NodeRefs, so no finalization is needed). Used where the
+     * hasher itself, not the verifier, is the bottleneck under test: the
+     * canonical encoder is exponential on shared Let chains (reported to the
+     * hashing stream), and this test isolates the verifier's cost.
+     */
+    private fun verifyUnhashed(json: String): VerifyResult {
+        val ingest = JsonIngest.parse(json)
+        val store = org.strand.core.NodeStore()
+        for ((_, stored) in ingest.rawStore.entries()) {
+            store.add((stored as org.strand.core.StoredNode.Canonical).node)
+        }
+        return Verifier(store).verify(ingest.root)
+    }
+
+    @Test
+    fun `a 40-level shared chain threaded through Lets verifies in under two seconds`() {
+        val json = sharedChain(40, viaLet = true)
+        val start = System.nanoTime()
+        val r = verifyUnhashed(json)
+        val ms = (System.nanoTime() - start) / 1_000_000
+        assertTrue(r is VerifyResult.Ok) { "got $r" }
+        assertTrue(ms < 2_000) { "40-level Let chain took $ms ms" }
+    }
+
+    @Test
+    fun `a schema obligation on a shared argument survives a later plain use (review H2)`() {
+        // `five` flows into a PositiveInt parameter and then into a plain Int
+        // parameter of Int.Add. The plain re-inference used to overwrite the
+        // SchemaType record, dropping the invariant obligation.
+        val v = verifyNamed("""{
+          "version": 1, "root": "root",
+          "nodes": {
+            "intT":   { "type": "PrimitiveType", "kind": "Int" },
+            "boolT":  { "type": "PrimitiveType", "kind": "Bool" },
+            "zero":   { "type": "IntLit", "value": 0 },
+            "xParam": { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+            "xRef":   { "type": "VarRef", "binder": "xParam" },
+            "gtT":    { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+            "gt":     { "type": "ForeignNode", "target": "strand-builtin:Int.Gt", "foreignType": "gtT" },
+            "gtBody": { "type": "Application", "function": "gt", "arguments": ["xRef", "zero"] },
+            "pred":   { "type": "Lambda", "parameters": ["xParam"], "body": "gtBody" },
+            "inv":    { "type": "Invariant", "invariantName": "pos", "targetSchema": "posInt", "body": "pred" },
+            "posInt": { "type": "Schema", "schemaName": "PositiveInt", "valueType": "intT", "invariants": ["inv"] },
+            "five":   { "type": "IntLit", "value": 5 },
+            "pIn":    { "type": "ParameterDecl", "name": "p", "paramType": "posInt" },
+            "pRef":   { "type": "VarRef", "binder": "pIn" },
+            "idPos":  { "type": "Lambda", "parameters": ["pIn"], "body": "pRef" },
+            "claim":  { "type": "Application", "function": "idPos", "arguments": ["five"] },
+            "addT":   { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+            "add":    { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+            "root":   { "type": "Application", "function": "add", "arguments": ["claim", "five"] }
+          }
+        }""")
+        val ok = v.result as? VerifyResult.Ok ?: error("expected Ok, got ${v.result}")
+        val recorded = ok.nodeTypes[v.names.getValue("five")]
+        assertTrue(recorded is TypeExpr.SchemaType) { "schema obligation lost: $recorded" }
+    }
+
     // ---- A8: NodeRefs in type position must be closed ----------------------
 
     @Test

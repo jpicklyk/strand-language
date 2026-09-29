@@ -9,6 +9,7 @@ import org.strand.core.NodeStore
 import org.strand.core.Primitive
 import org.strand.core.ProjectionSource
 import org.strand.core.ProjectionStep
+import org.strand.core.childNodeIds
 import org.strand.core.translateNodeIds
 
 /**
@@ -61,6 +62,34 @@ import org.strand.core.translateNodeIds
  * [hashToNodeId] to observe the admitted nodes, a federated caller must pass
  * the same mutable [FederatedProgram] instances the callback extends.
  */
+
+/** Memo-key marker: a referenced TypeParameter that is in scope. */
+private val IN_SCOPE = Any()
+
+private val EMPTY_REFS: Array<NodeId> = emptyArray()
+
+/** Memo key: node, recursive depth, and the observable slice of the context. */
+private class ContextKey(
+    val id: NodeId,
+    val depth: Int,
+    val values: Array<Any?>,
+) {
+    private val hash: Int = run {
+        var h = id.value * 31 + depth
+        for (v in values) h = h * 31 + System.identityHashCode(v)
+        h
+    }
+    override fun hashCode(): Int = hash
+    override fun equals(other: Any?): Boolean {
+        if (other !is ContextKey) return false
+        if (id != other.id || depth != other.depth || values.size != other.values.size) return false
+        for (i in values.indices) if (values[i] !== other.values[i]) return false
+        return true
+    }
+}
+
+/** A memoized inference result: the type and the effect closure recorded with it. */
+private class Inferred(val type: TypeExpr, val closure: Set<NodeId>?)
 
 /**
  * Q-046: the registry of IO-opening builtin targets a `source`-bound
@@ -278,9 +307,130 @@ class Verifier(
          */
         private val literalEqualityCache = mutableMapOf<Pair<NodeId, NodeId>, Boolean>()
 
+        /**
+         * Record [t] as the type of [id]. A SchemaType obligation recorded by a
+         * value-flow site (an Application argument, ProductFieldValue or
+         * SumValue payload flowing into a `Schema<T>` position) is sticky:
+         * a later record of the plain `T` for the same node (a re-inference
+         * through another parent that uses the node at a plain position)
+         * does not erase it (review H2). Two distinct schema obligations on
+         * one shared node still resolve last-write-wins.
+         */
         fun record(id: NodeId, t: TypeExpr) {
+            val prev = nodeTypes[id]
+            if (prev is TypeExpr.SchemaType && t !is TypeExpr.SchemaType && prev.valueType == t) return
             nodeTypes[id] = t
         }
+
+        // ---- Review C3: memoized inference over shared DAGs ----------------
+        //
+        // `infer` and `resolveType` are functions of the node and the part of
+        // the context the node's subgraph can observe: the scope entries of
+        // the term binders it references freely, the membership in the
+        // in-scope TypeParameter set of every TypeParameter it mentions (free
+        // or bound, so the rebinding rule sees its binders), and the
+        // RecursiveType depth. Keying the memo on exactly that makes a shared
+        // child verify once per distinct observable context instead of once
+        // per parent edge, which turns the exponential blow-up on
+        // `x_i = f(x_{i-1}, x_{i-1})` chains into linear work.
+        //
+        // Scope values are compared by reference. Every scope value for a
+        // given binder is produced by a memoized `infer`/`resolveType` call,
+        // so equal types arrive as the same object; the identity compare
+        // never hashes a TypeExpr tree. A missed hit costs time, never
+        // soundness.
+
+        /** Sorted referenced-name array per node (see [refsOf]). */
+        private val refsMemo = HashMap<NodeId, Array<NodeId>>()
+        private val refsInProgress = HashSet<NodeId>()
+
+        /**
+         * The binder and TypeParameter NodeIds [id]'s subgraph can observe
+         * from its context, sorted by NodeId; null when the walk hit a cycle
+         * (the caller then skips memoization for that node). Over-approximate
+         * by construction: a binder is subtracted only where Lambda, Let and
+         * MatchCase bind it.
+         */
+        private fun refsOf(id: NodeId): Array<NodeId>? {
+            refsMemo[id]?.let { return it }
+            val node = store.getOrNull(id) ?: return EMPTY_REFS
+            if (!refsInProgress.add(id)) return null
+            val out = HashSet<NodeId>()
+            try {
+                fun addAll(child: NodeId): Boolean {
+                    val r = refsOf(child) ?: return false
+                    out.addAll(r)
+                    return true
+                }
+                val complete = when (node) {
+                    is Node.VarRef -> { out += node.binder; true }
+                    is Node.TypeParameter -> { out += id; true }
+                    is Node.Lambda -> {
+                        val ok = node.childNodeIds().all(::addAll)
+                        out.removeAll(node.parameters.toSet())
+                        ok
+                    }
+                    is Node.Let -> {
+                        val bodyRefs = refsOf(node.body)
+                        val valueOk = addAll(node.value)
+                        if (bodyRefs != null) bodyRefs.filterTo(out) { it != id }
+                        valueOk && bodyRefs != null
+                    }
+                    is Node.MatchCase -> {
+                        val bodyRefs = refsOf(node.body)
+                        val patternOk = addAll(node.pattern)
+                        val bound = patternBinders(node.pattern)
+                        if (bodyRefs != null) bodyRefs.filterTo(out) { it !in bound }
+                        patternOk && bodyRefs != null
+                    }
+                    is Node.TypeAbstraction -> { out += node.typeParameters; addAll(node.body) }
+                    is Node.ForallType -> { out += node.typeParameters; addAll(node.body) }
+                    else -> node.childNodeIds().all(::addAll)
+                }
+                if (!complete) return null
+            } finally {
+                refsInProgress.remove(id)
+            }
+            val sorted = out.toTypedArray()
+            sorted.sortBy { it.value }
+            refsMemo[id] = sorted
+            return sorted
+        }
+
+        /** VariablePattern NodeIds bound by the pattern tree rooted at [patternId]. */
+        private fun patternBinders(patternId: NodeId): Set<NodeId> {
+            val out = HashSet<NodeId>()
+            val seen = HashSet<NodeId>()
+            var cur: NodeId? = patternId
+            while (cur != null && seen.add(cur)) {
+                val at: NodeId = cur
+                cur = when (val p = store.getOrNull(at)) {
+                    is Node.Pattern.VariablePattern -> { out += at; null }
+                    is Node.Pattern.ConstructorPattern -> p.payloadPattern
+                    else -> null
+                }
+            }
+            return out
+        }
+
+        /**
+         * Build the memo key for [id] under [scope] / [typeParams], or null
+         * when [id]'s reference set is incomplete. Each referenced name
+         * contributes its scope value (by reference), a marker when it is an
+         * in-scope TypeParameter, or null when it is neither.
+         */
+        private fun contextKey(id: NodeId, scope: Map<NodeId, TypeExpr>, typeParams: Set<NodeId>): ContextKey? {
+            val refs = refsOf(id) ?: return null
+            val values = arrayOfNulls<Any>(refs.size)
+            for (i in refs.indices) {
+                val r = refs[i]
+                values[i] = scope[r] ?: if (r in typeParams) IN_SCOPE else null
+            }
+            return ContextKey(id, recursiveDepth, values)
+        }
+
+        private val inferMemo = HashMap<ContextKey, Inferred>()
+        private val typeMemo = HashMap<ContextKey, TypeExpr>()
 
         fun recordClosure(id: NodeId, c: Set<NodeId>) {
             nodeClosures[id] = c
@@ -516,6 +666,22 @@ class Verifier(
          * checks consult this set when resolving TypeParameter references.
          */
         fun infer(id: NodeId, scope: Map<NodeId, TypeExpr>, typeParams: Set<NodeId>): TypeExpr {
+            val key = contextKey(id, scope, typeParams)
+            if (key != null) {
+                inferMemo[key]?.let { hit ->
+                    // Replay the recorded outputs a parent reads right after
+                    // this call returns: the node's type and effect closure.
+                    record(id, hit.type)
+                    if (hit.closure != null) nodeClosures[id] = hit.closure else nodeClosures.remove(id)
+                    return hit.type
+                }
+            }
+            val t = inferUncached(id, scope, typeParams)
+            if (key != null) inferMemo[key] = Inferred(t, nodeClosures[id])
+            return t
+        }
+
+        private fun inferUncached(id: NodeId, scope: Map<NodeId, TypeExpr>, typeParams: Set<NodeId>): TypeExpr {
             val node = store.getOrNull(id)
                 ?: reportFatal(VerifyError.DanglingReference(at = id, missing = id, fromField = "<resolve>"))
 
@@ -3104,6 +3270,14 @@ class Verifier(
          * substitution machinery keys on the TypeParameter NodeId.
          */
         private fun resolveType(typeId: NodeId, typeParams: Set<NodeId>): TypeExpr {
+            val key = contextKey(typeId, emptyMap(), typeParams)
+            if (key != null) typeMemo[key]?.let { return it }
+            val t = resolveTypeUncached(typeId, typeParams)
+            if (key != null) typeMemo[key] = t
+            return t
+        }
+
+        private fun resolveTypeUncached(typeId: NodeId, typeParams: Set<NodeId>): TypeExpr {
             val node = store.getOrNull(typeId)
                 ?: reportFatal(VerifyError.DanglingReference(at = typeId, missing = typeId, fromField = "type"))
             return when (node) {
