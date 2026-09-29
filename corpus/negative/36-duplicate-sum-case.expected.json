@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "DuplicateCaseName",
+  "notes": "SumType with two cases named A (Int and String payloads). Case lookup is by name, so a SumValue and a pattern could resolve different payload types (the Sum analogue of review C1). If ingest later rejects duplicate case names first, this entry's stage moves to ingest."
+}

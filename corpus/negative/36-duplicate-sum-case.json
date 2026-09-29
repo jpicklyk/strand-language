@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "root": "v",
+  "nodes": {
+    "intT":  { "type": "PrimitiveType", "kind": "Int" },
+    "strT":  { "type": "PrimitiveType", "kind": "String" },
+    "c1":    { "type": "SumTypeCase", "name": "A", "caseType": "intT" },
+    "c2":    { "type": "SumTypeCase", "name": "A", "caseType": "strT" },
+    "sT":    { "type": "SumType", "cases": ["c1", "c2"] },
+    "one":   { "type": "IntLit", "value": 1 },
+    "v":     { "type": "SumValue", "ofType": "sT", "caseName": "A", "payload": "one" }
+  }
+}

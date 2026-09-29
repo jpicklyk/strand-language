@@ -3315,6 +3315,16 @@ class Verifier(
                         }
                         TypeExpr.Product.Field(f.fieldName, resolveType(f.fieldType, typeParams))
                     }
+                    // Review C1: a repeated field name makes ProductValue
+                    // check against one declaration while ProductFieldGet
+                    // reads another, a type confusion.
+                    val seenFields = HashSet<String>()
+                    for (f in fields) {
+                        if (!seenFields.add(f.name)) {
+                            report(VerifyError.DuplicateFieldName(at = typeId, name = f.name))
+                            throw VerifyAbort()
+                        }
+                    }
                     TypeExpr.Product(origin = typeId, fields = fields)
                 }
                 is Node.SumType -> {
@@ -3328,6 +3338,15 @@ class Verifier(
                             throw VerifyAbort()
                         }
                         TypeExpr.Sum.Case(c.caseName, c.caseType?.let { resolveType(it, typeParams) })
+                    }
+                    // Review C1: the Sum analogue — a repeated case name
+                    // lets a SumValue and a pattern resolve different payloads.
+                    val seenCases = HashSet<String>()
+                    for (c in cases) {
+                        if (!seenCases.add(c.name)) {
+                            report(VerifyError.DuplicateCaseName(at = typeId, name = c.name))
+                            throw VerifyAbort()
+                        }
                     }
                     TypeExpr.Sum(origin = typeId, cases = cases)
                 }

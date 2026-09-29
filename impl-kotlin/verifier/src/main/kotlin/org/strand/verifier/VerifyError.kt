@@ -1173,6 +1173,27 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * A [Node.ProductType] declares two fields with the same [name]. Field
+     * lookup is by name, so a duplicate lets a ProductValue check a value
+     * against one declaration while ProductFieldGet types the read by
+     * another (review C1: a verified program reaching a runtime type error).
+     * [at] is the ProductType.
+     */
+    data class DuplicateFieldName(
+        override val at: NodeId,
+        val name: String,
+    ) : VerifyError()
+
+    /**
+     * A [Node.SumType] declares two cases with the same [name]; the Sum
+     * analogue of [DuplicateFieldName]. [at] is the SumType.
+     */
+    data class DuplicateCaseName(
+        override val at: NodeId,
+        val name: String,
+    ) : VerifyError()
+
+    /**
      * A [Node.ForeignNode] binds a registry target whose effect floor
      * ([org.strand.core.BuiltinEffectTable]) is not covered by its declared
      * effect row. The declared row is the union of `ForeignNode.effects` and

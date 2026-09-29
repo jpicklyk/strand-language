@@ -26,6 +26,25 @@ class VerifierSoundnessTest {
 
     private fun verify(json: String): VerifyResult = verifyNamed(json).result
 
+    /**
+     * Ingest a well-formed [json], overwrite [authorId]'s node with [patch]
+     * in the finalized store, and verify. For shapes JsonIngest refuses
+     * (duplicate field or case names): the verifier rule must still hold for
+     * stores built programmatically. No NodeRefs are involved, so the stale
+     * hash of the patched node is never consulted.
+     */
+    private fun verifyPatched(
+        json: String,
+        authorId: String,
+        patch: (org.strand.core.Node) -> org.strand.core.Node,
+    ): VerifyResult {
+        val ingest = JsonIngest.parse(json)
+        val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
+        val id = ingest.nameMap.getValue(authorId)
+        finalized.store.set(id, patch(finalized.store.get(id)))
+        return Verifier(finalized.store, finalized.hashToNodeId).verify(finalized.root)
+    }
+
     private inline fun <reified E : VerifyError> assertRejects(r: VerifyResult): E {
         val f = r as? VerifyResult.Failed ?: error("expected rejection with ${E::class.simpleName}, got $r")
         return f.errors.filterIsInstance<E>().firstOrNull()
@@ -121,6 +140,53 @@ class VerifierSoundnessTest {
         val ok = v.result as? VerifyResult.Ok ?: error("expected Ok, got ${v.result}")
         val recorded = ok.nodeTypes[v.names.getValue("five")]
         assertTrue(recorded is TypeExpr.SchemaType) { "schema obligation lost: $recorded" }
+    }
+
+    // ---- A6: duplicate field and case names ---------------------------------
+
+    @Test
+    fun `a ProductType with a duplicate field name is rejected (review C1 exploit)`() {
+        // {x: Int, x: String}: the value checks x against String (last
+        // duplicate) while the read types x as Int (first duplicate), so
+        // Int.Add received a String at runtime.
+        val r = verifyPatched("""{
+          "version": 1, "root": "sum",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "strT":  { "type": "PrimitiveType", "kind": "String" },
+            "f1":    { "type": "ProductTypeField", "name": "x", "fieldType": "intT" },
+            "f2":    { "type": "ProductTypeField", "name": "x2", "fieldType": "strT" },
+            "pT":    { "type": "ProductType", "fields": ["f1", "f2"] },
+            "s":     { "type": "StringLit", "value": "not an int" },
+            "fv":    { "type": "ProductFieldValue", "fieldName": "x", "value": "s" },
+            "pv":    { "type": "ProductValue", "ofType": "pT", "fields": ["fv"] },
+            "get":   { "type": "ProductFieldGet", "target": "pv", "fieldName": "x" },
+            "one":   { "type": "IntLit", "value": 1 },
+            "addT":  { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+            "add":   { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+            "sum":   { "type": "Application", "function": "add", "arguments": ["get", "one"] }
+          }
+        }""", "f2") { (it as org.strand.core.Node.ProductTypeField).copy(fieldName = "x") }
+        val err = assertRejects<VerifyError.DuplicateFieldName>(r)
+        assertEquals("x", err.name)
+    }
+
+    @Test
+    fun `a SumType with a duplicate case name is rejected`() {
+        val r = verifyPatched("""{
+          "version": 1, "root": "v",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "strT":  { "type": "PrimitiveType", "kind": "String" },
+            "c1":    { "type": "SumTypeCase", "name": "A", "caseType": "intT" },
+            "c2":    { "type": "SumTypeCase", "name": "B", "caseType": "strT" },
+            "sT":    { "type": "SumType", "cases": ["c1", "c2"] },
+            "one":   { "type": "IntLit", "value": 1 },
+            "v":     { "type": "SumValue", "ofType": "sT", "caseName": "A", "payload": "one" }
+          }
+        }""", "c2") { (it as org.strand.core.Node.SumTypeCase).copy(caseName = "A") }
+        val err = assertRejects<VerifyError.DuplicateCaseName>(r)
+        assertEquals("A", err.name)
     }
 
     // ---- A8: NodeRefs in type position must be closed ----------------------
