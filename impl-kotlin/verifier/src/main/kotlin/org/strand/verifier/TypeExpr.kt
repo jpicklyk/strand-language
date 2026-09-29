@@ -184,6 +184,38 @@ sealed class TypeExpr {
  * expression. Substitution is total: any [TypeExpr.Param] whose origin is not
  * in the map is left as-is.
  */
+/**
+ * Raised by [substitute] when instantiating would capture a free
+ * TypeParameter under a Forall that binds the same TypeParameter NodeId.
+ * The verifier reports it as [VerifyError.TypeParameterRebound].
+ */
+internal class TypeParameterCapture(val param: NodeId) : RuntimeException() {
+    override fun fillInStackTrace(): Throwable = this
+}
+
+/** The TypeParameter NodeIds occurring free in [t]. */
+internal fun freeParams(t: TypeExpr): Set<NodeId> {
+    val out = HashSet<NodeId>()
+    fun walk(x: TypeExpr, bound: Set<NodeId>) {
+        when (x) {
+            is TypeExpr.Prim, is TypeExpr.RecursiveSelf -> Unit
+            is TypeExpr.Param -> if (x.origin !in bound) out += x.origin
+            is TypeExpr.Fun -> { x.parameters.forEach { walk(it, bound) }; walk(x.result, bound) }
+            is TypeExpr.Product -> x.fields.forEach { walk(it.type, bound) }
+            is TypeExpr.Sum -> x.cases.forEach { c -> c.type?.let { walk(it, bound) } }
+            is TypeExpr.Forall -> walk(x.body, bound + x.typeParameters)
+            is TypeExpr.Recursive -> walk(x.body, bound)
+            is TypeExpr.SchemaType -> walk(x.valueType, bound)
+        }
+    }
+    walk(t, emptySet())
+    return out
+}
+
+/**
+ * Capture-refusing substitution of TypeParameters (by NodeId) in [t]. Throws
+ * [TypeParameterCapture] rather than silently capturing (see the Forall case).
+ */
 internal fun substitute(t: TypeExpr, subst: Map<NodeId, TypeExpr>): TypeExpr = when (t) {
     is TypeExpr.Prim -> t
     is TypeExpr.Param -> subst[t.origin] ?: t
@@ -203,6 +235,19 @@ internal fun substitute(t: TypeExpr, subst: Map<NodeId, TypeExpr>): TypeExpr = w
     is TypeExpr.Forall -> {
         // Bound type parameters of this Forall shadow any substitution targeting them.
         val filtered = subst.filterKeys { it !in t.typeParameters }
+        // Capture check (review C2): Forall equality is by TypeParameter
+        // NodeId, so substitution cannot rename a binder. If a replacement
+        // that actually reaches the body mentions one of this Forall's
+        // binders free, substituting would capture it; refuse instead.
+        if (filtered.isNotEmpty()) {
+            val bodyFree = freeParams(t.body)
+            for (binder in t.typeParameters) {
+                val captures = filtered.any { (key, replacement) ->
+                    key in bodyFree && binder in freeParams(replacement)
+                }
+                if (captures) throw TypeParameterCapture(binder)
+            }
+        }
         TypeExpr.Forall(t.typeParameters, substitute(t.body, filtered))
     }
     is TypeExpr.Recursive -> {

@@ -883,6 +883,12 @@ class Verifier(
                     throw VerifyAbort()
                 }
             }
+            // Review C2: Forall equality is by TypeParameter NodeId, so an
+            // inner binder that rebinds an in-scope TypeParameter makes two
+            // different variables indistinguishable (an inner `forall a.`
+            // under an outer `forall a.` lets a function returning the outer
+            // `a` type as the identity). Rebinding is rejected outright.
+            checkNoRebinding(id, node.typeParameters, typeParams)
             val extendedTypeParams = typeParams + node.typeParameters
             val bodyType = infer(node.body, scope, extendedTypeParams)
             // TypeAbstraction is transparent for effect-closure purposes: its
@@ -891,6 +897,21 @@ class Verifier(
             // typically resolves to ∅.
             recordClosure(id, closureOf(node.body))
             return TypeExpr.Forall(node.typeParameters, bodyType)
+        }
+
+        /**
+         * Reject a TypeAbstraction / ForallType at [at] whose binder list
+         * repeats a TypeParameter or names one already bound by an enclosing
+         * binder ([VerifyError.TypeParameterRebound]).
+         */
+        private fun checkNoRebinding(at: NodeId, binders: List<NodeId>, typeParams: Set<NodeId>) {
+            val seen = HashSet<NodeId>()
+            for (tp in binders) {
+                if (tp in typeParams || !seen.add(tp)) {
+                    report(VerifyError.TypeParameterRebound(at = at, param = tp))
+                    throw VerifyAbort()
+                }
+            }
         }
 
         private fun inferApplication(
@@ -930,7 +951,14 @@ class Verifier(
                     for ((i, tp) in fnType.typeParameters.withIndex()) {
                         subst[tp] = resolvedTypeArgs[i]
                     }
-                    val instantiated = substitute(fnType.body, subst)
+                    val instantiated = try {
+                        substitute(fnType.body, subst)
+                    } catch (capture: TypeParameterCapture) {
+                        // Review C2: a type argument mentions a TypeParameter
+                        // that an inner Forall of the callee rebinds.
+                        report(VerifyError.TypeParameterRebound(at = id, param = capture.param))
+                        throw VerifyAbort()
+                    }
                     when (instantiated) {
                         is TypeExpr.Fun -> instantiated
                         is TypeExpr.Forall -> {
@@ -3376,6 +3404,7 @@ class Verifier(
                             throw VerifyAbort()
                         }
                     }
+                    checkNoRebinding(typeId, node.typeParameters, typeParams)
                     val inner = typeParams + node.typeParameters
                     val body = resolveType(node.body, inner)
                     TypeExpr.Forall(node.typeParameters, body)

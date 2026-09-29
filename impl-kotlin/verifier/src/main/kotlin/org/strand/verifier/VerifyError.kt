@@ -1173,6 +1173,22 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * A TypeAbstraction or ForallType at [at] binds TypeParameter [param]
+     * while [param] is already bound by an enclosing binder (or repeats it in
+     * its own binder list), or an Application's type argument would be
+     * captured by a callee Forall that binds [param] (at is then the
+     * Application). Forall equality compares TypeParameter NodeIds, not
+     * alpha-equivalence, and substitution does not rename, so a rebound
+     * binder makes two distinct type variables indistinguishable: a rank-2
+     * program could type a function returning a String as `forall a. a -> a`
+     * and use it at Int (review C2).
+     */
+    data class TypeParameterRebound(
+        override val at: NodeId,
+        val param: NodeId,
+    ) : VerifyError()
+
+    /**
      * A [Node.ProductType] declares two fields with the same [name]. Field
      * lookup is by name, so a duplicate lets a ProductValue check a value
      * against one declaration while ProductFieldGet types the read by

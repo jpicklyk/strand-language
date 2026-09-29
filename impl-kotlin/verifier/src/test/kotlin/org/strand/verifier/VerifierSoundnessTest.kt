@@ -189,6 +189,106 @@ class VerifierSoundnessTest {
         assertEquals("A", err.name)
     }
 
+    // ---- A7: TypeParameter rebinding and capture ---------------------------
+
+    @Test
+    fun `an inner binder rebinding an in-scope TypeParameter cannot fake an identity (review C2)`() {
+        // outer = Λa. λ(x: a). (Λa. λ(y: a). x)
+        // The inner abstraction returns the OUTER x, yet with the rebound `a`
+        // its type reads as `forall a. a -> a`. outer[String]("s")[Int](5)
+        // then typed as Int while evaluating to "s": a String -> Int identity.
+        val r = verify("""{
+          "version": 1, "root": "root",
+          "nodes": {
+            "T_a":     { "type": "TypeParameter", "name": "a" },
+            "intT":    { "type": "PrimitiveType", "kind": "Int" },
+            "strT":    { "type": "PrimitiveType", "kind": "String" },
+            "x":       { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+            "y":       { "type": "ParameterDecl", "name": "y", "paramType": "T_a" },
+            "xRef":    { "type": "VarRef", "binder": "x" },
+            "innerLam":{ "type": "Lambda", "parameters": ["y"], "body": "xRef" },
+            "innerTA": { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "innerLam" },
+            "outerLam":{ "type": "Lambda", "parameters": ["x"], "body": "innerTA" },
+            "outerTA": { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "outerLam" },
+            "s":       { "type": "StringLit", "value": "s" },
+            "five":    { "type": "IntLit", "value": 5 },
+            "app1":    { "type": "Application", "function": "outerTA", "arguments": ["s"], "typeArguments": ["strT"] },
+            "app2":    { "type": "Application", "function": "app1", "arguments": ["five"], "typeArguments": ["intT"] },
+            "addT":    { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+            "add":     { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+            "root":    { "type": "Application", "function": "add", "arguments": ["app2", "five"] }
+          }
+        }""")
+        assertRejects<VerifyError.TypeParameterRebound>(r)
+    }
+
+    @Test
+    fun `a ForallType rebinding an in-scope TypeParameter is rejected`() {
+        // Λa. λ(g: forall a. a -> a). g — the parameter's type rebinds `a`.
+        val r = verify("""{
+          "version": 1, "root": "ta",
+          "nodes": {
+            "T_a":  { "type": "TypeParameter", "name": "a" },
+            "fnT":  { "type": "FunctionType", "parameters": ["T_a"], "result": "T_a" },
+            "allT": { "type": "ForallType", "typeParameters": ["T_a"], "body": "fnT" },
+            "g":    { "type": "ParameterDecl", "name": "g", "paramType": "allT" },
+            "gRef": { "type": "VarRef", "binder": "g" },
+            "lam":  { "type": "Lambda", "parameters": ["g"], "body": "gRef" },
+            "ta":   { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "lam" }
+          }
+        }""")
+        assertRejects<VerifyError.TypeParameterRebound>(r)
+    }
+
+    @Test
+    fun `instantiating a rank-2 callee with a TypeParameter its inner Forall binds is refused`() {
+        // f  = Λa. λ(g: forall b. b -> a). g[Int](5)        : forall a. (forall b. b -> a) -> a
+        // id = Λb. λ(z: b). z                                : forall b. b -> b
+        // use = Λb. λ(w: b). f[b](id)
+        // f and id are Let-bound outside `use`, so no binder is lexically
+        // nested under another binding the same TypeParameter; only the
+        // substitution at f[b] can capture.
+        // Substituting a := b into (forall b. b -> a) captures b and yields
+        // forall b. b -> b, so `id` would be accepted and f[b](id) would be
+        // typed b while evaluating to 5; use[String]("s") is then an Int
+        // typed as String.
+        val r = verifyNamed("""{
+          "version": 1, "root": "root",
+          "nodes": {
+            "T_a":   { "type": "TypeParameter", "name": "a" },
+            "T_b":   { "type": "TypeParameter", "name": "b" },
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "strT":  { "type": "PrimitiveType", "kind": "String" },
+            "gT":    { "type": "FunctionType", "parameters": ["T_b"], "result": "T_a" },
+            "gAll":  { "type": "ForallType", "typeParameters": ["T_b"], "body": "gT" },
+            "g":     { "type": "ParameterDecl", "name": "g", "paramType": "gAll" },
+            "gRef":  { "type": "VarRef", "binder": "g" },
+            "five":  { "type": "IntLit", "value": 5 },
+            "callG": { "type": "Application", "function": "gRef", "arguments": ["five"], "typeArguments": ["intT"] },
+            "fLam":  { "type": "Lambda", "parameters": ["g"], "body": "callG" },
+            "f":     { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "fLam" },
+            "z":     { "type": "ParameterDecl", "name": "z", "paramType": "T_b" },
+            "zRef":  { "type": "VarRef", "binder": "z" },
+            "idLam": { "type": "Lambda", "parameters": ["z"], "body": "zRef" },
+            "id":    { "type": "TypeAbstraction", "typeParameters": ["T_b"], "body": "idLam" },
+            "idLet": { "type": "Let", "name": "idv", "value": "id", "body": "top" },
+            "idRef": { "type": "VarRef", "binder": "idLet" },
+            "fLet":  { "type": "Let", "name": "fv", "value": "f", "body": "idLet" },
+            "fRef":  { "type": "VarRef", "binder": "fLet" },
+            "fb":    { "type": "Application", "function": "fRef", "arguments": ["idRef"], "typeArguments": ["T_b"] },
+            "w":     { "type": "ParameterDecl", "name": "w", "paramType": "T_b" },
+            "useLam":{ "type": "Lambda", "parameters": ["w"], "body": "fb" },
+            "use":   { "type": "TypeAbstraction", "typeParameters": ["T_b"], "body": "useLam" },
+            "s":     { "type": "StringLit", "value": "s" },
+            "top":   { "type": "Application", "function": "use", "arguments": ["s"], "typeArguments": ["strT"] },
+            "root":  { "type": "Let", "name": "unused", "value": "five", "body": "fLet" }
+          }
+        }""")
+        val err = assertRejects<VerifyError.TypeParameterRebound>(r.result)
+        assertEquals(r.names.getValue("T_b"), err.param)
+        assertEquals(r.names.getValue("fb"), err.at)
+    }
+
     // ---- A8: NodeRefs in type position must be closed ----------------------
 
     @Test
