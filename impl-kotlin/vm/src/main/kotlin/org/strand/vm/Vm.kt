@@ -8,6 +8,9 @@ import org.strand.core.EvaluationLimits
 import org.strand.core.ExhaustionKind
 import org.strand.core.NodeId
 import org.strand.interpreter.Builtins
+import org.strand.interpreter.CapabilityPattern
+import org.strand.interpreter.CapabilitySet
+import org.strand.interpreter.covers
 import org.strand.interpreter.DenialPhase
 import org.strand.interpreter.DenialReport
 import org.strand.interpreter.HostContext
@@ -58,8 +61,14 @@ class Vm(
     // the last entry. Both lists are shared across all frames — caps
     // and handlers are lexical-scope concerns within the program, not
     // per-frame call state.
-    private var currentCaps: Set<Int> = emptySet()
-    private val capStack: ArrayDeque<Set<Int>> = ArrayDeque()
+    //
+    // Review H2: the capability context is a full refinement-bearing
+    // [CapabilitySet] (not a set of category ids), so CALL performs the
+    // interpreter's two-pass check — category presence, then the Q-031
+    // refinement match against the call site's EffectDecl parameters or the
+    // callee's Q-039 projections.
+    private var currentCaps: CapabilitySet = CapabilitySet.EMPTY
+    private val capStack: ArrayDeque<CapabilitySet> = ArrayDeque()
     private val handlers: MutableList<VmActiveHandler> = mutableListOf()
 
     // Error recovery — N-047 Attempt (Q-048). Each ATTEMPT_PUSH records a
@@ -84,15 +93,24 @@ class Vm(
         run(initialCaps, EvaluationLimits.DEFAULTS)
 
     /**
+     * Review H2: run under a refinement-bearing [capabilities] set — the
+     * same [CapabilitySet] the interpreter's `eval` takes. A category-id
+     * set (the [run] overloads taking `Set<Int>`) is the wildcard grant
+     * [CapabilitySet.ofCategories] of those categories.
+     */
+    fun run(capabilities: CapabilitySet, limits: EvaluationLimits = EvaluationLimits.DEFAULTS): Value {
+        val raw = evaluate(capabilities, limits)
+        return raw as? Value
+            ?: error("HALT expected a Value at top of stack, got ${raw::class.simpleName}")
+    }
+
+    /**
      * Q-040: VM run under explicit [limits]. Breaches surface as
      * [InterpretError.ResourceExhaustion] (with `atNode = null` —
      * opcodes do not carry NodeIds in slice 1).
      */
-    fun run(initialCaps: Set<Int>, limits: EvaluationLimits): Value {
-        val raw = evaluate(initialCaps, limits)
-        return raw as? Value
-            ?: error("HALT expected a Value at top of stack, got ${raw::class.simpleName}")
-    }
+    fun run(initialCaps: Set<Int>, limits: EvaluationLimits): Value =
+        run(categoryGrant(initialCaps), limits)
 
     /**
      * Run the root chunk and return whatever's at the top of the stack at
@@ -112,8 +130,12 @@ class Vm(
      * [VmCounters]; same shape as [Interpreter]'s `EvalCounters` but
      * uses `frames.size` for stack-depth accounting.
      */
-    fun evaluate(initialCaps: Set<Int>, limits: EvaluationLimits): Any {
-        currentCaps = initialCaps
+    fun evaluate(initialCaps: Set<Int>, limits: EvaluationLimits): Any =
+        evaluate(categoryGrant(initialCaps), limits)
+
+    /** Review H2: evaluate under a refinement-bearing [capabilities] set. */
+    fun evaluate(capabilities: CapabilitySet, limits: EvaluationLimits = EvaluationLimits.DEFAULTS): Any {
+        currentCaps = capabilities
         capStack.clear()
         handlers.clear()
         attemptStack.clear()
@@ -131,10 +153,9 @@ class Vm(
      * `:schema`'s SchemaChecker to evaluate invariant bodies through the
      * VM (Layer 7 integration).
      *
-     * The closure's effects are still checked against [caps] and against
-     * the active handler list, exactly as if the call had originated
-     * from a CALL opcode. The caller is responsible for granting any
-     * capabilities the closure declares; [caps] is set as the current
+     * The closure's declared effects are checked category-only against
+     * [caps] before the body runs (the interpreter's `applyCallable` rule);
+     * [caps] is the wildcard grant of the listed categories and is the
      * capability context for the apply duration.
      */
     fun applyClosure(closure: Any, args: List<Value>, caps: Set<Int>): Value =
@@ -143,8 +164,23 @@ class Vm(
     /**
      * Q-040: applyClosure under explicit [limits].
      */
-    fun applyClosure(closure: Any, args: List<Value>, caps: Set<Int>, limits: EvaluationLimits): Value {
-        currentCaps = caps
+    fun applyClosure(closure: Any, args: List<Value>, caps: Set<Int>, limits: EvaluationLimits): Value =
+        applyClosure(closure, args, categoryGrant(caps), limits)
+
+    /**
+     * Review H2: applyClosure under a refinement-bearing [capabilities] set.
+     * Mirrors the interpreter's `applyCallable`: the callable's own declared
+     * effects are checked category-only against [capabilities] before the
+     * body runs (there is no call-site EffectDecl at this boundary), and the
+     * refinement checks fire at the effectful call sites inside the body.
+     */
+    fun applyClosure(
+        closure: Any,
+        args: List<Value>,
+        capabilities: CapabilitySet,
+        limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
+    ): Value {
+        currentCaps = capabilities
         // Note: we do NOT clear capStack / handlers here; the caller may
         // be invoking this from inside an active CapabilityScope or Handler
         // context (e.g., a transition function called from a CapabilityScope
@@ -158,6 +194,7 @@ class Vm(
         attemptStack.clear()
         val frames = ArrayDeque<Frame>()
         try {
+            checkCapabilities(RUNTIME_BOUNDARY, effectsOf(closure), emptyMap(), limits)
             when (closure) {
                 is VmClosure -> {
                     val sub = table[closure.chunkIndex]
@@ -351,17 +388,18 @@ class Vm(
                 Opcode.MAKE_FOREIGN -> {
                     val targetC = current.constant() as Constant.ForeignTargetC
                     val effectsC = current.constant() as Constant.EffectsC
+                    val projectionsC = current.constant() as Constant.ProjectionsC
                     bumpAllocation()
-                    current.stack.add(VmForeign(targetC.target, effectsC.effectIds))
+                    current.stack.add(VmForeign(targetC.target, effectsC.effectIds, projectionsC.projections))
                 }
 
                 Opcode.CAP_PUSH -> {
                     val effectsC = current.constant() as Constant.EffectsC
                     capStack.addLast(currentCaps)
-                    // Narrow: intersect current caps with the listed set.
-                    val narrowed = HashSet<Int>(effectsC.effectIds.size)
-                    for (id in effectsC.effectIds) if (id in currentCaps) narrowed += id
-                    currentCaps = narrowed
+                    // Narrow: keep only the listed categories, carrying their
+                    // refinement patterns through verbatim (the interpreter's
+                    // CapabilitySet.intersect).
+                    currentCaps = currentCaps.intersect(effectsC.effectIds.mapTo(HashSet()) { NodeId(it) })
                 }
                 Opcode.CAP_POP -> {
                     currentCaps = capStack.removeLast()
@@ -503,6 +541,12 @@ class Vm(
 
                 Opcode.CALL -> {
                     val arity = current.operand()
+                    val site = current.constant() as Constant.CallSiteC
+                    // EffectDecl parameter values sit above the arguments.
+                    val instanceParams = ArrayList<Value>(site.totalParams)
+                    val paramStart = current.stack.size - site.totalParams
+                    for (i in 0 until site.totalParams) instanceParams += current.stack[paramStart + i] as Value
+                    repeat(site.totalParams) { current.stack.removeLast() }
                     val args = Array<Any>(arity) { Value.UnitV }
                     val argStart = current.stack.size - arity
                     for (i in 0 until arity) {
@@ -523,23 +567,30 @@ class Vm(
                     val intercept = findInterceptingHandler(effects)
                     if (intercept != null) {
                         // Replace the callee with the handler's stored
-                        // value; we already have `args` ready.
+                        // value; we already have `args` ready. The
+                        // handler's OWN declared effects fire in the
+                        // surrounding context, checked category-only (no
+                        // EffectDecls reach the handler) — the interpreter's
+                        // applyValue rule (review H2).
+                        checkCapabilities(NodeId(site.site), effectsOf(intercept.handlerValue), emptyMap(), limits)
                         invokeCallable(intercept.handlerValue, args, frames, current)
                         continue
                     }
-                    // Capability check: every declared effect must be in
-                    // the current capability set. Effects not in the set
-                    // raise the shared InterpretError.CapabilityViolation —
-                    // unified at the InterpretError boundary the way
-                    // VmResourceExhaustion is (Q-064). The error is
-                    // uncatchable, so the per-opcode InterpretException
-                    // catch declines to unwind to any attempt marker and
-                    // the denial escapes TRY exactly as before.
-                    for (effId in effects) {
-                        if (effId !in currentCaps) {
-                            throw InterpretException(vmCapabilityDenial(effId, limits))
-                        }
+                    // Capability check (review H2): the interpreter's
+                    // two-pass rule — every declared category present, then
+                    // each category the site instantiates (EffectDecls, or
+                    // the callee's Q-039 projections synthesized from the
+                    // evaluated arguments) covered by a granted pattern.
+                    // Denials raise the shared, uncatchable
+                    // CapabilityViolation / RefinementViolation, so the
+                    // per-opcode InterpretException catch declines to unwind
+                    // them to any attempt marker.
+                    val instances = if (fn is VmForeign && fn.projections.isNotEmpty()) {
+                        synthesizeProjectedInstances(fn, args)
+                    } else {
+                        siteInstances(site, instanceParams)
                     }
+                    checkCapabilities(NodeId(site.site), effects.map { NodeId(it) }, instances, limits)
                     invokeCallable(fn, args, frames, current)
                 }
 
@@ -674,36 +725,140 @@ class Vm(
         return InterpretError.SandboxViolation(at = NodeId(-1), kind = sv.kind, detail = detail)
     }
 
+    /** A category-id grant as the wildcard [CapabilitySet] (the pre-H2 VM semantics). */
+    private fun categoryGrant(ids: Set<Int>): CapabilitySet =
+        CapabilitySet.ofCategories(ids.mapTo(HashSet()) { NodeId(it) })
+
+    private fun effectsOf(callable: Any): List<NodeId> {
+        val ids = when (callable) {
+            is VmClosure -> callable.effects
+            is VmForeign -> callable.effects
+            is VmFixpoint -> callable.effects
+            else -> IntArray(0)
+        }
+        return ids.map { NodeId(it) }
+    }
+
+    /** The call site's EffectDecl parameters keyed by category (interpreter `evalEffectInstances`). */
+    private fun siteInstances(site: Constant.CallSiteC, params: List<Value>): Map<NodeId, List<Value>> {
+        if (site.categories.isEmpty()) return emptyMap()
+        val out = LinkedHashMap<NodeId, List<Value>>(site.categories.size)
+        var cursor = 0
+        for (i in site.categories.indices) {
+            val n = site.paramCounts[i]
+            out[NodeId(site.categories[i])] = params.subList(cursor, cursor + n).toList()
+            cursor += n
+        }
+        return out
+    }
+
     /**
-     * Q-064: build the shared [InterpretError.CapabilityViolation] for a
-     * CALL-site category denial, unifying the VM's denial shape with the
-     * interpreter's at the InterpretError boundary (the
-     * [VmResourceExhaustion] precedent). The VM checks category presence
-     * only and holds no [org.strand.core.NodeStore], so the
-     * [DenialReport] represents that coarseness honestly: the category
-     * renders as the `#N` NodeId (no name available), `requested` is null
-     * (the VM never sees refinement parameters — none are fabricated),
-     * `held` is empty (the category is absent from the capability set),
-     * and the denying node is null (opcodes carry no NodeIds in slice 1).
-     * Under [org.strand.core.ErrorVerbosity.RedactedWithKindOnly] the
-     * held list is withheld too, matching the interpreter.
+     * Q-039: the capability-check parameters synthesized from [fn]'s
+     * projections — an ArgRef source is the exact argument value the builtin
+     * receives (interpreter `synthesizeProjectedInstances`).
      */
-    private fun vmCapabilityDenial(effId: Int, limits: EvaluationLimits): InterpretError.CapabilityViolation {
-        val kindOnly =
-            limits.errorVerbosity == org.strand.core.ErrorVerbosity.RedactedWithKindOnly
-        val categoryId = NodeId(effId)
-        return InterpretError.CapabilityViolation(
-            at = null,
-            missing = setOf(categoryId),
-            report = DenialReport(
-                category = categoryId.toString(),
-                requested = null,
-                held = if (kindOnly) null else emptyList(),
-                node = null,
-                instanceId = null,
-                eventIndex = null,
-                phase = DenialPhase.Expression,
-            ),
+    private fun synthesizeProjectedInstances(fn: VmForeign, args: Array<Any>): Map<NodeId, List<Value>> {
+        val out = LinkedHashMap<NodeId, List<Value>>(fn.projections.size)
+        for (projection in fn.projections) {
+            out[NodeId(projection.category)] = projection.sources.map { src ->
+                when (src) {
+                    is Constant.ProjectionSourceC.ArgRef -> args[src.index] as Value
+                    is Constant.ProjectionSourceC.Literal -> constantValue(src.value)
+                }
+            }
+        }
+        return out
+    }
+
+    private fun constantValue(c: Constant): Value = when (c) {
+        is Constant.IntC -> Value.IntV(c.value)
+        is Constant.FloatC -> Value.FloatV(c.value)
+        is Constant.StringC -> Value.StringV(c.value)
+        is Constant.BoolC -> Value.BoolV(c.value)
+        Constant.UnitC -> Value.UnitV
+        is Constant.BytesC -> Value.BytesV(c.value)
+        else -> error("projection literal constant $c is not a literal")
+    }
+
+    /**
+     * Review H2: the interpreter's refinement-lattice capability check
+     * (`Interpreter.checkCapabilities`, Q-031 § 5) over [currentCaps].
+     * First pass: every [declared] category absent from the context raises
+     * one [InterpretError.CapabilityViolation]. Second pass: each category
+     * the site instantiated (present in [instances]) must be covered by a
+     * granted pattern, else [InterpretError.RefinementViolation]. Categories
+     * declared but not instantiated at this site propagate (confused-deputy
+     * semantics). Reports are built exactly as the interpreter builds them,
+     * with category names from [ChunkTable.categoryNames] and the call-site
+     * NodeId carried by the lowered [Constant.CallSiteC].
+     */
+    private fun checkCapabilities(
+        at: NodeId,
+        declared: List<NodeId>,
+        instances: Map<NodeId, List<Value>>,
+        limits: EvaluationLimits,
+    ) {
+        if (declared.isEmpty()) return
+        val context = currentCaps
+        val missing = declared.toSet().filter { it !in context.grants }.toSet()
+        if (missing.isNotEmpty()) {
+            val missingInOrder = declared.filter { it in missing }.distinct()
+            val requestedValues = missingInOrder.flatMap { instances[it].orEmpty() }
+            throw InterpretException(InterpretError.CapabilityViolation(
+                at = at,
+                missing = missing,
+                report = denialReport(
+                    at = at,
+                    categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
+                    requested = requestedValues,
+                    held = emptyList(),
+                    heldCategoryName = "",
+                    limits = limits,
+                ),
+            ))
+        }
+        for (category in declared) {
+            val requirement = instances[category] ?: continue
+            val grants = context.grants.getValue(category)
+            if (grants.none { covers(it, requirement) }) {
+                val name = categoryNameOf(category)
+                throw InterpretException(InterpretError.RefinementViolation(
+                    at = at,
+                    category = category,
+                    requirement = requirement,
+                    available = grants,
+                    report = denialReport(
+                        at = at,
+                        categoryName = name,
+                        requested = requirement,
+                        held = grants,
+                        heldCategoryName = name,
+                        limits = limits,
+                    ),
+                ))
+            }
+        }
+    }
+
+    private fun categoryNameOf(id: NodeId): String = table.categoryNames[id.value] ?: id.toString()
+
+    private fun denialReport(
+        at: NodeId,
+        categoryName: String,
+        requested: List<Value>,
+        held: List<CapabilityPattern>,
+        heldCategoryName: String,
+        limits: EvaluationLimits,
+    ): DenialReport {
+        val kindOnly = limits.errorVerbosity == org.strand.core.ErrorVerbosity.RedactedWithKindOnly
+        return DenialReport(
+            category = categoryName,
+            requested = if (kindOnly) null else requested.map { DenialReport.renderParameter(it) },
+            held = if (kindOnly) null else held.map { DenialReport.renderGrant(heldCategoryName, it) },
+            node = at.takeIf { it != RUNTIME_BOUNDARY },
+            instanceId = null,
+            eventIndex = null,
+            phase = DenialPhase.Expression,
         )
     }
 
@@ -810,6 +965,12 @@ class Vm(
 internal data class VmActiveHandler(val intercept: Int, val handlerValue: Any)
 
 /**
+ * The `NodeId(-1)` sentinel the interpreter's `applyCallable` uses for the
+ * runtime boundary (no graph site); a denial there reports a null node.
+ */
+private val RUNTIME_BOUNDARY = NodeId(-1)
+
+/**
  * N-047 (Q-048) attempt marker. Recorded at every `ATTEMPT_PUSH`; consumed by
  * the unwinder on a catchable failure (popped on the success path by
  * `ATTEMPT_POP`). [frameDepth] / [stackDepth] are the `frames.size` and the
@@ -824,7 +985,7 @@ internal data class AttemptMarker(
     val stackDepth: Int,
     val capStackDepth: Int,
     val handlerDepth: Int,
-    val savedCaps: Set<Int>,
+    val savedCaps: CapabilitySet,
     val errPc: Int,
 )
 
@@ -898,14 +1059,17 @@ internal class VmClosure(
  * Int.Add" etc.); CALL sites dispatch via [org.strand.interpreter.Builtins]
  * to get the host-side function and apply it to the popped arguments.
  *
- * The VM never re-checks capabilities for foreign calls in slice 1; that
- * checking is the verifier's responsibility (it confirms the calling
- * context's CapabilitySet covers the foreign function's declared effects
- * at the verify-time check). When effect-bearing application reaches the
- * VM (Layer 3 extension), per-call CAP_PUSH/POP + runtime capability
- * lookup will be added.
+ * Every CALL of a foreign callable runs the interpreter's refinement-lattice
+ * capability check over its declared [effects] (review H2): the parameters
+ * come from the call site's EffectDecls, or — when [projections] is
+ * non-empty — are synthesized from the evaluated arguments (Q-039).
  */
-internal class VmForeign(val target: String, val effects: IntArray = IntArray(0)) {
+internal class VmForeign(
+    val target: String,
+    val effects: IntArray = IntArray(0),
+    /** Q-039 effect projections (review H2); empty for unprojected bindings. */
+    val projections: List<Constant.ProjectionC> = emptyList(),
+) {
     override fun equals(other: Any?): Boolean = other is VmForeign && target == other.target
     override fun hashCode(): Int = target.hashCode()
 }

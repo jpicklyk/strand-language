@@ -59,6 +59,7 @@ class Lowerer(
     private val resolveTarget: ((Hash) -> NodeId?)? = null,
 ) {
     private val chunks = mutableListOf<MutableChunk>()
+    private val categoryNames = LinkedHashMap<Int, String>()
 
     /**
      * Lower the program rooted at [rootId] into a [ChunkTable]. The root
@@ -71,7 +72,33 @@ class Lowerer(
         chunks += root
         lowerExpr(rootId, root, scope = LocalScope())
         root.emit(Opcode.HALT)
-        return ChunkTable(chunks.map { it.toChunk() })
+        return ChunkTable(chunks.map { it.toChunk() }, categoryNames.toMap())
+    }
+
+    /**
+     * Record [id]'s EffectCategory name for VM denial reports and return its
+     * integer id (review H2). Falls back to the `#N` rendering the
+     * interpreter uses for a non-category id.
+     */
+    private fun category(id: NodeId): Int {
+        categoryNames.getOrPut(id.value) {
+            (store.getOrNull(id) as? Node.EffectCategory)?.categoryName ?: id.toString()
+        }
+        return id.value
+    }
+
+    private fun effectsConstant(ids: List<NodeId>): Constant.EffectsC =
+        Constant.EffectsC(IntArray(ids.size) { category(ids[it]) })
+
+    /** A Q-039 LiteralNode projection source lowered to its constant. */
+    private fun literalConstant(id: NodeId): Constant = when (val n = store.get(id)) {
+        is Node.IntLit -> Constant.IntC(n.value)
+        is Node.FloatLit -> Constant.FloatC(n.value)
+        is Node.StringLit -> Constant.StringC(n.value)
+        is Node.BoolLit -> Constant.BoolC(n.value)
+        is Node.UnitLit -> Constant.UnitC
+        is Node.BytesLit -> Constant.BytesC(n.value)
+        else -> throw LoweringNotImplemented(nodeId = id, category = "projection-literal:${n::class.simpleName}")
     }
 
     /**
@@ -137,13 +164,25 @@ class Lowerer(
                 lowerLambda(nodeId, node, chunk, scope)
             }
 
-            // Application — push function, push args left-to-right, CALL.
+            // Application — push function, push args left-to-right, push
+            // each EffectDecl's parameter values (review H2), CALL with the
+            // arity and a CallSiteC describing the site and its instances.
             is Node.Application -> {
                 lowerExpr(node.function, chunk, scope)
                 for (argId in node.arguments) {
                     lowerExpr(argId, chunk, scope)
                 }
-                chunk.emit(Opcode.CALL, node.arguments.size)
+                val categories = IntArray(node.effectInstances.size)
+                val paramCounts = IntArray(node.effectInstances.size)
+                for ((i, declId) in node.effectInstances.withIndex()) {
+                    val decl = store.get(declId) as? Node.EffectDecl
+                        ?: error("Lowerer: Application $nodeId effectInstance $declId is not an EffectDecl")
+                    categories[i] = category(decl.effectType)
+                    paramCounts[i] = decl.parameters.size
+                    for (paramId in decl.parameters) lowerExpr(paramId, chunk, scope)
+                }
+                val siteIdx = chunk.constant(Constant.CallSiteC(nodeId.value, categories, paramCounts))
+                chunk.emit(Opcode.CALL, node.arguments.size, siteIdx)
             }
 
             // NodeRef — resolved to its target chunk via hashToNodeId. The
@@ -181,10 +220,21 @@ class Lowerer(
             // the Builtins registry.
             is Node.ForeignNode -> {
                 val targetIdx = chunk.constant(Constant.ForeignTargetC(node.target))
-                val effectsIdx = chunk.constant(Constant.EffectsC(
-                    IntArray(node.effects.size) { node.effects[it].value }
-                ))
-                chunk.emit(Opcode.MAKE_FOREIGN, targetIdx, effectsIdx)
+                val effectsIdx = chunk.constant(effectsConstant(node.effects))
+                val projectionsIdx = chunk.constant(Constant.ProjectionsC(node.effectProjections.map { p ->
+                    Constant.ProjectionC(
+                        category = category(p.category),
+                        sources = p.sources.map { src ->
+                            when (src) {
+                                is org.strand.core.ProjectionSource.ArgRef ->
+                                    Constant.ProjectionSourceC.ArgRef(src.index)
+                                is org.strand.core.ProjectionSource.LiteralNode ->
+                                    Constant.ProjectionSourceC.Literal(literalConstant(src.target))
+                            }
+                        },
+                    )
+                }))
+                chunk.emit(Opcode.MAKE_FOREIGN, targetIdx, effectsIdx, projectionsIdx)
             }
 
             // Layer 5 (partial — Fixpoint only): emit body as a sub-chunk
@@ -278,9 +328,7 @@ class Lowerer(
             // VM's CALL site reads the current capability set to check
             // each call's declared effects against the granted set.
             is Node.CapabilityScope -> {
-                val capsIdx = chunk.constant(Constant.EffectsC(
-                    IntArray(node.capabilities.size) { node.capabilities[it].value }
-                ))
+                val capsIdx = chunk.constant(effectsConstant(node.capabilities))
                 chunk.emit(Opcode.CAP_PUSH, capsIdx)
                 lowerExpr(node.body, chunk, scope)
                 chunk.emit(Opcode.CAP_POP)
@@ -292,7 +340,7 @@ class Lowerer(
             // declared effects include the handler's intercept category.
             is Node.Handler -> {
                 lowerExpr(node.handle, chunk, scope)
-                val interceptConstIdx = chunk.constant(Constant.IntC(node.intercept.value.toLong()))
+                val interceptConstIdx = chunk.constant(Constant.IntC(category(node.intercept).toLong()))
                 chunk.emit(Opcode.HANDLER_PUSH, interceptConstIdx)
                 lowerExpr(node.body, chunk, scope)
                 chunk.emit(Opcode.HANDLER_POP)
@@ -349,9 +397,7 @@ class Lowerer(
             }
         }
         val chunkRefIdx = outerChunk.constant(Constant.ChunkRefC(subChunkIndex))
-        val effectsIdx = outerChunk.constant(Constant.EffectsC(
-            IntArray(lambda.effects.size) { lambda.effects[it].value }
-        ))
+        val effectsIdx = outerChunk.constant(effectsConstant(lambda.effects))
         outerChunk.emit(Opcode.MAKE_CLOSURE, chunkRefIdx, captures.size, effectsIdx)
     }
 
@@ -412,6 +458,11 @@ class Lowerer(
                 walkExpr(node.function, parameters, localLets, outerScope, captures, visited)
                 for (argId in node.arguments) {
                     walkExpr(argId, parameters, localLets, outerScope, captures, visited)
+                }
+                // EffectDecl parameters are lowered at the call site too.
+                for (declId in node.effectInstances) {
+                    val decl = store.getOrNull(declId) as? Node.EffectDecl ?: continue
+                    for (p in decl.parameters) walkExpr(p, parameters, localLets, outerScope, captures, visited)
                 }
             }
             is Node.TypeAbstraction -> {
@@ -622,9 +673,7 @@ class Lowerer(
             }
         }
         val chunkRefIdx = outerChunk.constant(Constant.ChunkRefC(subChunkIndex))
-        val effectsIdx = outerChunk.constant(Constant.EffectsC(
-            IntArray(bodyLambda.effects.size) { bodyLambda.effects[it].value }
-        ))
+        val effectsIdx = outerChunk.constant(effectsConstant(bodyLambda.effects))
         outerChunk.emit(Opcode.MAKE_FIXPOINT, chunkRefIdx, captures.size, effectsIdx)
     }
 

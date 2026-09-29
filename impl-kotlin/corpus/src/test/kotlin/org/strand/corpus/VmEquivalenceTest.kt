@@ -86,9 +86,11 @@ class VmEquivalenceTest {
         Layer14Pair("15-builtin-add"),
         // Layer 3: effect-declared / capability-granted programs.
         // Both runs grant ALL effect categories in the store (mirrors
-        // CLI --grant-all). Refinement-bearing programs (33-35) pass
-        // because CapabilitySet.ofCategories produces wildcards that
-        // cover any refinement, and the VM does category-only checks.
+        // CLI --grant-all). CapabilitySet.ofCategories produces wildcards
+        // that cover any refinement, so this is value parity only; the
+        // refinement-bearing programs (33-35, 39, 70, 74) run under the
+        // interpreter corpus tests' exact refined grants, with denial
+        // parity, in VmRefinedCapabilityEquivalenceTest (review H2).
         Layer14Pair("12-effect-declared-and-granted"),
         Layer14Pair("13-capability-scope-narrow-then-call"),
         Layer14Pair("14-multi-effect-lambda"),

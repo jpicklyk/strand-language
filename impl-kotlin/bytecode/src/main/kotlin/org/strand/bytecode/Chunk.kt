@@ -113,6 +113,47 @@ sealed class Constant {
             other is EffectsC && effectIds.contentEquals(other.effectIds)
         override fun hashCode(): Int = effectIds.contentHashCode()
     }
+
+    /**
+     * Review H2: one per lowered Application, consumed by `CALL`. [site] is
+     * the Application's NodeId value (so a VM denial names the same graph
+     * site the interpreter's does). [categories] / [paramCounts] describe
+     * the Application's `effectInstances` in declaration order: for each
+     * EffectDecl, its EffectCategory id and the number of parameter values
+     * the lowered code pushed after the call's arguments. The VM pops those
+     * values into the same `category → evaluated parameters` map the
+     * interpreter's `evalEffectInstances` builds and runs the refinement
+     * check against it.
+     */
+    data class CallSiteC(
+        val site: Int,
+        val categories: IntArray,
+        val paramCounts: IntArray,
+    ) : Constant() {
+        val totalParams: Int get() = paramCounts.sum()
+        override fun equals(other: Any?): Boolean =
+            other is CallSiteC && site == other.site &&
+                categories.contentEquals(other.categories) && paramCounts.contentEquals(other.paramCounts)
+        override fun hashCode(): Int =
+            31 * (31 * site + categories.contentHashCode()) + paramCounts.contentHashCode()
+    }
+
+    /**
+     * Review H2 / Q-039: a ForeignNode's `effectProjections`, carried by
+     * `MAKE_FOREIGN` so the VM synthesizes the capability-check parameters
+     * from the evaluated call arguments exactly as the interpreter's
+     * `synthesizeProjectedInstances` does. Empty for unprojected bindings.
+     */
+    data class ProjectionsC(val projections: List<ProjectionC>) : Constant()
+
+    /** One Q-039 projection: the category and its per-parameter sources. */
+    data class ProjectionC(val category: Int, val sources: List<ProjectionSourceC>)
+
+    /** A projection parameter source: a call argument position or a literal. */
+    sealed class ProjectionSourceC {
+        data class ArgRef(val index: Int) : ProjectionSourceC()
+        data class Literal(val value: Constant) : ProjectionSourceC()
+    }
 }
 
 /**
@@ -126,6 +167,12 @@ sealed class Constant {
  */
 data class ChunkTable(
     val chunks: List<Chunk>,
+    /**
+     * Review H2: EffectCategory id → declared category name for every
+     * category the lowered code references, so VM denial reports render the
+     * category the way the interpreter's do (the VM holds no NodeStore).
+     */
+    val categoryNames: Map<Int, String> = emptyMap(),
 ) {
     val root: Chunk get() = chunks[0]
     operator fun get(index: Int): Chunk = chunks[index]

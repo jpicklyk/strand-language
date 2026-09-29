@@ -120,14 +120,15 @@ class AttemptVmTest {
         val err = ex.error as InterpretError.CapabilityViolation
         val readFx = l.names.getValue("readFx")
         assertEquals(setOf(readFx), err.missing)
-        // The VM-side DenialReport is honest about its coarseness: the
-        // category renders as the NodeId (no store to resolve the name),
-        // requested is null (category-only checking — no refinement
-        // parameters fabricated), held is empty, no denying NodeId.
-        assertEquals(readFx.toString(), err.report.category)
-        assertEquals(null, err.report.requested)
+        // Review H2: the VM builds the same DenialReport the interpreter
+        // does — category name (carried in the ChunkTable), the call-site
+        // NodeId (carried in the CALL site constant), held empty.
+        assertEquals("Filesystem.Read", err.report.category)
         assertEquals(emptyList<String>(), err.report.held)
-        assertEquals(null, err.report.node)
         assertEquals(org.strand.interpreter.DenialPhase.Expression, err.report.phase)
+        val interp = org.junit.jupiter.api.assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, CapabilitySet.EMPTY)
+        }
+        assertEquals(interp.error, err)
     }
 }
