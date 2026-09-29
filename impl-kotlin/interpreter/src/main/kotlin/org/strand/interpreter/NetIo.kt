@@ -161,6 +161,15 @@ object NetIo {
         NetSandbox.checkConnect(policy, host, port, resolver)
     }
 
+    /**
+     * Review M4: the [IoFailure] a vector transport raises for an I/O
+     * failure. [IoFailure] scrubs registered credentials from the detail
+     * at construction, and the interpreter re-scrubs against the tenant's
+     * own scrubber at translation.
+     */
+    fun vectorIoFailure(request: HttpRequest, e: Exception): IoFailure =
+        IoFailure("vector-http", "${request.method} ${request.url}: ${e::class.simpleName}: ${e.message}")
+
     private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
 
     /** RFC 3986 unreserved + sub-delims + `:` `/` `?` (the `@` of pchar is excluded above). */
@@ -183,7 +192,13 @@ class SandboxedVectorHttpTransport(
 ) : VectorHttpTransport {
     override fun execute(request: HttpRequest): HttpResponse {
         NetIo.checkUrl(request.url, policy, resolver)
-        return delegate.execute(request)
+        // Review M4: whatever transport the host injected, an I/O failure
+        // crosses the builtin boundary as a catchable, scrubbed IoFailure.
+        return try {
+            delegate.execute(request)
+        } catch (e: java.io.IOException) {
+            throw NetIo.vectorIoFailure(request, e)
+        }
     }
 }
 

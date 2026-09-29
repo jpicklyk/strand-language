@@ -92,7 +92,23 @@ data class HttpResponse(
  * bounds installs its own `BoundedJdkHttpTransport(limits)`.
  */
 open class BoundedJdkHttpTransport(private val limits: BuiltinLimits) : VectorHttpTransport {
-    override fun execute(request: HttpRequest): HttpResponse {
+    /**
+     * Review M4: transport I/O failures (connection refused, unknown host,
+     * timeouts, malformed URLs) surface as a catchable
+     * `IoFailure("vector-http", ...)` whose detail is credential-scrubbed,
+     * never as a raw JVM exception.
+     */
+    override fun execute(request: HttpRequest): HttpResponse = try {
+        exchange(request)
+    } catch (e: java.io.IOException) {
+        throw NetIo.vectorIoFailure(request, e)
+    } catch (e: java.net.URISyntaxException) {
+        throw NetIo.vectorIoFailure(request, e)
+    } catch (e: IllegalArgumentException) {
+        throw NetIo.vectorIoFailure(request, e)
+    }
+
+    private fun exchange(request: HttpRequest): HttpResponse {
         val url = java.net.URI(request.url).toURL()
         // Review H2: never follow a redirect (the target is not sandbox-checked).
         val conn = NetIo.openConnection(url)
