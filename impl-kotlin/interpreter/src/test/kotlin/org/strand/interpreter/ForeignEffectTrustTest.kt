@@ -160,4 +160,81 @@ class ForeignEffectTrustTest {
         }
         assertTrue(ex.error is InterpretError.CapabilityViolation) { "got ${ex.error}" }
     }
+
+    // ---- A3: callbacks run by higher-order builtins are checked ------------
+
+    /**
+     * `List.Map(fsRead, ["secret.txt"])`. The List.Map binding declares no
+     * effects (Q-070: the static row of a higher-order builtin does not yet
+     * carry its callback's effects), so the only runtime gate on the read is
+     * the callback dispatch itself.
+     */
+    private val mapFsReadJson = """{
+        "version": 1, "root": "app",
+        "nodes": {
+          "strT":     { "type": "PrimitiveType", "kind": "String" },
+          "bytesT":   { "type": "PrimitiveType", "kind": "Bytes" },
+          "readFx":   { "type": "EffectCategory", "categoryName": "Filesystem.Read", "parameters": ["strT"] },
+          "readT":    { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT", "effects": ["readFx"] },
+          "fsRead":   { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "readT",
+                        "effects": ["readFx"],
+                        "effectProjections": [ { "category": "readFx", "sources": [ { "kind": "ArgRef", "index": 0 } ] } ] },
+          "headF":    { "type": "ProductTypeField", "name": "head", "fieldType": "strT" },
+          "tailF":    { "type": "ProductTypeField", "name": "tail", "fieldType": "self" },
+          "consP":    { "type": "ProductType", "fields": ["headF", "tailF"] },
+          "consC":    { "type": "SumTypeCase", "name": "Cons", "caseType": "consP" },
+          "nilC":     { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+          "body":     { "type": "SumType", "cases": ["consC", "nilC"] },
+          "self":     { "type": "RecursiveSelf" },
+          "listT":    { "type": "RecursiveType", "body": "body" },
+          "headO":    { "type": "ProductTypeField", "name": "head", "fieldType": "strT" },
+          "tailO":    { "type": "ProductTypeField", "name": "tail", "fieldType": "listT" },
+          "consO":    { "type": "ProductType", "fields": ["headO", "tailO"] },
+          "nil":      { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+          "secret":   { "type": "StringLit", "value": "secret.txt" },
+          "hv":       { "type": "ProductFieldValue", "fieldName": "head", "value": "secret" },
+          "tv":       { "type": "ProductFieldValue", "fieldName": "tail", "value": "nil" },
+          "cell":     { "type": "ProductValue", "ofType": "consO", "fields": ["hv", "tv"] },
+          "paths":    { "type": "SumValue", "ofType": "listT", "caseName": "Cons", "payload": "cell" },
+          "mapT":     { "type": "FunctionType", "parameters": ["listT", "readT"], "result": "listT" },
+          "listMap":  { "type": "ForeignNode", "target": "strand-builtin:List.Map", "foreignType": "mapT" },
+          "cbP":      { "type": "ParameterDecl", "name": "p", "paramType": "strT" },
+          "cbRef":    { "type": "VarRef", "binder": "cbP" },
+          "cb":       { "type": "Lambda", "parameters": ["cbP"], "body": "cbRef", "effects": ["readFx"] },
+          "app":      { "type": "Application", "function": "listMap", "arguments": ["paths", "CALLBACK"] }
+        }
+      }"""
+
+    @Test
+    fun `a ForeignFn callback is refinement-checked against the callback argument`() {
+        val l = load(mapFsReadJson.replace("CALLBACK", "fsRead"))
+        val readFx = l.names.getValue("readFx")
+        val grant = CapabilitySet(mapOf(readFx to listOf(
+            CapabilityPattern(listOf(CapabilityArgument.Concrete(Value.StringV("allowed.txt")))),
+        )))
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, grant)
+        }
+        val err = ex.error as? InterpretError.RefinementViolation
+            ?: error("expected RefinementViolation, got ${ex.error}")
+        assertEquals(listOf<Value>(Value.StringV("secret.txt")), err.requirement)
+    }
+
+    @Test
+    fun `a ForeignFn callback with no grant raises CapabilityViolation`() {
+        val l = load(mapFsReadJson.replace("CALLBACK", "fsRead"))
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, CapabilitySet.EMPTY)
+        }
+        assertTrue(ex.error is InterpretError.CapabilityViolation) { "got ${ex.error}" }
+    }
+
+    @Test
+    fun `a Closure callback's declared effects are capability-checked`() {
+        val l = load(mapFsReadJson.replace("CALLBACK", "cb"))
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, CapabilitySet.EMPTY)
+        }
+        assertTrue(ex.error is InterpretError.CapabilityViolation) { "got ${ex.error}" }
+    }
 }

@@ -924,9 +924,11 @@ class Interpreter(
     /**
      * Invoke a pre-evaluated callable [callable] on already-evaluated
      * [args]. Mirrors [applyCall]'s dispatch but skips the argument
-     * evaluation step (the caller — the handler dispatch path — already
-     * evaluated arguments once). Capability checks DO run for the handler
-     * itself (its own effects must be covered by the surrounding context).
+     * evaluation step (the caller — the handler dispatch path, or a
+     * higher-order builtin via [applyValueToArgs] — already evaluated the
+     * arguments). Capability checks DO run for the callable itself (its own
+     * effects must be covered by the surrounding context); a ForeignFn goes
+     * through [dispatchForeign].
      *
      * The handler is invoked under the SAME handlers list as the
      * intercepted call site: a handler that itself calls into a handled
@@ -966,45 +968,11 @@ class Interpreter(
             }
             eval(callable.lambda.body, callEnv, context, handlers, counters, limits)
         }
-        is Value.ForeignFn -> {
-            checkForeignFloor(id, callable.node)
-            checkCapabilities(id, foreignEffectRow(callable.node), emptyMap(), context, limits)
-            try {
-                foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
-            } catch (io: IoFailure) {
-                throw InterpretException(translateIoFailure(id, io, limits))
-            } catch (sv: SandboxViolation) {
-                throw InterpretException(translateSandboxViolation(id, sv, limits))
-            }
-            val builtin = Builtins.lookup(callable.node.target)
-                ?: throw InterpretException(
-                    InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
-                )
-            try {
-                builtin.invoke(hostContext, args)
-            } catch (io: IoFailure) {
-                throw InterpretException(translateIoFailure(id, io, limits))
-            } catch (sv: SandboxViolation) {
-                throw InterpretException(translateSandboxViolation(id, sv, limits))
-            } catch (e: IllegalArgumentException) {
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = callable.node.target,
-                    detail = e.message ?: "builtin contract violation",
-                ))
-            } catch (e: ClassCastException) {
-                // Q-066: the declared foreignType is graph-supplied and is
-                // not checked against the builtin's actual JVM contract, so
-                // a hostile graph can hand a builtin type-confused argument
-                // values. The cast failure is a contract violation, not an
-                // implementation crash.
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = callable.node.target,
-                    detail = e.message ?: "builtin argument type confusion",
-                ))
-            }
-        }
+        is Value.ForeignFn ->
+            // A handler that is itself a ForeignNode: its own row fires in
+            // the surrounding context. Projected refinements are synthesized
+            // from the handler's arguments by [dispatchForeign].
+            dispatchForeign(id, callable.node, args, null, context, handlers, counters, limits)
         is Value.FixpointFn -> {
             val userArity = callable.bodyLambda.parameters.size - 1
             if (userArity != args.size) {
@@ -1123,81 +1091,83 @@ class Interpreter(
         } else {
             evalEffectInstances(env, context, handlers, app, counters, limits)
         }
-        checkForeignFloor(id, fn.node)
-        checkCapabilities(id, foreignEffectRow(fn.node), instances, context, limits)
+        return dispatchForeign(id, fn.node, args, instances, context, handlers, counters, limits)
+    }
+
+    /**
+     * The single foreign-dispatch path (review H3). Every route that invokes
+     * a [Node.ForeignNode] — a direct Application ([applyForeign]), a handler
+     * standing in for an intercepted call ([applyValue]), and a callback run
+     * by a higher-order builtin ([applyValueToArgs]) — goes through here, so
+     * the effect-floor check, the capability check, and the exception
+     * translation cannot drift between copies.
+     *
+     * [instances] is the call site's refinement map when the caller already
+     * computed it (a direct Application's authored EffectDecls or projected
+     * instances). When null (no enclosing Application: handler and callback
+     * dispatch), a projected ForeignNode's instances are synthesized from
+     * [args] exactly as a direct call would — the value checked is the value
+     * the foreign code receives — and an unprojected one supplies none.
+     */
+    private fun dispatchForeign(
+        id: NodeId,
+        node: Node.ForeignNode,
+        args: List<Value>,
+        instances: Map<NodeId, List<Value>>?,
+        context: CapabilitySet,
+        handlers: List<ActiveHandler>,
+        counters: EvalCounters,
+        limits: EvaluationLimits,
+    ): Value {
+        checkForeignFloor(id, node)
+        val effectiveInstances = instances
+            ?: if (node.effectProjections.isNotEmpty()) {
+                // LiteralNode sources are closed literals; the env is irrelevant.
+                synthesizeProjectedInstances(emptyMap(), context, handlers, node, args, counters, limits)
+            } else {
+                emptyMap()
+            }
+        checkCapabilities(id, foreignEffectRow(node), effectiveInstances, context, limits)
         try {
-            foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
+            foreignDispatcher?.dispatch(node.target, args)?.let { return it }
+            // Higher-order lookup wins over standard lookup; the registries
+            // are disjoint so this ordering is conservative.
+            val higherOrder = Builtins.lookupHigherOrder(node.target)
+            if (higherOrder != null) {
+                val apply = Builtins.ApplyFn { callable, callbackArgs ->
+                    applyValueToArgs(id, callable, callbackArgs, context, handlers, counters, limits)
+                }
+                return higherOrder.invoke(hostContext, args, apply)
+            }
+            val builtin = Builtins.lookup(node.target)
+                ?: throw InterpretException(
+                    InterpretError.UnknownForeignTarget(at = id, target = node.target)
+                )
+            return builtin.invoke(hostContext, args)
         } catch (io: IoFailure) {
+            // Q-042: runtime IoFailure → structured InterpretError, honouring
+            // the active ErrorVerbosity.
             throw InterpretException(translateIoFailure(id, io, limits))
         } catch (sv: SandboxViolation) {
-            throw InterpretException(translateSandboxViolation(id, sv, limits))
-        }
-        // Higher-order lookup wins over standard lookup; the registries
-        // are disjoint so this ordering is conservative.
-        val higherOrder = Builtins.lookupHigherOrder(fn.node.target)
-        if (higherOrder != null) {
-            val apply = Builtins.ApplyFn { callable, callbackArgs ->
-                applyValueToArgs(id, callable, callbackArgs, context, handlers, counters, limits)
-            }
-            return try {
-                higherOrder.invoke(hostContext, args, apply)
-            } catch (io: IoFailure) {
-                throw InterpretException(translateIoFailure(id, io, limits))
-            } catch (sv: SandboxViolation) {
-                throw InterpretException(translateSandboxViolation(id, sv, limits))
-            } catch (e: IllegalArgumentException) {
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = fn.node.target,
-                    detail = e.message ?: "builtin contract violation",
-                ))
-            } catch (e: ClassCastException) {
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = fn.node.target,
-                    detail = e.message ?: "builtin argument type confusion",
-                ))
-            }
-        }
-        val builtin = Builtins.lookup(fn.node.target)
-            ?: throw InterpretException(
-                InterpretError.UnknownForeignTarget(at = id, target = fn.node.target)
-            )
-        return try {
-            builtin.invoke(hostContext, args)
-        } catch (io: IoFailure) {
-            // Translate runtime IoFailure (thrown by Layer 4 step 2
-            // builtins on actual OS failures) into a structured
-            // InterpretError carrying the call-site NodeId. Q-042
-            // routes through [translateIoFailure] to honour the active
-            // [ErrorVerbosity] in the threaded limits.
-            throw InterpretException(translateIoFailure(id, io, limits))
-        } catch (sv: SandboxViolation) {
-            // Q-041: runtime SandboxViolation thrown by FsSandbox /
-            // NetSandbox / Http scheme validation. Translated through
-            // the verbosity-aware helper so detail is scrubbed when
-            // policy demands.
+            // Q-041: FsSandbox / NetSandbox / Http scheme rejection.
             throw InterpretException(translateSandboxViolation(id, sv, limits))
         } catch (e: IllegalArgumentException) {
-            // Builtin contract violation (e.g. division by zero from
-            // Int.Div / Int.Mod / Math.Mod's require(b != 0L) guard).
-            // The boundary catch intentionally covers every IAE escaping
-            // any builtin — every such IAE is a contract failure.
+            // Builtin contract violation (e.g. a require() guard such as
+            // division by zero). Every IAE escaping a builtin is a contract
+            // failure.
             throw InterpretException(InterpretError.BuiltinContractViolation(
                 at = id,
-                target = fn.node.target,
+                target = node.target,
                 detail = e.message ?: "builtin contract violation",
             ))
         } catch (e: ClassCastException) {
-            // Q-066: builtins cast their argument Values to the shapes the
-            // real builtin contract expects, but the declared foreignType is
-            // graph-supplied and nothing checks it against that contract —
-            // a graph declaring Int.Add at (String, String) -> Int verifies
-            // and hands the builtin StringV arguments. The cast failure is
-            // a structured contract violation, not an implementation crash.
+            // Q-066: the declared foreignType is graph-supplied and nothing
+            // checks it against the builtin's JVM contract, so a hostile graph
+            // can hand a builtin type-confused arguments. The cast failure is
+            // a contract violation, not an implementation crash.
             throw InterpretException(InterpretError.BuiltinContractViolation(
                 at = id,
-                target = fn.node.target,
+                target = node.target,
                 detail = e.message ?: "builtin argument type confusion",
             ))
         }
@@ -1206,25 +1176,22 @@ class Interpreter(
     /**
      * Apply a runtime [Value] callable to pre-evaluated [args] without
      * an enclosing Application node. Used by higher-order builtins
-     * (Slice 2 of stdlib expansion round 2) to invoke user-supplied
-     * lambdas on each element of a collection.
+     * (`List.Map`, `List.Fold`, ...) to invoke a user-supplied callable on
+     * each element, and by the LLM tool-use loop to run a ToolDef
+     * implementation.
      *
      * Reuses the current [context] and [handlers] from the enclosing
-     * higher-order builtin's call site — the verifier guarantees that
-     * the surrounding Application's effect declarations cover the
-     * callback's effects (the higher-order builtin's signature
-     * propagates the callable's effects to its own).
-     *
-     * Effect-instance evaluation is skipped because the callback has
-     * no per-call Application node and therefore no `effectInstances`
-     * to evaluate — refinement checking for parameterized effects
-     * inside higher-order callbacks is a follow-up (current
-     * higher-order builtins only deal with collections of plain
-     * values).
+     * higher-order builtin's call site. The callback is dispatched through
+     * [applyValue], so it gets the same checks as any other call: a
+     * Closure's or FixpointFn's declared effects must be present in the
+     * context, and a ForeignFn goes through [dispatchForeign] (effect floor,
+     * capability check, projected refinements synthesized from the callback
+     * arguments). Review H3 / Q-070: before this, callbacks ran with no
+     * capability check at all, so `List.Map(fsRead, paths)` read any path
+     * under a refined grant.
      *
      * @param id NodeId of the enclosing higher-order builtin call (used
-     *           for error reporting if [callable] is not callable or
-     *           has wrong arity).
+     *           for error reporting).
      */
     private fun applyValueToArgs(
         id: NodeId,
@@ -1234,76 +1201,7 @@ class Interpreter(
         handlers: List<ActiveHandler>,
         counters: EvalCounters,
         limits: EvaluationLimits,
-    ): Value {
-        return when (callable) {
-            is Value.Closure -> {
-                if (callable.lambda.parameters.size != args.size) {
-                    throw InterpretException(InterpretError.ArityMismatch(
-                        at = id, expected = callable.lambda.parameters.size, actual = args.size,
-                    ))
-                }
-                var callEnv = callable.env
-                for ((paramId, value) in callable.lambda.parameters.zip(args)) {
-                    callEnv = callEnv + (paramId to value)
-                }
-                eval(callable.lambda.body, callEnv, context, handlers, counters, limits)
-            }
-            is Value.FixpointFn -> {
-                // Body has args.size + 1 parameters: param[0] is the self-slot.
-                val userArity = callable.bodyLambda.parameters.size - 1
-                if (userArity != args.size) {
-                    throw InterpretException(InterpretError.ArityMismatch(
-                        at = id, expected = userArity, actual = args.size,
-                    ))
-                }
-                var callEnv = callable.env + (callable.bodyLambda.parameters[0] to callable)
-                for ((i, paramId) in callable.bodyLambda.parameters.drop(1).withIndex()) {
-                    callEnv = callEnv + (paramId to args[i])
-                }
-                eval(callable.bodyLambda.body, callEnv, context, handlers, counters, limits)
-            }
-            is Value.ForeignFn -> {
-                // Dispatch directly to the builtin registry. ForeignFn
-                // callbacks (passing e.g. Bool.Not as a List.Map fn) are
-                // rare but legitimate — and they don't recurse into the
-                // higher-order machinery because Bool.Not is a standard Fn.
-                checkForeignFloor(id, callable.node)
-                try {
-                    foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
-                } catch (io: IoFailure) {
-                    throw InterpretException(translateIoFailure(id, io, limits))
-                } catch (sv: SandboxViolation) {
-                    throw InterpretException(translateSandboxViolation(id, sv, limits))
-                }
-                val builtin = Builtins.lookup(callable.node.target)
-                    ?: throw InterpretException(
-                        InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
-                    )
-                try {
-                    builtin.invoke(hostContext, args)
-                } catch (io: IoFailure) {
-                    throw InterpretException(translateIoFailure(id, io, limits))
-                } catch (sv: SandboxViolation) {
-                    throw InterpretException(translateSandboxViolation(id, sv, limits))
-                } catch (e: IllegalArgumentException) {
-                    throw InterpretException(InterpretError.BuiltinContractViolation(
-                        at = id,
-                        target = callable.node.target,
-                        detail = e.message ?: "builtin contract violation",
-                    ))
-                } catch (e: ClassCastException) {
-                    throw InterpretException(InterpretError.BuiltinContractViolation(
-                        at = id,
-                        target = callable.node.target,
-                        detail = e.message ?: "builtin argument type confusion",
-                    ))
-                }
-            }
-            else -> throw InterpretException(
-                InterpretError.NotCallable(at = id, gotKind = callable::class.simpleName ?: "Value")
-            )
-        }
-    }
+    ): Value = applyValue(id, callable, args, context, handlers, counters, limits)
 
     /**
      * Evaluate every [Node.EffectDecl] in `app.effectInstances` to a
