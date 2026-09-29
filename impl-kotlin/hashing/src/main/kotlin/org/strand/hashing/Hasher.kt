@@ -66,7 +66,7 @@ class Hasher(private val rawStore: RawNodeStore) {
         // backstop turns a JVM StackOverflowError into a typed
         // IngestError.ResourceExhaustion(GraphDepth) for stores that bypass
         // the ingest-time graph-depth cap.
-        encoder.stackGuard { walk(rootId, emptyList(), out) }
+        encoder.stackGuard { walk(rootId, BinderStack.EMPTY, out) }
         return out
     }
 
@@ -182,7 +182,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                 // hashed) in the EMPTY context, exactly as the encoder hashes
                 // it when emitting this NodeRef's bytes.
                 out[id] = Hash(encoder.hash(id, stack))
-                encoder.inEmptyContext { walk(stored.targetId, emptyList(), out) }
+                encoder.inEmptyContext { walk(stored.targetId, BinderStack.EMPTY, out) }
             }
             is StoredNode.RawModuleManifest -> {
                 // Hash the manifest itself, then recurse into each export's
@@ -191,7 +191,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                 // each declaredEffect EffectCategory (referenced by hash).
                 out[id] = Hash(encoder.hash(id, stack))
                 for (export in stored.exports) {
-                    encoder.inEmptyContext { walk(export.target, emptyList(), out) }
+                    encoder.inEmptyContext { walk(export.target, BinderStack.EMPTY, out) }
                     export.declaredEffects.forEach { walk(it, stack, out) }
                 }
             }
@@ -232,7 +232,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                 node.effects.forEach { walk(it, stack, out) }
             }
             is Node.ForallType -> {
-                walk(node.body, stack + listOf(node.typeParameters), out)
+                walk(node.body, encoder.push(stack, node.typeParameters), out)
             }
 
             is Node.Lambda -> {
@@ -243,14 +243,14 @@ class Hasher(private val rawStore: RawNodeStore) {
                     val pd = fetchCanonicalNode(paramId) as Node.ParameterDecl
                     walk(pd.paramType, stack, out)
                 }
-                walk(node.body, stack + listOf(node.parameters), out)
+                walk(node.body, encoder.push(stack, node.parameters), out)
                 // Effects are visited in the OUTER stack (they reference
                 // EffectCategory nodes that exist outside the Lambda's body
                 // scope).
                 node.effects.forEach { walk(it, stack, out) }
             }
             is Node.TypeAbstraction -> {
-                walk(node.body, stack + listOf(node.typeParameters), out)
+                walk(node.body, encoder.push(stack, node.typeParameters), out)
             }
             is Node.Application -> {
                 walk(node.function, stack, out)
@@ -260,7 +260,7 @@ class Hasher(private val rawStore: RawNodeStore) {
             }
             is Node.Let -> {
                 walk(node.value, stack, out)
-                walk(node.body, stack + listOf(listOf(id)), out)
+                walk(node.body, encoder.push(stack, listOf(id)), out)
             }
             is Node.VarRef -> Unit  // binder is referenced positionally, not walked
 
@@ -310,7 +310,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                 // helper at encoding time so the stacks line up.
                 val patternNode = fetchCanonicalNode(node.pattern) as Node.Pattern
                 val binders = collectPatternBinders(rawNodeStoreLookup(rawStore), node.pattern, patternNode)
-                val bodyStack = if (binders.isEmpty()) stack else stack + listOf(binders)
+                val bodyStack = if (binders.isEmpty()) stack else encoder.push(stack, binders)
                 walk(node.body, bodyStack, out)
             }
             is Node.Pattern -> {

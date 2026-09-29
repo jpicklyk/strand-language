@@ -68,17 +68,35 @@ internal fun collectPatternBinders(
 /**
  * A binder stack tracks the lexical scopes enclosing a position in the graph.
  * Each frame is a list of bound [NodeId]s — the parameters of a Lambda, the
- * type parameters of a TypeAbstraction or ForallType, or the single binder of
- * a Let. The frame at the end of the list is the innermost (most recently
- * entered) binder.
+ * type parameters of a TypeAbstraction or ForallType, the single binder of a
+ * Let, or the variable patterns of a MatchCase. [frame] is the innermost
+ * (most recently entered) frame; [parent] is the stack below it.
  *
  * The encoder uses the stack to resolve [Node.VarRef.binder] and bound
  * [Node.TypeParameter] references into de Bruijn `(depth, index)` pairs:
  * `depth` counts the number of intervening binders out from the innermost
  * (depth 0 is the innermost binder), `index` is the position within the
  * matched frame.
+ *
+ * The stack is a persistent linked list: pushing a frame shares the whole
+ * parent, so descending through a binder costs O(frame size) rather than a
+ * copy of every enclosing frame. Instances are interned per encoder by
+ * [CanonicalEncoder.push] (the same parent and an equal frame yield the same
+ * instance), so equality and hashing are by identity and a cache key over a
+ * stack is O(1) to hash and compare regardless of nesting depth (review M1).
+ * [EMPTY] is the root of every stack.
  */
-internal typealias BinderStack = List<List<NodeId>>
+internal class BinderStack private constructor(
+    val frame: List<NodeId>,
+    val parent: BinderStack?,
+    /** Number of frames; the innermost frame sits at level `size - 1`. */
+    val size: Int,
+) {
+    internal companion object {
+        val EMPTY = BinderStack(emptyList(), null, 0)
+        fun child(parent: BinderStack, frame: List<NodeId>) = BinderStack(frame, parent, parent.size + 1)
+    }
+}
 
 /**
  * Computes the canonical byte encoding of a Strand node per
@@ -103,9 +121,26 @@ internal typealias BinderStack = List<List<NodeId>>
  * before encoding, so two product types with the same `{name: type}` set in
  * any declaration order hash identically.
  *
- * The encoder caches per-(NodeId, stack) results within a single instance.
- * Hashing a graph of N reachable nodes runs in O(N) hash computations, each
- * over a constant-size byte sequence dominated by hash references.
+ * **Caching and cost.** Every encoding records the outermost binder level it
+ * resolved against (VarRef / TypeParameter frames, and RecursiveSelf
+ * recursive-binder levels; an unbound reference counts as depending on the
+ * whole context). An encoding that resolved nothing outside its own subtree
+ * is *closed*: its bytes are identical in every context, so it is cached
+ * under its [NodeId] alone and computed once per encoder. An open encoding is
+ * cached under `(NodeId, interned stack, recursive depth)`, whose key hashes
+ * and compares in O(1). Each node is therefore encoded once per distinct
+ * context it is actually open in — once overall for closed subtrees, and
+ * once for every node of a tree-shaped graph — and each encoding costs O(its
+ * own fields) plus, for a VarRef or bound TypeParameter, the O(binder
+ * distance) walk down the stack to its frame. Hashing a tree of N nodes is
+ * O(N + total binder distance); it no longer copies or hashes the full stack
+ * per binder (review M1: the previous `List<List<NodeId>>` stack made both
+ * quadratic in nesting depth).
+ *
+ * **Not thread-safe.** The encoder holds mutable caches and traversal state
+ * (recursive-binder depth, dependency accumulators, the stack guard). Use one
+ * instance per thread; [Hasher] owns one encoder per instance and inherits
+ * the same restriction.
  *
  * The encoder is parameterized by a hash function ([hashFn]) so it can be
  * tested against a deterministic mock without pulling in BLAKE3. In
@@ -117,7 +152,28 @@ internal class CanonicalEncoder(
     private val hashFn: (ByteArray) -> ByteArray,
 ) {
 
-    private val encodingCache = HashMap<EncodingKey, ByteArray>()
+    /** A cached encoding plus the outermost binder levels it depends on. */
+    private class Entry(val bytes: ByteArray, val minVarLevel: Int, val minRecLevel: Int) {
+        var hash: ByteArray? = null
+    }
+
+    /** Encodings that depend on their context, keyed by that context. */
+    private val contextCache = HashMap<EncodingKey, Entry>()
+
+    /** Closed encodings (context-free), keyed by NodeId alone. */
+    private val closedCache = HashMap<NodeId, Entry>()
+
+    /** Intern table backing [push]. */
+    private val internTable = HashMap<InternKey, BinderStack>()
+
+    /**
+     * Dependency accumulators for the encoding in progress: the lowest
+     * absolute binder-frame level and recursive-binder level resolved so
+     * far (`Int.MAX_VALUE` = none, `-1` = an unbound reference, which depends
+     * on the whole context). See the class kdoc.
+     */
+    private var accVarLevel: Int = Int.MAX_VALUE
+    private var accRecLevel: Int = Int.MAX_VALUE
 
     /**
      * Tracks the number of enclosing `RecursiveType` binders the encoder
@@ -130,35 +186,64 @@ internal class CanonicalEncoder(
     private var currentRecDepth: Int = 0
 
     /**
+     * Push [frame] onto [stack], returning the interned child stack. Every
+     * stack the encoder or [Hasher.walk] builds goes through here, so equal
+     * stacks are the same instance.
+     */
+    internal fun push(stack: BinderStack, frame: List<NodeId>): BinderStack =
+        internTable.getOrPut(InternKey(stack, frame)) { BinderStack.child(stack, frame) }
+
+    /** Build an interned stack from outermost-first frames (test convenience). */
+    internal fun stackOf(frames: List<List<NodeId>>): BinderStack =
+        frames.fold(BinderStack.EMPTY) { s, f -> push(s, f) }
+
+    /**
      * Encode the node at [id] in the given binder context. Returns the
      * canonical bytes ready to feed into the hash function.
      */
-    fun encode(id: NodeId, stack: BinderStack = emptyList()): ByteArray =
-        stackGuard { encodeInner(id, stack) }
+    fun encode(id: NodeId, stack: BinderStack = BinderStack.EMPTY): ByteArray =
+        stackGuard { entryFor(id, stack).bytes }
+
+    /** [encode] with the context given as outermost-first frames. */
+    fun encode(id: NodeId, frames: List<List<NodeId>>): ByteArray = encode(id, stackOf(frames))
 
     /** Hash the canonical encoding of [id] in the given binder context. */
-    fun hash(id: NodeId, stack: BinderStack = emptyList()): ByteArray =
+    fun hash(id: NodeId, stack: BinderStack = BinderStack.EMPTY): ByteArray =
         stackGuard { hashInner(id, stack) }
 
-    // Internal recursion goes through the unguarded *Inner entry points so
+    // Internal recursion goes through the unguarded entryFor / hashInner so
     // the stack guard costs no frames per graph level.
-    private fun encodeInner(id: NodeId, stack: BinderStack): ByteArray {
+    private fun entryFor(id: NodeId, stack: BinderStack): Entry {
+        closedCache[id]?.let { return it }  // references nothing outside itself
         val key = EncodingKey(id, stack, currentRecDepth)
-        encodingCache[key]?.let { return it }
-        val stored = lookup(id)
+        contextCache[key]?.let { hit ->
+            if (hit.minVarLevel < accVarLevel) accVarLevel = hit.minVarLevel
+            if (hit.minRecLevel < accRecLevel) accRecLevel = hit.minRecLevel
+            return hit
+        }
+        val savedVar = accVarLevel
+        val savedRec = accRecLevel
+        accVarLevel = Int.MAX_VALUE
+        accRecLevel = Int.MAX_VALUE
         nesting++
         if (nesting > maxNesting) maxNesting = nesting
-        val encoded = try {
-            encodeDispatch(id, stored, stack)
-        } finally {
-            nesting--
+        val bytes = encodeDispatch(id, lookup(id), stack)
+        nesting--
+        val entry = Entry(bytes, accVarLevel, accRecLevel)
+        if (entry.minVarLevel >= stack.size && entry.minRecLevel >= currentRecDepth) {
+            closedCache[id] = entry
+        } else {
+            contextCache[key] = entry
         }
-        encodingCache[key] = encoded
-        return encoded
+        accVarLevel = minOf(savedVar, entry.minVarLevel)
+        accRecLevel = minOf(savedRec, entry.minRecLevel)
+        return entry
     }
 
-    private fun hashInner(id: NodeId, stack: BinderStack): ByteArray =
-        hashFn(encodeInner(id, stack))
+    private fun hashInner(id: NodeId, stack: BinderStack): ByteArray {
+        val entry = entryFor(id, stack)
+        return entry.hash ?: hashFn(entry.bytes).also { entry.hash = it }
+    }
 
     /** Current / deepest encode nesting, reported by the [stackGuard] backstop. */
     private var nesting: Int = 0
@@ -174,12 +259,17 @@ internal class CanonicalEncoder(
      * [ExhaustionKind.GraphDepth]; `current` is the deepest encode nesting
      * reached and `limit` is `-1` (the JVM thread stack, not a configured
      * cap). Nested calls run unguarded so the catch sits at a shallow frame
-     * where the stack has unwound.
+     * where the stack has unwound. Traversal state an overflow may have
+     * left mid-flight (nesting, dependency accumulators) is reset on entry;
+     * caches only ever hold completed encodings.
      */
     internal fun <T> stackGuard(block: () -> T): T {
         if (guardActive) return block()
         guardActive = true
+        nesting = 0
         maxNesting = 0
+        accVarLevel = Int.MAX_VALUE
+        accRecLevel = Int.MAX_VALUE
         try {
             return block()
         } catch (e: StackOverflowError) {
@@ -213,7 +303,10 @@ internal class CanonicalEncoder(
     /**
      * Run [block] in the EMPTY binder context: no enclosing recursive
      * binders (`currentRecDepth` saved, zeroed, and restored). The binder
-     * stack is not ambient state — callers pass `emptyList()` explicitly.
+     * stack is not ambient state — callers pass [BinderStack.EMPTY]
+     * explicitly. Whatever the block resolves is relative to the empty
+     * context, so the dependency accumulators are restored too: a reference
+     * target's bytes never depend on where the reference sits.
      *
      * Per design/canonical-encoding.md (References) a local NodeRef target
      * and a ModuleManifest export target are hashed under the empty context,
@@ -223,11 +316,15 @@ internal class CanonicalEncoder(
      */
     internal fun <T> inEmptyContext(block: () -> T): T {
         val saved = currentRecDepth
+        val savedVar = accVarLevel
+        val savedRec = accRecLevel
         currentRecDepth = 0
         try {
             return block()
         } finally {
             currentRecDepth = saved
+            accVarLevel = savedVar
+            accRecLevel = savedRec
         }
     }
 
@@ -237,7 +334,7 @@ internal class CanonicalEncoder(
      * context regardless of the reference's own position.
      */
     internal fun hashReferenceTarget(targetId: NodeId): ByteArray =
-        stackGuard { inEmptyContext { hashInner(targetId, emptyList()) } }
+        stackGuard { inEmptyContext { hashInner(targetId, BinderStack.EMPTY) } }
 
     private fun encodeDispatch(id: NodeId, stored: StoredNode, stack: BinderStack): ByteArray =
         when (stored) {
@@ -443,8 +540,12 @@ internal class CanonicalEncoder(
         // out-of-range cases so finalize can produce a hash for the
         // surrounding subgraph and the verifier gets a chance to run.
         val depth: Long = if (node.depth in 0 until currentRecDepth) {
+            // Absolute recursive-binder level resolved against (outermost = 0).
+            val level = currentRecDepth - 1 - node.depth
+            if (level < accRecLevel) accRecLevel = level
             node.depth.toLong()
         } else {
+            accRecLevel = -1  // unbound: depends on the whole context
             Long.MAX_VALUE  // sentinel: encoder-detectable out-of-range
         }
         return encodeWithTag(CategoryTag.RecursiveSelf, listOf(
@@ -495,7 +596,7 @@ internal class CanonicalEncoder(
         // parameters themselves are not encoded by hash — only the arity is
         // captured. Two ForallTypes that quantify over the same number of
         // parameters with the same body structure hash identically.
-        val newStack = stack + listOf(node.typeParameters)
+        val newStack = push(stack, node.typeParameters)
         return encodeWithTag(CategoryTag.ForallType, listOf(
             CanonicalCbor.encodeUint(node.typeParameters.size.toLong()),
             encodeTypePositionChild(node.body, newStack),
@@ -526,7 +627,7 @@ internal class CanonicalEncoder(
             val paramDecl = requireParameterDecl(paramId)
             encodeTypePositionChild(paramDecl.paramType, stack)
         }
-        val newStack = stack + listOf(node.parameters)
+        val newStack = push(stack, node.parameters)
         // Effects are a set: sort by hash bytes for canonical-order
         // determinism. Two lambdas that differ only in effect declaration
         // order hash identically.
@@ -542,7 +643,7 @@ internal class CanonicalEncoder(
     }
 
     private fun encodeTypeAbstraction(node: Node.TypeAbstraction, stack: BinderStack): ByteArray {
-        val newStack = stack + listOf(node.typeParameters)
+        val newStack = push(stack, node.typeParameters)
         return encodeWithTag(CategoryTag.TypeAbstraction, listOf(
             CanonicalCbor.encodeUint(node.typeParameters.size.toLong()),
             encodeExpressionChild(node.body, newStack),
@@ -584,7 +685,7 @@ internal class CanonicalEncoder(
         // single binder. VarRef.binder pointing at this Let's NodeId resolves
         // to (depth 0, index 0) within the body.
         val valueEncoding = encodeExpressionChild(node.value, stack)
-        val newStack = stack + listOf(listOf(letId))
+        val newStack = push(stack, listOf(letId))
         val bodyEncoding = encodeExpressionChild(node.body, newStack)
         return encodeWithTag(CategoryTag.Let, listOf(valueEncoding, bodyEncoding))
     }
@@ -777,7 +878,7 @@ internal class CanonicalEncoder(
             )
         }
         val binders = collectPatternBinders(node.pattern, patternNode)
-        val bodyStack = if (binders.isEmpty()) stack else stack + listOf(binders)
+        val bodyStack = if (binders.isEmpty()) stack else push(stack, binders)
         return encodeWithTag(CategoryTag.MatchCase, listOf(
             CanonicalCbor.encodeBytes(hashInner(node.pattern, stack)),
             encodeExpressionChild(node.body, bodyStack),
@@ -1209,7 +1310,7 @@ internal class CanonicalEncoder(
         val child = (lookup(childId) as? StoredNode.Canonical)?.node
         return if (child is Node.TypeParameter && resolvePosition(childId, stack) != null) {
             // Bound TypeParameter: inline positional reference (NOT a hash).
-            encodeInner(childId, stack)
+            entryFor(childId, stack).bytes
         } else {
             // Any other type — including a NodeRef boundary — or a free
             // TypeParameter (the verifier would reject the latter, but we
@@ -1252,18 +1353,31 @@ internal class CanonicalEncoder(
      * the offset within the matched frame.
      */
     private fun resolvePosition(target: NodeId, stack: BinderStack): BoundPosition? {
-        for (i in stack.indices.reversed()) {
-            val idx = stack[i].indexOf(target)
+        var s = stack
+        var depth = 0
+        while (s.size > 0) {
+            val idx = s.frame.indexOf(target)
             if (idx >= 0) {
-                return BoundPosition(depth = stack.lastIndex - i, index = idx)
+                // Record the absolute level (outermost frame = 0) this
+                // encoding depends on; see the class kdoc.
+                val level = s.size - 1
+                if (level < accVarLevel) accVarLevel = level
+                return BoundPosition(depth = depth, index = idx)
             }
+            depth++
+            s = s.parent ?: break
         }
+        accVarLevel = -1  // unbound: depends on the whole context
         return null
     }
 
-    // ----- Cache key -----
+    // ----- Cache keys -----
 
+    /** Stacks are interned, so [stack] compares and hashes by identity. */
     private data class EncodingKey(val id: NodeId, val stack: BinderStack, val recDepth: Int)
+
+    /** [push] intern key: parent by identity, frame by content. */
+    private data class InternKey(val parent: BinderStack, val frame: List<NodeId>)
 
     // ----- Store-typed accessors with clearer error messages -----
 
