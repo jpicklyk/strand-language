@@ -124,6 +124,43 @@ object NetIo {
         }
     }
 
+    /**
+     * Review H4: gate a full URL (the vector-store providers build theirs
+     * from program-supplied config) through the same [NetSandbox] check
+     * `Net.Connect` / `Http.Request` use. The scheme must be `http` or
+     * `https` and userinfo is refused under every policy; the host / range
+     * / allowlist checks run when [NetPolicy.defaultDeny] is set (the open
+     * test policy performs no DNS here).
+     *
+     * Residual: the providers speak through an [VectorHttpTransport] that
+     * takes a URL, so the checked address is not pinned into the
+     * connection the way `Http.Request` pins it; the JDK re-resolves at
+     * connect. Re-checking every request (see [SandboxedVectorHttpTransport])
+     * narrows the rebinding window to the JVM DNS cache interval.
+     */
+    fun checkUrl(url: String, policy: NetPolicy, resolver: NameResolver) {
+        val uri = try {
+            URI(url)
+        } catch (e: java.net.URISyntaxException) {
+            throw SandboxViolation(SandboxViolationKind.HttpPathRejected, "malformed URL: ${e.message}")
+        }
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") {
+            throw SandboxViolation(
+                SandboxViolationKind.HttpSchemeRejected,
+                "scheme '${uri.scheme}' is not allowed; expected 'http' or 'https'",
+            )
+        }
+        if (uri.rawUserInfo != null) {
+            throw SandboxViolation(SandboxViolationKind.HttpPathRejected, "URL userinfo is not allowed")
+        }
+        val host = uri.host
+            ?: throw SandboxViolation(SandboxViolationKind.NetHostBlocked, "URL '$url' has no host")
+        if (!policy.defaultDeny) return
+        val port = if (uri.port > 0) uri.port else if (scheme == "https") 443 else 80
+        NetSandbox.checkConnect(policy, host, port, resolver)
+    }
+
     private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
 
     /** RFC 3986 unreserved + sub-delims + `:` `/` `?` (the `@` of pchar is excluded above). */
@@ -131,3 +168,25 @@ object NetIo {
         c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' ||
             c in "-._~" || c in "!$&'()*+,;=" || c == ':' || c == '/' || c == '?'
 }
+
+/**
+ * Review H4: a [VectorHttpTransport] decorator that runs
+ * [NetIo.checkUrl] on every request before handing it to [delegate], so a
+ * program-chosen vector-store host (and the API key attached to the
+ * request) never reaches a blocked or non-allow-listed address. The
+ * vector builtins wrap the context's transport with this on every call.
+ */
+class SandboxedVectorHttpTransport(
+    private val delegate: VectorHttpTransport,
+    private val policy: NetPolicy,
+    private val resolver: NameResolver,
+) : VectorHttpTransport {
+    override fun execute(request: HttpRequest): HttpResponse {
+        NetIo.checkUrl(request.url, policy, resolver)
+        return delegate.execute(request)
+    }
+}
+
+/** The active context's vector transport behind the network sandbox (review H4). */
+internal fun HostContext.sandboxedVectorTransport(): VectorHttpTransport =
+    SandboxedVectorHttpTransport(vectorHttpTransport, sandboxPolicy.net, nameResolver)

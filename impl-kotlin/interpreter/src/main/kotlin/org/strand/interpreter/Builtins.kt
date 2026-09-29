@@ -2670,7 +2670,9 @@ object Builtins {
                 "Pinecone.Index.Open expects 1 arg (config: PineconeIndexConfig), got ${args.size}"
             }
             val config = VectorValueMarshal.toPineconeConfig(args[0])
-            PineconeProvider.open(config, credentialProvider)
+            // Review H4: the program-chosen host passes the network sandbox
+            // before the API key is resolved or any request is built.
+            PineconeProvider.open(config, credentialProvider) { url -> NetIo.checkUrl(url, sandboxPolicy.net, nameResolver) }
         },
 
         "strand-builtin:Pinecone.Index.Close" to det { args ->
@@ -2694,7 +2696,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-upsert",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val items = VectorValueMarshal.toUpsertItems(args[1])
-            PineconeProvider.upsert(handle, items, vectorHttpTransport)
+            PineconeProvider.upsert(handle, items, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2708,7 +2710,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-query",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val request = VectorValueMarshal.toQueryRequest(args[1])
-            VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request, sandboxedVectorTransport()))
         },
 
         "strand-builtin:Pinecone.Index.Delete" to fx { args ->
@@ -2721,7 +2723,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-delete",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            PineconeProvider.delete(handle, ids, vectorHttpTransport)
+            PineconeProvider.delete(handle, ids, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2735,7 +2737,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-fetch",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            VectorValueMarshal.fromQueryHits(PineconeProvider.fetch(handle, ids, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(PineconeProvider.fetch(handle, ids, sandboxedVectorTransport()))
         },
 
         // Q-038 Phase 1 — Chroma vector-store builtins. Same shape
@@ -2751,7 +2753,7 @@ object Builtins {
                 "Chroma.Collection.Open expects 1 arg (config: ChromaCollectionConfig), got ${args.size}"
             }
             val config = VectorValueMarshal.toChromaConfig(args[0])
-            ChromaProvider.open(config, credentialProvider, vectorHttpTransport)
+            ChromaProvider.open(config, credentialProvider, sandboxedVectorTransport())
         },
 
         "strand-builtin:Chroma.Collection.Close" to det { args ->
@@ -2775,7 +2777,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-upsert",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val items = VectorValueMarshal.toUpsertItems(args[1])
-            ChromaProvider.add(handle, items, vectorHttpTransport)
+            ChromaProvider.add(handle, items, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2789,7 +2791,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-query",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val request = VectorValueMarshal.toQueryRequest(args[1])
-            VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request, sandboxedVectorTransport()))
         },
 
         "strand-builtin:Chroma.Collection.Delete" to fx { args ->
@@ -2802,7 +2804,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-delete",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            ChromaProvider.delete(handle, ids, vectorHttpTransport)
+            ChromaProvider.delete(handle, ids, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2817,7 +2819,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-get",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids, sandboxedVectorTransport()))
         },
 
         // ===== Stdlib expansion round 4 (2026-05-27) =====
