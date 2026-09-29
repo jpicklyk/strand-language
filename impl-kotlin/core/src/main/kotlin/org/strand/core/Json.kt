@@ -8,7 +8,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.longOrNull
 
 /**
@@ -194,12 +194,12 @@ object JsonIngest {
         validateWellFormedStrings(element)
         val obj = element.requireObject("root document")
 
-        val version = obj["version"]?.jsonPrimitive?.intOrNull
-        if (version != 1) {
+        val version = obj["version"].strictLong()
+        if (version != 1L) {
             throw IngestError.Malformed("Unsupported or missing schema version (expected 1, got $version)")
         }
 
-        val rootName = obj["root"]?.jsonPrimitive?.contentOrNull
+        val rootName = obj["root"].strictString()
             ?: throw IngestError.Malformed("Missing 'root' field")
 
         val nodesObj = obj["nodes"]?.requireObject("nodes")
@@ -631,7 +631,7 @@ object JsonIngest {
         obj: JsonObject,
         resolve: (String, String) -> NodeId
     ): StoredNode {
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull
+        val type = obj["type"].strictString()
             ?: throw IngestError.Malformed("Node '$name' is missing 'type'")
         // NodeRef is the one node category whose canonical form carries a
         // Hash rather than a NodeId. Two ingest forms:
@@ -646,7 +646,7 @@ object JsonIngest {
         // Exactly one of `target` / `targetHash` must be present.
         if (type == "NodeRef") {
             val ctx = "node '$name'"
-            val targetHashHex = obj["targetHash"]?.jsonPrimitive?.contentOrNull
+            val targetHashHex = obj["targetHash"].strictString()
             if (targetHashHex != null) {
                 if (obj["target"] != null) {
                     throw IngestError.Malformed(
@@ -715,7 +715,7 @@ object JsonIngest {
         ) {
             null
         } else {
-            val hex = sigElement.jsonPrimitive.contentOrNull
+            val hex = sigElement.strictString()
                 ?: throw IngestError.Malformed("'manifestSignature' in $ctx must be a hex string")
             hexDecode(hex, "$ctx.manifestSignature")
         }
@@ -727,7 +727,7 @@ object JsonIngest {
         obj: JsonObject,
         resolve: (String, String) -> NodeId
     ): Node {
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull
+        val type = obj["type"].strictString()
             ?: throw IngestError.Malformed("Node '$name' is missing 'type'")
         val ctx = "node '$name'"
         return when (type) {
@@ -1001,7 +1001,7 @@ object JsonIngest {
      */
     private fun parseOverflowPolicy(element: JsonElement, ctx: String): OverflowPolicy {
         if (element is JsonPrimitive) {
-            val name = element.contentOrNull
+            val name = element.strictString()
                 ?: throw IngestError.Malformed("overflowPolicy in $ctx must be a string or an object")
             return when (name) {
                 "BlockProducer", "blockProducer", "block_producer", "block" -> OverflowPolicy.BlockProducer
@@ -1015,14 +1015,14 @@ object JsonIngest {
             }
         }
         val obj = element.requireObject("$ctx.overflowPolicy")
-        val kind = obj["kind"]?.jsonPrimitive?.contentOrNull
+        val kind = obj["kind"].strictString()
             ?: throw IngestError.Malformed("overflowPolicy object in $ctx missing 'kind' field")
         return when (kind) {
             "BlockProducer" -> OverflowPolicy.BlockProducer
             "DropNewest" -> OverflowPolicy.DropNewest
             "DropOldest" -> OverflowPolicy.DropOldest
             "Sample" -> {
-                val interval = obj["intervalNanos"]?.jsonPrimitive?.longOrNull
+                val interval = obj["intervalNanos"].strictLong()
                     ?: throw IngestError.Malformed(
                         "overflowPolicy Sample in $ctx missing 'intervalNanos' Long"
                     )
@@ -1154,36 +1154,54 @@ private fun JsonElement.requireObject(ctx: String): JsonObject =
     this as? JsonObject ?: throw IngestError.Malformed("Expected object at $ctx")
 
 private fun JsonObject.requireString(field: String, ctx: String): String =
-    this[field]?.jsonPrimitive?.contentOrNull
+    this[field].strictString()
         ?: throw IngestError.Malformed("Missing or non-string field '$field' in $ctx")
 
 private fun JsonObject.requireLong(field: String, ctx: String): Long {
-    val prim = this[field]?.jsonPrimitive
-        ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
-    return prim.longOrNull
-        ?: throw IngestError.Malformed("Field '$field' in $ctx must be an integer")
+    val v = this[field] ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
+    return v.strictLong()
+        ?: throw IngestError.Malformed("Field '$field' in $ctx must be an integer (a JSON number, not a string)")
 }
 
 private fun JsonObject.requireDouble(field: String, ctx: String): Double {
-    val prim = this[field]?.jsonPrimitive
-        ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
-    return prim.doubleOrNull
-        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a number")
+    val v = this[field] ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
+    return v.nonStringScalar()?.doubleOrNull
+        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a number (a JSON number, not a string)")
 }
 
 private fun JsonObject.requireBoolean(field: String, ctx: String): Boolean {
-    val prim = this[field]?.jsonPrimitive
-        ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
-    return prim.booleanOrNull
-        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a boolean")
+    val v = this[field] ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
+    return v.nonStringScalar()?.booleanOrNull
+        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a boolean (true/false, not a string)")
 }
+
+/*
+ * Review M4 (core): strict scalar accessors. kotlinx-serialization's
+ * `JsonPrimitive.content` / `longOrNull` / `booleanOrNull` read the literal
+ * text whether or not it was quoted, so `"name": 7` ingested as "7",
+ * `"value": "42"` as the Int 42, `"value": "true"` as a Bool, and a
+ * numeric reference as the author id "7". Ingest now checks
+ * [JsonPrimitive.isString] explicitly: a string field must be a JSON
+ * string, a numeric or boolean field must not be one.
+ */
+
+/** The content of a JSON string; null for anything else (absent, null, number, boolean, object, array). */
+private fun JsonElement?.strictString(): String? =
+    (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+/** A non-string, non-null JSON scalar (a number or boolean literal); null otherwise. */
+private fun JsonElement?.nonStringScalar(): JsonPrimitive? =
+    (this as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }
+
+/** An integral JSON number; null for a string (even "42"), a non-integral number, or anything else. */
+private fun JsonElement?.strictLong(): Long? = nonStringScalar()?.longOrNull
 
 private fun JsonObject.requireRef(
     field: String,
     ctx: String,
     resolve: (String, String) -> NodeId
 ): NodeId {
-    val name = this[field]?.jsonPrimitive?.contentOrNull
+    val name = this[field].strictString()
         ?: throw IngestError.Malformed("Missing or non-string ref field '$field' in $ctx")
     return resolve(name, "$ctx.$field")
 }
@@ -1195,7 +1213,7 @@ private fun JsonObject.optionalRef(
 ): NodeId? {
     val v = this[field] ?: return null
     if (v is JsonPrimitive && v.contentOrNull == null) return null
-    val name = v.jsonPrimitive.contentOrNull
+    val name = v.strictString()
         ?: throw IngestError.Malformed("Ref field '$field' in $ctx must be a string id or absent")
     return resolve(name, "$ctx.$field")
 }
@@ -1208,7 +1226,7 @@ private fun JsonObject.requireRefList(
     val arr = this[field]?.jsonArray
         ?: throw IngestError.Malformed("Missing or non-array field '$field' in $ctx")
     return arr.mapIndexed { i, e ->
-        val s = e.jsonPrimitive.contentOrNull
+        val s = e.strictString()
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be a string id")
         resolve(s, "$ctx.$field[$i]")
     }
@@ -1221,7 +1239,7 @@ private fun JsonObject.optionalRefList(
 ): List<NodeId> {
     val arr = this[field]?.jsonArray ?: return emptyList()
     return arr.mapIndexed { i, e ->
-        val s = e.jsonPrimitive.contentOrNull
+        val s = e.strictString()
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be a string id")
         resolve(s, "$ctx.$field[$i]")
     }
@@ -1230,8 +1248,8 @@ private fun JsonObject.optionalRefList(
 private fun JsonObject.optionalInt(field: String, ctx: String): Int? {
     val v = this[field] ?: return null
     if (v is JsonPrimitive && v.contentOrNull == null) return null
-    val long = v.jsonPrimitive.longOrNull
-        ?: throw IngestError.Malformed("Optional field '$field' in $ctx must be an integer if present")
+    val long = v.strictLong()
+        ?: throw IngestError.Malformed("Optional field '$field' in $ctx must be an integer (a JSON number, not a string) if present")
     if (long < Int.MIN_VALUE.toLong() || long > Int.MAX_VALUE.toLong()) {
         throw IngestError.Malformed("Field '$field' in $ctx must fit in 32 bits, got $long")
     }
@@ -1247,7 +1265,7 @@ private fun JsonObject.optionalOverflowPolicy(field: String, ctx: String): Overf
 private fun JsonObject.optionalConsumerMode(field: String, ctx: String): ConsumerMode? {
     val v = this[field] ?: return null
     if (v is JsonPrimitive && v.contentOrNull == null) return null
-    val name = v.jsonPrimitive.contentOrNull
+    val name = v.strictString()
         ?: throw IngestError.Malformed("Optional field '$field' in $ctx must be a string if present")
     return JsonIngest.parseConsumerMode(name, "$ctx.$field")
 }
@@ -1279,7 +1297,7 @@ private fun JsonObject.optionalEffectProjections(
         val obj = e as? JsonObject
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be an object")
         val projCtx = "$ctx.$field[$i]"
-        val categoryName = obj["category"]?.jsonPrimitive?.contentOrNull
+        val categoryName = obj["category"].strictString()
             ?: throw IngestError.Malformed("Missing or non-string 'category' in $projCtx")
         val categoryId = resolve(categoryName, "$projCtx.category")
         val sourcesArr = obj["sources"] as? kotlinx.serialization.json.JsonArray
@@ -1288,11 +1306,11 @@ private fun JsonObject.optionalEffectProjections(
             val sObj = sEl as? JsonObject
                 ?: throw IngestError.Malformed("Element $j of 'sources' in $projCtx must be an object")
             val srcCtx = "$projCtx.sources[$j]"
-            val kind = sObj["kind"]?.jsonPrimitive?.contentOrNull
+            val kind = sObj["kind"].strictString()
                 ?: throw IngestError.Malformed("Missing or non-string 'kind' in $srcCtx")
             when (kind) {
                 "ArgRef" -> {
-                    val idx = sObj["index"]?.jsonPrimitive?.longOrNull
+                    val idx = sObj["index"].strictLong()
                         ?: throw IngestError.Malformed("Missing or non-integer 'index' in $srcCtx")
                     if (idx < 0 || idx > Int.MAX_VALUE.toLong()) {
                         throw IngestError.Malformed(
@@ -1302,7 +1320,7 @@ private fun JsonObject.optionalEffectProjections(
                     ProjectionSource.ArgRef(idx.toInt())
                 }
                 "LiteralNode" -> {
-                    val targetName = sObj["target"]?.jsonPrimitive?.contentOrNull
+                    val targetName = sObj["target"].strictString()
                         ?: throw IngestError.Malformed("Missing or non-string 'target' in $srcCtx")
                     val targetId = resolve(targetName, "$srcCtx.target")
                     ProjectionSource.LiteralNode(targetId)
@@ -1344,15 +1362,15 @@ private fun JsonObject.requireProjectionPath(field: String, ctx: String): List<P
         val stepObj = e as? JsonObject
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be an object")
         val stepCtx = "$ctx.$field[$i]"
-        val step = stepObj["step"]?.jsonPrimitive?.contentOrNull
+        val step = stepObj["step"].strictString()
             ?: throw IngestError.Malformed("Missing or non-string 'step' in $stepCtx")
         when (step) {
             "Case" -> ProjectionStep.Case(
-                caseName = stepObj["caseName"]?.jsonPrimitive?.contentOrNull
+                caseName = stepObj["caseName"].strictString()
                     ?: throw IngestError.Malformed("Missing or non-string 'caseName' in $stepCtx")
             )
             "Field" -> ProjectionStep.Field(
-                fieldName = stepObj["fieldName"]?.jsonPrimitive?.contentOrNull
+                fieldName = stepObj["fieldName"].strictString()
                     ?: throw IngestError.Malformed("Missing or non-string 'fieldName' in $stepCtx")
             )
             "Unfold" -> ProjectionStep.Unfold
@@ -1364,5 +1382,3 @@ private fun JsonObject.requireProjectionPath(field: String, ctx: String): List<P
     }
 }
 
-private val JsonPrimitive.intOrNull: Int?
-    get() = this.contentOrNull?.toIntOrNull()

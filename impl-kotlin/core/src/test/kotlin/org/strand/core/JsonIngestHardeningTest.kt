@@ -39,6 +39,62 @@ class JsonIngestHardeningTest {
         }
     }
 
+    // ----- M4: no silent scalar coercion -----
+
+    @Test
+    fun `a number where a string field is expected is rejected`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "r": { "type": "EffectCategory", "categoryName": 7 } """))
+        }
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "r": { "type": "StringLit", "value": true } """))
+        }
+    }
+
+    @Test
+    fun `a quoted number where an Int is expected is rejected`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "r": { "type": "IntLit", "value": "42" } """))
+        }
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "r": { "type": "FloatLit", "value": "1.5" } """))
+        }
+    }
+
+    @Test
+    fun `a quoted boolean where a Bool is expected is rejected`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "r": { "type": "BoolLit", "value": "true" } """))
+        }
+    }
+
+    @Test
+    fun `a numeric reference is rejected even when an author id of that spelling exists`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "7": { "type": "IntLit", "value": 1 }, "r": { "type": "NodeRef", "target": 7 } """))
+        }
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "7": { "type": "IntLit", "value": 1 }, "r": { "type": "Attempt", "body": 7 } """))
+        }
+    }
+
+    @Test
+    fun `quoted schema version, root, type and optional ints are rejected`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse("""{ "version": "1", "root": "r", "nodes": { "r": { "type": "UnitLit" } } }""")
+        }
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc(""" "r": { "type": "RecursiveSelf", "depth": "0" } """))
+        }
+    }
+
+    @Test
+    fun `correctly typed scalars are still accepted`() {
+        JsonIngest.parse(doc(""" "r": { "type": "IntLit", "value": 42 } """))
+        JsonIngest.parse(doc(""" "r": { "type": "FloatLit", "value": 1.5 } """))
+        JsonIngest.parse(doc(""" "r": { "type": "BoolLit", "value": false } """))
+    }
+
     // ----- H3: graph depth -----
 
     private fun letChain(n: Int): String {
