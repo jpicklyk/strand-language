@@ -1006,12 +1006,16 @@ object Builtins {
             // and pick a different address. The Host: header still
             // names the original hostname so the upstream sees a
             // well-formed request (set explicitly below).
-            val resolvedHost = resolvedAddr.hostAddress.let { addr ->
-                if (resolvedAddr is java.net.Inet6Address) "[$addr]" else addr
-            }
-            val urlStr = "${scheme.lowercase()}://$resolvedHost:$port$pathArg"
+            //
+            // Review H1: the path is graph data. NetIo.buildPinnedUri
+            // validates it (leading '/', no '@' / '\' / '#' / whitespace /
+            // control characters) and asserts that the parsed URI's host
+            // and port are exactly the pinned address and the refined
+            // port, so a path can never become userinfo or extend the port.
+            val pinnedUri = NetIo.buildPinnedUri(scheme, resolvedAddr, port.toInt(), pathArg)
+            val urlStr = pinnedUri.toString()
             try {
-                val url = java.net.URI(urlStr).toURL()
+                val url = pinnedUri.toURL()
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = method.uppercase()
                 conn.doInput = true
