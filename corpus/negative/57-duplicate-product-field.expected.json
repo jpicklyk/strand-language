@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "ProductType{x: Int, x: String} with a matching duplicate-field ProductValue, read through ProductFieldGet into Int.Add. The verifier checked the value against one duplicate and typed the read against the other, so a verified program handed a String to Int.Add at runtime (review verifier C1, confirmed by execution). Ingest rejects duplicate ProductType field, SumType case, and ProductValue field names; the verifier carries the matching rule for programmatically built stores."
+}

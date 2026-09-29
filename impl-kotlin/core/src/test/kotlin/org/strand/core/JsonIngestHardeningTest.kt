@@ -95,6 +95,61 @@ class JsonIngestHardeningTest {
         JsonIngest.parse(doc(""" "r": { "type": "BoolLit", "value": false } """))
     }
 
+    // ----- verifier C1 (ingest half): duplicate names -----
+
+    @Test
+    fun `duplicate ProductType field names are rejected`() {
+        val err = assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc("""
+                "int": { "type": "PrimitiveType", "kind": "Int" },
+                "str": { "type": "PrimitiveType", "kind": "String" },
+                "f1": { "type": "ProductTypeField", "name": "x", "fieldType": "int" },
+                "f2": { "type": "ProductTypeField", "name": "x", "fieldType": "str" },
+                "r": { "type": "ProductType", "fields": ["f1", "f2"] }
+            """))
+        }
+        assertTrue(err.message!!.contains("'x'"), err.message)
+    }
+
+    @Test
+    fun `the same field node listed twice is a duplicate`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc("""
+                "int": { "type": "PrimitiveType", "kind": "Int" },
+                "f1": { "type": "ProductTypeField", "name": "x", "fieldType": "int" },
+                "r": { "type": "ProductType", "fields": ["f1", "f1"] }
+            """))
+        }
+    }
+
+    @Test
+    fun `duplicate SumType case names are rejected`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc("""
+                "int": { "type": "PrimitiveType", "kind": "Int" },
+                "c1": { "type": "SumTypeCase", "name": "Some", "caseType": "int" },
+                "c2": { "type": "SumTypeCase", "name": "Some" },
+                "r": { "type": "SumType", "cases": ["c1", "c2"] }
+            """))
+        }
+    }
+
+    @Test
+    fun `duplicate ProductValue field names are rejected`() {
+        assertThrows<IngestError.Malformed> {
+            JsonIngest.parse(doc("""
+                "int": { "type": "PrimitiveType", "kind": "Int" },
+                "f1": { "type": "ProductTypeField", "name": "x", "fieldType": "int" },
+                "t": { "type": "ProductType", "fields": ["f1"] },
+                "one": { "type": "IntLit", "value": 1 },
+                "two": { "type": "IntLit", "value": 2 },
+                "v1": { "type": "ProductFieldValue", "fieldName": "x", "value": "one" },
+                "v2": { "type": "ProductFieldValue", "fieldName": "x", "value": "two" },
+                "r": { "type": "ProductValue", "ofType": "t", "fields": ["v1", "v2"] }
+            """))
+        }
+    }
+
     // ----- H3: graph depth -----
 
     private fun letChain(n: Int): String {

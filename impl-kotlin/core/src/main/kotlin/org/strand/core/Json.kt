@@ -389,6 +389,11 @@ object JsonIngest {
      *     back-references. Any other edge would make the hash walk visit
      *     it standalone, which the encoding does not define.
      *
+     * Name-keyed children must also be distinct: duplicate ProductType
+     * field names, SumType case names, or ProductValue field names are
+     * rejected (review verifier C1 — a duplicate let the verifier and the
+     * interpreter pick different fields of the same name).
+     *
      * The verifier's CategoryMismatch rule still guards the same shapes
      * for programmatically-built stores.
      */
@@ -444,6 +449,40 @@ object JsonIngest {
                 is Node.MatchCase ->
                     requireCategory(name, "MatchCase.pattern", listOf(node.pattern),
                         { it is Node.Pattern }, "Pattern")
+                else -> {}
+            }
+        }
+
+        // Group 1b (review verifier C1, ingest half): name-keyed children
+        // must have distinct names. `ProductType{x: Int, x: String}` let the
+        // verifier type a field read against one duplicate while the
+        // interpreter read the other — a verified program reaching a runtime
+        // type error. The same holds for SumType case names and
+        // ProductValue field names. Group 1 has already established the
+        // child categories, so the casts below are safe.
+        fun requireDistinct(owner: String, what: String, children: List<NodeId>, nameOf: (Node) -> String) {
+            val seen = HashSet<String>()
+            for (childId in children) {
+                val childName = nameOf(nodeAt(childId)!!)
+                if (!seen.add(childName)) {
+                    throw IngestError.Malformed(
+                        "Node '$owner' declares $what '$childName' more than once; " +
+                            "$what names must be distinct"
+                    )
+                }
+            }
+        }
+        for (name in orderedNames) {
+            when (val node = nodeAt(nameToId.getValue(name))) {
+                is Node.ProductType -> requireDistinct(name, "ProductType field", node.fields) {
+                    (it as Node.ProductTypeField).fieldName
+                }
+                is Node.SumType -> requireDistinct(name, "SumType case", node.cases) {
+                    (it as Node.SumTypeCase).caseName
+                }
+                is Node.ProductValue -> requireDistinct(name, "ProductValue field", node.fields) {
+                    (it as Node.ProductFieldValue).fieldName
+                }
                 else -> {}
             }
         }
