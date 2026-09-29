@@ -2,7 +2,6 @@ package org.strand.interpreter
 
 import java.net.InetAddress
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -146,9 +145,9 @@ data class SandboxPolicy(
  *   [EscapePolicy.Deny] raises [SandboxViolation]; [EscapePolicy.Allow]
  *   passes through.
  * @property followSymlinks when false (secure default), the resolver
- *   refuses any path whose canonical form differs from its lexical
- *   form due to a symlink component. When true, follow the symlink and
- *   re-check containment against the link target.
+ *   refuses any path with a symlink component, the leaf included
+ *   (dangling or not). When true, follow every link (a dangling leaf
+ *   to its target) and check containment of where the call lands.
  */
 data class FsPolicy(
     val workspaceRoot: Path?,
@@ -295,39 +294,82 @@ data class IpRange(val cidr: String) {
  * Filesystem-side sandbox enforcer. Each `Fs.*` builtin calls
  * [resolve] on its first argument before invoking the JVM file API.
  *
- * Per § 4.1 of the proposal:
+ * Per § 4.1 of the proposal, amended by review H6:
  *  1. If `policy.workspaceRoot` is null, no constraint — return
  *     [Paths.get] of the supplied string. The host opted out.
  *  2. Otherwise resolve the supplied string against the workspace
- *     root. `resolve` against an absolute path discards the root
- *     (which the canonicalisation in step 3 catches).
- *  3. Canonicalise: `toRealPath(NOFOLLOW_LINKS)` when
- *     `followSymlinks=false`, else `toRealPath()`. On a non-existent
- *     target — common for `Fs.Write` to a new file — fall back to
- *     `normalize().toAbsolutePath()`.
- *  4. Check that the canonical form is lexically prefixed by the
- *     canonicalised workspace root. If not: [EscapePolicy.Deny]
- *     raises [SandboxViolation(FsPathEscape)]; [EscapePolicy.Allow]
- *     proceeds.
- *  5. If `followSymlinks=false` and the supplied path's lexical
- *     resolution differs from its canonical form due to symlink
- *     traversal, raise [SandboxViolation(FsSymlinkRejected)].
- *  6. Return the canonical (or lexical fallback) path.
+ *     root and normalise lexically. `resolve` against an absolute path
+ *     discards the root (which the containment check in step 4 catches).
+ *  3. Canonicalise.
+ *     - `followSymlinks=false`: every existing component of the path,
+ *       **including the leaf**, is inspected without following links; any
+ *       symlink — dangling or not — raises
+ *       [SandboxViolationKind.FsSymlinkRejected]. The canonical form is
+ *       the real path when the leaf exists, the lexical form otherwise.
+ *     - `followSymlinks=true`: the path is resolved fully. An existing
+ *       path resolves to its real path; a dangling symlink leaf resolves
+ *       to its target (recursively, bounded at [MAX_LINK_DEPTH] hops) so
+ *       the containment check sees where a write would actually land; a
+ *       plain missing leaf resolves under its (resolved) parent.
+ *  4. Check that the canonical form is prefixed by the canonicalised
+ *     workspace root. If not: [EscapePolicy.Deny] raises
+ *     [SandboxViolation(FsPathEscape)]; [EscapePolicy.Allow] proceeds.
+ *  5. Return the canonical path; the builtin operates on it.
+ *
+ * The pre-H6 fallback for a non-existent leaf checked only the parents,
+ * so a dangling symlink at the leaf let `Fs.Write` create the link's
+ * target outside the workspace.
+ *
+ * The filesystem is consulted through a [PathProbe] so the decision logic
+ * is testable without creating real symlinks.
  */
 object FsSandbox {
-    fun resolve(policy: FsPolicy, supplied: String): Path {
+    /** Upper bound on symlink hops followed while resolving one path. */
+    const val MAX_LINK_DEPTH: Int = 40
+
+    /**
+     * The filesystem queries [resolve] makes. [JdkPathProbe] is the real
+     * one; tests supply a fake to exercise the decision logic without
+     * symlink privileges.
+     */
+    interface PathProbe {
+        /** True when [p] itself is a symbolic link (not followed). */
+        fun isSymlink(p: Path): Boolean
+
+        /** True when [p] exists, following links. */
+        fun exists(p: Path): Boolean
+
+        /** The raw target of the symbolic link [p]. */
+        fun readLink(p: Path): Path
+
+        /** The real path of the existing [p], following links. */
+        fun realPath(p: Path): Path
+    }
+
+    /** [PathProbe] over `java.nio.file.Files`. */
+    object JdkPathProbe : PathProbe {
+        override fun isSymlink(p: Path): Boolean = Files.isSymbolicLink(p)
+        override fun exists(p: Path): Boolean = Files.exists(p)
+        override fun readLink(p: Path): Path = Files.readSymbolicLink(p)
+        override fun realPath(p: Path): Path = p.toRealPath()
+    }
+
+    fun resolve(policy: FsPolicy, supplied: String): Path = resolve(policy, supplied, JdkPathProbe)
+
+    /** [resolve] against an explicit [probe] (the pure decision logic; see [PathProbe]). */
+    fun resolve(policy: FsPolicy, supplied: String, probe: PathProbe): Path {
         val workspaceRoot = policy.workspaceRoot
             ?: return Paths.get(supplied)
 
         // Step 2: lexical resolution. An absolute supplied path
         // discards workspaceRoot here, which step 4 catches.
-        val candidate = workspaceRoot.resolve(supplied)
+        val candidate = workspaceRoot.resolve(supplied).toAbsolutePath().normalize()
 
-        // Step 3: canonicalise the workspace root once. The root
-        // itself must exist (otherwise the policy is misconfigured;
-        // we surface that as FsWorkspaceNotConfigured).
+        // The root itself must exist (otherwise the policy is
+        // misconfigured; surfaced as FsWorkspaceNotConfigured).
         val canonicalRoot = try {
-            workspaceRoot.toRealPath()
+            if (!probe.exists(workspaceRoot)) throw java.nio.file.NoSuchFileException(workspaceRoot.toString())
+            probe.realPath(workspaceRoot)
         } catch (e: java.io.IOException) {
             throw SandboxViolation(
                 SandboxViolationKind.FsWorkspaceNotConfigured,
@@ -335,36 +377,14 @@ object FsSandbox {
             )
         }
 
-        // Step 5 (interleaved with 3): if symlinks are disallowed,
-        // refuse a path whose canonical form requires following a
-        // symlink. We detect by computing both the symlink-following
-        // canonical form and the symlink-rejecting canonical form
-        // and comparing; a difference means a symlink is involved.
-        // Path may not yet exist (Fs.Write to a new file) — fall
-        // back to lexical normalisation in that case.
+        // Step 3: canonicalise.
         val canonicalCandidate: Path = try {
             if (policy.followSymlinks) {
-                candidate.toRealPath()
+                resolveFollowing(candidate, supplied, probe, linkDepth = 0)
             } else {
-                val noFollow = candidate.toRealPath(LinkOption.NOFOLLOW_LINKS)
-                val follow = candidate.toRealPath()
-                if (follow != noFollow) {
-                    throw SandboxViolation(
-                        SandboxViolationKind.FsSymlinkRejected,
-                        "path '$supplied' resolves through a symlink (forbidden when followSymlinks=false)",
-                    )
-                }
-                noFollow
+                rejectSymlinkComponents(candidate, supplied, probe)
+                if (probe.exists(candidate)) probe.realPath(candidate) else candidate
             }
-        } catch (_: java.nio.file.NoSuchFileException) {
-            // Common path for Fs.Write of a new file: the leaf does
-            // not yet exist. Lexically normalise so the containment
-            // check below still sees a deterministic absolute path.
-            // We must additionally check whether *any prefix* of the
-            // path is a symlink (a non-leaf symlink would let a write
-            // land outside the workspace even though the leaf is new).
-            checkNoSymlinkInPrefix(candidate, policy)
-            candidate.normalize().toAbsolutePath()
         } catch (e: java.io.IOException) {
             throw SandboxViolation(
                 SandboxViolationKind.FsPathEscape,
@@ -388,26 +408,45 @@ object FsSandbox {
     }
 
     /**
-     * When a path's leaf does not exist (Fs.Write of a new file),
-     * canonicalisation falls back to lexical normalisation. Lexical
-     * normalisation doesn't catch a symlink at a parent directory.
-     * Walk the path upward and reject if any *existing* prefix is a
-     * symlink.
+     * `followSymlinks=false`: reject when the leaf or any ancestor of
+     * [candidate] is a symbolic link. The leaf is checked whether or not
+     * the link dangles (review H6) — a dangling link is exactly the shape
+     * that lets a write create a file outside the workspace.
      */
-    private fun checkNoSymlinkInPrefix(candidate: Path, policy: FsPolicy) {
-        if (policy.followSymlinks) return
-        var p: Path? = candidate.normalize().parent
+    private fun rejectSymlinkComponents(candidate: Path, supplied: String, probe: PathProbe) {
+        var p: Path? = candidate
         while (p != null) {
-            if (Files.exists(p, LinkOption.NOFOLLOW_LINKS) &&
-                Files.isSymbolicLink(p)
-            ) {
+            if (probe.isSymlink(p)) {
                 throw SandboxViolation(
                     SandboxViolationKind.FsSymlinkRejected,
-                    "path '$candidate' has a symlink at prefix '$p' (forbidden when followSymlinks=false)",
+                    "path '$supplied' has a symlink at '$p' (forbidden when followSymlinks=false)",
                 )
             }
             p = p.parent
         }
+    }
+
+    /**
+     * `followSymlinks=true`: where does an operation on [p] actually land?
+     * An existing path is its real path; a dangling symlink is its target,
+     * resolved again; a missing plain leaf sits under its resolved parent.
+     */
+    private fun resolveFollowing(p: Path, supplied: String, probe: PathProbe, linkDepth: Int): Path {
+        if (linkDepth > MAX_LINK_DEPTH) {
+            throw SandboxViolation(
+                SandboxViolationKind.FsSymlinkRejected,
+                "path '$supplied' follows more than $MAX_LINK_DEPTH symlinks",
+            )
+        }
+        if (probe.exists(p)) return probe.realPath(p)
+        if (probe.isSymlink(p)) {
+            val parent = p.parent ?: p
+            val target = parent.resolve(probe.readLink(p)).toAbsolutePath().normalize()
+            return resolveFollowing(target, supplied, probe, linkDepth + 1)
+        }
+        val parent = p.parent ?: return p
+        val name = p.fileName ?: return p
+        return resolveFollowing(parent, supplied, probe, linkDepth).resolve(name)
     }
 }
 
