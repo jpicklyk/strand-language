@@ -240,7 +240,8 @@ object DefaultLlmHttpClient : LlmHttpClient {
         body: ByteArray,
     ): LlmHttpClient.HttpResponse {
         val uri = java.net.URI(url)
-        val conn = uri.toURL().openConnection() as java.net.HttpURLConnection
+        // Review H2: redirects are never followed.
+        val conn = NetIo.openConnection(uri.toURL())
         return try {
             conn.requestMethod = "POST"
             conn.doInput = true
@@ -250,6 +251,7 @@ object DefaultLlmHttpClient : LlmHttpClient {
             for ((name, value) in headers) conn.setRequestProperty(name, value)
             conn.outputStream.use { it.write(body) }
             val status = conn.responseCode
+            NetIo.rejectRedirect(conn, status)
             val respBody = try {
                 (if (status in 200..299) conn.inputStream else conn.errorStream)?.readBytes()
                     ?: ByteArray(0)
@@ -278,7 +280,8 @@ object DefaultLlmHttpClient : LlmHttpClient {
         body: ByteArray,
     ): LlmHttpClient.LlmStream {
         val uri = java.net.URI(url)
-        val conn = uri.toURL().openConnection() as java.net.HttpURLConnection
+        // Review H2: redirects are never followed.
+        val conn = NetIo.openConnection(uri.toURL())
         conn.requestMethod = "POST"
         conn.doInput = true
         conn.doOutput = true
@@ -288,6 +291,7 @@ object DefaultLlmHttpClient : LlmHttpClient {
         for ((name, value) in headers) conn.setRequestProperty(name, value)
         conn.outputStream.use { it.write(body) }
         val status = conn.responseCode
+        NetIo.rejectRedirect(conn, status)
         if (status !in 200..299) {
             val errBody = try {
                 conn.errorStream?.readBytes() ?: ByteArray(0)

@@ -111,6 +111,48 @@ class HttpRequestHardeningTest {
         assertTrue(v6.host.contains("2001:db8"))
     }
 
+    // ---------- H2: redirects ----------
+
+    /** A server that answers every request with `302 Location: <target>`. */
+    private fun redirector(target: String): Pair<Int, AtomicInteger> = server { ex ->
+        ex.responseHeaders.add("Location", target)
+        ex.sendResponseHeaders(302, -1)
+    }
+
+    @Test
+    fun `Http_Request does not follow a redirect to another address`() {
+        val (victimPort, victimHits) = server()
+        val (port, hits) = redirector("http://127.0.0.1:$victimPort/latest/meta-data/")
+        val ex = assertThrows<IoFailure> { request(openCtx, port, "/") }
+        assertEquals("http-redirect", ex.kind)
+        assertTrue(ex.detail.contains("302"), ex.detail)
+        assertEquals(1, hits.get())
+        assertEquals(0, victimHits.get(), "the redirect target must never be contacted")
+    }
+
+    @Test
+    fun `JdkHttpTransport does not follow redirects`() {
+        val (victimPort, victimHits) = server()
+        val (port, _) = redirector("http://127.0.0.1:$victimPort/")
+        val ex = assertThrows<IoFailure> {
+            JdkHttpTransport.execute(HttpRequest("GET", "http://127.0.0.1:$port/"))
+        }
+        assertEquals("http-redirect", ex.kind)
+        assertEquals(0, victimHits.get())
+    }
+
+    @Test
+    fun `DefaultLlmHttpClient does not follow redirects on post or openStream`() {
+        val (victimPort, victimHits) = server()
+        val (port, _) = redirector("http://127.0.0.1:$victimPort/")
+        val url = "http://127.0.0.1:$port/v1/messages"
+        val postEx = assertThrows<IoFailure> { DefaultLlmHttpClient.post(url, emptyList(), "{}".toByteArray()) }
+        assertEquals("http-redirect", postEx.kind)
+        val streamEx = assertThrows<IoFailure> { DefaultLlmHttpClient.openStream(url, emptyList(), "{}".toByteArray()) }
+        assertEquals("http-redirect", streamEx.kind)
+        assertEquals(0, victimHits.get())
+    }
+
     @Test
     fun `well-formed path with query still reaches the server`() {
         val seen = mutableListOf<String>()

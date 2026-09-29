@@ -89,7 +89,8 @@ data class HttpResponse(
 object JdkHttpTransport : VectorHttpTransport {
     override fun execute(request: HttpRequest): HttpResponse {
         val url = java.net.URI(request.url).toURL()
-        val conn = url.openConnection() as java.net.HttpURLConnection
+        // Review H2: never follow a redirect (the target is not sandbox-checked).
+        val conn = NetIo.openConnection(url)
         conn.requestMethod = request.method.uppercase()
         conn.doInput = true
         for ((name, value) in request.headers) {
@@ -100,6 +101,7 @@ object JdkHttpTransport : VectorHttpTransport {
             conn.outputStream.use { it.write(request.body) }
         }
         val status = conn.responseCode
+        NetIo.rejectRedirect(conn, status)
         val body = try {
             val stream = if (status in 200..299) conn.inputStream else conn.errorStream
             stream?.readBytes() ?: ByteArray(0)

@@ -1016,7 +1016,8 @@ object Builtins {
             val urlStr = pinnedUri.toString()
             try {
                 val url = pinnedUri.toURL()
-                val conn = url.openConnection() as java.net.HttpURLConnection
+                // Review H2: redirects are never followed (NetIo.openConnection).
+                val conn = NetIo.openConnection(url)
                 conn.requestMethod = method.uppercase()
                 conn.doInput = true
                 // Preserve the original hostname in the Host header so
@@ -1033,6 +1034,7 @@ object Builtins {
                     conn.outputStream.use { it.write(body) }
                 }
                 val status = conn.responseCode
+                NetIo.rejectRedirect(conn, status)
                 val responseBody = try {
                     (if (status in 200..299) conn.inputStream else conn.errorStream)
                         ?.readBytes() ?: ByteArray(0)

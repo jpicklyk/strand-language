@@ -94,6 +94,36 @@ object NetIo {
         }
     }
 
+    /**
+     * Review H2: open an [java.net.HttpURLConnection] that never follows
+     * redirects. A followed redirect is a second connection to an address
+     * the network sandbox never checked (an allow-listed server answering
+     * `302 Location: http://169.254.169.254/...`), so every transport opens
+     * its connection through here and then calls [rejectRedirect].
+     */
+    fun openConnection(url: java.net.URL): java.net.HttpURLConnection {
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.instanceFollowRedirects = false
+        return conn
+    }
+
+    /**
+     * Review H2: a 3xx response other than `304 Not Modified` is a
+     * redirect the transport will not follow; it surfaces as a catchable
+     * `IoFailure("http-redirect", ...)` carrying the status and the
+     * `Location` the server asked for. The connection is disconnected.
+     */
+    fun rejectRedirect(conn: java.net.HttpURLConnection, status: Int) {
+        if (status in 300..399 && status != 304) {
+            val location = conn.getHeaderField("Location") ?: "<none>"
+            conn.disconnect()
+            throw IoFailure(
+                "http-redirect",
+                "status=$status location=$location (redirects are not followed; the target was not sandbox-checked)",
+            )
+        }
+    }
+
     private fun isHex(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
 
     /** RFC 3986 unreserved + sub-delims + `:` `/` `?` (the `@` of pchar is excluded above). */
