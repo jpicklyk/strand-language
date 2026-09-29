@@ -62,11 +62,24 @@ class Lowerer(
     private val categoryNames = LinkedHashMap<Int, String>()
 
     /**
+     * Sub-chunk index per sub-chunk name (`lambda(#N)`, `fixpoint(#N)`,
+     * `noderef(#N)`), so a Lambda / Fixpoint / NodeRef target shared by
+     * several parents in the DAG is lowered once and its chunk reused
+     * (review, Low). A closure's capture layout is a function of its own
+     * body, so one sub-chunk serves every site that references the node.
+     */
+    private val subChunkByName = HashMap<String, Int>()
+
+    /**
      * Lower the program rooted at [rootId] into a [ChunkTable]. The root
      * chunk is at index 0; sub-chunks (Lambda bodies, Fixpoint bodies)
-     * follow in the order they're encountered.
+     * follow in the order they're encountered. Reentrant: each call starts
+     * from empty state, so lowering twice yields two equal tables.
      */
     fun lower(rootId: NodeId): ChunkTable {
+        chunks.clear()
+        categoryNames.clear()
+        subChunkByName.clear()
         // Reserve the root chunk's slot so sub-chunks get index ≥ 1.
         val root = MutableChunk(name = "root($rootId)")
         chunks += root
@@ -473,13 +486,39 @@ class Lowerer(
             is Node.Attempt -> {
                 walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
             }
+            // Review M5: every expression-bearing category the lowerer
+            // handles is walked, so a closure over an outer binder used only
+            // inside a Match / Product / Sum / CapabilityScope / Handler /
+            // Fixpoint captures it. Pattern-bound binders are never in the
+            // outer scope, so they are not mistaken for captures.
+            is Node.Match -> {
+                walkExpr(node.scrutinee, parameters, localLets, outerScope, captures, visited)
+                for (caseId in node.cases) {
+                    val case = store.getOrNull(caseId) as? Node.MatchCase ?: continue
+                    walkExpr(case.body, parameters, localLets, outerScope, captures, visited)
+                }
+            }
+            is Node.ProductValue -> for (fieldId in node.fields) {
+                val field = store.getOrNull(fieldId) as? Node.ProductFieldValue ?: continue
+                walkExpr(field.value, parameters, localLets, outerScope, captures, visited)
+            }
+            is Node.ProductFieldGet -> walkExpr(node.target, parameters, localLets, outerScope, captures, visited)
+            is Node.SumValue -> node.payload?.let {
+                walkExpr(it, parameters, localLets, outerScope, captures, visited)
+            }
+            is Node.CapabilityScope -> walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
+            is Node.Handler -> {
+                walkExpr(node.handle, parameters, localLets, outerScope, captures, visited)
+                walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
+            }
+            is Node.Fixpoint -> walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
             // Literals and NodeRef have no inner expressions that reference
-            // outer binders (NodeRef's target is closed by verifier rule).
+            // outer binders (NodeRef's target is closed by verifier rule);
+            // ForeignNode is closed.
             is Node.IntLit, is Node.FloatLit, is Node.StringLit, is Node.BoolLit,
-            is Node.UnitLit, is Node.BytesLit, is Node.NodeRef -> Unit
-            // Out-of-slice nodes — collect free vars of their expression
-            // children where they appear; the lowerer will fail with
-            // LoweringNotImplemented at lowering time anyway.
+            is Node.UnitLit, is Node.BytesLit, is Node.NodeRef, is Node.ForeignNode -> Unit
+            // Remaining categories are rejected by lowerExpr with
+            // LoweringNotImplemented, so they cannot hide a capture.
             else -> Unit
         }
     }
@@ -546,8 +585,9 @@ class Lowerer(
             // Patch JUMP_IF_FALSE to here — start of next case's test.
             chunk.patchJump(skipBodyOffset)
         }
-        // Past all cases — no match.
-        chunk.emit(Opcode.THROW_NO_MATCH)
+        // Past all cases — no match. The operand is the Match NodeId so the
+        // VM raises the interpreter's InterpretError.NoMatchingCase(at).
+        chunk.emit(Opcode.THROW_NO_MATCH, matchId.value)
 
         // Patch all end-jumps to point here.
         for (offset in endJumpOffsets) {
@@ -683,9 +723,11 @@ class Lowerer(
      * nested sub-chunks get higher indices.
      */
     private fun lowerSubChunk(name: String, block: (MutableChunk) -> Unit): Int {
+        subChunkByName[name]?.let { return it }
         val sub = MutableChunk(name = name)
         val index = chunks.size
         chunks += sub
+        subChunkByName[name] = index
         block(sub)
         return index
     }

@@ -181,10 +181,14 @@ class Vm(
         limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
     ): Value {
         currentCaps = capabilities
-        // Note: we do NOT clear capStack / handlers here; the caller may
-        // be invoking this from inside an active CapabilityScope or Handler
-        // context (e.g., a transition function called from a CapabilityScope
-        // body). For top-level callers, both stacks should be empty.
+        val closure = unbox(closure)
+        // The capability and handler stacks are shared across calls on this
+        // Vm. Review (Low): record their depths and truncate back in
+        // `finally`, so an exception escaping mid-body (inside a
+        // CapabilityScope or Handler) cannot leave a stale scope or handler
+        // active for the next applyClosure on the same Vm.
+        val savedCapDepth = capStack.size
+        val savedHandlerDepth = handlers.size
         //
         // The attempt-marker stack, by contrast, IS isolated per applyClosure
         // run: markers record frame depths into the fresh [frames] deque this
@@ -241,6 +245,8 @@ class Vm(
         } finally {
             attemptStack.clear()
             attemptStack.addAll(savedAttempts)
+            while (capStack.size > savedCapDepth) capStack.removeLast()
+            while (handlers.size > savedHandlerDepth) handlers.removeLast()
         }
     }
 
@@ -444,7 +450,7 @@ class Vm(
                     val startIdx = current.stack.size - count
                     val fields = LinkedHashMap<String, Value>(count)
                     for (i in 0 until count) {
-                        fields[c.names[i]] = current.stack[startIdx + i] as Value
+                        fields[c.names[i]] = box(current.stack[startIdx + i])
                     }
                     repeat(count) { current.stack.removeLast() }
                     bumpAllocation()
@@ -457,14 +463,14 @@ class Vm(
                     val product = current.stack.removeLast() as Value.ProductV
                     val field = product.fields[c.value]
                         ?: error("PRODUCT_GET: field '${c.value}' not present in ${product.fields.keys}")
-                    current.stack.add(field)
+                    current.stack.add(unbox(field))
                 }
 
                 Opcode.SUM_NEW -> {
                     // Layer 5 step 3b: build a SumV. Pop payload if the
                     // case has one; otherwise emit a nullary SumV.
                     val c = current.constant() as Constant.SumCaseC
-                    val payload = if (c.hasPayload) current.stack.removeLast() as Value else null
+                    val payload = if (c.hasPayload) box(current.stack.removeLast()) else null
                     bumpAllocation()
                     current.stack.add(Value.SumV(c.caseName, payload))
                 }
@@ -487,11 +493,13 @@ class Vm(
                 Opcode.SUM_PAYLOAD -> {
                     val sum = current.stack.removeLast() as? Value.SumV
                         ?: error("SUM_PAYLOAD: top of stack is not a SumV")
-                    current.stack.add(sum.payload ?: Value.UnitV)
+                    current.stack.add(sum.payload?.let { unbox(it) } ?: Value.UnitV)
                 }
 
                 Opcode.THROW_NO_MATCH -> {
-                    throw VmNoMatchingCase()
+                    // Review M5: the interpreter's typed, uncatchable error at
+                    // the Match NodeId the lowerer recorded as the operand.
+                    throw InterpretException(InterpretError.NoMatchingCase(at = NodeId(current.operand())))
                 }
 
                 Opcode.JUMP -> {
@@ -553,7 +561,7 @@ class Vm(
                         args[i] = current.stack[argStart + i]
                     }
                     repeat(arity) { current.stack.removeLast() }
-                    val fn = current.stack.removeLast()
+                    val fn = unbox(current.stack.removeLast())
                     val effects: IntArray = when (fn) {
                         is VmClosure -> fn.effects
                         is VmForeign -> fn.effects
@@ -840,6 +848,39 @@ class Vm(
         }
     }
 
+    /**
+     * Review M5: VM callables ([VmClosure], [VmFixpoint], [VmForeign]) are not
+     * [Value]s ([Value] is sealed in `:interpreter`), so a callable stored in a
+     * record field or a sum payload is boxed as a [Value.Resource] of kind
+     * [VM_CALLABLE_KIND] whose id indexes this Vm's box table, and unboxed
+     * again when projected (PRODUCT_GET, SUM_PAYLOAD) or called. Inside the VM
+     * the behaviour matches the interpreter's first-class closures; a boxed
+     * callable that escapes to the host shows as that Resource (the
+     * interpreter would return a Value.Closure — the same representational
+     * difference as a bare closure result). [callable] unboxes for hosts.
+     */
+    private val callableBoxes = ArrayList<Any>()
+
+    private fun box(x: Any): Value {
+        if (x is Value) return x
+        callableBoxes += x
+        return Value.Resource(id = (callableBoxes.size - 1).toLong(), kind = VM_CALLABLE_KIND)
+    }
+
+    private fun unbox(x: Any): Any =
+        if (x is Value.Resource && x.kind == VM_CALLABLE_KIND) {
+            callableBoxes.getOrNull(x.id.toInt())
+                ?: error("VM callable box ${x.id} does not belong to this Vm")
+        } else {
+            x
+        }
+
+    /**
+     * Resolve a [Value] produced by this Vm to the callable it boxes (for
+     * [applyClosure]); a non-boxed value is returned unchanged.
+     */
+    fun callable(value: Value): Any = unbox(value)
+
     private fun categoryNameOf(id: NodeId): String = table.categoryNames[id.value] ?: id.toString()
 
     private fun denialReport(
@@ -1098,14 +1139,8 @@ internal class VmFixpoint(
 class VmOpcodeNotImplemented(val op: Opcode) :
     RuntimeException("VM slice 1 has not implemented opcode $op")
 
-/**
- * Thrown when a Match's THROW_NO_MATCH opcode runs — every case's
- * pattern test returned false. Mirrors the tree-walking interpreter's
- * `InterpretError.NoMatchingCase` at the value level (the test asserts
- * the message; the structural type comparison happens at the test layer
- * because [Value] is sealed in `:interpreter`).
- */
-class VmNoMatchingCase : RuntimeException("VM: no Match case matched the scrutinee")
+/** [Value.Resource] kind marking a boxed VM callable (see `Vm.box`). */
+const val VM_CALLABLE_KIND: String = "strand-vm:callable"
 
 /**
  * Q-040 VM-internal exception. Raised by [Vm.runLoop] when a resource
