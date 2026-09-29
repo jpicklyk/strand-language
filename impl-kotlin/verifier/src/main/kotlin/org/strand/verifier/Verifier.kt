@@ -456,8 +456,10 @@ class Verifier(
             }
 
         /**
-         * After verifying a NodeRef's target subgraph under an empty scope,
-         * fold any [VerifyError.UnboundVariable] / [VerifyError.UnboundTypeParameter]
+         * After verifying a NodeRef's target subgraph under an empty scope
+         * (term position) or an empty TypeParameter set and zero recursive
+         * depth (type position), fold any [VerifyError.UnboundVariable] /
+         * [VerifyError.UnboundTypeParameter] / [VerifyError.UnboundRecursiveSelf]
          * errors raised between [errorsBefore] and now into a single
          * [VerifyError.NodeRefTargetMustBeClosed] report. Closure-check errors
          * are removed; any unrelated errors raised during the recursive verify
@@ -470,13 +472,17 @@ class Verifier(
                 when (err) {
                     is VerifyError.UnboundVariable -> err.binder
                     is VerifyError.UnboundTypeParameter -> err.typeParameter
+                    // A RecursiveSelf escaping a type-position NodeRef target
+                    // (review H4) is an open reference to an outer binder.
+                    is VerifyError.UnboundRecursiveSelf -> err.at
                     else -> null
                 }
             }
             if (openRefs.isEmpty()) return
             // Strip the closure-related errors; keep any others.
             val kept = window.filter { err ->
-                err !is VerifyError.UnboundVariable && err !is VerifyError.UnboundTypeParameter
+                err !is VerifyError.UnboundVariable && err !is VerifyError.UnboundTypeParameter &&
+                    err !is VerifyError.UnboundRecursiveSelf
             }
             window.clear()
             errors += kept
@@ -3189,7 +3195,26 @@ class Verifier(
                             else
                                 VerifyError.NodeRefTargetNotFound(at = typeId, targetHash = node.target)
                         )
-                    resolveType(targetId, typeParams)
+                    // Review H4: a NodeRef in type position is subject to the
+                    // same closedness rule as one in term position. Its target
+                    // resolves under an EMPTY TypeParameter set and a zero
+                    // RecursiveType depth, so an open fragment (a free
+                    // TypeParameter, or a RecursiveSelf escaping the target)
+                    // cannot hash to a context-dependent sentinel and mean
+                    // different types in different contexts (ADR-003).
+                    val errorsBefore = errors.size
+                    val savedDepth = recursiveDepth
+                    recursiveDepth = 0
+                    val targetType = try {
+                        resolveType(targetId, emptySet())
+                    } catch (e: VerifyAbort) {
+                        wrapClosureErrors(typeId, targetId, errorsBefore)
+                        throw e
+                    } finally {
+                        recursiveDepth = savedDepth
+                    }
+                    wrapClosureErrors(typeId, targetId, errorsBefore)
+                    targetType
                 }
                 is Node.RecursiveType -> {
                     recursiveDepth++
