@@ -60,10 +60,20 @@ delayed APP sleep [1000]
 `procWait` is in the prelude. `Process.Spawn` and `Process.EnvVar` are not (they return polymorphic types). Declare explicitly:
 
 ```layer-a
-argsT FNT [bytesT] bytesT   -- placeholder; real signature varies
-spawnT FNT [argsT stringT] intT [procWaitFx]
-spawn FN "strand-builtin:Process.Spawn" spawnT [procWaitFx]
+procSpawnFx EFC "Process.Spawn"
+sSelf RS
+sHead PRF "head" stringT
+sTail PRF "tail" sSelf
+sCons PRD [sHead sTail]
+sConsCase SCS "Cons" sCons
+sNilCase SCS "Nil" _
+sSum SUM [sConsCase sNilCase]
+strListT RT sSum
+spawnT FNT [stringT strListT] intT [procSpawnFx]
+spawn FN "strand-builtin:Process.Spawn" spawnT [procSpawnFx]
 ```
+
+`Process.Spawn` must declare the `Process.Spawn` effect category (`procWaitFx` is `Process.Wait`, and the prelude's `spawnFx` is `StateMachine.Spawn`); the verifier checks every `strand-builtin:` ForeignNode's declared effects against the builtin effect table and rejects under-declaration with `ForeignEffectUnderDeclared`.
 
 ## HTTP — prelude or declare
 

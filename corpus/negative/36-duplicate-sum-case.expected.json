@@ -1,5 +1,5 @@
 {
-  "stage": "verify",
-  "family": "DuplicateCaseName",
-  "notes": "SumType with two cases named A (Int and String payloads). Case lookup is by name, so a SumValue and a pattern could resolve different payload types (the Sum analogue of review C1). If ingest later rejects duplicate case names first, this entry's stage moves to ingest."
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "SumType with two cases named A (Int and String payloads). Case lookup is by name, so a SumValue and a pattern could resolve different payload types (the Sum analogue of the duplicate-field type confusion, review C1). Ingest now rejects duplicate case names before the verifier runs; the verifier-level rule DuplicateCaseName still guards programmatically built stores and is exercised in VerifierSoundnessTest. Entry 57 is the ProductType counterpart."
 }
