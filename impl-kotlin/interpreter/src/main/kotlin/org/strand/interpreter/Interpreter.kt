@@ -904,7 +904,9 @@ class Interpreter(
      * decide whether any active handler intercepts a particular call.
      *
      *  - Closure: the Lambda's `effects` list.
-     *  - ForeignFn: the ForeignNode's `effects` list.
+     *  - ForeignFn: the ForeignNode's effect row ([foreignEffectRow]): its
+     *    `effects` list unioned with its foreignType's effects, matching the
+     *    verifier's typing of the ForeignNode.
      *  - FixpointFn: the body Lambda's `effects` list. The body's effects
      *    are equal (by verifier construction) to the recursionType's
      *    effects.
@@ -914,7 +916,7 @@ class Interpreter(
      */
     private fun effectsOf(value: Value): Set<NodeId> = when (value) {
         is Value.Closure -> value.lambda.effects.toSet()
-        is Value.ForeignFn -> value.node.effects.toSet()
+        is Value.ForeignFn -> foreignEffectRow(value.node).toSet()
         is Value.FixpointFn -> value.bodyLambda.effects.toSet()
         else -> emptySet()
     }
@@ -966,7 +968,7 @@ class Interpreter(
         }
         is Value.ForeignFn -> {
             checkForeignFloor(id, callable.node)
-            checkCapabilities(id, callable.node.effects, emptyMap(), context, limits)
+            checkCapabilities(id, foreignEffectRow(callable.node), emptyMap(), context, limits)
             try {
                 foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
             } catch (io: IoFailure) {
@@ -1122,7 +1124,7 @@ class Interpreter(
             evalEffectInstances(env, context, handlers, app, counters, limits)
         }
         checkForeignFloor(id, fn.node)
-        checkCapabilities(id, fn.node.effects, instances, context, limits)
+        checkCapabilities(id, foreignEffectRow(fn.node), instances, context, limits)
         try {
             foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
         } catch (io: IoFailure) {

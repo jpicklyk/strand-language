@@ -124,4 +124,40 @@ class ForeignEffectTrustTest {
             .replace(""""result": "intT" },""", """"result": "intT", "effects": ["writeFx"] },""")
         assertTrue(verify(load(json)) is VerifyResult.Ok)
     }
+
+    // ---- A2: foreignType effects are part of the runtime row --------------
+
+    private fun typeOnlyTimeNow(handled: Boolean) = """{
+        "version": 1, "root": "${if (handled) "h" else "call"}",
+        "nodes": {
+          "intT":   { "type": "PrimitiveType", "kind": "Int" },
+          "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+          "nowT":   { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+          "now":    { "type": "ForeignNode", "target": "strand-builtin:Time.Now",
+                      "foreignType": "nowT", "effects": [] },
+          "call":   { "type": "Application", "function": "now", "arguments": [] },
+          "mock":   { "type": "IntLit", "value": 99 },
+          "mockFn": { "type": "Lambda", "parameters": [], "body": "mock" },
+          "h":      { "type": "Handler", "intercept": "timeFx", "handle": "mockFn", "body": "call" }
+        }
+      }"""
+
+    @Test
+    fun `an effect declared only on the foreignType is intercepted by a Handler`() {
+        val l = load(typeOnlyTimeNow(handled = true))
+        val ok = verify(l) as? VerifyResult.Ok ?: error("expected Ok, got ${verify(l)}")
+        assertTrue(ok.rootClosure(l.root).isEmpty()) { "handler subtracts the type-only effect statically" }
+        assertEquals(Value.IntV(99), Interpreter(l.store, l.hashToNodeId).eval(l.root, CapabilitySet.EMPTY))
+    }
+
+    @Test
+    fun `an effect declared only on the foreignType is capability-checked when not intercepted`() {
+        val l = load(typeOnlyTimeNow(handled = false))
+        val ok = verify(l) as? VerifyResult.Ok ?: error("expected Ok, got ${verify(l)}")
+        assertEquals(setOf(l.names.getValue("timeFx")), ok.rootClosure(l.root))
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, CapabilitySet.EMPTY)
+        }
+        assertTrue(ex.error is InterpretError.CapabilityViolation) { "got ${ex.error}" }
+    }
 }
