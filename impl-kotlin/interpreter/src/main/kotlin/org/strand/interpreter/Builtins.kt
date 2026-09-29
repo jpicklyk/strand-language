@@ -183,6 +183,19 @@ object Builtins {
     private fun detH(fn: (List<Value>, ApplyFn) -> Value): Registration<FnH> =
         Registration(FnH { _, args, apply -> fn(args, apply) }, effectful = false, declared = Determinism.Deterministic)
 
+    /**
+     * Registration helper: effect-free and Deterministic like [det], but
+     * with a [HostContext] receiver so the body can read
+     * [HostContext.builtinLimits] (review H7). Used by the pure builtins
+     * whose output size is chosen by an argument (`List.Range`,
+     * `String.Repeat`, `Compress.Gunzip`, `Regex.*`, ...): the limit is
+     * host policy, so the result for given arguments is still fixed under
+     * a given policy, and exceeding it is an uncatchable
+     * `ResourceExhaustion` rather than a different value.
+     */
+    private fun detBounded(fn: HostContext.(List<Value>) -> Value): Registration<Fn> =
+        Registration(Fn { ctx, args -> ctx.fn(args) }, effectful = false, declared = Determinism.Deterministic)
+
     /** Registration helper: effect-declaring higher-order, defaults Stateful; [HostContext] receiver. */
     private fun fxH(fn: HostContext.(List<Value>, ApplyFn) -> Value): Registration<FnH> =
         Registration(FnH { ctx, args, apply -> ctx.fn(args, apply) }, effectful = true)
@@ -820,9 +833,13 @@ object Builtins {
             }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("network-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
-            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+            val maxBytesLong = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("network-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
-            require(maxBytes >= 0) { "Net.Receive maxBytes must be non-negative, got $maxBytes" }
+            require(maxBytesLong >= 0) { "Net.Receive maxBytes must be non-negative, got $maxBytesLong" }
+            // Review H7: the receive buffer is allocated up front at
+            // maxBytes; bound it before allocating (and before narrowing).
+            builtinLimits.checkBytes(maxBytesLong)
+            val maxBytes = maxBytesLong.toInt()
             val socket = ResourceTable.get(handle, "socket") as java.net.Socket
             try {
                 val buf = ByteArray(maxBytes)
@@ -863,9 +880,13 @@ object Builtins {
             }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("network-stream-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
-            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+            val maxBytesLong = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("network-stream-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
-            require(maxBytes >= 0) { "Net.Stream.Receive maxBytes must be non-negative, got $maxBytes" }
+            require(maxBytesLong >= 0) { "Net.Stream.Receive maxBytes must be non-negative, got $maxBytesLong" }
+            // Review H7: the receive buffer is allocated up front at
+            // maxBytes; bound it before allocating (and before narrowing).
+            builtinLimits.checkBytes(maxBytesLong)
+            val maxBytes = maxBytesLong.toInt()
             val socket = ResourceTable.get(handle, ResourceTable.KIND_SOCKET) as java.net.Socket
             try {
                 val buf = ByteArray(maxBytes)
@@ -915,9 +936,13 @@ object Builtins {
             }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("llm-stream-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
-            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+            val maxBytesLong = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("llm-stream-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
-            require(maxBytes >= 0) { "LLM.Stream.Receive maxBytes must be non-negative, got $maxBytes" }
+            require(maxBytesLong >= 0) { "LLM.Stream.Receive maxBytes must be non-negative, got $maxBytesLong" }
+            // Review H7: the receive buffer is allocated up front at
+            // maxBytes; bound it before allocating (and before narrowing).
+            builtinLimits.checkBytes(maxBytesLong)
+            val maxBytes = maxBytesLong.toInt()
             val holder = ResourceTable.get(handle, ResourceTable.KIND_LLM_STREAM) as LlmStreamHolder
             try {
                 val chunk = holder.stream.read(maxBytes)
@@ -1430,7 +1455,7 @@ object Builtins {
             Value.StringV(out.toString())
         },
 
-        "strand-builtin:String.PadLeft" to det { args ->
+        "strand-builtin:String.PadLeft" to detBounded { args ->
             // (s: String, n: Int, pad: String) -> String.
             // Pads s on the left with `pad` (must be non-empty) until
             // length >= n. If s is already >= n chars, returns s
@@ -1438,9 +1463,13 @@ object Builtins {
             // exactly n chars.
             require(args.size == 3) { "String.PadLeft expects 3 args (s, n, pad), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
-            val n = (args[1] as Value.IntV).v.toInt()
+            val nLong = (args[1] as Value.IntV).v
+            // Review H7: the output length is argument-chosen; bound it
+            // before allocating (and before the Int narrowing).
+            builtinLimits.checkBytes(nLong)
+            val n = nLong.toInt()
             val pad = (args[2] as Value.StringV).v
-            if (s.length >= n) return@det Value.StringV(s)
+            if (s.length >= n) return@detBounded Value.StringV(s)
             require(pad.isNotEmpty()) { "String.PadLeft pad must be non-empty" }
             val needed = n - s.length
             val out = StringBuilder()
@@ -1448,12 +1477,16 @@ object Builtins {
             Value.StringV(out.substring(0, needed) + s)
         },
 
-        "strand-builtin:String.PadRight" to det { args ->
+        "strand-builtin:String.PadRight" to detBounded { args ->
             require(args.size == 3) { "String.PadRight expects 3 args (s, n, pad), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
-            val n = (args[1] as Value.IntV).v.toInt()
+            val nLong = (args[1] as Value.IntV).v
+            // Review H7: the output length is argument-chosen; bound it
+            // before allocating (and before the Int narrowing).
+            builtinLimits.checkBytes(nLong)
+            val n = nLong.toInt()
             val pad = (args[2] as Value.StringV).v
-            if (s.length >= n) return@det Value.StringV(s)
+            if (s.length >= n) return@detBounded Value.StringV(s)
             require(pad.isNotEmpty()) { "String.PadRight pad must be non-empty" }
             val needed = n - s.length
             val out = StringBuilder()
@@ -1461,17 +1494,25 @@ object Builtins {
             Value.StringV(s + out.substring(0, needed))
         },
 
-        "strand-builtin:String.Repeat" to det { args ->
+        "strand-builtin:String.Repeat" to detBounded { args ->
             // (s: String, n: Int) -> String. Non-negative n only;
-            // n=0 yields "". The repeated output capacity is bounded
-            // by Q-040's allocated-values limit indirectly (one
-            // BytesV allocation), so very-large n still gets caught
-            // at the limit boundary.
+            // n=0 yields "". Review H7: the result is ONE allocation that
+            // the Q-040 allocated-values counter counts as a single value,
+            // so it does not bound the length; the output length
+            // `s.length * n` is checked against
+            // BuiltinLimits.maxBuiltinBytes before anything is allocated
+            // (and before n is narrowed to Int, which used to truncate).
             require(args.size == 2) { "String.Repeat expects 2 args (s, n), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
-            val n = (args[1] as Value.IntV).v.toInt()
-            require(n >= 0) { "String.Repeat n must be non-negative, got $n" }
-            Value.StringV(s.repeat(n))
+            val nLong = (args[1] as Value.IntV).v
+            require(nLong >= 0) { "String.Repeat n must be non-negative, got $nLong" }
+            if (s.isNotEmpty()) {
+                val total = if (nLong > Long.MAX_VALUE / s.length) Long.MAX_VALUE else nLong * s.length
+                builtinLimits.checkBytes(total)
+            } else if (nLong > Int.MAX_VALUE) {
+                return@detBounded Value.StringV("")
+            }
+            Value.StringV(s.repeat(nLong.toInt()))
         },
 
         "strand-builtin:String.Lines" to det { args ->
@@ -2055,12 +2096,20 @@ object Builtins {
         // ops (Range/Zip/Unzip/Distinct) cover gaps in the round-2
         // primitives.
 
-        "strand-builtin:List.Range" to det { args ->
+        "strand-builtin:List.Range" to detBounded { args ->
             // (start: Int, end: Int) -> List<Int>
             // Inclusive start, exclusive end. Empty if start >= end.
+            // Review H7: the element count is argument-chosen and the
+            // cells are built outside the interpreter's allocation
+            // counter, so it is checked against
+            // BuiltinLimits.maxCollectionElements first.
             require(args.size == 2) { "List.Range expects 2 args (start, end: Int), got ${args.size}" }
             val start = (args[0] as Value.IntV).v
             val end = (args[1] as Value.IntV).v
+            if (end > start) {
+                val count = if (start < 0 && end > Long.MAX_VALUE + start) Long.MAX_VALUE else end - start
+                builtinLimits.checkElements(count)
+            }
             var result: Value = Value.SumV("Nil", null)
             var i = end - 1
             while (i >= start) {
@@ -2288,8 +2337,11 @@ object Builtins {
         "strand-builtin:Random.Bytes" to nondet { args ->
             // (n: Int) -> Bytes. Exactly n random bytes.
             require(args.size == 1) { "Random.Bytes expects 1 arg (n: Int), got ${args.size}" }
-            val n = (args[0] as Value.IntV).v.toInt()
-            require(n >= 0) { "Random.Bytes n must be non-negative, got $n" }
+            val nLong = (args[0] as Value.IntV).v
+            require(nLong >= 0) { "Random.Bytes n must be non-negative, got $nLong" }
+            // Review H7: bound the argument-chosen allocation (and the Int narrowing).
+            builtinLimits.checkBytes(nLong)
+            val n = nLong.toInt()
             val out = ByteArray(n)
             random.nextBytes(out)
             Value.BytesV(out)
@@ -2539,13 +2591,23 @@ object Builtins {
         // (?:...), ^, $, |, *, +, ?, {n,m}, anchors, and groups all
         // work. Named groups are not exposed in this slice (would need
         // a richer return type than Option<String>).
+        //
+        // Review H7: pattern and input lengths are capped at
+        // BuiltinLimits.maxRegexInputChars, which bounds the cost of a
+        // linear-time match. It does NOT bound catastrophic backtracking
+        // (e.g. `(a+)+$` against "aaaa...b"): java.util.regex exposes no
+        // step limit, so a hostile pattern can still spend time
+        // super-linear in the capped input length. That residual is
+        // recorded rather than fixed here.
 
-        "strand-builtin:Regex.Match" to det { args ->
+        "strand-builtin:Regex.Match" to detBounded { args ->
             // (pattern: String, input: String) -> Option<String>
             // Returns the first full-match substring, or None if no match.
             require(args.size == 2) { "Regex.Match expects 2 args (pattern, input), got ${args.size}" }
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -2555,12 +2617,14 @@ object Builtins {
             else Value.SumV("None", null)
         },
 
-        "strand-builtin:Regex.FindAll" to det { args ->
+        "strand-builtin:Regex.FindAll" to detBounded { args ->
             // (pattern: String, input: String) -> List<String>
             // Returns every non-overlapping match as a Cons/Nil chain.
             require(args.size == 2) { "Regex.FindAll expects 2 args (pattern, input), got ${args.size}" }
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -2575,7 +2639,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:Regex.Replace" to det { args ->
+        "strand-builtin:Regex.Replace" to detBounded { args ->
             // (pattern: String, input: String, replacement: String) -> String
             // Replaces every non-overlapping match. The replacement
             // string supports $1/$2/etc. backreferences for capture
@@ -2584,6 +2648,8 @@ object Builtins {
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
             val replacement = (args[2] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -2591,13 +2657,15 @@ object Builtins {
             Value.StringV(regex.replace(input, replacement))
         },
 
-        "strand-builtin:Regex.Split" to det { args ->
+        "strand-builtin:Regex.Split" to detBounded { args ->
             // (pattern: String, input: String) -> List<String>
             // Splits on every non-overlapping match. Adjacent matches
             // produce empty-string entries (matches Kotlin's split).
             require(args.size == 2) { "Regex.Split expects 2 args (pattern, input), got ${args.size}" }
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -3276,14 +3344,19 @@ object Builtins {
             Value.BytesV(sink.toByteArray())
         },
 
-        "strand-builtin:Compress.Gunzip" to det { args ->
+        "strand-builtin:Compress.Gunzip" to detBounded { args ->
             // (b: Bytes) -> Option<Bytes>. None on malformed gzip
             // (truncated header / CRC mismatch / etc.).
+            // Review H7: decompression is streamed under
+            // BuiltinLimits.maxBuiltinBytes, so a gzip bomb raises
+            // ResourceExhaustion as soon as the output crosses the cap.
             require(args.size == 1) { "Compress.Gunzip expects 1 arg (b: Bytes), got ${args.size}" }
             val bytes = (args[0] as Value.BytesV).v
             try {
                 val out = java.io.ByteArrayInputStream(bytes).use { src ->
-                    java.util.zip.GZIPInputStream(src).use { it.readBytes() }
+                    java.util.zip.GZIPInputStream(src).use {
+                        BuiltinLimits.readBounded(it, builtinLimits.maxBuiltinBytes)
+                    }
                 }
                 Value.SumV("Some", Value.BytesV(out))
             } catch (_: java.util.zip.ZipException) {

@@ -1,0 +1,6 @@
+{
+  "stage": "evaluate",
+  "family": "ResourceExhaustion",
+  "exhaustionKind": "AllocatedValues",
+  "notes": "An effect-free String.PadLeft pads to a 2e9-character width under an empty capability grant. The output width is argument-chosen and built in one StringBuilder the allocation counter cannot see, so the builtin checks it against BuiltinLimits.maxBuiltinBytes first and fails with an uncatchable ResourceExhaustion (review H7)."
+}
