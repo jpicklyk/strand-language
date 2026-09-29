@@ -135,7 +135,38 @@ object LayerATranslator {
             nodeDecls += decl
         }
         if (errors.isNotEmpty()) throw AuthoringException(errors)
-        return LayerADocument(version = version, rootId = rootId, nodes = nodeDecls)
+        return renameReservedIds(LayerADocument(version = version, rootId = rootId, nodes = nodeDecls))
+    }
+
+    /**
+     * Ids starting with `__` are reserved for compiler-minted nodes and
+     * [LayerAParser] rejects them in user text. Emitter output contains such
+     * ids (`__lit0`, `__var1`, ...), so translating it back to Layer A renames
+     * each to a fresh legal id (author ids are not part of a node's content
+     * hash, so this never changes the recompiled root hash) and rewrites every
+     * reference, including the document root.
+     */
+    private fun renameReservedIds(doc: LayerADocument): LayerADocument {
+        val reserved = doc.nodes.map { it.id }.filter { it.startsWith("__") }
+        if (reserved.isEmpty()) return doc
+        val used = doc.nodes.mapTo(HashSet()) { it.id }
+        val renames = LinkedHashMap<String, String>()
+        for (id in reserved) {
+            var candidate = "r_" + id.removePrefix("__").trimStart('_')
+            while (candidate in used) candidate += "_"
+            used += candidate
+            renames[id] = candidate
+        }
+        fun rewrite(arg: Arg): Arg = when (arg) {
+            is Arg.Bare -> renames[arg.text]?.let { Arg.Bare(it) } ?: arg
+            is Arg.Listing -> Arg.Listing(arg.items.map(::rewrite))
+            is Arg.Nested -> Arg.Nested(arg.code, arg.args.map(::rewrite))
+            else -> arg
+        }
+        return doc.copy(
+            rootId = renames[doc.rootId] ?: doc.rootId,
+            nodes = doc.nodes.map { it.copy(id = renames[it.id] ?: it.id, args = it.args.map(::rewrite)) },
+        )
     }
 
     private fun translateNode(

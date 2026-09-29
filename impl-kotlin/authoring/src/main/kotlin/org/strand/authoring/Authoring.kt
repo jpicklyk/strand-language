@@ -56,6 +56,8 @@ object Authoring {
          * trip over is not worth reporting.
          */
         val elaborationGaps: List<ElaborationGap> = emptyList(),
+        /** Non-fatal authoring diagnostics (e.g. a node id shadowing a prelude reserved name). */
+        val warnings: List<AuthoringWarning> = emptyList(),
     )
 
     /** Parse [text] into a [LayerADocument]. */
@@ -95,15 +97,16 @@ object Authoring {
         val sourceLines = elaborated.nodes
             .filter { it.line > 0 }
             .associate { it.id to it.line }
-        val dagJson = try {
-            DagJsonEmitter.emit(elaborated)
+        val (dagJsonObj, warnings) = try {
+            DagJsonEmitter.emitJsonWithWarnings(elaborated)
         } catch (e: AuthoringException) {
             throw AuthoringException(e.errors, result.gaps)
         }
         return CompileResult(
-            dagJson = dagJson,
+            dagJson = DagJsonEmitter.serialize(dagJsonObj),
             sourceLines = sourceLines,
             elaborationGaps = result.gaps,
+            warnings = warnings,
         )
     }
 

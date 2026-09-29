@@ -127,6 +127,24 @@ class LayerAReverseRoundTripTest {
             }
         }
 
+    /**
+     * Review authoring finding 5: exponent-form and signed-zero floats must survive
+     * compile -> reverse projection -> recompile with an identical canonical root hash.
+     */
+    @TestFactory
+    fun `exponent and signed-zero floats round-trip through Layer A`(): List<DynamicTest> =
+        listOf("1.0E10", "1.0E-5", "-0.0", "123456789.0", "2e3", "-2.5E+8", "4.9E-324").map { literal ->
+            DynamicTest.dynamicTest("float $literal") {
+                val source = "@v=1 root=r\nr FLT $literal\n"
+                val original = Authoring.compileToDagJson(source)
+                val rendered = Authoring.projectFromDagJson(original)
+                val recompiled = Authoring.compileToDagJson(rendered)
+                assertEquals(ingestHash(original, "float $literal"), ingestHash(recompiled, "float $literal (recompiled)")) {
+                    "rendered Layer A:\n$rendered"
+                }
+            }
+        }
+
     private fun ingestHash(text: String, label: String): org.strand.core.Hash {
         val ingest = JsonIngest.parse(text)
         val finalized = Hasher(ingest.rawStore).finalize(ingest.root)

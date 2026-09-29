@@ -54,11 +54,21 @@ object DagJsonEmitter {
     }
 
     /** Emit [doc] as a canonical-form JSON string. */
+    fun serialize(json: JsonObject): String = printer.encodeToString(JsonObject.serializer(), json)
+
     fun emit(doc: LayerADocument): String =
         printer.encodeToString(JsonObject.serializer(), emitJson(doc))
 
     /** Build the dag-json JsonObject for [doc] without serializing to text. */
-    fun emitJson(doc: LayerADocument): JsonObject {
+    fun emitJson(doc: LayerADocument): JsonObject = emitJsonWithWarnings(doc).first
+
+    /**
+     * As [emitJson], also returning non-fatal [AuthoringWarning]s. Currently:
+     * a user node whose id is a prelude reserved name and whose emitted body
+     * differs from the prelude's own node (a user declaration byte-identical
+     * to the prelude's is a harmless re-declaration and is not reported).
+     */
+    fun emitJsonWithWarnings(doc: LayerADocument): Pair<JsonObject, List<AuthoringWarning>> {
         val errors = mutableListOf<AuthoringError>()
         val ctx = EmitContext(doc)
         val emittedUser = linkedMapOf<String, JsonObject>()
@@ -87,6 +97,13 @@ object DagJsonEmitter {
         // changes. The legacy synthesis path remains available behind
         // -Dstrand.prelude.legacySynthesis=true as the equivalence suite's
         // comparison baseline and an escape hatch.
+        val warnings = mutableListOf<AuthoringWarning>()
+        for (node in doc.nodes) {
+            val body = emittedUser[node.id] ?: continue
+            if (node.id in LayerAGrammar.reservedNodes && body != resolveReserved(node.id)) {
+                warnings += AuthoringWarning.ShadowedReservedName(line = node.line, name = node.id)
+            }
+        }
         val declaredIds = emittedUser.keys + ctx.synthesized.keys
         val referenced = collectReferencedIds(emittedUser.values) +
             collectReferencedIds(ctx.synthesized.values)
@@ -103,11 +120,12 @@ object DagJsonEmitter {
                 put(reservedId, resolveReserved(reservedId))
             }
         }
-        return buildJsonObject {
+        val out = buildJsonObject {
             put("version", doc.version)
             put("root", doc.rootId)
             put("nodes", nodesObj)
         }
+        return out to warnings
     }
 
     /**
@@ -119,6 +137,24 @@ object DagJsonEmitter {
      * Slice 3 auto-VarRef rule can fire without scanning the document
      * O(N) times.
      */
+    /**
+     * Synthesized-node table that refuses to overwrite. A compiler-minted id
+     * that equals a user-declared id, or one already synthesized, would
+     * otherwise be silently replaced by the later `put` (review authoring
+     * finding 4); this raises a typed [AuthoringError.SynthesizedIdCollision]
+     * instead. Unreachable for parsed Layer A once [LayerAParser] rejects
+     * user ids with the reserved `__` prefix; it guards every other producer
+     * of a [LayerADocument].
+     */
+    private class GuardedSynthesized(private val userIds: Set<String>) : LinkedHashMap<String, JsonObject>() {
+        override fun put(key: String, value: JsonObject): JsonObject? {
+            if (key in userIds || containsKey(key)) {
+                throw AuthoringException(listOf(AuthoringError.SynthesizedIdCollision(line = 0, id = key)))
+            }
+            return super.put(key, value)
+        }
+    }
+
     private class EmitContext(doc: LayerADocument) {
         var litCounter: Int = 0
         var varRefCounter: Int = 0
@@ -127,7 +163,7 @@ object DagJsonEmitter {
         var resCounter: Int = 0
         var exprCounter: Int = 0
         var lamPrcCounter: Int = 0
-        val synthesized: LinkedHashMap<String, JsonObject> = linkedMapOf()
+        val synthesized: LinkedHashMap<String, JsonObject> = GuardedSynthesized(doc.nodes.mapTo(HashSet()) { it.id })
         val document: LayerADocument = doc
 
         /**
@@ -354,7 +390,9 @@ object DagJsonEmitter {
         if (useLegacySynthesis) synthesizeReserved(id) else PreludeModule.nodeJson(id)
 
     /**
-     * The legacy per-program synthesis path — build the reserved node's
+     * The legacy per-program synthesis path, retained only as the equivalence
+     * oracle for `PreludeResolutionEquivalenceTest` (and the
+     * `-Dstrand.prelude.legacySynthesis` escape hatch that test drives) — build the reserved node's
      * dag-json object directly from the in-memory spec table. The
      * JSON-shaping lives in [PreludeModuleGenerator.reservedNodeJson] (the
      * same code that generated the bundled prelude module snapshot), which

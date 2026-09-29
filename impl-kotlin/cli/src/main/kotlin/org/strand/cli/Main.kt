@@ -10,6 +10,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.strand.authoring.Authoring
 import org.strand.authoring.AuthoringException
+import org.strand.authoring.AuthoringError
 import org.strand.authoring.ConstraintGrammar
 import org.strand.authoring.LayerAGrammar
 import org.strand.authoring.PreludeModule
@@ -73,7 +74,11 @@ import kotlin.system.exitProcess
  * vocabulary, for the per-subcommand parser to dispatch against
  * `--grant-all` / `--metrics` / `--emit-json` / etc.).
  */
-private fun parseLimits(flags: List<String>): Triple<EvaluationLimits, SandboxPolicy, Set<String>> {
+private fun parseLimits(rawFlags: List<String>): Triple<EvaluationLimits, SandboxPolicy, Set<String>> {
+    // Accept the `--error-verbosity=<mode>` spelling as well as `--error-verbosity <mode>`.
+    val flags = rawFlags.flatMap {
+        if (it.startsWith("--error-verbosity=")) listOf("--error-verbosity", it.substringAfter('=')) else listOf(it)
+    }
     var limits = EvaluationLimits.DEFAULTS
     // CLI default is secure; flags relax it.
     var fsPolicy = SandboxPolicy.SECURE_DEFAULT.fs
@@ -84,41 +89,41 @@ private fun parseLimits(flags: List<String>): Triple<EvaluationLimits, SandboxPo
         val flag = flags[i]
         val v = { f: String ->
             val raw = flags.getOrNull(i + 1)
-                ?: error("$f requires an argument")
+                ?: usageError("$f requires an argument")
             i++
             raw
         }
         when (flag) {
             "--max-steps" -> {
-                val n = v(flag).toLongOrNull() ?: error("--max-steps requires a Long")
+                val n = v(flag).toLongOrNull() ?: usageError("--max-steps requires a Long")
                 limits = limits.copy(maxSteps = n)
             }
             "--max-stack-depth" -> {
-                val n = v(flag).toIntOrNull() ?: error("--max-stack-depth requires an Int")
+                val n = v(flag).toIntOrNull() ?: usageError("--max-stack-depth requires an Int")
                 limits = limits.copy(maxStackDepth = n)
             }
             "--max-allocated-values" -> {
-                val n = v(flag).toLongOrNull() ?: error("--max-allocated-values requires a Long")
+                val n = v(flag).toLongOrNull() ?: usageError("--max-allocated-values requires a Long")
                 limits = limits.copy(maxAllocatedValues = n)
             }
             "--wall-clock-ms" -> {
-                val n = v(flag).toLongOrNull() ?: error("--wall-clock-ms requires a Long")
+                val n = v(flag).toLongOrNull() ?: usageError("--wall-clock-ms requires a Long")
                 limits = limits.copy(wallClockBudgetMillis = n)
             }
             "--stream-receive-timeout-ms" -> {
-                val n = v(flag).toLongOrNull() ?: error("--stream-receive-timeout-ms requires a Long")
+                val n = v(flag).toLongOrNull() ?: usageError("--stream-receive-timeout-ms requires a Long")
                 limits = limits.copy(streamReceiveTimeoutMillis = n)
             }
             "--max-json-depth" -> {
-                val n = v(flag).toIntOrNull() ?: error("--max-json-depth requires an Int")
+                val n = v(flag).toIntOrNull() ?: usageError("--max-json-depth requires an Int")
                 limits = limits.copy(maxJsonDepth = n)
             }
             "--max-node-count" -> {
-                val n = v(flag).toIntOrNull() ?: error("--max-node-count requires an Int")
+                val n = v(flag).toIntOrNull() ?: usageError("--max-node-count requires an Int")
                 limits = limits.copy(maxNodeCount = n)
             }
             "--max-ingest-bytes" -> {
-                val n = v(flag).toLongOrNull() ?: error("--max-ingest-bytes requires a Long")
+                val n = v(flag).toLongOrNull() ?: usageError("--max-ingest-bytes requires a Long")
                 limits = limits.copy(maxIngestBytes = n)
             }
             "--error-verbosity" -> {
@@ -135,7 +140,7 @@ private fun parseLimits(flags: List<String>): Triple<EvaluationLimits, SandboxPo
                         ErrorVerbosity.Full
                     }
                     "kind-only" -> ErrorVerbosity.RedactedWithKindOnly
-                    else -> error("--error-verbosity expects {redacted|full|kind-only}, got '$raw'")
+                    else -> usageError("--error-verbosity expects {redacted|full|kind-only}, got '$raw'")
                 }
                 limits = limits.copy(errorVerbosity = verbosity)
             }
@@ -175,7 +180,7 @@ private fun extractPeerStores(flags: List<String>): Pair<List<String>, List<Stri
     var i = 0
     while (i < flags.size) {
         if (flags[i] == "--peer-store") {
-            peers += flags.getOrNull(i + 1) ?: error("--peer-store requires a path argument")
+            peers += flags.getOrNull(i + 1) ?: usageError("--peer-store requires a path argument")
             i += 2
         } else {
             rest += flags[i]
@@ -472,6 +477,51 @@ private fun grantAllCapabilities(finalized: FinalizedProgram): CapabilitySet {
  * the pipeline; `grammar` emits the Layer B GBNF constraint grammar.
  */
 fun main(args: Array<String>) {
+    val code = runGuarded(args)
+    if (code != 0) exitProcess(code)
+}
+
+/** A user mistake in the command line (bad flag value, missing flag argument). Exit code 2. */
+internal class CliUsageException(message: String) : RuntimeException(message)
+
+/** Throw a [CliUsageException]; the top-level guard prints the message and exits 2. */
+internal fun usageError(message: String): Nothing = throw CliUsageException(message)
+
+/**
+ * Run [dispatch] and convert user mistakes into a message plus exit code instead of a JVM
+ * stack trace (review CLI finding): a [CliUsageException] (malformed flag) -> stderr message,
+ * exit 2; a missing or unreadable file -> message, exit 1; any other unexpected throwable ->
+ * a one-line message, exit 1, with the stack trace printed only under
+ * `--error-verbosity=full`. Returns the exit code (0 on normal completion). Commands that
+ * terminate through `exitProcess` themselves never return here.
+ */
+internal fun runGuarded(args: Array<String>, dispatch: (Array<String>) -> Unit = ::dispatchCommand): Int =
+    try {
+        dispatch(args)
+        0
+    } catch (e: CliUsageException) {
+        System.err.println("error: ${e.message}")
+        2
+    } catch (e: java.io.FileNotFoundException) {
+        System.err.println("error: cannot read input file: ${e.message}")
+        1
+    } catch (e: java.nio.file.NoSuchFileException) {
+        System.err.println("error: cannot read input file: ${e.message}")
+        1
+    } catch (e: java.io.IOException) {
+        System.err.println("error: I/O failure: ${e.message ?: e.javaClass.simpleName}")
+        1
+    } catch (e: Throwable) {
+        System.err.println("error: ${e.javaClass.simpleName}: ${e.message ?: "(no message)"}")
+        if (wantsFullErrors(args)) e.printStackTrace()
+        1
+    }
+
+private fun wantsFullErrors(args: Array<String>): Boolean =
+    args.contains("--error-verbosity=full") ||
+        args.indices.any { args[it] == "--error-verbosity" && args.getOrNull(it + 1) == "full" }
+
+private fun dispatchCommand(args: Array<String>) {
     if (args.isEmpty()) {
         usage()
         exitProcess(2)
@@ -1047,11 +1097,13 @@ private fun runAuthor(args: Array<String>) {
     } catch (e: AuthoringException) {
         System.err.println("$surfaceLabel compilation failed:")
         for (err in e.errors) {
-            System.err.println("  line ${err.line}: ${err.detail}")
+            System.err.println("  ${AuthoringError.location(err)}: ${err.detail}")
         }
         printElaborationNotes(e.elaborationGaps)
         exitProcess(1)
     }
+    // Authoring warnings ride the same stderr channel as verifier warnings.
+    for (w in compiled.warnings) System.err.println("warning: line ${w.line}: ${w.message}")
     if (emitOnly) {
         println(compiled.dagJson)
         return

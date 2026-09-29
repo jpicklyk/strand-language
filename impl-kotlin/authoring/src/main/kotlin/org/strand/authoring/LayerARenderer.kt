@@ -50,28 +50,50 @@ object LayerARenderer {
         }
     }
 
-    /** Render a Kotlin String as a Layer A double-quoted string with the standard escapes. */
+    /**
+     * Render a Kotlin String as a Layer A double-quoted string. Escapes `\\`,
+     * `\"`, `\n`, `\t`, `\r`; every other control character (and DEL and
+     * unpaired surrogates) becomes `\uXXXX` so the rendered line never
+     * contains a raw line break and always reads back to the same string.
+     */
     private fun renderString(s: String): String {
         val sb = StringBuilder().append('"')
-        for (c in s) {
-            when (c) {
-                '\\' -> sb.append("\\\\")
-                '"' -> sb.append("\\\"")
-                '\n' -> sb.append("\\n")
-                '\t' -> sb.append("\\t")
+        for ((i, c) in s.withIndex()) {
+            when {
+                c == '\\' -> sb.append("\\\\")
+                c == '"' -> sb.append("\\\"")
+                c == '\n' -> sb.append("\\n")
+                c == '\t' -> sb.append("\\t")
+                c == '\r' -> sb.append("\\r")
+                c.code < 0x20 || c.code == 0x7f || isUnpairedSurrogate(s, i) ->
+                    sb.append("\\u").append("%04x".format(c.code))
                 else -> sb.append(c)
             }
         }
         return sb.append('"').toString()
     }
 
+    private fun isUnpairedSurrogate(s: String, i: Int): Boolean {
+        val c = s[i]
+        return when {
+            c.isHighSurrogate() -> !(i + 1 < s.length && s[i + 1].isLowSurrogate())
+            c.isLowSurrogate() -> !(i > 0 && s[i - 1].isHighSurrogate())
+            else -> false
+        }
+    }
+
     /**
-     * Render a Double so the output reliably contains a `.` (Layer A's float
-     * discriminator vs. integer). Kotlin's [Double.toString] already includes
-     * the dot for finite values (e.g., `1.0` → `"1.0"`, `3.14` → `"3.14"`),
-     * and the exponential form (`"1.0E10"`) still contains a dot. Non-finite
-     * values (NaN, Infinity) aren't produced by the current corpus; if they
-     * later are, [LayerAParser]'s float grammar would need extension.
+     * Render a Double in a form [LayerAParser] accepts and reads back to the
+     * identical value. [Double.toString] is the shortest round-tripping decimal
+     * and always contains a `.`; its exponent forms (`1.0E10`, `1.0E-5`) match
+     * the parser's `digits[.digits](e|E)[+-]digits` float grammar, and `-0.0`
+     * keeps its sign. NaN and the infinities have no Layer A literal and are
+     * rejected with a typed [AuthoringError.UnrenderableFloat].
      */
-    private fun renderFloat(d: Double): String = d.toString()
+    private fun renderFloat(d: Double): String {
+        if (d.isNaN() || d.isInfinite()) {
+            throw AuthoringException(listOf(AuthoringError.UnrenderableFloat(line = 0, value = d.toString())))
+        }
+        return d.toString()
+    }
 }
