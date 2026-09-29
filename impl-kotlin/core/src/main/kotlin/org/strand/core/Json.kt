@@ -138,6 +138,11 @@ object JsonIngest {
      *     `nodes.entries.size > limits.maxNodeCount` raises
      *     [IngestError.ResourceExhaustion] with [ExhaustionKind.NodeCount].
      *
+     * A fourth cap fires after the nodes are materialized but before the
+     * store is committed: **graph depth** (review H3). The longest reference
+     * chain exceeding `limits.maxGraphDepth` raises
+     * [IngestError.ResourceExhaustion] with [ExhaustionKind.GraphDepth].
+     *
      * Existing malformed-input failure paths (missing fields, unknown node
      * types, etc.) raise [IngestError.Malformed] with the same string
      * messages they did pre-Q-040.
@@ -270,7 +275,15 @@ object JsonIngest {
         // is its target's content hash, and the hash walk only computes
         // hashes for root-reachable nodes — an unreachable target leaves
         // the NodeRef with no canonical form at all.
-        validateAcyclic(orderedEntries.map { it.key }, nameToId, slots, nameToId.getValue(rootName))
+        //
+        // The same DFS enforces the graph-depth cap (review H3):
+        // [EvaluationLimits.maxGraphDepth] bounds the longest reference
+        // chain, which the flat JSON form (and so [validateJsonDepth]) does
+        // not bound, and which every downstream recursive walk depends on.
+        validateAcyclic(
+            orderedEntries.map { it.key }, nameToId, slots, nameToId.getValue(rootName),
+            limits.maxGraphDepth,
+        )
 
         // Pass 3: commit to the raw store. Every slot must be Resolved; an
         // unresolved slot would indicate an ingest bug, not a malformed
@@ -479,12 +492,22 @@ object JsonIngest {
      * [Node.VarRef.binder] (binders are positionally encoded back-edges),
      * the raw target of a pre-finalization NodeRef, and the export targets
      * plus declared effects of a pre-finalization ModuleManifest.
+     *
+     * The same DFS computes each node's graph height (the number of nodes on
+     * the longest path from it down that edge set, a leaf being 1) as it
+     * finishes the node, and rejects a document in which any node's height
+     * exceeds [maxGraphDepth] with [IngestError.ResourceExhaustion] /
+     * [ExhaustionKind.GraphDepth]. The flat JSON form does not bound graph
+     * depth — a 100k-node Let chain is shallow JSON — while the canonical
+     * encoder, the hash walk, the verifier and the interpreter all recurse
+     * per graph level (review H3 / verifier M4).
      */
     private fun validateAcyclic(
         orderedNames: List<String>,
         nameToId: Map<String, NodeId>,
         slots: Map<NodeId, IngestSlot>,
         rootId: NodeId,
+        maxGraphDepth: Int,
     ) {
         fun edgesOf(id: NodeId): List<NodeId> {
             val stored = ((slots.getValue(id) as? IngestSlot.Resolved)?.stored) ?: return emptyList()
@@ -512,6 +535,7 @@ object JsonIngest {
         val gray = 1
         val black = 2
         val color = HashMap<NodeId, Int>()
+        val height = HashMap<NodeId, Int>()
         for (startName in orderedNames) {
             val start = nameToId.getValue(startName)
             if ((color[start] ?: white) != white) continue
@@ -536,6 +560,21 @@ object JsonIngest {
                         else -> {}
                     }
                 } else {
+                    // Every child is black here (a gray child is a cycle and
+                    // was thrown above), so its height is final.
+                    var h = 1
+                    for (child in edgesOf(id)) {
+                        val ch = height.getValue(child) + 1
+                        if (ch > h) h = ch
+                    }
+                    if (h > maxGraphDepth) {
+                        throw IngestError.ResourceExhaustion(
+                            kind = ExhaustionKind.GraphDepth,
+                            current = h.toLong(),
+                            limit = maxGraphDepth.toLong(),
+                        )
+                    }
+                    height[id] = h
                     color[id] = black
                     stack.removeLast()
                 }

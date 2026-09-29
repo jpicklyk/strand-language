@@ -2,6 +2,7 @@ package org.strand.hashing
 
 import org.strand.core.ConsumerMode
 import org.strand.core.EffectProjection
+import org.strand.core.ExhaustionKind
 import org.strand.core.IngestError
 import java.nio.CharBuffer
 import java.nio.charset.CharacterCodingException
@@ -132,13 +133,64 @@ internal class CanonicalEncoder(
      * Encode the node at [id] in the given binder context. Returns the
      * canonical bytes ready to feed into the hash function.
      */
-    fun encode(id: NodeId, stack: BinderStack = emptyList()): ByteArray {
+    fun encode(id: NodeId, stack: BinderStack = emptyList()): ByteArray =
+        stackGuard { encodeInner(id, stack) }
+
+    /** Hash the canonical encoding of [id] in the given binder context. */
+    fun hash(id: NodeId, stack: BinderStack = emptyList()): ByteArray =
+        stackGuard { hashInner(id, stack) }
+
+    // Internal recursion goes through the unguarded *Inner entry points so
+    // the stack guard costs no frames per graph level.
+    private fun encodeInner(id: NodeId, stack: BinderStack): ByteArray {
         val key = EncodingKey(id, stack, currentRecDepth)
         encodingCache[key]?.let { return it }
         val stored = lookup(id)
-        val encoded = encodeDispatch(id, stored, stack)
+        nesting++
+        if (nesting > maxNesting) maxNesting = nesting
+        val encoded = try {
+            encodeDispatch(id, stored, stack)
+        } finally {
+            nesting--
+        }
         encodingCache[key] = encoded
         return encoded
+    }
+
+    private fun hashInner(id: NodeId, stack: BinderStack): ByteArray =
+        hashFn(encodeInner(id, stack))
+
+    /** Current / deepest encode nesting, reported by the [stackGuard] backstop. */
+    private var nesting: Int = 0
+    private var maxNesting: Int = 0
+    private var guardActive: Boolean = false
+
+    /**
+     * Backstop for review H3: JSON ingest bounds graph depth
+     * ([org.strand.core.EvaluationLimits.maxGraphDepth]), but a
+     * programmatically built store bypasses ingest, and the encoder recurses
+     * once per graph level. The OUTERMOST encode call converts a JVM
+     * [StackOverflowError] into a typed [IngestError.ResourceExhaustion] with
+     * [ExhaustionKind.GraphDepth]; `current` is the deepest encode nesting
+     * reached and `limit` is `-1` (the JVM thread stack, not a configured
+     * cap). Nested calls run unguarded so the catch sits at a shallow frame
+     * where the stack has unwound.
+     */
+    internal fun <T> stackGuard(block: () -> T): T {
+        if (guardActive) return block()
+        guardActive = true
+        maxNesting = 0
+        try {
+            return block()
+        } catch (e: StackOverflowError) {
+            throw IngestError.ResourceExhaustion(
+                kind = ExhaustionKind.GraphDepth,
+                current = maxNesting.toLong(),
+                limit = -1L,
+            )
+        } finally {
+            guardActive = false
+        }
     }
 
     private fun fetchCanonical(id: NodeId): Node {
@@ -146,10 +198,6 @@ internal class CanonicalEncoder(
         return (stored as? StoredNode.Canonical)?.node
             ?: error("Expected canonical node at $id, found ${stored::class.simpleName}")
     }
-
-    /** Hash the canonical encoding of [id] in the given binder context. */
-    fun hash(id: NodeId, stack: BinderStack = emptyList()): ByteArray =
-        hashFn(encode(id, stack))
 
     /**
      * Push one recursive-binder frame. Callers (this encoder's own
@@ -189,7 +237,7 @@ internal class CanonicalEncoder(
      * context regardless of the reference's own position.
      */
     internal fun hashReferenceTarget(targetId: NodeId): ByteArray =
-        inEmptyContext { hash(targetId, emptyList()) }
+        stackGuard { inEmptyContext { hashInner(targetId, emptyList()) } }
 
     private fun encodeDispatch(id: NodeId, stored: StoredNode, stack: BinderStack): ByteArray =
         when (stored) {
@@ -302,7 +350,7 @@ internal class CanonicalEncoder(
             requireProductTypeField(fieldId).fieldName
         }
         val fieldHashes = sortedFieldIds.map { fieldId ->
-            CanonicalCbor.encodeBytes(hash(fieldId, stack))
+            CanonicalCbor.encodeBytes(hashInner(fieldId, stack))
         }
         return encodeWithTag(CategoryTag.ProductType, listOf(
             CanonicalCbor.encodeArray(fieldHashes)
@@ -321,7 +369,7 @@ internal class CanonicalEncoder(
             requireSumTypeCase(caseId).caseName
         }
         val caseHashes = sortedCaseIds.map { caseId ->
-            CanonicalCbor.encodeBytes(hash(caseId, stack))
+            CanonicalCbor.encodeBytes(hashInner(caseId, stack))
         }
         return encodeWithTag(CategoryTag.SumType, listOf(
             CanonicalCbor.encodeArray(caseHashes)
@@ -353,7 +401,7 @@ internal class CanonicalEncoder(
         // two FunctionTypes that differ only in declared effect order hash
         // identically.
         val effectHashes = node.effects
-            .map { hash(it, stack) }
+            .map { hashInner(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         val baseFields = listOf(
@@ -423,7 +471,7 @@ internal class CanonicalEncoder(
         // The selector-tag discriminator (0/1/2) is frozen on assignment.
         val stepEncodings = node.path.map { step -> encodeProjectionStep(step) }
         return encodeWithTag(CategoryTag.RecursiveProjection, listOf(
-            CanonicalCbor.encodeBytes(hash(node.recursiveType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.recursiveType, stack)),
             CanonicalCbor.encodeArray(stepEncodings),
         ))
     }
@@ -483,7 +531,7 @@ internal class CanonicalEncoder(
         // determinism. Two lambdas that differ only in effect declaration
         // order hash identically.
         val effectHashes = node.effects
-            .map { hash(it, stack) }
+            .map { hashInner(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         return encodeWithTag(CategoryTag.Lambda, listOf(
@@ -523,7 +571,7 @@ internal class CanonicalEncoder(
             baseFields
         } else {
             val effectInstanceHashes = node.effectInstances
-                .map { hash(it, stack) }
+                .map { hashInner(it, stack) }
                 .sortedWith(byteArrayLexicographicComparator)
                 .map { CanonicalCbor.encodeBytes(it) }
             baseFields + CanonicalCbor.encodeArray(effectInstanceHashes)
@@ -582,12 +630,12 @@ internal class CanonicalEncoder(
         // identically to its pre-Q-039 form (the epoch-1 gated-omit special
         // case is gone).
         val effectHashes = node.effects
-            .map { hash(it, stack) }
+            .map { hashInner(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         val baseFields = listOf(
             CanonicalCbor.encodeBytes(utf8(node.target)),
-            CanonicalCbor.encodeBytes(hash(node.foreignType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.foreignType, stack)),
             CanonicalCbor.encodeArray(effectHashes),
         )
         val allFields = baseFields + encodeOptionalProjections(node.effectProjections, stack)
@@ -651,7 +699,7 @@ internal class CanonicalEncoder(
         // structural (positional within the EffectCategory.parameters).
         val sourceEntries = proj.sources.map { src -> encodeProjectionSource(src, stack) }
         return CanonicalCbor.encodeArray(listOf(
-            CanonicalCbor.encodeBytes(hash(proj.category, stack)),
+            CanonicalCbor.encodeBytes(hashInner(proj.category, stack)),
             CanonicalCbor.encodeArray(sourceEntries),
         ))
     }
@@ -670,7 +718,7 @@ internal class CanonicalEncoder(
             ))
             is ProjectionSource.LiteralNode -> CanonicalCbor.encodeArray(listOf(
                 CanonicalCbor.encodeUint(1),
-                CanonicalCbor.encodeBytes(hash(src.target, stack)),
+                CanonicalCbor.encodeBytes(hashInner(src.target, stack)),
             ))
         }
     }
@@ -692,7 +740,7 @@ internal class CanonicalEncoder(
             encodeExpressionChild(paramId, stack)
         }
         return encodeWithTag(CategoryTag.EffectDecl, listOf(
-            CanonicalCbor.encodeBytes(hash(node.effectType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.effectType, stack)),
             CanonicalCbor.encodeArray(paramEncodings),
         ))
     }
@@ -706,7 +754,7 @@ internal class CanonicalEncoder(
         // semantics is "first match wins" — so we encode cases in
         // declaration order.
         val caseEncodings = node.cases.map { caseId ->
-            CanonicalCbor.encodeBytes(hash(caseId, stack))
+            CanonicalCbor.encodeBytes(hashInner(caseId, stack))
         }
         return encodeWithTag(CategoryTag.Match, listOf(
             encodeExpressionChild(node.scrutinee, stack),
@@ -731,7 +779,7 @@ internal class CanonicalEncoder(
         val binders = collectPatternBinders(node.pattern, patternNode)
         val bodyStack = if (binders.isEmpty()) stack else stack + listOf(binders)
         return encodeWithTag(CategoryTag.MatchCase, listOf(
-            CanonicalCbor.encodeBytes(hash(node.pattern, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.pattern, stack)),
             encodeExpressionChild(node.body, bodyStack),
         ))
     }
@@ -749,10 +797,10 @@ internal class CanonicalEncoder(
             requireProductFieldValue(fieldId).fieldName
         }
         val fieldHashes = sortedFieldIds.map { fieldId ->
-            CanonicalCbor.encodeBytes(hash(fieldId, stack))
+            CanonicalCbor.encodeBytes(hashInner(fieldId, stack))
         }
         return encodeWithTag(CategoryTag.ProductValue, listOf(
-            CanonicalCbor.encodeBytes(hash(node.ofType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.ofType, stack)),
             CanonicalCbor.encodeArray(fieldHashes),
         ))
     }
@@ -783,7 +831,7 @@ internal class CanonicalEncoder(
             )
         }
         return encodeWithTag(CategoryTag.SumValue, listOf(
-            CanonicalCbor.encodeBytes(hash(node.ofType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.ofType, stack)),
             CanonicalCbor.encodeBytes(utf8(node.caseName)),
         ) + payloadFields)
     }
@@ -801,8 +849,8 @@ internal class CanonicalEncoder(
         // structural relationship is verified, not encoded — the canonical
         // bytes simply reference the two children by hash.
         return encodeWithTag(CategoryTag.Fixpoint, listOf(
-            CanonicalCbor.encodeBytes(hash(node.recursionType, stack)),
-            CanonicalCbor.encodeBytes(hash(node.body, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.recursionType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.body, stack)),
         ))
     }
 
@@ -828,7 +876,7 @@ internal class CanonicalEncoder(
             is Node.Pattern.LiteralPattern -> encodeWithTag(CategoryTag.Pattern, listOf(
                 CanonicalCbor.encodeUint(KIND_LITERAL),
                 encodeTypePositionChild(node.patternType, stack),
-                CanonicalCbor.encodeBytes(hash(node.literal, stack)),
+                CanonicalCbor.encodeBytes(hashInner(node.literal, stack)),
             ))
             is Node.Pattern.VariablePattern -> encodeWithTag(CategoryTag.Pattern, listOf(
                 CanonicalCbor.encodeUint(KIND_VARIABLE),
@@ -847,7 +895,7 @@ internal class CanonicalEncoder(
                 } else {
                     listOf(
                         CanonicalCbor.encodeUint(1L),
-                        CanonicalCbor.encodeBytes(hash(payload, stack)),
+                        CanonicalCbor.encodeBytes(hashInner(payload, stack)),
                     )
                 }
                 encodeWithTag(CategoryTag.Pattern, listOf(
@@ -862,7 +910,7 @@ internal class CanonicalEncoder(
     private fun encodeCapabilityScope(node: Node.CapabilityScope, stack: BinderStack): ByteArray {
         // Capability list is a set: sort by hash for canonical order.
         val capabilityHashes = node.capabilities
-            .map { hash(it, stack) }
+            .map { hashInner(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         return encodeWithTag(CategoryTag.CapabilityScope, listOf(
@@ -878,7 +926,7 @@ internal class CanonicalEncoder(
         // order so identity is fully structural: two Handlers with the same
         // (intercept, handle, body) triple hash byte-identically.
         return encodeWithTag(CategoryTag.Handler, listOf(
-            CanonicalCbor.encodeBytes(hash(node.intercept, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.intercept, stack)),
             encodeExpressionChild(node.handle, stack),
             encodeExpressionChild(node.body, stack),
         ))
@@ -895,14 +943,14 @@ internal class CanonicalEncoder(
         // position into the runtime's OutputBatch (field name "output_i"),
         // and step 2 will tag input events by their stream's position too.
         // Effects are a set (sort by hash bytes for determinism).
-        val inputHashes = node.inputStreams.map { CanonicalCbor.encodeBytes(hash(it, stack)) }
-        val outputHashes = node.outputStreams.map { CanonicalCbor.encodeBytes(hash(it, stack)) }
+        val inputHashes = node.inputStreams.map { CanonicalCbor.encodeBytes(hashInner(it, stack)) }
+        val outputHashes = node.outputStreams.map { CanonicalCbor.encodeBytes(hashInner(it, stack)) }
         val effectHashes = node.effects
-            .map { hash(it, stack) }
+            .map { hashInner(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         return encodeWithTag(CategoryTag.StateMachine, listOf(
-            CanonicalCbor.encodeBytes(hash(node.transitionFn, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.transitionFn, stack)),
             encodeExpressionChild(node.initialState, stack),
             CanonicalCbor.encodeArray(inputHashes),
             CanonicalCbor.encodeArray(outputHashes),
@@ -937,11 +985,11 @@ internal class CanonicalEncoder(
         // gated-omit special case is gone, and with it the collision-avoidance
         // reasoning the old trailing-hash form depended on).
         val baseFields = mutableListOf(
-            CanonicalCbor.encodeBytes(hash(node.eventType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.eventType, stack)),
             CanonicalCbor.encodeUint(node.streamKind.ordinal.toLong()),
         )
         val sourceFields: List<ByteArray> = node.source?.let {
-            listOf(CanonicalCbor.encodeUint(1L), CanonicalCbor.encodeBytes(hash(it, stack)))
+            listOf(CanonicalCbor.encodeUint(1L), CanonicalCbor.encodeBytes(hashInner(it, stack)))
         } ?: listOf(CanonicalCbor.encodeUint(0L))
         val hasNonDefaultBuffer = node.bufferSize != null
         val hasNonDefaultPolicy = node.overflowPolicy != null &&
@@ -1011,12 +1059,12 @@ internal class CanonicalEncoder(
         // currently carry it; the field is reserved for the security-model
         // work that lands alongside ForeignNode-backed checkers).
         val invariantHashes = node.invariants
-            .map { hash(it, stack) }
+            .map { hashInner(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         return encodeWithTag(CategoryTag.Schema, listOf(
             CanonicalCbor.encodeBytes(utf8(node.schemaName)),
-            CanonicalCbor.encodeBytes(hash(node.valueType, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.valueType, stack)),
             CanonicalCbor.encodeArray(invariantHashes),
         ))
     }
@@ -1038,7 +1086,7 @@ internal class CanonicalEncoder(
         // ToolDefs with the same (parameterSchema, implementation) pair
         // hash byte-identically.
         return encodeWithTag(CategoryTag.ToolDef, listOf(
-            CanonicalCbor.encodeBytes(hash(node.parameterSchema, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.parameterSchema, stack)),
             encodeExpressionChild(node.implementation, stack),
         ))
     }
@@ -1052,7 +1100,7 @@ internal class CanonicalEncoder(
         // so two ResponseSchemaSpecs around equal Schemas hash byte-
         // identically.
         return encodeWithTag(CategoryTag.ResponseSchemaSpec, listOf(
-            CanonicalCbor.encodeBytes(hash(node.schema, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.schema, stack)),
         ))
     }
 
@@ -1108,7 +1156,7 @@ internal class CanonicalEncoder(
         stack: BinderStack,
     ): ByteArray {
         val effectHashes = declaredEffects
-            .map { hash(it, stack) }
+            .map { hashInner(it, stack) }
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         return CanonicalCbor.encodeArray(listOf(
@@ -1138,7 +1186,7 @@ internal class CanonicalEncoder(
         // authoritative association.
         return encodeWithTag(CategoryTag.Invariant, listOf(
             CanonicalCbor.encodeBytes(utf8(node.invariantName)),
-            CanonicalCbor.encodeBytes(hash(node.body, stack)),
+            CanonicalCbor.encodeBytes(hashInner(node.body, stack)),
         ))
     }
 
@@ -1161,13 +1209,13 @@ internal class CanonicalEncoder(
         val child = (lookup(childId) as? StoredNode.Canonical)?.node
         return if (child is Node.TypeParameter && resolvePosition(childId, stack) != null) {
             // Bound TypeParameter: inline positional reference (NOT a hash).
-            encode(childId, stack)
+            encodeInner(childId, stack)
         } else {
             // Any other type — including a NodeRef boundary — or a free
             // TypeParameter (the verifier would reject the latter, but we
             // encode defensively): emit the child's hash as a 33-byte byte
             // string.
-            CanonicalCbor.encodeBytes(hash(childId, stack))
+            CanonicalCbor.encodeBytes(hashInner(childId, stack))
         }
     }
 
@@ -1177,7 +1225,7 @@ internal class CanonicalEncoder(
      * positional encoding is captured inside the VarRef's own canonical form.
      */
     private fun encodeExpressionChild(childId: NodeId, stack: BinderStack): ByteArray =
-        CanonicalCbor.encodeBytes(hash(childId, stack))
+        CanonicalCbor.encodeBytes(hashInner(childId, stack))
 
     // ----- Common framing -----
 

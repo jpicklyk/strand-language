@@ -52,6 +52,19 @@ package org.strand.core
  *    Reaching this cap raises [ExhaustionKind.NodeCount].
  *  - [maxIngestBytes]: maximum byte size of an ingested program. Reaching
  *    this cap raises [ExhaustionKind.IngestBytes].
+ *  - [maxGraphDepth]: maximum graph depth of an ingested program — the
+ *    number of nodes on the longest chain of hash-relevant references
+ *    (VarRef binder back-edges excluded), a leaf counting 1. The flat JSON
+ *    form does not bound this (a long Let chain is shallow JSON), while the
+ *    canonical encoder, hash walk, verifier and interpreter each recurse
+ *    once per graph level. Computed iteratively alongside the ingest cycle
+ *    check; reaching this cap raises [ExhaustionKind.GraphDepth]. The
+ *    default 512 mirrors [maxJsonDepth] and is sized from measurement: on a
+ *    1 MB JVM thread stack (the Windows default) the hashing walk exhausted
+ *    the stack at roughly 1,000 levels of a Let chain before JIT warm-up,
+ *    so 512 keeps a 2x margin for every stage while leaving far more room
+ *    than any corpus or demo program uses (PERMISSIVE lifts it; a host
+ *    running on larger thread stacks may raise it).
  *  - [errorVerbosity] (Q-042): how aggressively agent-visible runtime
  *    error messages are scrubbed of credential values. See
  *    [ErrorVerbosity] for variant semantics. Default is
@@ -94,6 +107,7 @@ data class EvaluationLimits(
     val maxJsonDepth: Int = 512,
     val maxNodeCount: Int = 100_000,
     val maxIngestBytes: Long = 64L * 1024L * 1024L,
+    val maxGraphDepth: Int = 512,
     val errorVerbosity: ErrorVerbosity = ErrorVerbosity.Redacted,
     val perEventStepBudget: Long? = null,
     val perEventWallClockBudgetMillis: Long? = null,
@@ -150,6 +164,7 @@ data class EvaluationLimits(
             maxJsonDepth = Int.MAX_VALUE,
             maxNodeCount = Int.MAX_VALUE,
             maxIngestBytes = Long.MAX_VALUE,
+            maxGraphDepth = Int.MAX_VALUE,
             errorVerbosity = ErrorVerbosity.Redacted,
         )
     }
@@ -188,4 +203,12 @@ enum class ExhaustionKind {
 
     /** Ingest-time byte count exceeded [EvaluationLimits.maxIngestBytes]. */
     IngestBytes,
+
+    /**
+     * Ingest-time graph depth (longest reference chain) exceeded
+     * [EvaluationLimits.maxGraphDepth]. Also raised by the canonical
+     * encoder / hasher as a backstop when a programmatically built store
+     * (which bypasses ingest) exhausts the JVM stack during hashing.
+     */
+    GraphDepth,
 }

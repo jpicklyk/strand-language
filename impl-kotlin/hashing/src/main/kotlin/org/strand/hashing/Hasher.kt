@@ -62,7 +62,11 @@ class Hasher(private val rawStore: RawNodeStore) {
      */
     fun hashReachable(rootId: NodeId): Map<NodeId, Hash> {
         val out = LinkedHashMap<NodeId, Hash>()
-        walk(rootId, emptyList(), out)
+        // The walk recurses once per graph level like the encoder; the same
+        // backstop turns a JVM StackOverflowError into a typed
+        // IngestError.ResourceExhaustion(GraphDepth) for stores that bypass
+        // the ingest-time graph-depth cap.
+        encoder.stackGuard { walk(rootId, emptyList(), out) }
         return out
     }
 

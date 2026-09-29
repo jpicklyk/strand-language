@@ -1,6 +1,8 @@
 package org.strand.hashing
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.strand.core.ExhaustionKind
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -26,6 +28,29 @@ class EncoderHardeningTest {
             add(Node.ProductTypeField(fieldName = "x\uDC00", fieldType = t))
         }
         assertThrows<IngestError.Malformed> { Hasher(field).hashRoot(org.strand.core.NodeId(1)) }
+    }
+
+    /** A programmatic Let chain of [n] Lets (bypasses the ingest depth cap). */
+    private fun letChainStore(n: Int): Pair<NodeStore, org.strand.core.NodeId> {
+        val store = NodeStore()
+        val one = store.add(Node.IntLit(1))
+        // Build inside-out: innermost body is the IntLit, each Let wraps it.
+        var body = one
+        repeat(n) { i -> body = store.add(Node.Let(name = "x$i", value = one, body = body)) }
+        return store to body
+    }
+
+    @Test
+    fun `hashing a store deeper than the JVM stack raises typed GraphDepth exhaustion`() {
+        val (store, root) = letChainStore(200_000)
+        val hashRoot = assertThrows<IngestError.ResourceExhaustion> { Hasher(store).hashRoot(root) }
+        assertEquals(ExhaustionKind.GraphDepth, hashRoot.kind)
+        assertTrue(hashRoot.current > 0)
+        val reachable = assertThrows<IngestError.ResourceExhaustion> { Hasher(store).hashReachable(root) }
+        assertEquals(ExhaustionKind.GraphDepth, reachable.kind)
+        // The encoder recovers: a shallow graph hashes fine afterwards.
+        val (small, smallRoot) = letChainStore(10)
+        Hasher(small).hashRoot(smallRoot)
     }
 
     @Test
