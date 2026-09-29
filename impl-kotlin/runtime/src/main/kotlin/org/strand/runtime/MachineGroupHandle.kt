@@ -176,10 +176,12 @@ class MachineGroupHandle internal constructor(
 
     /**
      * The input events [instance] consumed in arrival order. Returns null
-     * if the group disabled `recordInputs`. Feeding this list to
-     * [StateMachineRuntime.runMachine] against the same StateMachine NodeId
-     * reproduces the per-step state transitions the actor observed —
-     * replay-determinism property.
+     * if the group disabled `recordInputs`. The recording holds inputs only,
+     * not the results of effectful or nondeterministic calls: feeding it to
+     * [StateMachineRuntime.replay] against the same StateMachine NodeId
+     * reproduces the per-step transitions the actor observed when the
+     * machine's transition closure is Deterministic-only (pure or `det`
+     * builtins), and raises [ReplayNotDeterministic] otherwise (review M4).
      */
     fun recordedEvents(instance: InstanceId): List<Value>? =
         liveInstance(instance)?.recordedEvents()

@@ -238,7 +238,7 @@ internal class MachineActor(
         // through to the legacy interpreter.applyCallable on the cached
         // transitionFnValue when no dispatcher is set.
         val result = instance.dispatcher
-            ?.applyTransition(instance.currentState, event)
+            ?.applyTransition(instance.currentState, event, eventLimits, counters)
             ?: interpreter.applyCallable(
                 fn = instance.transitionFnValue,
                 args = listOf(instance.currentState, event),

@@ -100,3 +100,17 @@ class SnapshotMachineHashMismatch(
  */
 class SnapshotUnknownInstance(val instance: InstanceId) :
     RuntimeException("no instance with id $instance is part of this group")
+
+/**
+ * Review M4: thrown by [StateMachineRuntime.replay] when [machine]'s
+ * transition closure reaches foreign targets ([builtins]) that are not
+ * registered Deterministic — the recording holds inputs only, so a replay
+ * would silently diverge from the original run.
+ */
+class ReplayNotDeterministic(
+    val machine: NodeId,
+    val builtins: List<String>,
+) : RuntimeException(
+    "machine $machine is not byte-replayable from its input recording: its transition " +
+        "closure reaches non-deterministic or stateful targets $builtins"
+)

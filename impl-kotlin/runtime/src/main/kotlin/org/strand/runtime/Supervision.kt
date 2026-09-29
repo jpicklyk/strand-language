@@ -162,7 +162,10 @@ internal class RuntimeContext(
         }
         val recorder = if (recordInputs) EventRecorder() else null
 
-        val dispatcher = dispatcherFactory?.build(node, machineId, capabilities)
+        val dispatcher = dispatcherFactory?.build(
+            node, machineId, capabilities,
+            DispatcherWiring(hostContext, foreignDispatcher, resolveTarget, limits),
+        )
         val instance = MachineInstance(
             instanceId = instanceId,
             node = node,

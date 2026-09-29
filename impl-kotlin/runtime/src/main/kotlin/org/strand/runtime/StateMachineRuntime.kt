@@ -12,6 +12,7 @@ import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
+import org.strand.core.translateNodeIds
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.InterpretError
@@ -173,6 +174,75 @@ class StateMachineRuntime(
         @Suppress("UNUSED_VARIABLE")
         val _input = inputStreamId
         return Trace(steps = steps, final = halt)
+    }
+
+    /**
+     * Review M4: replay a recording (typically
+     * [MachineGroupHandle.recordedEvents]) through the synchronous fold,
+     * refusing up front when the replay would not be byte-reproducible.
+     *
+     * **Which machines are byte-replayable.** A recording holds the INPUT
+     * events only — never the results of effectful or nondeterministic calls
+     * the transitions made. Replaying it reproduces the original run exactly
+     * iff every foreign builtin reachable from the machine's `transitionFn`
+     * and `initialState` is registered [org.strand.interpreter.Builtins.Determinism.Deterministic]
+     * (a `det` builtin): pure transitions and `det`-only builtin calls. A
+     * machine reaching a `Stateful` builtin (every effect-declaring builtin:
+     * `Time.*`, `Fs.*`, `Http.*`, `LLM.*`, ...), a `Nondeterministic` one
+     * (`Random.*`), or a target the registry does not know (including the
+     * in-band `strand-runtime:StateMachine.Spawn`, which mints random
+     * instance ids) is not replayable from inputs alone, and this method
+     * throws [ReplayNotDeterministic] naming the offending targets instead of
+     * silently diverging. [verifierWarnings] — the verify result's warnings —
+     * are consumed too: every `NondeterministicInReplayContext` warning for
+     * [machine] adds its builtin.
+     *
+     * Plain [runMachine] does not perform this check: it drives any event
+     * list, recorded or not. Logging effect results so that effectful
+     * machines become replayable is not implemented.
+     */
+    fun replay(
+        machine: NodeId,
+        recording: List<Value>,
+        capabilities: CapabilitySet = CapabilitySet.EMPTY,
+        limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
+        verifierWarnings: List<org.strand.verifier.VerifyWarning> = emptyList(),
+    ): Trace {
+        val offending = replayUnsafeTargets(machine, verifierWarnings)
+        if (offending.isNotEmpty()) throw ReplayNotDeterministic(machine, offending)
+        return runMachine(machine, recording, capabilities, limits)
+    }
+
+    private fun replayUnsafeTargets(
+        machine: NodeId,
+        verifierWarnings: List<org.strand.verifier.VerifyWarning>,
+    ): List<String> {
+        val node = store.get(machine) as? Node.StateMachine
+            ?: error("replay: expected a StateMachine at $machine")
+        val out = LinkedHashSet<String>()
+        for (w in verifierWarnings) {
+            if (w is org.strand.verifier.VerifyWarning.NondeterministicInReplayContext &&
+                w.machineOrInvariant == machine
+            ) {
+                out += w.builtin
+            }
+        }
+        val seen = HashSet<NodeId>()
+        val queue = ArrayDeque(listOf(node.transitionFn, node.initialState))
+        while (queue.isNotEmpty()) {
+            val id = queue.removeFirst()
+            if (!seen.add(id)) continue
+            val n = store.getOrNull(id) ?: continue
+            if (n is Node.ForeignNode &&
+                org.strand.interpreter.Builtins.determinismOf(n.target) !=
+                org.strand.interpreter.Builtins.Determinism.Deterministic
+            ) {
+                out += n.target
+            }
+            if (n is Node.NodeRef) hashToNodeId[n.target]?.let { queue.addLast(it) }
+            n.translateNodeIds { child -> queue.addLast(child); child }
+        }
+        return out.toList()
     }
 
     /**
@@ -641,7 +711,7 @@ class StateMachineRuntime(
         // through to the legacy interpreter.applyCallable on the cached
         // transitionFnValue when no dispatcher is set.
         val resultValue = instance.dispatcher
-            ?.applyTransition(before, event)
+            ?.applyTransition(before, event, limits, counters)
             ?: interpreter.applyCallable(
                 fn = instance.transitionFnValue,
                 args = listOf(before, event),
