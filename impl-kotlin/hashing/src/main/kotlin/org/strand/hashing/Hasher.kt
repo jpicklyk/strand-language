@@ -230,6 +230,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                 node.parameters.forEach { walk(it, stack, out) }
                 walk(node.result, stack, out)
                 node.effects.forEach { walk(it, stack, out) }
+                walkProjections(node.effectProjections, stack, out)
             }
             is Node.ForallType -> {
                 walk(node.body, encoder.push(stack, node.typeParameters), out)
@@ -286,6 +287,7 @@ class Hasher(private val rawStore: RawNodeStore) {
             is Node.ForeignNode -> {
                 walk(node.foreignType, stack, out)
                 node.effects.forEach { walk(it, stack, out) }
+                walkProjections(node.effectProjections, stack, out)
             }
 
             is Node.EffectCategory -> node.parameters.forEach { walk(it, stack, out) }
@@ -413,6 +415,26 @@ class Hasher(private val rawStore: RawNodeStore) {
             }
 
             is Node.ParameterDecl, is Node.TypeParameter -> Unit  // unreachable, guarded above
+        }
+    }
+
+    /**
+     * Visit what the encoder hashes inside an `effectProjections` list: each
+     * projection's EffectCategory and each `LiteralNode` source target
+     * (review hashing M2 — nodes reachable only through a projection were
+     * missing from `nodeIdToHash`, so they had no hash and no
+     * `hashToNodeId` entry). `ArgRef` sources carry no NodeId.
+     */
+    private fun walkProjections(
+        projections: List<org.strand.core.EffectProjection>,
+        stack: BinderStack,
+        out: MutableMap<NodeId, Hash>,
+    ) {
+        for (proj in projections) {
+            walk(proj.category, stack, out)
+            for (src in proj.sources) {
+                if (src is org.strand.core.ProjectionSource.LiteralNode) walk(src.target, stack, out)
+            }
         }
     }
 

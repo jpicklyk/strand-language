@@ -654,7 +654,7 @@ object JsonIngest {
                             "or 'targetHash' (cross-store content hash), not both"
                     )
                 }
-                return StoredNode.Canonical(Node.NodeRef(target = Hash(hexDecode(targetHashHex, "$ctx.targetHash"))))
+                return StoredNode.Canonical(Node.NodeRef(target = parseTargetHash(targetHashHex, "$ctx.targetHash")))
             }
             val targetId = obj.requireRef("target", ctx, resolve)
             return StoredNode.RawNodeRef(targetId)
@@ -1038,6 +1038,28 @@ object JsonIngest {
                     "(expected BlockProducer, DropNewest, DropOldest, or Sample)"
             )
         }
+    }
+
+    /**
+     * Decode a cross-store `targetHash` into a [Hash], rejecting an empty
+     * value, an unassigned multi-hash prefix, or a digest of the wrong
+     * length with [IngestError.Malformed] (review hashing M3: an unknown
+     * prefix used to escape as a raw `IllegalStateException`).
+     */
+    private fun parseTargetHash(hex: String, ctx: String): Hash {
+        val bytes = hexDecode(hex, ctx)
+        if (bytes.isEmpty()) throw IngestError.Malformed("Empty content hash in $ctx")
+        val fn = HashFunction.fromPrefixOrNull(bytes[0]) ?: throw IngestError.Malformed(
+            "Unknown hash function prefix 0x%02x in $ctx (known: %s)".format(
+                bytes[0], HashFunction.entries.joinToString { "0x%02x %s".format(it.prefix, it.name) }
+            )
+        )
+        if (bytes.size != 1 + fn.digestSize) throw IngestError.Malformed(
+            "Content hash in $ctx with prefix 0x%02x must carry %d digest bytes; got %d".format(
+                bytes[0], fn.digestSize, bytes.size - 1
+            )
+        )
+        return Hash(bytes)
     }
 
     private fun hexDecode(s: String, ctx: String): ByteArray {

@@ -76,8 +76,20 @@ enum class HashFunction(val prefix: Byte, val digestSize: Int) {
     Blake3(0x1e.toByte(), 32);
 
     companion object {
+        /**
+         * The function with multi-hash [prefix]. An unknown prefix is bad
+         * input, not a broken invariant, so it raises
+         * [IllegalArgumentException] (like the other [Hash] constructor
+         * checks) — callers that parse untrusted hex (JSON ingest, the store
+         * and snapshot codecs, the CLI) already translate that into their
+         * structured error (review hashing M3).
+         */
         fun fromPrefix(prefix: Byte): HashFunction =
+            fromPrefixOrNull(prefix)
+                ?: throw IllegalArgumentException("Unknown hash function prefix: 0x%02x".format(prefix))
+
+        /** The function with multi-hash [prefix], or null when the prefix is unassigned. */
+        fun fromPrefixOrNull(prefix: Byte): HashFunction? =
             entries.firstOrNull { it.prefix == prefix }
-                ?: error("Unknown hash function prefix: 0x%02x".format(prefix))
     }
 }
