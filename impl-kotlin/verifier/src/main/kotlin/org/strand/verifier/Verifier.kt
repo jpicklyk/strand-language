@@ -591,28 +591,48 @@ class Verifier(
         }
 
         /**
-         * The effect surface a consumer incurs by *using* a manifest export.
+         * The effect surface a consumer incurs by *using* a manifest export:
+         * the effects evaluating the export itself exercises (its
+         * construction closure, empty for a Lambda) together with every
+         * effect row latent in its type (review H5).
          *
-         * For a function-typed export (the common case) this is the function's
-         * declared effect row — releasing those effects is exactly what calling
-         * the export does. A bare Lambda has an empty *closure* (constructing a
-         * closure value is pure; effects release at call sites, see
-         * [inferApplication]), so `closureOf` would wrongly report no effects
-         * for an effectful function. For a non-function (value) export, the
-         * surface is the node's construction closure.
+         * A function-typed export's surface is its declared row plus the
+         * latent rows of its result, so a curried function whose inner
+         * function performs an effect surfaces that effect. A record, sum or
+         * schema-wrapped value exposes the latent rows of every function it
+         * carries, so a record of effectful functions cannot certify with
+         * `declaredEffects = []`. Parameter positions are not counted: a
+         * callback's effects are the consumer's own, supplied by the
+         * consumer. A polymorphic export uses its body.
          *
-         * This clarifies proposal § 5.4's "closure of the target": for function
-         * exports the meaningful quantity is the function's effect row, not the
-         * always-empty closure of the Lambda value. Polymorphic functions
-         * (a Forall over a Fun) use the inner Fun's effect row.
+         * This clarifies proposal § 5.4's "closure of the target": for
+         * function exports the meaningful quantity is what calling (and
+         * calling the results of calling) releases, not the always-empty
+         * closure of the Lambda value.
          */
         private fun exportEffectSurface(targetId: NodeId, targetType: TypeExpr): Set<NodeId> =
-            when (targetType) {
-                is TypeExpr.Fun -> targetType.effects
-                is TypeExpr.Forall ->
-                    (targetType.body as? TypeExpr.Fun)?.effects ?: closureOf(targetId)
-                else -> closureOf(targetId)
+            closureOf(targetId) + latentEffects(targetType)
+
+        /** Every effect row reachable in [t] outside function-parameter positions. */
+        private fun latentEffects(t: TypeExpr): Set<NodeId> {
+            val out = LinkedHashSet<NodeId>()
+            val seen = HashSet<TypeExpr>()
+            fun walk(x: TypeExpr) {
+                when (x) {
+                    is TypeExpr.Fun -> { out += x.effects; walk(x.result) }
+                    is TypeExpr.Forall -> walk(x.body)
+                    is TypeExpr.Product -> x.fields.forEach { walk(it.type) }
+                    is TypeExpr.Sum -> x.cases.forEach { c -> c.type?.let(::walk) }
+                    // A μ-body is walked once; its RecursiveSelf occurrences
+                    // add no new rows.
+                    is TypeExpr.Recursive -> if (seen.add(x)) walk(x.body)
+                    is TypeExpr.SchemaType -> walk(x.valueType)
+                    is TypeExpr.Prim, is TypeExpr.Param, is TypeExpr.RecursiveSelf -> Unit
+                }
             }
+            walk(t)
+            return out
+        }
 
         /**
          * After verifying a NodeRef's target subgraph under an empty scope

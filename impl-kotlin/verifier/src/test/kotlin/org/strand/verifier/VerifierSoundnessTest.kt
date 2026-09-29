@@ -393,6 +393,54 @@ class VerifierSoundnessTest {
         assertTrue(r is VerifyResult.Ok) { "got $r" }
     }
 
+    // ---- A10: manifest export surface includes latent effect rows ---------
+
+    /** A manifest exporting [exportTarget] with [declared] effects, over an Fs.Write-wrapping writer. */
+    private fun latentManifest(exportTarget: String, declared: String) = """{
+      "version": 1, "root": "lib",
+      "nodes": {
+        "intT":   { "type": "PrimitiveType", "kind": "Int" },
+        "strT":   { "type": "PrimitiveType", "kind": "String" },
+        "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+        "writeFx": { "type": "EffectCategory", "categoryName": "Filesystem.Write", "parameters": ["strT"] },
+        "writeT":  { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT" },
+        "writeFn": { "type": "ForeignNode", "target": "strand-builtin:Fs.Write",
+                     "foreignType": "writeT", "effects": ["writeFx"] },
+        "wPath":    { "type": "ParameterDecl", "name": "path", "paramType": "strT" },
+        "wData":    { "type": "ParameterDecl", "name": "data", "paramType": "bytesT" },
+        "wVarPath": { "type": "VarRef", "binder": "wPath" },
+        "wVarData": { "type": "VarRef", "binder": "wData" },
+        "wBody":    { "type": "Application", "function": "writeFn", "arguments": ["wVarPath", "wVarData"] },
+        "writer":   { "type": "Lambda", "parameters": ["wPath", "wData"], "body": "wBody", "effects": ["writeFx"] },
+        "wFnT":     { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT", "effects": ["writeFx"] },
+        "toolF":    { "type": "ProductTypeField", "name": "write", "fieldType": "wFnT" },
+        "toolsT":   { "type": "ProductType", "fields": ["toolF"] },
+        "toolV":    { "type": "ProductFieldValue", "fieldName": "write", "value": "writer" },
+        "tools":    { "type": "ProductValue", "ofType": "toolsT", "fields": ["toolV"] },
+        "u":        { "type": "ParameterDecl", "name": "u", "paramType": "intT" },
+        "curried":  { "type": "Lambda", "parameters": ["u"], "body": "writer" },
+        "lib": { "type": "ModuleManifest", "exports": [
+          { "target": "$exportTarget", "declaredEffects": $declared, "displayName": "export" }
+        ] }
+      }
+    }"""
+
+    @Test
+    fun `a manifest exporting a record of effectful functions cannot declare no effects`() {
+        val r = verify(latentManifest("tools", "[]"))
+        val err = assertRejects<VerifyError.ManifestExportEffectMismatch>(r)
+        assertEquals(1, err.actual.size)
+        assertTrue(verify(latentManifest("tools", "[\"writeFx\"]")) is VerifyResult.Ok)
+    }
+
+    @Test
+    fun `a manifest exporting a curried function with an effectful inner row cannot declare no effects`() {
+        val r = verify(latentManifest("curried", "[]"))
+        val err = assertRejects<VerifyError.ManifestExportEffectMismatch>(r)
+        assertEquals(1, err.actual.size)
+        assertTrue(verify(latentManifest("curried", "[\"writeFx\"]")) is VerifyResult.Ok)
+    }
+
     // ---- A8: NodeRefs in type position must be closed ----------------------
 
     @Test
