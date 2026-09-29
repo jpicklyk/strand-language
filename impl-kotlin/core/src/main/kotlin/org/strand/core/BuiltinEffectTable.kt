@@ -10,19 +10,21 @@ package org.strand.core
  * what each builtin actually does; the declared row may over-approximate it
  * but never under-approximate it.
  *
- * Consumers:
- *  - The verifier rejects a ForeignNode whose declared row (the union of
- *    `ForeignNode.effects` and its `foreignType`'s FunctionType effects)
- *    does not cover [requiredCategories] for its target
- *    (`VerifyError.ForeignEffectUnderDeclared`).
- *  - The interpreter re-checks the same floor at dispatch as defence in
- *    depth (a store admitted without verification, or built
- *    programmatically) and raises `InterpretError.BuiltinContractViolation`.
+ * Relation to Q-056. The authoritative builtin effect surface is the
+ * verifier's `BuiltinSignatureOracle`, service-loaded from `:authoring`.
+ * This table is the floor used where that oracle is not reachable: the
+ * verifier falls back to it on a classpath without the provider (and for
+ * the `strand-runtime:` targets the oracle does not model), reporting
+ * under-declaration as `VerifyError.BuiltinEffectMismatch`; the interpreter
+ * consults the oracle at dispatch when resolvable and this table otherwise,
+ * raising `InterpretError.BuiltinContractViolation`. The `:corpus` test
+ * `BuiltinEffectTableOracleConsistencyTest` proves the table agrees with the
+ * oracle for every effectful `strand-builtin:` target.
  *
  * Scope. Keys are full target strings. Every effectful `strand-builtin:`
  * registry entry (`fx`, `fxH`, `nondet` registrations in `Builtins.kt`)
  * has a row; effect-free (`det`/`detH`) entries have none. The
- * `interpreter` test `BuiltinEffectTableConsistencyTest` enforces this
+ * `interpreter` test `ForeignEffectTrustTest` enforces this
  * two-way correspondence. The runtime-intercepted
  * `strand-runtime:StateMachine.Spawn` / `.Terminate` targets are listed as
  * well. Targets absent from the table (non-registry bindings, effect-free

@@ -35,6 +35,7 @@ import java.nio.file.Paths
 data class SandboxPolicy(
     val fs: FsPolicy,
     val net: NetPolicy,
+    val process: ProcessPolicy = ProcessPolicy(),
 ) {
     companion object {
         /**
@@ -95,38 +96,49 @@ data class SandboxPolicy(
         )
 
         /**
-         * **Open default — opt-out.** No filesystem workspace constraint,
-         * no network default-deny, no blocked ranges. Used by the
-         * singleton on [Builtins.sandboxPolicy] so library and test
-         * callers that exercise `Fs.*` / `Net.Connect` / `Http.Request`
-         * against `@TempDir` paths or local sockets see the pre-Q-041
-         * behaviour unchanged. CLI invocations from agents override
-         * this with [SECURE_DEFAULT] (or a custom flag-driven policy)
-         * at startup.
+         * **Open policy — explicit opt-in, not a default.** No filesystem
+         * workspace constraint, no network default-deny, no blocked ranges.
+         * Q-075 removed this as the [Builtins.sandboxPolicy] singleton
+         * default; the library and CLI defaults are now both
+         * [SECURE_DEFAULT]. A caller installs [OPEN_DEFAULT] explicitly
+         * when it genuinely needs the open surface — tests that exercise
+         * real `Fs.*` / `Net.Connect` / `Http.Request` I/O against
+         * `@TempDir` paths or loopback sockets, or an embedder that has
+         * made a deliberate decision to run unsandboxed.
          *
-         * The deliberate inversion — "open" as the singleton default,
-         * "secure" as the CLI default — keeps the 895-test pre-Q-041
-         * baseline running unchanged while still establishing the
-         * agent-facing surface as default-deny. The sandbox-aware
-         * test files (FsSandboxTest, NetSandboxTest, HttpSandboxTest)
-         * install [SECURE_DEFAULT] or a custom policy in `@BeforeEach`
-         * and reset to [OPEN_DEFAULT] in `@AfterEach`.
+         * Before Q-075, this was the ambient singleton default (the
+         * "deliberate inversion" that kept the pre-Q-041 test baseline
+         * running unchanged while the CLI alone defaulted to secure). That
+         * inversion's justification expired once the baseline it protected
+         * was no longer at risk; see
+         * `proposals/implemented/secure-by-default.md`. The sandbox-aware
+         * test files (SandboxPolicyTest, CorpusSandboxTest, and every test
+         * class that exercises real IO) now install [OPEN_DEFAULT] or a
+         * scoped policy explicitly in `@BeforeEach` and reset to
+         * [Builtins.DEFAULT_SANDBOX_POLICY] (= [SECURE_DEFAULT]) in
+         * `@AfterEach`.
          */
         val OPEN_DEFAULT = SandboxPolicy(
             fs = FsPolicy(workspaceRoot = null, escape = EscapePolicy.Allow, followSymlinks = true),
             net = NetPolicy(defaultDeny = false, allowedHosts = emptyList(), blockedRanges = emptyList()),
+            process = ProcessPolicy(defaultDeny = false, allowedCommands = emptyList()),
         )
 
         /**
-         * **Secure default — the policy the CLI installs by default.**
-         * Workspace rooted at the JVM working directory with escape
-         * detection and symlink rejection; network default-deny on
-         * loopback, RFC1918, link-local, multicast, broadcast, IPv6
-         * ULA, and the cloud-metadata literals; DNS pin-at-check.
+         * **Secure default — the policy both the library and the CLI
+         * install by default (Q-075).** Workspace rooted at the JVM
+         * working directory with escape detection and symlink rejection;
+         * network default-deny on loopback, RFC1918, link-local,
+         * multicast, broadcast, IPv6 ULA, and the cloud-metadata literals;
+         * DNS pin-at-check.
          *
          * The CLI's `--workspace-root`, `--allow-fs-escape`,
          * `--allow-host`, and `--allow-net-internal` flags relax
-         * this default; absent flags inherit from here.
+         * this default; absent flags inherit from here. A library or
+         * embedder caller inherits the same default via
+         * [Builtins.sandboxPolicy] / [Builtins.DEFAULT_SANDBOX_POLICY] and
+         * relaxes it the same way — by installing a different
+         * [SandboxPolicy], not by relying on an open ambient default.
          */
         val SECURE_DEFAULT = SandboxPolicy(
             fs = FsPolicy(
@@ -141,6 +153,10 @@ data class SandboxPolicy(
                 blockedHostnames = SECURE_DEFAULT_BLOCKED_HOSTNAMES,
                 dnsPolicy = DnsPolicy.PinAtCheck,
             ),
+            process = ProcessPolicy(
+                defaultDeny = true,
+                allowedCommands = emptyList(),
+            ),
         )
     }
 }
@@ -151,7 +167,8 @@ data class SandboxPolicy(
  * @property workspaceRoot if non-null, every resolved path must lie
  *   lexically beneath this directory after canonicalisation. The
  *   resolver applies `..`-normalisation, then re-checks containment.
- *   Null disables fs sandboxing entirely (test / library default).
+ *   Null disables fs sandboxing entirely — the explicit opt-out
+ *   ([SandboxPolicy.OPEN_DEFAULT]), not the library default.
  * @property escape behaviour when a path resolves outside [workspaceRoot]:
  *   [EscapePolicy.Deny] raises [SandboxViolation]; [EscapePolicy.Allow]
  *   passes through.
@@ -173,8 +190,9 @@ enum class EscapePolicy { Allow, Deny }
  *
  * @property defaultDeny when true, the IP-range and hostname blocklists
  *   below are enforced; when false, every host is admitted. The toggle
- *   exists so the test default ([SandboxPolicy.OPEN_DEFAULT]) can opt
- *   out wholesale without separately clearing the blocklists.
+ *   exists so an explicit opt-out policy ([SandboxPolicy.OPEN_DEFAULT],
+ *   installed by a test or embedder that needs it) can disable the
+ *   network gate wholesale without separately clearing the blocklists.
  * @property allowedHosts non-empty list narrows the policy to only
  *   permit hosts matching one of these glob patterns (`*.example.com`
  *   etc.); empty list means "no allowlist gate, only the blocklist
@@ -218,6 +236,34 @@ data class NetPolicy(
  *  - [RequireIpLiteral]: refuse hostnames outright.
  */
 enum class DnsPolicy { PinAtCheck, RecheckAtConnect, RequireIpLiteral }
+
+/**
+ * Q-041 follow-up: process-spawn sandbox policy. Mirrors the shape of
+ * [FsPolicy] / [NetPolicy] — a default-deny toggle plus an allowlist of
+ * permitted commands.
+ *
+ * `Process.Spawn` shells out to an arbitrary executable, which is the
+ * broadest single capability a host can grant: the child process runs
+ * outside every Strand sandbox and outside the effect-closure guarantees
+ * (its transitive effects are opaque). This policy is the runtime gate on
+ * that call, analogous to [FsSandbox] for `Fs.*` and [NetSandbox] for the
+ * network builtins.
+ *
+ * @property defaultDeny when true, only commands matching an entry in
+ *   [allowedCommands] may spawn; every other command raises
+ *   [SandboxViolationKind.ProcessSpawnBlocked]. When false, every command
+ *   is admitted — the open library default, matching the pre-policy
+ *   behaviour so the existing test baseline stays green.
+ * @property allowedCommands the set of permitted executables. A command
+ *   argument matches when it equals an entry exactly, or when its
+ *   filename component (the last path segment) equals an entry — so a
+ *   host may allowlist either a bare name (`git`) or an absolute path
+ *   (`/usr/bin/git`). Only consulted when [defaultDeny] is true.
+ */
+data class ProcessPolicy(
+    val defaultDeny: Boolean = false,
+    val allowedCommands: List<String> = emptyList(),
+)
 
 /**
  * Pluggable name resolver used by [NetSandbox]. The production
@@ -496,7 +542,7 @@ object FsSandbox {
  *     `Socket(InetAddress, port)` (pin-at-check).
  *
  * Honours [NetPolicy.defaultDeny]: when false, blocked ranges and
- * blocked hostnames are not enforced (test mode).
+ * blocked hostnames are not enforced (the explicit opt-out policy).
  *
  * @param resolver injectable for tests; defaults to [SystemNameResolver].
  */
@@ -507,10 +553,10 @@ object NetSandbox {
         port: Int,
         resolver: NameResolver = SystemNameResolver,
     ): InetAddress {
-        // The `defaultDeny = false` test policy disables every check,
-        // returning whatever DNS resolves to. This is the test-mode
-        // bypass for `BuiltinsIoTest` and similar that connect to
-        // local sockets on 127.0.0.1.
+        // The `defaultDeny = false` opt-out policy (SandboxPolicy.OPEN_DEFAULT,
+        // installed explicitly) disables every check, returning whatever DNS
+        // resolves to. This is the bypass tests use for `BuiltinsIoTest` and
+        // similar that connect to local sockets on 127.0.0.1.
         if (!policy.defaultDeny) {
             return resolver.resolve(host).first()
         }
@@ -667,5 +713,38 @@ object NetSandbox {
             }
         }
         return false
+    }
+}
+
+/**
+ * Process-side sandbox enforcer. The `Process.Spawn` builtin calls
+ * [check] with the command string before invoking `ProcessBuilder.start`.
+ *
+ *  1. If `policy.defaultDeny` is false, no constraint — the host opted
+ *     out (the [SandboxPolicy.OPEN_DEFAULT] library default).
+ *  2. Otherwise the command must match an entry in
+ *     `policy.allowedCommands`, either exactly or by filename component
+ *     (last path segment), so a host may allowlist a bare name or an
+ *     absolute path. A non-match raises
+ *     [SandboxViolation(ProcessSpawnBlocked)].
+ */
+object ProcessSandbox {
+    fun check(policy: ProcessPolicy, cmd: String) {
+        if (!policy.defaultDeny) return
+
+        val cmdFileName = Paths.get(cmd).fileName?.toString()
+        val permitted = policy.allowedCommands.any { allowed ->
+            allowed == cmd || allowed == cmdFileName
+        }
+        if (!permitted) {
+            throw SandboxViolation(
+                SandboxViolationKind.ProcessSpawnBlocked,
+                if (policy.allowedCommands.isEmpty())
+                    "command '$cmd' is blocked (process spawning is denied by default and no command is allowlisted)"
+                else
+                    "command '$cmd' is not in the process allowlist " +
+                        "(${policy.allowedCommands.joinToString(", ")})",
+            )
+        }
     }
 }

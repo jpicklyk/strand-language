@@ -134,8 +134,8 @@ class SchemaCheckerHardeningTest {
         val c = prepare(program(underDeclaredWriteNodes("/tmp/strand-invariant-under-declared.bin")))
         val failed = c.verify as? VerifyResult.Failed
             ?: error("expected the verifier to reject the under-declared Fs.Write, got ${c.verify}")
-        assertTrue(failed.errors.any { it::class.simpleName == "ForeignEffectUnderDeclared" }) {
-            "expected VerifyError.ForeignEffectUnderDeclared, got ${failed.errors}"
+        assertTrue(failed.errors.any { it::class.simpleName == "BuiltinEffectMismatch" }) {
+            "expected VerifyError.BuiltinEffectMismatch, got ${failed.errors}"
         }
     }
 }

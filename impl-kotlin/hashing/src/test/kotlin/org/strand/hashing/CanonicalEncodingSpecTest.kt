@@ -264,6 +264,64 @@ class CanonicalEncodingSpecTest {
         assertArrayEquals(expected, encoder.encode(value))
     }
 
+    // ----- Trace 4b: epoch-3 UTF-8 name-sort divergence (Q-074) -----
+
+    @Test
+    fun `ProductType field sort is UTF-8 byte order, diverging from UTF-16`() {
+        // Two field names chosen to straddle the one construct where UTF-16
+        // code-unit order (epoch <= 2) and UTF-8 byte order (epoch 3) disagree:
+        //   "Ａ" = U+FF21 (BMP, in U+E000..U+FFFF)  utf8: ef bc a1  utf16-be: ff 21
+        //   "𐀀" = U+10000 (supplementary plane)     utf8: f0 90 80 80  utf16-be: d8 00 dc 00
+        // UTF-8:  ef bc a1  <  f0 90 80 80   -> the U+FF21 field sorts FIRST
+        // UTF-16: d8 00 dc 00  <  ff 21      -> the U+10000 field would sort first
+        val bmpName = "Ａ"          // U+FF21
+        val suppName = "𐀀"   // U+10000 (surrogate pair)
+
+        // Sanity-pin the two orders so the divergence itself is asserted, not
+        // assumed. (Kotlin's natural String order IS UTF-16 code-unit order.)
+        assertEquals(
+            -1,
+            compareUnsigned(bmpName.toByteArray(Charsets.UTF_8), suppName.toByteArray(Charsets.UTF_8)),
+        ) { "expected the U+FF21 name to sort before U+10000 in UTF-8 byte order" }
+        // Under the retired epoch-<= 2 rule the order was reversed:
+        assertEquals(
+            1,
+            bmpName.compareTo(suppName).coerceIn(-1, 1),
+        ) { "expected UTF-16 code-unit order (Kotlin natural) to place U+FF21 AFTER U+10000" }
+
+        val store = NodeStore()
+        val intT = store.add(Node.PrimitiveType(Primitive.Int))
+        val boolT = store.add(Node.PrimitiveType(Primitive.Bool))
+        val fieldBmp = store.add(Node.ProductTypeField(bmpName, intT))
+        val fieldSupp = store.add(Node.ProductTypeField(suppName, boolT))
+        // Declaration order supp-then-bmp, so a stable sort cannot accidentally
+        // produce the epoch-3 order without actually comparing the names.
+        val productT = store.add(Node.ProductType(listOf(fieldSupp, fieldBmp)))
+        val encoder = newEncoder(store)
+
+        val bmpFieldHash = multihash(encoder.encode(fieldBmp))
+        val suppFieldHash = multihash(encoder.encode(fieldSupp))
+
+        // ProductType: [tag 8][array(2: H(field) sorted by fieldName's UTF-8
+        // bytes)]. Epoch 3 places the U+FF21 field FIRST; the old UTF-16 order
+        // would place the U+10000 field first (see the comment above).
+        val expected = tag(8) + byteArrayOf(0x82.toByte()) +
+            hashRef(bmpFieldHash) + hashRef(suppFieldHash)
+        assertArrayEquals(expected, encoder.encode(productT)) {
+            "ProductType field order must be UTF-8 byte lexicographic (epoch 3)"
+        }
+    }
+
+    /** Unsigned byte-array lexicographic comparison, normalized to -1/0/1. */
+    private fun compareUnsigned(a: ByteArray, b: ByteArray): Int {
+        val n = minOf(a.size, b.size)
+        for (i in 0 until n) {
+            val d = (a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF)
+            if (d != 0) return if (d < 0) -1 else 1
+        }
+        return (a.size - b.size).coerceIn(-1, 1)
+    }
+
     // ----- Trace 5: EventStream (default-gating rules) -----
 
     @Test

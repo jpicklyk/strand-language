@@ -147,6 +147,28 @@ sealed class AuthoringError {
         override val detail: String
             get() = "root '$rootId' is not declared in the document"
     }
+
+    /**
+     * The [Elaborator]'s fixed-point inference loop did not reach a stable
+     * document within its iteration bound. A converging document produces
+     * a no-change pass and returns early; exhausting the bound while the
+     * last pass still rewrites the document means the inference passes are
+     * cycling (or a genuinely large document needs more iterations than
+     * the defensive bound allows). Rather than emit a possibly
+     * half-elaborated document silently, elaboration fails structurally so
+     * the caller sees a definite non-convergence rather than a mysterious
+     * downstream verifier error. Synthesized diagnostic (no source line).
+     */
+    data class ElaborationDidNotConverge(
+        val iterations: Int,
+    ) : AuthoringError() {
+        override val line: Int
+            get() = 0
+        override val detail: String
+            get() = "elaboration did not converge within $iterations fixed-point " +
+                "iterations; the document may be too large for the iteration bound or " +
+                "the inference passes are cycling"
+    }
 }
 
 /**

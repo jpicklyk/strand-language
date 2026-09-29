@@ -88,6 +88,15 @@ data class HostContext(
      * in [fromPolicy]; [BuiltinLimits.DEFAULT] otherwise.
      */
     val builtinLimits: BuiltinLimits = BuiltinLimits.DEFAULT,
+
+    /**
+     * Q-055 per-context effect-audit sink. The interpreter emits an
+     * [AuditRecord] to this sink at every foreign-dispatch capability
+     * boundary (allowed and denied). Defaults to [NoOpAuditSink]; the runtime
+     * facade threads the [HostPolicy.auditSink] here via [fromPolicy], so a
+     * multi-tenant host's per-tenant sink collects only that tenant's records.
+     */
+    val auditSink: AuditSink = NoOpAuditSink,
 ) {
     companion object {
         /**
@@ -122,6 +131,7 @@ data class HostContext(
                 toolLoopLimit = policy.toolLoopLimit,
                 scrubber = scrubber,
                 builtinLimits = BuiltinLimits.from(policy.limits),
+                auditSink = policy.auditSink,
             )
         }
 

@@ -41,7 +41,12 @@ class ProcessAndListenHardeningTest {
 
     @Test
     fun `Spawn gives the child the tenant environment, not the JVM environment`() {
-        val ctx = HostContext.processDefault().copy(osEnv = FakeEnv(mapOf("STRAND_CHILD_VAR" to "42")))
+        // Q-075: the library default sandbox denies Process.Spawn; this test
+        // exercises the environment, so it opts into the open sandbox.
+        val ctx = HostContext.processDefault().copy(
+            osEnv = FakeEnv(mapOf("STRAND_CHILD_VAR" to "42")),
+            sandboxPolicy = SandboxPolicy.OPEN_DEFAULT,
+        )
         val sees = if (windows) "if \"%STRAND_CHILD_VAR%\"==\"42\" (exit 0) else (exit 3)"
             else "test \"\$STRAND_CHILD_VAR\" = 42"
         assertEquals(0L, runShell(ctx, sees), "child must see the tenant's variable")

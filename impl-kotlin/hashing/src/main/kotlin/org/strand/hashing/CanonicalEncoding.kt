@@ -25,7 +25,7 @@ object CanonicalEncoding {
     /**
      * The encoding epoch implemented by [CanonicalEncoder] / [Hasher].
      *
-     * Epoch 2 (2026-06-13) is the first deliberate break: the two gated
+     * Epoch 2 (2026-06-13) was the first deliberate break: the two gated
      * optional fields — FunctionType / ForeignNode `effectProjections`
      * (Q-039) and EventStream `source` (Q-046) — were normalized from their
      * epoch-1 gated-omit special cases to the uniform presence-prefix rule,
@@ -33,6 +33,17 @@ object CanonicalEncoding {
      * RecursiveProjection tag 48, added additively under epoch 1, carries
      * forward unchanged; the Q-049 `TypeParameter.bound` decision was
      * deliberately not bundled and rides a future epoch.
+     *
+     * Epoch 3 (2026-07-05, Q-074) switches the three name-keyed edge-list
+     * sorts (ProductType fields, SumType cases, ProductValue fields) from
+     * UTF-16 code-unit order — Kotlin's natural String order, a JVM-ism — to
+     * UTF-8 byte lexicographic order, equivalently Unicode code-point order.
+     * The two orders diverge only for names mixing characters in
+     * U+E000..U+FFFF with supplementary characters (>= U+10000), so the
+     * all-ASCII corpus moved no hash: only the epoch field advances. Every
+     * non-JVM implementation (the Rust VM per ADR-008) compares UTF-8 bytes
+     * naturally, and the encoding is UTF-8 everywhere else, so this is the
+     * cross-implementation-neutral order.
      */
-    const val EPOCH: Int = 2
+    const val EPOCH: Int = 3
 }

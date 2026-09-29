@@ -1128,7 +1128,15 @@ class Interpreter(
             } else {
                 emptyMap()
             }
-        checkCapabilities(id, foreignEffectRow(node), effectiveInstances, context, limits, performs = true)
+        // A higher-order builtin (`List.Map`, `List.Fold`, ...) performs no
+        // effect of its own: its declared row is the latent row of the
+        // callbacks it runs, and each callback invocation re-enters here
+        // with its own (projected) instances. It is therefore a propagating
+        // site, not a performing one, so an instance-free parameterized
+        // category does not demand an unrefined grant at the combinator
+        // (main's Q-070 callback refinement check relies on this).
+        val performs = Builtins.lookupHigherOrder(node.target) == null
+        checkCapabilities(id, foreignEffectRow(node), effectiveInstances, context, limits, performs = performs)
         try {
             foreignDispatcher?.dispatch(node.target, args)?.let { return it }
             // Higher-order lookup wins over standard lookup; the registries
@@ -1345,17 +1353,21 @@ class Interpreter(
             // category is absent, the context holds nothing for it.
             val missingInOrder = declared.filter { it in missing }.distinct()
             val requestedValues = missingInOrder.flatMap { instances[it].orEmpty() }
+            val report = buildDenialReport(
+                at = at,
+                categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
+                requested = requestedValues,
+                held = emptyList(),
+                heldCategoryName = "",
+                limits = limits,
+            )
+            // Q-055: emit the denied audit record reusing the Q-064 report so
+            // the two reconcile.
+            emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
             throw InterpretException(InterpretError.CapabilityViolation(
                 at = at,
                 missing = missing,
-                report = buildDenialReport(
-                    at = at,
-                    categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
-                    requested = requestedValues,
-                    held = emptyList(),
-                    heldCategoryName = "",
-                    limits = limits,
-                ),
+                report = report,
             ))
         }
         // Second pass: per-category refinement check. Only fires when the
@@ -1370,23 +1382,38 @@ class Interpreter(
             }
             val grants = context.grants[category]!! // non-null: first pass filtered missing
             val matched = grants.any { covers(it, requirement) }
+            val name = categoryNameOf(category)
             if (!matched) {
-                val name = categoryNameOf(category)
+                val report = buildDenialReport(
+                    at = at,
+                    categoryName = name,
+                    requested = requirement,
+                    held = grants,
+                    heldCategoryName = name,
+                    limits = limits,
+                )
+                emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
                 throw InterpretException(InterpretError.RefinementViolation(
                     at = at,
                     category = category,
                     requirement = requirement,
                     available = grants,
-                    report = buildDenialReport(
-                        at = at,
-                        categoryName = name,
-                        requested = requirement,
-                        held = grants,
-                        heldCategoryName = name,
-                        limits = limits,
-                    ),
+                    report = report,
                 ))
             }
+            // Q-055: the capability check passed for a category the call site
+            // concretely exercised (an EffectDecl instance was present). Emit
+            // an Allowed record — the new information the audit log adds over
+            // the always-on denial surface. Refinement values are rendered and
+            // scrubbed through the per-context Scrubber, exactly as the denial
+            // report scrubs its requested list.
+            emitAudit(AuditRecord(
+                callSiteNodeId = at.takeIf { it.value != -1 },
+                effectCategory = name,
+                refinementParameters = requirement.map { renderAuditParameter(it) },
+                outcome = AuditOutcome.Allowed,
+                phase = if (inInvariant) DenialPhase.Invariant else DenialPhase.Expression,
+            ))
         }
     }
 
@@ -1404,17 +1431,36 @@ class Interpreter(
     }
 
     /**
+     * The effect categories a registry target really exercises: the Q-056
+     * [org.strand.verifier.BuiltinSignatures] oracle's name set when an
+     * oracle is resolvable (the `:authoring` provider on the classpath) and
+     * the target is known to it, else the core
+     * [org.strand.core.BuiltinEffectTable] floor (which also covers the
+     * `strand-runtime:` targets and exempts the `strand-builtin:Test.`
+     * namespace). `BuiltinEffectTableOracleConsistencyTest` (`:corpus`)
+     * proves the two agree for every effectful `strand-builtin:` target.
+     */
+    private fun foreignEffectFloor(target: String): Set<String>? {
+        if (org.strand.core.BuiltinEffectTable.isExempt(target)) return null
+        if (target.startsWith("strand-builtin:")) {
+            org.strand.verifier.BuiltinSignatures.effectNamesFor(target)?.let { return it }
+        }
+        return org.strand.core.BuiltinEffectTable.requiredCategories(target)
+    }
+
+    /**
      * Defence in depth for review finding 1: before dispatching a registry
-     * target with an effect floor ([org.strand.core.BuiltinEffectTable]),
-     * confirm the ForeignNode's declared row covers it. The verifier's
-     * `ForeignEffectUnderDeclared` rule rejects such graphs at admission;
-     * this re-check holds for stores that reach the interpreter without
+     * target with an effect floor ([foreignEffectFloor]), confirm the
+     * ForeignNode's declared row covers it. The verifier's Q-056
+     * `BuiltinEffectMismatch` rule rejects such graphs at admission; this
+     * re-check holds for stores that reach the interpreter without
      * verification (programmatic construction, a skipped verify step).
      */
     private fun checkForeignFloor(at: NodeId, node: Node.ForeignNode) {
-        if (org.strand.core.BuiltinEffectTable.requiredCategories(node.target) == null) return
+        val required = foreignEffectFloor(node.target) ?: return
+        if (required.isEmpty()) return
         val declaredNames = foreignEffectRow(node).map { categoryNameOf(it) }.toSet()
-        val missing = org.strand.core.BuiltinEffectTable.missingCategories(node.target, declaredNames)
+        val missing = required - declaredNames
         if (missing.isNotEmpty()) {
             throw InterpretException(InterpretError.BuiltinContractViolation(
                 at = at,
@@ -1444,7 +1490,7 @@ class Interpreter(
         }
         if (unrefined) return
         val name = categoryNameOf(category)
-        val report = buildDenialReport(
+        val baseReport = buildDenialReport(
             at = at,
             categoryName = name,
             requested = emptyList(),
@@ -1452,16 +1498,62 @@ class Interpreter(
             heldCategoryName = name,
             limits = limits,
         )
+        val report = baseReport.copy(
+            requested = baseReport.requested?.let { List(categoryNode.parameters.size) { "*" } },
+        )
+        // Q-055: the denied audit record carries the same report.
+        emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
         throw InterpretException(InterpretError.RefinementViolation(
             at = at,
             category = category,
             requirement = emptyList(),
             available = grants,
-            report = report.copy(
-                requested = report.requested?.let { List(categoryNode.parameters.size) { "*" } },
-            ),
+            report = report,
         ))
     }
+
+    /**
+     * Q-055: emit [record] to the per-context audit sink. The default
+     * [NoOpAuditSink] discards it, so every non-auditing run is unaffected.
+     */
+    private fun emitAudit(record: AuditRecord) {
+        hostContext.auditSink.record(record)
+    }
+
+    /**
+     * Q-055: build the denied [AuditRecord] from a reused Q-064 [DenialReport]
+     * so the audit log and denial surface carry the same call-site, category,
+     * scrubbed refinement values, instance/event, and phase.
+     */
+    private fun auditRecordFor(report: DenialReport, outcome: AuditOutcome): AuditRecord =
+        AuditRecord(
+            callSiteNodeId = report.node,
+            effectCategory = report.category,
+            refinementParameters = report.requested ?: emptyList(),
+            outcome = outcome,
+            instanceId = report.instanceId,
+            eventIndex = report.eventIndex,
+            phase = report.phase,
+        )
+
+    /**
+     * Q-055: render one refinement parameter value for an allowed audit
+     * record, scrubbing through the per-context [Scrubber] (a credential-
+     * bearing value cannot leak through the audit surface). Mirrors
+     * [DenialReport.renderParameter]'s primitive rendering but scrubs with the
+     * active tenant's scrubber rather than the process-global one.
+     */
+    private fun renderAuditParameter(v: Value): String = hostContext.scrubber.scrub(
+        when (v) {
+            is Value.StringV -> v.v
+            is Value.IntV -> v.v.toString()
+            is Value.FloatV -> v.v.toString()
+            is Value.BoolV -> v.v.toString()
+            Value.UnitV -> "()"
+            is Value.BytesV -> "bytes[${v.v.size}]"
+            else -> v.toString()
+        }
+    )
 
     /** The EffectCategory's declared name, falling back to the `#N` NodeId rendering. */
     private fun categoryNameOf(id: NodeId): String =

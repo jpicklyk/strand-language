@@ -19,7 +19,9 @@ import org.strand.verifier.VerifyResult
  * Stream A): a ForeignNode's declared effect row is graph-supplied, so every
  * runtime path that dispatches a foreign or closure callable must enforce the
  * same row the verifier charged, and a registry target's row must cover the
- * target's effect floor ([BuiltinEffectTable]).
+ * target's effect floor ([BuiltinEffectTable] on this `:interpreter` classpath,
+ * which carries no Q-056 oracle provider; `VerifyError.BuiltinEffectMismatch`
+ * is main's Q-056 variant, which falls back to the table without an oracle).
  */
 class ForeignEffectTrustTest {
 
@@ -86,7 +88,7 @@ class ForeignEffectTrustTest {
     fun `under-declared Fs Write is rejected at admission`() {
         val r = verify(load(underDeclaredFsWrite("pwned.txt")))
         val f = r as? VerifyResult.Failed ?: error("expected rejection, got $r")
-        val err = f.errors.filterIsInstance<VerifyError.ForeignEffectUnderDeclared>().single()
+        val err = f.errors.filterIsInstance<VerifyError.BuiltinEffectMismatch>().single()
         assertEquals("strand-builtin:Fs.Write", err.target)
         assertEquals(setOf("Filesystem.Write"), err.missing)
     }

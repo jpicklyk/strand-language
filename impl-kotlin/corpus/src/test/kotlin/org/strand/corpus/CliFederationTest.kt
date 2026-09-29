@@ -22,9 +22,12 @@ import java.nio.file.Path
 class CliFederationTest {
 
     // Content hash of corpus 76 lib.json's `inc` export (its root). Epoch-
-    // dependent (Q-062): this is the epoch-2 value. The same hash is bound by
-    // corpus 77's registry.json and is the `targetHash` of corpus 76 app.json's
-    // cross-store NodeRef — all three move together on an epoch advance.
+    // dependent (Q-062): this value is stable through epoch 3 (Q-074) — the
+    // epoch-3 UTF-8 name-sort change moves a hash only for a graph with
+    // non-ASCII field/case names, and `inc` is all-ASCII, so it kept its
+    // epoch-2 value. The same hash is bound by corpus 77's registry.json and
+    // is the `targetHash` of corpus 76 app.json's cross-store NodeRef — all
+    // three would move together on any epoch advance that did touch it.
     // CorpusFederationTest derives it dynamically (lib.nodeIdToHash[lib.root]);
     // it is pinned literally here because this test reads raw resources.
     private val incHashHex = "1eb0b74ebbc9d9b895bf8733e7ada027f8df54c93266542a6d67824cd6749ca2fd"

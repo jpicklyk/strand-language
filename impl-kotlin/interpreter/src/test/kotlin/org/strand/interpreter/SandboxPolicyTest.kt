@@ -33,22 +33,25 @@ import java.nio.file.Path
  *  12. `file://` scheme rejected (HttpSchemeRejected).
  *
  * Each test installs its own SandboxPolicy in `@BeforeEach` and resets
- * to [SandboxPolicy.OPEN_DEFAULT] in `@AfterEach` per the singleton
+ * to [Builtins.DEFAULT_SANDBOX_POLICY] in `@AfterEach` per the singleton
  * isolation discipline shared with [clock] / [credentialProvider].
  */
 class SandboxPolicyTest {
 
     @BeforeEach
     fun setUp() {
-        // Each test installs the policy it needs; the default at
-        // entry is the open-default so a misconfigured test is loud.
-        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+        // Each test installs the policy it needs explicitly (many install
+        // SandboxPolicy.OPEN_DEFAULT to exercise real IO against @TempDir
+        // paths or loopback sockets); the value at entry is the library
+        // default so a misconfigured test is loud rather than silently
+        // permissive.
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         Builtins.nameResolver = SystemNameResolver
     }
 
     @AfterEach
     fun tearDown() {
-        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         Builtins.nameResolver = SystemNameResolver
         ResourceTable.resetForTest()
     }
@@ -347,6 +350,60 @@ class SandboxPolicyTest {
         assertEquals(SandboxViolationKind.HttpSchemeRejected, ex.kind)
     }
 
+    // ---------- Process-spawn scenarios (Q-041 follow-up) ----------
+
+    @Test
+    fun `ProcessSandbox under OPEN policy permits a benign spawn`() {
+        // OPEN_DEFAULT's ProcessPolicy has defaultDeny=false, so the
+        // check is a no-op regardless of the command — matching the
+        // pre-policy behaviour that keeps the existing baseline green.
+        ProcessSandbox.check(SandboxPolicy.OPEN_DEFAULT.process, "git")
+        ProcessSandbox.check(SandboxPolicy.OPEN_DEFAULT.process, "/bin/rm")
+        // No exception thrown == permitted.
+    }
+
+    @Test
+    fun `ProcessSandbox under SECURE policy denies a non-allowlisted command with ProcessSpawnBlocked`() {
+        val ex = org.junit.jupiter.api.assertThrows<SandboxViolation> {
+            ProcessSandbox.check(SandboxPolicy.SECURE_DEFAULT.process, "curl")
+        }
+        assertEquals(SandboxViolationKind.ProcessSpawnBlocked, ex.kind)
+    }
+
+    @Test
+    fun `ProcessSandbox under SECURE policy permits an allowlisted command`() {
+        val policy = ProcessPolicy(defaultDeny = true, allowedCommands = listOf("git"))
+        // Exact-name match.
+        ProcessSandbox.check(policy, "git")
+        // Filename-component match against an absolute path.
+        ProcessSandbox.check(policy, "/usr/bin/git")
+        // A different command is still denied.
+        val ex = org.junit.jupiter.api.assertThrows<SandboxViolation> {
+            ProcessSandbox.check(policy, "sh")
+        }
+        assertEquals(SandboxViolationKind.ProcessSpawnBlocked, ex.kind)
+    }
+
+    @Test
+    fun `Process Spawn builtin under SECURE policy denies before spawning`() {
+        // Drive the actual builtin: under a deny-by-default process
+        // policy the SandboxViolation fires BEFORE ProcessBuilder.start,
+        // so no child process is ever created.
+        Builtins.sandboxPolicy = SandboxPolicy(
+            fs = FsPolicy(workspaceRoot = null, escape = EscapePolicy.Allow),
+            net = NetPolicy(defaultDeny = false),
+            process = ProcessPolicy(defaultDeny = true, allowedCommands = emptyList()),
+        )
+        val fn = Builtins.lookup("strand-builtin:Process.Spawn")!!
+        val ex = org.junit.jupiter.api.assertThrows<SandboxViolation> {
+            fn.invoke(listOf(
+                Value.StringV("some-command-that-must-not-run"),
+                Value.SumV("Nil", null),
+            ))
+        }
+        assertEquals(SandboxViolationKind.ProcessSpawnBlocked, ex.kind)
+    }
+
     // ---------- Auxiliary policy primitive tests ----------
 
     @Test
@@ -494,5 +551,20 @@ class SandboxPolicyTest {
             assertEquals(SandboxViolationKind.NetHostBlocked, ex.kind,
                 "expected $ip to be NetHostBlocked")
         }
+    }
+
+    // ---------- Q-075 default-pin regression guard ----------
+
+    @Test
+    fun `Builtins DEFAULT_SANDBOX_POLICY is SECURE_DEFAULT`() {
+        // Q-075: the library default is SECURE_DEFAULT, not OPEN_DEFAULT. This
+        // is the single source of truth every test-reset path (this class's
+        // own @BeforeEach/@AfterEach included) restores to. Asserting the
+        // constant directly — rather than the mutable `Builtins.sandboxPolicy`
+        // singleton, which any test in the suite may have mutated mid-run —
+        // makes a regression toward OPEN_DEFAULT fail here regardless of test
+        // execution order or other tests' singleton mutations.
+        assertEquals(SandboxPolicy.SECURE_DEFAULT, Builtins.DEFAULT_SANDBOX_POLICY)
+        assertNotEquals(SandboxPolicy.OPEN_DEFAULT, Builtins.DEFAULT_SANDBOX_POLICY)
     }
 }

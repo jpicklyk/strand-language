@@ -1,5 +1,5 @@
 {
   "stage": "verify",
-  "family": "ForeignEffectUnderDeclared",
-  "notes": "A ForeignNode binds strand-builtin:Fs.Write with an empty effect row. Before the BuiltinEffectTable floor it verified with an empty effect closure and wrote the file under an empty capability grant (review finding 1). The declared row must cover the target's floor {Filesystem.Write}."
+  "family": "BuiltinEffectMismatch",
+  "notes": "A ForeignNode binds strand-builtin:Fs.Write with an empty effect row. Before the builtin effect cross-check it verified with an empty effect closure and wrote the file under an empty capability grant (review finding 1). The declared row (foreignType effects plus ForeignNode.effects) must match the Q-056 builtin effect set {Filesystem.Write}."
 }

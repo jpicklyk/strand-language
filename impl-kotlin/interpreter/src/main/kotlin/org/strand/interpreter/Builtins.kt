@@ -471,25 +471,39 @@ object Builtins {
     var vectorHttpTransport: VectorHttpTransport = JdkHttpTransport
 
     /**
-     * Q-041: active sandbox policy mediating every `Fs.*` /
-     * `Net.Connect` / `Http.Request` foreign call. The singleton
-     * default is [SandboxPolicy.OPEN_DEFAULT] — no workspace
-     * constraint, no network blocklist — so pre-Q-041 tests and
-     * library callers see unchanged behaviour. The CLI installs
-     * [SandboxPolicy.SECURE_DEFAULT] (or a custom flag-driven
-     * policy) at startup so agent-facing invocations get the
-     * default-deny surface.
+     * Q-075: the single source of truth for the [sandboxPolicy] singleton
+     * default (and the value every test-reset helper restores). Strand's
+     * thesis is containment — every surface defaults default-deny, and the
+     * library default is no exception. A test asserts this constant is
+     * [SandboxPolicy.SECURE_DEFAULT] so a future regression toward
+     * [SandboxPolicy.OPEN_DEFAULT] fails loudly rather than silently
+     * reopening the ambient sandbox.
+     */
+    val DEFAULT_SANDBOX_POLICY: SandboxPolicy = SandboxPolicy.SECURE_DEFAULT
+
+    /**
+     * Q-041/Q-075: active sandbox policy mediating every `Fs.*` /
+     * `Net.Connect` / `Http.Request` foreign call. The singleton default is
+     * [DEFAULT_SANDBOX_POLICY] (= [SandboxPolicy.SECURE_DEFAULT]) —
+     * workspace-rooted filesystem, default-deny network with the OWASP
+     * blocked ranges, default-deny process spawn. The library default and
+     * the CLI default now agree: both are secure-by-default. A caller that
+     * genuinely needs the open surface (tests exercising real IO against
+     * `@TempDir` paths or loopback sockets, or an embedder that has made a
+     * deliberate decision to run unsandboxed) installs
+     * [SandboxPolicy.OPEN_DEFAULT] explicitly — it is an opt-in, not an
+     * ambient default.
      *
      * The volatile-singleton pattern matches [clock] /
      * [credentialProvider] / [random] / [llmHttpClient]: tests
      * that install a custom policy must not run in parallel with
      * other tests that touch this field, and must restore the
-     * pre-test value in `@AfterEach`. Per-interpreter policy
+     * pre-test value ([DEFAULT_SANDBOX_POLICY]) in `@AfterEach`. Per-interpreter policy
      * injection is a future refactor flagged in the proposal §
      * 4.4 as non-blocking cleanup.
      */
     @Volatile
-    var sandboxPolicy: SandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+    var sandboxPolicy: SandboxPolicy = DEFAULT_SANDBOX_POLICY
 
     /**
      * Q-041: pluggable DNS resolver used by [NetSandbox]. Defaults
@@ -1258,6 +1272,13 @@ object Builtins {
                 cur = payload.fields["tail"]
                     ?: throw IoFailure("process-spawn", "Process.Spawn args list missing tail")
             }
+            // Q-041 follow-up: process-spawn sandbox gate. Under the CLI's
+            // SECURE_DEFAULT this denies any non-allowlisted command; under
+            // the library OPEN_DEFAULT it is a no-op. Runs before the JVM
+            // spawn, mirroring FsSandbox.resolve / NetSandbox.checkConnect.
+            // The SandboxViolation propagates to dispatchForeign, which
+            // translates it to InterpretError.SandboxViolation.
+            ProcessSandbox.check(sandboxPolicy.process, cmd)
             try {
                 // Review M1: the child gets the tenant's host environment
                 // (HostContext.osEnv — empty under HostPolicy.SECURE), not

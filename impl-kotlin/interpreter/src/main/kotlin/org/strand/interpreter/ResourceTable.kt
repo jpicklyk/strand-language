@@ -253,4 +253,7 @@ enum class SandboxViolationKind {
      * installed by [HostPolicy.SECURE]).
      */
     SystemExitRefused,
+
+    /** `Process.Spawn` was invoked with a command not permitted by the process policy. */
+    ProcessSpawnBlocked,
 }

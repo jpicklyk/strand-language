@@ -440,12 +440,16 @@ internal class CanonicalEncoder(
     // ----- Type-position encodings -----
 
     private fun encodeProductType(node: Node.ProductType, stack: BinderStack): ByteArray {
-        // Field order is normalized by lexicographic order on the field name.
-        // Two product types declared with the same name/type pairs in any order
-        // therefore hash identically (per node-algebra.md § Type system).
-        val sortedFieldIds = node.fields.sortedBy { fieldId ->
-            requireProductTypeField(fieldId).fieldName
-        }
+        // Field order is normalized by lexicographic order on the field name's
+        // UTF-8 bytes — equivalently, Unicode code-point order (epoch 3, Q-074;
+        // epoch <= 2 used UTF-16 code-unit order, a JVM-ism). Two product types
+        // declared with the same name/type pairs in any order therefore hash
+        // identically (per node-algebra.md § Type system).
+        val sortedFieldIds = node.fields.sortedWith(
+            compareBy(utf8LexicographicComparator) { fieldId ->
+                requireProductTypeField(fieldId).fieldName
+            }
+        )
         val fieldHashes = sortedFieldIds.map { fieldId ->
             CanonicalCbor.encodeBytes(hashInner(fieldId, stack))
         }
@@ -462,9 +466,13 @@ internal class CanonicalEncoder(
     }
 
     private fun encodeSumType(node: Node.SumType, stack: BinderStack): ByteArray {
-        val sortedCaseIds = node.cases.sortedBy { caseId ->
-            requireSumTypeCase(caseId).caseName
-        }
+        // Cases sorted by caseName's UTF-8 bytes (= code-point order; epoch 3,
+        // Q-074) — epoch <= 2 sorted by UTF-16 code units.
+        val sortedCaseIds = node.cases.sortedWith(
+            compareBy(utf8LexicographicComparator) { caseId ->
+                requireSumTypeCase(caseId).caseName
+            }
+        )
         val caseHashes = sortedCaseIds.map { caseId ->
             CanonicalCbor.encodeBytes(hashInner(caseId, stack))
         }
@@ -891,12 +899,15 @@ internal class CanonicalEncoder(
     // ----- Composite values -----
 
     private fun encodeProductValue(node: Node.ProductValue, stack: BinderStack): ByteArray {
-        // Sort fields by fieldName for canonical order — two ProductValues
-        // with the same field-name-to-value mapping must hash identically,
-        // matching the canonical-field-ordering rule for ProductType.
-        val sortedFieldIds = node.fields.sortedBy { fieldId ->
-            requireProductFieldValue(fieldId).fieldName
-        }
+        // Sort fields by fieldName's UTF-8 bytes (= code-point order; epoch 3,
+        // Q-074) — two ProductValues with the same field-name-to-value mapping
+        // must hash identically, matching the canonical-field-ordering rule for
+        // ProductType. Epoch <= 2 sorted by UTF-16 code units.
+        val sortedFieldIds = node.fields.sortedWith(
+            compareBy(utf8LexicographicComparator) { fieldId ->
+                requireProductFieldValue(fieldId).fieldName
+            }
+        )
         val fieldHashes = sortedFieldIds.map { fieldId ->
             CanonicalCbor.encodeBytes(hashInner(fieldId, stack))
         }
@@ -1450,6 +1461,28 @@ internal class CanonicalEncoder(
             if (ai != bi) return@Comparator ai - bi
         }
         a.size - b.size
+    }
+
+    /**
+     * Lexicographic comparator on strings by their UTF-8 byte encoding,
+     * compared as unsigned bytes — equivalently, Unicode code-point order.
+     * This is the epoch-3 (Q-074) ordering for the three name-keyed edge
+     * lists (ProductType fields, SumType cases, ProductValue fields). It
+     * replaces the epoch-<= 2 `sortedBy { name }`, which used Kotlin's natural
+     * String order (UTF-16 code units, a JVM-ism). The two orders agree for
+     * all ASCII and for the whole BMP below the surrogate range; they diverge
+     * only when a supplementary-plane character (>= U+10000) is compared
+     * against a character in U+E000..U+FFFF — UTF-16 code-unit order places the
+     * supplementary character first, UTF-8 byte order places it last. Every
+     * non-JVM implementation (the anticipated Rust VM per ADR-008) compares
+     * UTF-8 bytes natively, and the encoding is UTF-8 everywhere else, so
+     * UTF-8 byte order is the cross-implementation-neutral choice.
+     */
+    private val utf8LexicographicComparator = Comparator<String> { a, b ->
+        byteArrayLexicographicComparator.compare(
+            a.toByteArray(Charsets.UTF_8),
+            b.toByteArray(Charsets.UTF_8),
+        )
     }
 
     private companion object {

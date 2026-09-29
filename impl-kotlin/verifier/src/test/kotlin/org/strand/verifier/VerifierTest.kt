@@ -1006,7 +1006,7 @@ class VerifierTest {
         // EffectDecl. The set covered (1 category) does not equal the
         // declared set (empty); verifier flags EffectInstanceCoverageMismatch.
         // The target is a non-registry binding: a registry target such as
-        // Time.Now with an empty row is now ForeignEffectUnderDeclared.
+        // Time.Now with an empty row is a BuiltinEffectMismatch (Q-056).
         val r = verify("""{
           "version": 1, "root": "app",
           "nodes": {

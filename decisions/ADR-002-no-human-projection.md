@@ -71,3 +71,4 @@ The decision is reversible at a future cost. If at some future point a projectio
 - [`ADR-006-per-node-encryption.md`](ADR-006-per-node-encryption.md) — interaction with encrypted-node visibility in analysis tooling
 - [`research-plan.md`](../research-plan.md) — analysis tooling commitments for Phase 4
 - [`ADR-009-structured-outputs.md`](ADR-009-structured-outputs.md) — distinguishes program (not projected) from outputs (renderable to humans)
+- [`ADR-010-reasoning-surface.md`](ADR-010-reasoning-surface.md) — the machine-facing reasoning surface, distinct from the human projection this ADR declines

@@ -10,6 +10,7 @@ import org.strand.interpreter.Interpreter
 import org.strand.interpreter.Value
 import org.strand.schema.SchemaCheckResult
 import org.strand.schema.SchemaChecker
+import org.strand.verifier.ProgramAnalysis
 import org.strand.verifier.TypeExpr
 import org.strand.verifier.Verifier
 import org.strand.verifier.VerifyResult
@@ -103,6 +104,98 @@ class StrandRuntime(private val policy: HostPolicy) {
         )
         val value = interp.eval(program.root, capabilities, policy.limits)
         return RunOutcome.Ok(verify, schema, value)
+    }
+
+    /**
+     * Q-072 (ADR-010): the third first-class entry point alongside [verify]
+     * and [run]. Verify [program], then wrap the verified artifact in a pure
+     * [ProgramAnalysis] query surface. On a verify failure the outcome carries
+     * the diagnostics and no analysis; the facade never prints or exits.
+     *
+     * Reads only the verify result and the store — no evaluation, no policy
+     * install, hash-neutral. The returned [ProgramAnalysis] answers the
+     * machine-facing reasoning queries (effect / latent / total closure,
+     * capability requirement, egress set, harm bound, reachability, cross-
+     * program diff) as typed data.
+     */
+    fun analyze(program: ProgramImage): AnalysisOutcome {
+        val verify = verify(program)
+        if (verify is VerifyResult.Failed) return AnalysisOutcome.VerifyFailed(verify.errors)
+        verify as VerifyResult.Ok
+        return AnalysisOutcome.Ok(ProgramAnalysis(program.store, verify, program.root))
+    }
+
+    /**
+     * Convenience: verify [program] and return both the raw [VerifyResult.Ok]
+     * and its [ProgramAnalysis] in one call, or the verify diagnostics. A
+     * caller that wants the inferred types *and* the reasoning surface avoids
+     * verifying twice.
+     */
+    fun verifyAndAnalyze(program: ProgramImage): AnalysisOutcome = analyze(program)
+
+    /**
+     * Q-073 (ADR-010's fourth commitment): the self-gating primitive. Gate
+     * [program]'s execution on a declared [budget] BEFORE any effect runs.
+     *
+     * Verifies [program] first (a verify failure yields
+     * [GuardedOutcome.VerifyFailed], mirroring [verify] / [analyze]). On a
+     * verifying image, builds a [ProgramAnalysis] exactly as [analyze] does
+     * and computes `totalClosure(root)` — the union of the directly-performed
+     * and latent effect closures ([ProgramAnalysis.totalClosure], already
+     * Handler-aware and latent-channel-aware; not re-derived here). If the
+     * total closure contains an EffectCategory [budget] does not grant (i.e.
+     * `totalClosure ⊄ budget.grants.keys`), the operation refuses: it returns
+     * [GuardedOutcome.Refused] with a [RefusalReport] naming every exceeding
+     * category and whether each was reached through the direct channel (in
+     * `rootClosure`), the latent channel (in `rootLatentClosure` but not
+     * `rootClosure`), or both — WITHOUT invoking [run]. No effect occurs on
+     * the refusal path.
+     *
+     * Otherwise the program is within budget: it runs under [budget] as its
+     * [CapabilitySet] (so runtime refinement enforcement remains the
+     * backstop for the parameter-level bounds this category-level gate does
+     * not statically prove), and the outcome is [GuardedOutcome.Ran] wrapping
+     * the ordinary [RunOutcome].
+     *
+     * The gate is category-level, matching the N-036 CapabilityScope
+     * static-proof granularity it generalizes to the whole program at the
+     * run boundary. Refinement-level (parameter) pre-execution proof is
+     * deferred to Q-068; runtime enforcement covers it for now.
+     *
+     * Only the plain [run] entry point is guarded. Guarding
+     * [runMachine] / [runGroup] is deferred — see
+     * `proposals/self-gating-execution.md`'s implementation note.
+     */
+    fun runGuarded(program: ProgramImage, budget: CapabilitySet): GuardedOutcome {
+        val verify = verify(program)
+        if (verify is VerifyResult.Failed) return GuardedOutcome.VerifyFailed(verify.errors)
+        verify as VerifyResult.Ok
+
+        val analysis = ProgramAnalysis(program.store, verify, program.root)
+        val direct = verify.rootClosure(program.root)
+        val latent = verify.rootLatentClosure(program.root)
+        val total = analysis.totalClosure(program.root)
+        val granted = budget.grants.keys
+
+        val exceeding = total - granted
+        if (exceeding.isNotEmpty()) {
+            val perCategory = exceeding.associateWith { category ->
+                when {
+                    category in direct && category in latent -> EffectChannel.BOTH
+                    category in direct -> EffectChannel.DIRECT
+                    else -> EffectChannel.LATENT
+                }
+            }
+            return GuardedOutcome.Refused(
+                RefusalReport(
+                    exceeding = perCategory,
+                    requested = total,
+                    granted = granted,
+                ),
+            )
+        }
+
+        return GuardedOutcome.Ran(run(program, budget))
     }
 
     /**
@@ -401,6 +494,72 @@ sealed class RunOutcome {
         val schema: SchemaCheckResult,
     ) : RunOutcome()
 }
+
+/** Outcome of [StrandRuntime.analyze] / [StrandRuntime.verifyAndAnalyze] (Q-072). */
+sealed class AnalysisOutcome {
+    /** The program verified; [analysis] is the reasoning query surface over it. */
+    data class Ok(val analysis: ProgramAnalysis) : AnalysisOutcome()
+
+    /** Verification failed; no analysis was produced. */
+    data class VerifyFailed(val errors: List<org.strand.verifier.VerifyError>) : AnalysisOutcome()
+}
+
+/**
+ * Outcome of [StrandRuntime.runGuarded] (Q-073): the self-gating primitive.
+ * Distinct in kind from a runtime capability denial ([InterpretError] surfaced
+ * inside [RunOutcome.Ok]'s value or thrown mid-evaluation) — that fires during
+ * execution at the offending call, after the program has begun and possibly
+ * performed other effects. [Refused] fires before any effect: the whole
+ * program is refused up front, at the run boundary.
+ */
+sealed class GuardedOutcome {
+    /** The program's total closure was within [budget]; it ran. */
+    data class Ran(val outcome: RunOutcome) : GuardedOutcome()
+
+    /**
+     * The program's total closure exceeded the declared budget. No effect
+     * occurred — [run] was never invoked. [report] names the exceeding
+     * categories and the channel(s) each was reached through.
+     */
+    data class Refused(val report: RefusalReport) : GuardedOutcome()
+
+    /** Verification failed; neither the gate nor [run] was evaluated. */
+    data class VerifyFailed(val errors: List<org.strand.verifier.VerifyError>) : GuardedOutcome()
+}
+
+/**
+ * Which channel(s) an exceeding EffectCategory was reached through, within a
+ * [RefusalReport]. [DIRECT] means the category is in the program's directly-
+ * performed root closure; [LATENT] means it is reachable only indirectly (a
+ * ToolDef implementation or a higher-order effectful callback argument, per
+ * [org.strand.verifier.VerifyResult.Ok.rootLatentClosure]); [BOTH] means the
+ * category is reached through both channels. This distinction is the whole
+ * point of gating on `totalClosure` rather than hand-rolling a check over
+ * only the directly-performed closure — a naive gate that checks only the
+ * direct channel would miss a latent-only over-budget category entirely.
+ */
+enum class EffectChannel { DIRECT, LATENT, BOTH }
+
+/**
+ * The structured, self-contained reason [StrandRuntime.runGuarded] refused to
+ * run a program: which EffectCategory NodeIds exceeded the declared budget,
+ * through which channel each was reached, and the full requested-versus-
+ * granted category sets so the report can be acted on (or rendered) without
+ * re-deriving anything from the program.
+ *
+ * [exceeding] is keyed by the exceeding EffectCategory NodeId (structural —
+ * not prose) to the [EffectChannel] it was reached through. [requested] is
+ * the program's full `totalClosure(root)`; [granted] is the budget's granted
+ * categories ([org.strand.interpreter.CapabilitySet.grants]'s keys). Both are
+ * carried in full (not just the exceeding subset) so a caller can compute
+ * `requested - granted` itself, diff two refusals, or render a complete
+ * picture without a second call back into [org.strand.verifier.ProgramAnalysis].
+ */
+data class RefusalReport(
+    val exceeding: Map<NodeId, EffectChannel>,
+    val requested: Set<NodeId>,
+    val granted: Set<NodeId>,
+)
 
 /** Convenience: the Ok form of a [VerifyResult], or null. */
 fun VerifyResult.asOk(): VerifyResult.Ok? = this as? VerifyResult.Ok
