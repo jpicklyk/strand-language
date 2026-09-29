@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "root": "s",
+  "nodes": {
+    "s": { "type": "StringLit", "value": "\ud800" }
+  }
+}

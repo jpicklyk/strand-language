@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "An IntLit whose value is the JSON string \"40\". kotlinx-serialization reads a primitive's literal text whether or not it was quoted, so ingest silently coerced it to the Int 40 (and likewise numbers to strings, \"true\" to a Bool, numeric references to author ids; review core M4). Ingest now checks JsonPrimitive.isString explicitly for every scalar and reference field."
+}

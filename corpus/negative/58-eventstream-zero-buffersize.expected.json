@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "An EventStream declaring bufferSize 0. The canonical encoder uses 0 as the sentinel for an unset bufferSize, so the explicit 0 hashed identically to the same stream with bufferSize absent (review hashing Low), while the verifier rejects bufferSize <= 0. Ingest now rejects bufferSize <= 0, matching the verifier (companion to entry 24, the negative case)."
+}

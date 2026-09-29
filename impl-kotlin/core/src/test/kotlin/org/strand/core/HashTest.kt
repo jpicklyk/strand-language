@@ -27,4 +27,21 @@ class HashTest {
     fun `fromHex rejects non-hex characters`() {
         assertThrows(IllegalArgumentException::class.java) { Hash.fromHex("zz" + "00".repeat(32)) }
     }
+
+    @Test
+    fun `an unknown prefix is bad input, not an internal error`() {
+        assertThrows(IllegalArgumentException::class.java) { Hash.fromHex("ff" + "00".repeat(32)) }
+    }
+
+    @Test
+    fun `Hash is immutable - neither the source array nor the exposed bytes alias its value`() {
+        val source = byteArrayOf(0x1e.toByte()) + ByteArray(32) { it.toByte() }
+        val h = Hash(source)
+        val expected = Hash(source.copyOf())
+        source[5] = 99
+        assertEquals(expected, h, "mutating the constructor argument changed the Hash")
+        h.bytes[5] = 42
+        assertEquals(expected, h, "mutating the exposed bytes changed the Hash")
+        assertEquals(expected.hashCode(), h.hashCode())
+    }
 }

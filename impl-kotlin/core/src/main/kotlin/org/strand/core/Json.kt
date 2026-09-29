@@ -8,7 +8,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.longOrNull
 
 /**
@@ -89,18 +89,30 @@ import kotlinx.serialization.json.longOrNull
  *                         "parameterSchema": <Schema id>, "implementation": <Expression id> }
  *   ResponseSchemaSpec  { "type": "ResponseSchemaSpec", "schema": <Schema id> }
  *
- * State machines (excerpt — full schema in impl/CLAUDE.md):
+ * State machines:
+ *   StateMachine { "type": "StateMachine", "transitionFn": <id>, "initialState": <id>,
+ *                  "inputStreams": [<id>, ...], "outputStreams": [<id>, ...]?,
+ *                  "effects": [<id>, ...]? }
  *   EventStream  { "type": "EventStream", "eventType": <id>,
  *                  "streamKind": "external|internal|output",
- *                  "bufferSize": <int>?  (optional; default 1024 at runtime),
- *                  "overflowPolicy": <policy>?  (optional; default BlockProducer) }
+ *                  "bufferSize": <positive int>?  (optional; default 1024 at runtime),
+ *                  "overflowPolicy": <policy>?  (optional; default BlockProducer),
+ *                  "consumerMode": "Single|Broadcast"?  (optional; default Single),
+ *                  "source": <id>?  (optional; Q-046 source edge) }
+ *   Transition   { "type": "Transition", "guard": <id>?, "body": <id> }
  *
  *   overflowPolicy may be either a shorthand string ("BlockProducer",
  *   "DropNewest", "DropOldest") or an object form for the parameterized
- *   variant: `{ "kind": "Sample", "intervalNanos": <long> }`. When omitted
- *   (or for any of the three nullary variants), the canonical encoder gates
- *   both `bufferSize` and `overflowPolicy` on non-default values so pre-step-3
- *   EventStream hashes are byte-identical to the new form (additive versioning).
+ *   variant: `{ "kind": "Sample", "intervalNanos": <long> }`. The canonical
+ *   encoder emits the bufferSize / overflowPolicy / consumerMode group only
+ *   when at least one of them is non-default, and always emits the `source`
+ *   field under the epoch-2 (Q-062) presence prefix; see
+ *   design/canonical-encoding.md for the exact layout.
+ *
+ * Every scalar is type-checked strictly: a string field must be a JSON
+ * string, a numeric or boolean field a JSON number or boolean (never a
+ * quoted one), and every reference a string author id. Strings must be
+ * well-formed UTF-16 (no unpaired surrogates).
  */
 object JsonIngest {
 
@@ -137,6 +149,11 @@ object JsonIngest {
      *  3. **Node count cap.** After parsing the top-level object,
      *     `nodes.entries.size > limits.maxNodeCount` raises
      *     [IngestError.ResourceExhaustion] with [ExhaustionKind.NodeCount].
+     *
+     * A fourth cap fires after the nodes are materialized but before the
+     * store is committed: **graph depth** (review H3). The longest reference
+     * chain exceeding `limits.maxGraphDepth` raises
+     * [IngestError.ResourceExhaustion] with [ExhaustionKind.GraphDepth].
      *
      * Existing malformed-input failure paths (missing fields, unknown node
      * types, etc.) raise [IngestError.Malformed] with the same string
@@ -186,14 +203,15 @@ object JsonIngest {
     }
 
     private fun parseValidated(element: JsonElement, limits: EvaluationLimits): IngestResult {
+        validateWellFormedStrings(element)
         val obj = element.requireObject("root document")
 
-        val version = obj["version"]?.jsonPrimitive?.intOrNull
-        if (version != 1) {
+        val version = obj["version"].strictLong()
+        if (version != 1L) {
             throw IngestError.Malformed("Unsupported or missing schema version (expected 1, got $version)")
         }
 
-        val rootName = obj["root"]?.jsonPrimitive?.contentOrNull
+        val rootName = obj["root"].strictString()
             ?: throw IngestError.Malformed("Missing 'root' field")
 
         val nodesObj = obj["nodes"]?.requireObject("nodes")
@@ -269,7 +287,15 @@ object JsonIngest {
         // is its target's content hash, and the hash walk only computes
         // hashes for root-reachable nodes — an unreachable target leaves
         // the NodeRef with no canonical form at all.
-        validateAcyclic(orderedEntries.map { it.key }, nameToId, slots, nameToId.getValue(rootName))
+        //
+        // The same DFS enforces the graph-depth cap (review H3):
+        // [EvaluationLimits.maxGraphDepth] bounds the longest reference
+        // chain, which the flat JSON form (and so [validateJsonDepth]) does
+        // not bound, and which every downstream recursive walk depends on.
+        validateAcyclic(
+            orderedEntries.map { it.key }, nameToId, slots, nameToId.getValue(rootName),
+            limits.maxGraphDepth,
+        )
 
         // Pass 3: commit to the raw store. Every slot must be Resolved; an
         // unresolved slot would indicate an ingest bug, not a malformed
@@ -289,6 +315,54 @@ object JsonIngest {
         }
 
         return IngestResult(rawStore, nameToId.getValue(rootName), nameToId)
+    }
+
+    /**
+     * Review H2: reject ill-formed UTF-16 (an unpaired surrogate, reachable
+     * through a JSON `\ud800` escape) in every string of the document —
+     * object keys and string values alike. The canonical encoding carries
+     * string content fields as UTF-8, and an unpaired surrogate has no UTF-8
+     * encoding: the JVM's lenient encoder substitutes `?`, which would make
+     * two different values hash identically. Iterative, since the element
+     * tree may be up to [EvaluationLimits.maxJsonDepth] deep.
+     */
+    private fun validateWellFormedStrings(root: JsonElement) {
+        val pending = ArrayDeque<JsonElement>()
+        pending.addLast(root)
+        while (pending.isNotEmpty()) {
+            when (val e = pending.removeLast()) {
+                is JsonObject -> for ((key, value) in e) {
+                    requireWellFormedUtf16(key, "object key")
+                    pending.addLast(value)
+                }
+                is kotlinx.serialization.json.JsonArray -> e.forEach { pending.addLast(it) }
+                is JsonPrimitive -> if (e.isString) requireWellFormedUtf16(e.content, "string value")
+            }
+        }
+    }
+
+    private fun requireWellFormedUtf16(s: String, what: String) {
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 < s.length && Character.isLowSurrogate(s[i + 1])) {
+                    i += 2
+                    continue
+                }
+                throw IngestError.Malformed(
+                    "Ill-formed UTF-16 in $what: unpaired high surrogate at offset $i " +
+                        "(string content must be valid Unicode to have a canonical UTF-8 encoding)"
+                )
+            }
+            if (Character.isLowSurrogate(c)) {
+                throw IngestError.Malformed(
+                    "Ill-formed UTF-16 in $what: unpaired low surrogate at offset $i " +
+                        "(string content must be valid Unicode to have a canonical UTF-8 encoding)"
+                )
+            }
+            i++
+        }
     }
 
     /**
@@ -326,6 +400,11 @@ object JsonIngest {
      *     to one are Lambda.parameters entries and VarRef.binder
      *     back-references. Any other edge would make the hash walk visit
      *     it standalone, which the encoding does not define.
+     *
+     * Name-keyed children must also be distinct: duplicate ProductType
+     * field names, SumType case names, or ProductValue field names are
+     * rejected (review verifier C1 — a duplicate let the verifier and the
+     * interpreter pick different fields of the same name).
      *
      * The verifier's CategoryMismatch rule still guards the same shapes
      * for programmatically-built stores.
@@ -386,6 +465,40 @@ object JsonIngest {
             }
         }
 
+        // Group 1b (review verifier C1, ingest half): name-keyed children
+        // must have distinct names. `ProductType{x: Int, x: String}` let the
+        // verifier type a field read against one duplicate while the
+        // interpreter read the other — a verified program reaching a runtime
+        // type error. The same holds for SumType case names and
+        // ProductValue field names. Group 1 has already established the
+        // child categories, so the casts below are safe.
+        fun requireDistinct(owner: String, what: String, children: List<NodeId>, nameOf: (Node) -> String) {
+            val seen = HashSet<String>()
+            for (childId in children) {
+                val childName = nameOf(nodeAt(childId)!!)
+                if (!seen.add(childName)) {
+                    throw IngestError.Malformed(
+                        "Node '$owner' declares $what '$childName' more than once; " +
+                            "$what names must be distinct"
+                    )
+                }
+            }
+        }
+        for (name in orderedNames) {
+            when (val node = nodeAt(nameToId.getValue(name))) {
+                is Node.ProductType -> requireDistinct(name, "ProductType field", node.fields) {
+                    (it as Node.ProductTypeField).fieldName
+                }
+                is Node.SumType -> requireDistinct(name, "SumType case", node.cases) {
+                    (it as Node.SumTypeCase).caseName
+                }
+                is Node.ProductValue -> requireDistinct(name, "ProductValue field", node.fields) {
+                    (it as Node.ProductFieldValue).fieldName
+                }
+                else -> {}
+            }
+        }
+
         // Group 2: ParameterDecl may only be referenced from
         // Lambda.parameters or VarRef.binder. Walk every other
         // hash-relevant edge and reject ParameterDecl targets.
@@ -430,12 +543,22 @@ object JsonIngest {
      * [Node.VarRef.binder] (binders are positionally encoded back-edges),
      * the raw target of a pre-finalization NodeRef, and the export targets
      * plus declared effects of a pre-finalization ModuleManifest.
+     *
+     * The same DFS computes each node's graph height (the number of nodes on
+     * the longest path from it down that edge set, a leaf being 1) as it
+     * finishes the node, and rejects a document in which any node's height
+     * exceeds [maxGraphDepth] with [IngestError.ResourceExhaustion] /
+     * [ExhaustionKind.GraphDepth]. The flat JSON form does not bound graph
+     * depth — a 100k-node Let chain is shallow JSON — while the canonical
+     * encoder, the hash walk, the verifier and the interpreter all recurse
+     * per graph level (review H3 / verifier M4).
      */
     private fun validateAcyclic(
         orderedNames: List<String>,
         nameToId: Map<String, NodeId>,
         slots: Map<NodeId, IngestSlot>,
         rootId: NodeId,
+        maxGraphDepth: Int,
     ) {
         fun edgesOf(id: NodeId): List<NodeId> {
             val stored = ((slots.getValue(id) as? IngestSlot.Resolved)?.stored) ?: return emptyList()
@@ -463,6 +586,7 @@ object JsonIngest {
         val gray = 1
         val black = 2
         val color = HashMap<NodeId, Int>()
+        val height = HashMap<NodeId, Int>()
         for (startName in orderedNames) {
             val start = nameToId.getValue(startName)
             if ((color[start] ?: white) != white) continue
@@ -487,6 +611,21 @@ object JsonIngest {
                         else -> {}
                     }
                 } else {
+                    // Every child is black here (a gray child is a cycle and
+                    // was thrown above), so its height is final.
+                    var h = 1
+                    for (child in edgesOf(id)) {
+                        val ch = height.getValue(child) + 1
+                        if (ch > h) h = ch
+                    }
+                    if (h > maxGraphDepth) {
+                        throw IngestError.ResourceExhaustion(
+                            kind = ExhaustionKind.GraphDepth,
+                            current = h.toLong(),
+                            limit = maxGraphDepth.toLong(),
+                        )
+                    }
+                    height[id] = h
                     color[id] = black
                     stack.removeLast()
                 }
@@ -543,7 +682,7 @@ object JsonIngest {
         obj: JsonObject,
         resolve: (String, String) -> NodeId
     ): StoredNode {
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull
+        val type = obj["type"].strictString()
             ?: throw IngestError.Malformed("Node '$name' is missing 'type'")
         // NodeRef is the one node category whose canonical form carries a
         // Hash rather than a NodeId. Two ingest forms:
@@ -558,7 +697,7 @@ object JsonIngest {
         // Exactly one of `target` / `targetHash` must be present.
         if (type == "NodeRef") {
             val ctx = "node '$name'"
-            val targetHashHex = obj["targetHash"]?.jsonPrimitive?.contentOrNull
+            val targetHashHex = obj["targetHash"].strictString()
             if (targetHashHex != null) {
                 if (obj["target"] != null) {
                     throw IngestError.Malformed(
@@ -566,7 +705,7 @@ object JsonIngest {
                             "or 'targetHash' (cross-store content hash), not both"
                     )
                 }
-                return StoredNode.Canonical(Node.NodeRef(target = Hash(hexDecode(targetHashHex, "$ctx.targetHash"))))
+                return StoredNode.Canonical(Node.NodeRef(target = parseTargetHash(targetHashHex, "$ctx.targetHash")))
             }
             val targetId = obj.requireRef("target", ctx, resolve)
             return StoredNode.RawNodeRef(targetId)
@@ -627,7 +766,7 @@ object JsonIngest {
         ) {
             null
         } else {
-            val hex = sigElement.jsonPrimitive.contentOrNull
+            val hex = sigElement.strictString()
                 ?: throw IngestError.Malformed("'manifestSignature' in $ctx must be a hex string")
             hexDecode(hex, "$ctx.manifestSignature")
         }
@@ -639,7 +778,7 @@ object JsonIngest {
         obj: JsonObject,
         resolve: (String, String) -> NodeId
     ): Node {
-        val type = obj["type"]?.jsonPrimitive?.contentOrNull
+        val type = obj["type"].strictString()
             ?: throw IngestError.Malformed("Node '$name' is missing 'type'")
         val ctx = "node '$name'"
         return when (type) {
@@ -817,9 +956,13 @@ object JsonIngest {
                 bufferSize = obj.optionalInt("bufferSize", ctx)?.also {
                     // Q-066: the canonical encoding carries bufferSize as a
                     // CBOR uint, so a negative value is unencodable; it is
-                    // also meaningless as a channel capacity.
-                    if (it < 0) throw IngestError.Malformed(
-                        "EventStream bufferSize in $ctx must be non-negative, got $it"
+                    // also meaningless as a channel capacity. Zero is
+                    // rejected too (review hashing Low): the encoder uses 0
+                    // as the "unset" sentinel, so an explicit 0 would hash
+                    // identically to an absent bufferSize, and the verifier
+                    // rejects bufferSize <= 0 anyway.
+                    if (it <= 0) throw IngestError.Malformed(
+                        "EventStream bufferSize in $ctx must be positive, got $it"
                     )
                 },
                 overflowPolicy = obj.optionalOverflowPolicy("overflowPolicy", ctx),
@@ -913,7 +1056,7 @@ object JsonIngest {
      */
     private fun parseOverflowPolicy(element: JsonElement, ctx: String): OverflowPolicy {
         if (element is JsonPrimitive) {
-            val name = element.contentOrNull
+            val name = element.strictString()
                 ?: throw IngestError.Malformed("overflowPolicy in $ctx must be a string or an object")
             return when (name) {
                 "BlockProducer", "blockProducer", "block_producer", "block" -> OverflowPolicy.BlockProducer
@@ -927,14 +1070,14 @@ object JsonIngest {
             }
         }
         val obj = element.requireObject("$ctx.overflowPolicy")
-        val kind = obj["kind"]?.jsonPrimitive?.contentOrNull
+        val kind = obj["kind"].strictString()
             ?: throw IngestError.Malformed("overflowPolicy object in $ctx missing 'kind' field")
         return when (kind) {
             "BlockProducer" -> OverflowPolicy.BlockProducer
             "DropNewest" -> OverflowPolicy.DropNewest
             "DropOldest" -> OverflowPolicy.DropOldest
             "Sample" -> {
-                val interval = obj["intervalNanos"]?.jsonPrimitive?.longOrNull
+                val interval = obj["intervalNanos"].strictLong()
                     ?: throw IngestError.Malformed(
                         "overflowPolicy Sample in $ctx missing 'intervalNanos' Long"
                     )
@@ -950,6 +1093,28 @@ object JsonIngest {
                     "(expected BlockProducer, DropNewest, DropOldest, or Sample)"
             )
         }
+    }
+
+    /**
+     * Decode a cross-store `targetHash` into a [Hash], rejecting an empty
+     * value, an unassigned multi-hash prefix, or a digest of the wrong
+     * length with [IngestError.Malformed] (review hashing M3: an unknown
+     * prefix used to escape as a raw `IllegalStateException`).
+     */
+    private fun parseTargetHash(hex: String, ctx: String): Hash {
+        val bytes = hexDecode(hex, ctx)
+        if (bytes.isEmpty()) throw IngestError.Malformed("Empty content hash in $ctx")
+        val fn = HashFunction.fromPrefixOrNull(bytes[0]) ?: throw IngestError.Malformed(
+            "Unknown hash function prefix 0x%02x in $ctx (known: %s)".format(
+                bytes[0], HashFunction.entries.joinToString { "0x%02x %s".format(it.prefix, it.name) }
+            )
+        )
+        if (bytes.size != 1 + fn.digestSize) throw IngestError.Malformed(
+            "Content hash in $ctx with prefix 0x%02x must carry %d digest bytes; got %d".format(
+                bytes[0], fn.digestSize, bytes.size - 1
+            )
+        )
+        return Hash(bytes)
     }
 
     private fun hexDecode(s: String, ctx: String): ByteArray {
@@ -1066,36 +1231,54 @@ private fun JsonElement.requireObject(ctx: String): JsonObject =
     this as? JsonObject ?: throw IngestError.Malformed("Expected object at $ctx")
 
 private fun JsonObject.requireString(field: String, ctx: String): String =
-    this[field]?.jsonPrimitive?.contentOrNull
+    this[field].strictString()
         ?: throw IngestError.Malformed("Missing or non-string field '$field' in $ctx")
 
 private fun JsonObject.requireLong(field: String, ctx: String): Long {
-    val prim = this[field]?.jsonPrimitive
-        ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
-    return prim.longOrNull
-        ?: throw IngestError.Malformed("Field '$field' in $ctx must be an integer")
+    val v = this[field] ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
+    return v.strictLong()
+        ?: throw IngestError.Malformed("Field '$field' in $ctx must be an integer (a JSON number, not a string)")
 }
 
 private fun JsonObject.requireDouble(field: String, ctx: String): Double {
-    val prim = this[field]?.jsonPrimitive
-        ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
-    return prim.doubleOrNull
-        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a number")
+    val v = this[field] ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
+    return v.nonStringScalar()?.doubleOrNull
+        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a number (a JSON number, not a string)")
 }
 
 private fun JsonObject.requireBoolean(field: String, ctx: String): Boolean {
-    val prim = this[field]?.jsonPrimitive
-        ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
-    return prim.booleanOrNull
-        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a boolean")
+    val v = this[field] ?: throw IngestError.Malformed("Missing field '$field' in $ctx")
+    return v.nonStringScalar()?.booleanOrNull
+        ?: throw IngestError.Malformed("Field '$field' in $ctx must be a boolean (true/false, not a string)")
 }
+
+/*
+ * Review M4 (core): strict scalar accessors. kotlinx-serialization's
+ * `JsonPrimitive.content` / `longOrNull` / `booleanOrNull` read the literal
+ * text whether or not it was quoted, so `"name": 7` ingested as "7",
+ * `"value": "42"` as the Int 42, `"value": "true"` as a Bool, and a
+ * numeric reference as the author id "7". Ingest now checks
+ * [JsonPrimitive.isString] explicitly: a string field must be a JSON
+ * string, a numeric or boolean field must not be one.
+ */
+
+/** The content of a JSON string; null for anything else (absent, null, number, boolean, object, array). */
+private fun JsonElement?.strictString(): String? =
+    (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+/** A non-string, non-null JSON scalar (a number or boolean literal); null otherwise. */
+private fun JsonElement?.nonStringScalar(): JsonPrimitive? =
+    (this as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }
+
+/** An integral JSON number; null for a string (even "42"), a non-integral number, or anything else. */
+private fun JsonElement?.strictLong(): Long? = nonStringScalar()?.longOrNull
 
 private fun JsonObject.requireRef(
     field: String,
     ctx: String,
     resolve: (String, String) -> NodeId
 ): NodeId {
-    val name = this[field]?.jsonPrimitive?.contentOrNull
+    val name = this[field].strictString()
         ?: throw IngestError.Malformed("Missing or non-string ref field '$field' in $ctx")
     return resolve(name, "$ctx.$field")
 }
@@ -1107,7 +1290,7 @@ private fun JsonObject.optionalRef(
 ): NodeId? {
     val v = this[field] ?: return null
     if (v is JsonPrimitive && v.contentOrNull == null) return null
-    val name = v.jsonPrimitive.contentOrNull
+    val name = v.strictString()
         ?: throw IngestError.Malformed("Ref field '$field' in $ctx must be a string id or absent")
     return resolve(name, "$ctx.$field")
 }
@@ -1120,7 +1303,7 @@ private fun JsonObject.requireRefList(
     val arr = this[field]?.jsonArray
         ?: throw IngestError.Malformed("Missing or non-array field '$field' in $ctx")
     return arr.mapIndexed { i, e ->
-        val s = e.jsonPrimitive.contentOrNull
+        val s = e.strictString()
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be a string id")
         resolve(s, "$ctx.$field[$i]")
     }
@@ -1133,7 +1316,7 @@ private fun JsonObject.optionalRefList(
 ): List<NodeId> {
     val arr = this[field]?.jsonArray ?: return emptyList()
     return arr.mapIndexed { i, e ->
-        val s = e.jsonPrimitive.contentOrNull
+        val s = e.strictString()
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be a string id")
         resolve(s, "$ctx.$field[$i]")
     }
@@ -1142,8 +1325,8 @@ private fun JsonObject.optionalRefList(
 private fun JsonObject.optionalInt(field: String, ctx: String): Int? {
     val v = this[field] ?: return null
     if (v is JsonPrimitive && v.contentOrNull == null) return null
-    val long = v.jsonPrimitive.longOrNull
-        ?: throw IngestError.Malformed("Optional field '$field' in $ctx must be an integer if present")
+    val long = v.strictLong()
+        ?: throw IngestError.Malformed("Optional field '$field' in $ctx must be an integer (a JSON number, not a string) if present")
     if (long < Int.MIN_VALUE.toLong() || long > Int.MAX_VALUE.toLong()) {
         throw IngestError.Malformed("Field '$field' in $ctx must fit in 32 bits, got $long")
     }
@@ -1159,7 +1342,7 @@ private fun JsonObject.optionalOverflowPolicy(field: String, ctx: String): Overf
 private fun JsonObject.optionalConsumerMode(field: String, ctx: String): ConsumerMode? {
     val v = this[field] ?: return null
     if (v is JsonPrimitive && v.contentOrNull == null) return null
-    val name = v.jsonPrimitive.contentOrNull
+    val name = v.strictString()
         ?: throw IngestError.Malformed("Optional field '$field' in $ctx must be a string if present")
     return JsonIngest.parseConsumerMode(name, "$ctx.$field")
 }
@@ -1191,7 +1374,7 @@ private fun JsonObject.optionalEffectProjections(
         val obj = e as? JsonObject
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be an object")
         val projCtx = "$ctx.$field[$i]"
-        val categoryName = obj["category"]?.jsonPrimitive?.contentOrNull
+        val categoryName = obj["category"].strictString()
             ?: throw IngestError.Malformed("Missing or non-string 'category' in $projCtx")
         val categoryId = resolve(categoryName, "$projCtx.category")
         val sourcesArr = obj["sources"] as? kotlinx.serialization.json.JsonArray
@@ -1200,11 +1383,11 @@ private fun JsonObject.optionalEffectProjections(
             val sObj = sEl as? JsonObject
                 ?: throw IngestError.Malformed("Element $j of 'sources' in $projCtx must be an object")
             val srcCtx = "$projCtx.sources[$j]"
-            val kind = sObj["kind"]?.jsonPrimitive?.contentOrNull
+            val kind = sObj["kind"].strictString()
                 ?: throw IngestError.Malformed("Missing or non-string 'kind' in $srcCtx")
             when (kind) {
                 "ArgRef" -> {
-                    val idx = sObj["index"]?.jsonPrimitive?.longOrNull
+                    val idx = sObj["index"].strictLong()
                         ?: throw IngestError.Malformed("Missing or non-integer 'index' in $srcCtx")
                     if (idx < 0 || idx > Int.MAX_VALUE.toLong()) {
                         throw IngestError.Malformed(
@@ -1214,7 +1397,7 @@ private fun JsonObject.optionalEffectProjections(
                     ProjectionSource.ArgRef(idx.toInt())
                 }
                 "LiteralNode" -> {
-                    val targetName = sObj["target"]?.jsonPrimitive?.contentOrNull
+                    val targetName = sObj["target"].strictString()
                         ?: throw IngestError.Malformed("Missing or non-string 'target' in $srcCtx")
                     val targetId = resolve(targetName, "$srcCtx.target")
                     ProjectionSource.LiteralNode(targetId)
@@ -1256,15 +1439,15 @@ private fun JsonObject.requireProjectionPath(field: String, ctx: String): List<P
         val stepObj = e as? JsonObject
             ?: throw IngestError.Malformed("Element $i of '$field' in $ctx must be an object")
         val stepCtx = "$ctx.$field[$i]"
-        val step = stepObj["step"]?.jsonPrimitive?.contentOrNull
+        val step = stepObj["step"].strictString()
             ?: throw IngestError.Malformed("Missing or non-string 'step' in $stepCtx")
         when (step) {
             "Case" -> ProjectionStep.Case(
-                caseName = stepObj["caseName"]?.jsonPrimitive?.contentOrNull
+                caseName = stepObj["caseName"].strictString()
                     ?: throw IngestError.Malformed("Missing or non-string 'caseName' in $stepCtx")
             )
             "Field" -> ProjectionStep.Field(
-                fieldName = stepObj["fieldName"]?.jsonPrimitive?.contentOrNull
+                fieldName = stepObj["fieldName"].strictString()
                     ?: throw IngestError.Malformed("Missing or non-string 'fieldName' in $stepCtx")
             )
             "Unfold" -> ProjectionStep.Unfold
@@ -1276,5 +1459,3 @@ private fun JsonObject.requireProjectionPath(field: String, ctx: String): List<P
     }
 }
 
-private val JsonPrimitive.intOrNull: Int?
-    get() = this.contentOrNull?.toIntOrNull()

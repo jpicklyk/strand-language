@@ -19,33 +19,44 @@ package org.strand.core
  * boundary — can carry a [Hash] without inverting the module dependency
  * direction (`:hashing` depends on `:core`, not the other way around).
  */
-class Hash(val bytes: ByteArray) {
+class Hash(bytes: ByteArray) {
+    /**
+     * Private copy of the multi-hash. A [Hash] is a map key and the identity
+     * of a node, so it must be immutable: the constructor copies its
+     * argument and [bytes] returns a fresh copy, so neither the caller's
+     * array nor a returned array can alter this value (review hashing Low).
+     */
+    private val value: ByteArray = bytes.copyOf()
+
     init {
-        require(bytes.isNotEmpty()) { "Hash bytes must not be empty" }
+        require(value.isNotEmpty()) { "Hash bytes must not be empty" }
         // Validate the prefix corresponds to a known function and that the
         // digest length matches that function's specification.
-        val fn = HashFunction.fromPrefix(bytes[0])
-        require(bytes.size == 1 + fn.digestSize) {
+        val fn = HashFunction.fromPrefix(value[0])
+        require(value.size == 1 + fn.digestSize) {
             "Hash with prefix 0x%02x must carry %d digest bytes; got %d".format(
-                bytes[0], fn.digestSize, bytes.size - 1
+                value[0], fn.digestSize, value.size - 1
             )
         }
     }
 
+    /** The full multi-hash (prefix + digest), as a defensive copy. */
+    val bytes: ByteArray get() = value.copyOf()
+
     /** The hash function that produced this digest, recovered from the prefix byte. */
-    val function: HashFunction get() = HashFunction.fromPrefix(bytes[0])
+    val function: HashFunction get() = HashFunction.fromPrefix(value[0])
 
     /** The digest bytes, excluding the one-byte function-identifier prefix. */
-    val digest: ByteArray get() = bytes.copyOfRange(1, bytes.size)
+    val digest: ByteArray get() = value.copyOfRange(1, value.size)
 
     override fun equals(other: Any?): Boolean =
-        other is Hash && bytes.contentEquals(other.bytes)
+        other is Hash && value.contentEquals(other.value)
 
-    override fun hashCode(): Int = bytes.contentHashCode()
+    override fun hashCode(): Int = value.contentHashCode()
 
     /** Lowercase hex of the full multi-hash (prefix + digest). */
     override fun toString(): String =
-        bytes.joinToString("") { "%02x".format(it) }
+        value.joinToString("") { "%02x".format(it) }
 
     companion object {
         /**
@@ -76,8 +87,20 @@ enum class HashFunction(val prefix: Byte, val digestSize: Int) {
     Blake3(0x1e.toByte(), 32);
 
     companion object {
+        /**
+         * The function with multi-hash [prefix]. An unknown prefix is bad
+         * input, not a broken invariant, so it raises
+         * [IllegalArgumentException] (like the other [Hash] constructor
+         * checks) — callers that parse untrusted hex (JSON ingest, the store
+         * and snapshot codecs, the CLI) already translate that into their
+         * structured error (review hashing M3).
+         */
         fun fromPrefix(prefix: Byte): HashFunction =
+            fromPrefixOrNull(prefix)
+                ?: throw IllegalArgumentException("Unknown hash function prefix: 0x%02x".format(prefix))
+
+        /** The function with multi-hash [prefix], or null when the prefix is unassigned. */
+        fun fromPrefixOrNull(prefix: Byte): HashFunction? =
             entries.firstOrNull { it.prefix == prefix }
-                ?: error("Unknown hash function prefix: 0x%02x".format(prefix))
     }
 }
