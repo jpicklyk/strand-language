@@ -85,12 +85,18 @@ data class HttpResponse(
  * Default JDK-backed transport. Uses [java.net.HttpURLConnection]
  * matching the style of `strand-builtin:Http.Request` in
  * [Builtins]. HTTPS via the JVM's default truststore.
+ *
+ * Review H2 / M2: redirects are never followed, every connection carries
+ * the connect / read timeouts of [limits], and response bodies are read
+ * under [BuiltinLimits.maxResponseBytes]. A host that wants different
+ * bounds installs its own `BoundedJdkHttpTransport(limits)`.
  */
-object JdkHttpTransport : VectorHttpTransport {
+open class BoundedJdkHttpTransport(private val limits: BuiltinLimits) : VectorHttpTransport {
     override fun execute(request: HttpRequest): HttpResponse {
         val url = java.net.URI(request.url).toURL()
         // Review H2: never follow a redirect (the target is not sandbox-checked).
         val conn = NetIo.openConnection(url)
+        limits.applyTimeouts(conn)
         conn.requestMethod = request.method.uppercase()
         conn.doInput = true
         for ((name, value) in request.headers) {
@@ -104,7 +110,7 @@ object JdkHttpTransport : VectorHttpTransport {
         NetIo.rejectRedirect(conn, status)
         val body = try {
             val stream = if (status in 200..299) conn.inputStream else conn.errorStream
-            stream?.readBytes() ?: ByteArray(0)
+            stream?.let { limits.readBounded(it) } ?: ByteArray(0)
         } catch (_: java.io.IOException) {
             ByteArray(0)
         }
@@ -112,6 +118,9 @@ object JdkHttpTransport : VectorHttpTransport {
         return HttpResponse(status, body)
     }
 }
+
+/** The default transport: [BoundedJdkHttpTransport] under [BuiltinLimits.DEFAULT]. */
+object JdkHttpTransport : BoundedJdkHttpTransport(BuiltinLimits.DEFAULT)
 
 /**
  * In-memory transport for tests. Constructed with a list of

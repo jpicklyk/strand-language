@@ -550,6 +550,13 @@ object Builtins {
             require(args.size == 1) { "Time.Sleep expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
             require(millis >= 0) { "Time.Sleep millis must be non-negative, got $millis" }
+            // Review M2: a sleep advances no interpreter step, so the sampled
+            // wall-clock budget cannot interrupt it. Refuse, up front, any
+            // sleep longer than the whole budget (it could never finish
+            // inside it). Capping at the *remaining* budget needs the
+            // evaluation start time, which the interpreter does not expose
+            // to builtins yet.
+            builtinLimits.checkSleep(millis)
             clock.sleep(millis)
             Value.UnitV
         },
@@ -1018,6 +1025,8 @@ object Builtins {
                 val url = pinnedUri.toURL()
                 // Review H2: redirects are never followed (NetIo.openConnection).
                 val conn = NetIo.openConnection(url)
+                // Review M2: connect/read timeouts from the host wall-clock budget.
+                builtinLimits.applyTimeouts(conn)
                 conn.requestMethod = method.uppercase()
                 conn.doInput = true
                 // Preserve the original hostname in the Host header so
@@ -1035,9 +1044,10 @@ object Builtins {
                 }
                 val status = conn.responseCode
                 NetIo.rejectRedirect(conn, status)
+                // Review M2: the body is read under the host's maxResponseBytes cap.
                 val responseBody = try {
                     (if (status in 200..299) conn.inputStream else conn.errorStream)
-                        ?.readBytes() ?: ByteArray(0)
+                        ?.let { builtinLimits.readBounded(it) } ?: ByteArray(0)
                 } catch (_: java.io.IOException) {
                     ByteArray(0)
                 }
@@ -2307,17 +2317,31 @@ object Builtins {
 
         "strand-builtin:Http.Accept" to fx { args ->
             // (server: serverHandle) -> {method, path, body, responder}
-            // Blocks until a request arrives.
+            // Blocks until a request arrives or the host accept timeout
+            // (BuiltinLimits.acceptTimeoutMillis) expires.
             require(args.size == 1) { "Http.Accept expects 1 arg (server: serverHandle), got ${args.size}" }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("http-accept", "expected Resource handle, got ${args[0]::class.simpleName}")
             val holder = ResourceTable.get(handle, "http-server") as HttpServerHolder
             try {
-                val pending = holder.queue.take()  // blocks
+                // Review M2: bounded wait. A native blocking take advances no
+                // interpreter step, so without a timeout the wall-clock budget
+                // could never fire; expiry is a catchable IoFailure so a
+                // server loop can poll again.
+                val waitMillis = builtinLimits.acceptTimeoutMillis
+                val pending = (if (waitMillis in 1 until Long.MAX_VALUE) {
+                    holder.queue.poll(waitMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+                } else {
+                    holder.queue.take()
+                }) ?: throw IoFailure(
+                    "http-accept-timeout",
+                    "no request arrived within ${waitMillis}ms (host accept timeout)",
+                )
                 val exchange = pending.exchange
                 val method = exchange.requestMethod
                 val path = exchange.requestURI.toString()
-                val body = exchange.requestBody.readAllBytes()
+                // Review M2: inbound bodies are capped like response bodies.
+                val body = builtinLimits.readBounded(exchange.requestBody)
                 val responderHandle = ResourceTable.register("http-pending", pending)
                 Value.ProductV(mapOf(
                     "method" to Value.StringV(method),

@@ -153,6 +153,98 @@ class HttpRequestHardeningTest {
         assertEquals(0, victimHits.get())
     }
 
+    // ---------- M2: timeouts and body caps ----------
+
+    private val tight = BuiltinLimits(
+        connectTimeoutMillis = 500, readTimeoutMillis = 300, acceptTimeoutMillis = 200,
+        maxSleepMillis = 1_000, maxResponseBytes = 1024,
+    )
+
+    /** A loopback listener that completes the TCP handshake (backlog) but never answers. */
+    private fun stalledPort(): Pair<Int, java.net.ServerSocket> {
+        val s = java.net.ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+        return s.localPort to s
+    }
+
+    @Test
+    fun `Http_Request against a stalled server fails within the read timeout`() {
+        val (port, sock) = stalledPort()
+        sock.use {
+            val ctx = openCtx.copy(builtinLimits = tight)
+            val ex = org.junit.jupiter.api.assertTimeoutPreemptively(java.time.Duration.ofSeconds(10)) {
+                assertThrows<IoFailure> { request(ctx, port, "/") }
+            }
+            assertEquals("http-request", ex.kind)
+        }
+    }
+
+    @Test
+    fun `Http_Request refuses a response body over maxResponseBytes`() {
+        val (port, _) = server { ex ->
+            val body = ByteArray(64 * 1024) { 'x'.code.toByte() }
+            ex.sendResponseHeaders(200, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+        }
+        val ex = assertThrows<InterpretException> { request(openCtx.copy(builtinLimits = tight), port, "/") }
+        val err = ex.error as InterpretError.ResourceExhaustion
+        assertEquals(org.strand.core.ExhaustionKind.AllocatedValues, err.kind)
+        assertEquals(1024L, err.limit)
+    }
+
+    @Test
+    fun `vector and LLM transports cap response bodies`() {
+        val (port, _) = server { ex ->
+            val body = ByteArray(64 * 1024) { 'x'.code.toByte() }
+            ex.sendResponseHeaders(200, body.size.toLong())
+            ex.responseBody.use { it.write(body) }
+        }
+        val vector = assertThrows<InterpretException> {
+            BoundedJdkHttpTransport(tight).execute(HttpRequest("GET", "http://127.0.0.1:$port/"))
+        }
+        assertTrue(vector.error is InterpretError.ResourceExhaustion)
+        val llm = assertThrows<InterpretException> {
+            BoundedLlmHttpClient(tight).post("http://127.0.0.1:$port/", emptyList(), "{}".toByteArray())
+        }
+        assertTrue(llm.error is InterpretError.ResourceExhaustion)
+    }
+
+    @Test
+    fun `Http_Accept with no client fails after the accept timeout`() {
+        val ctx = openCtx.copy(builtinLimits = tight)
+        val server = Builtins.lookup("strand-builtin:Http.Listen")!!.invoke(ctx, listOf(Value.IntV(0))) as Value.Resource
+        try {
+            val ex = org.junit.jupiter.api.assertTimeoutPreemptively(java.time.Duration.ofSeconds(10)) {
+                assertThrows<IoFailure> { Builtins.lookup("strand-builtin:Http.Accept")!!.invoke(ctx, listOf(server)) }
+            }
+            assertEquals("http-accept-timeout", ex.kind)
+        } finally {
+            Builtins.lookup("strand-builtin:Http.ServerClose")!!.invoke(ctx, listOf(server))
+        }
+    }
+
+    @Test
+    fun `Time_Sleep beyond the wall-clock budget is refused without sleeping`() {
+        val ctx = openCtx.copy(clock = Builtins.SystemClock, builtinLimits = tight)
+        val t0 = System.nanoTime()
+        val ex = assertThrows<InterpretException> {
+            Builtins.lookup("strand-builtin:Time.Sleep")!!.invoke(ctx, listOf(Value.IntV(Long.MAX_VALUE)))
+        }
+        assertTrue((System.nanoTime() - t0) / 1_000_000 < 1_000)
+        val err = ex.error as InterpretError.ResourceExhaustion
+        assertEquals(org.strand.core.ExhaustionKind.WallClock, err.kind)
+        assertEquals(1_000L, err.limit)
+    }
+
+    @Test
+    fun `BuiltinLimits derive from the policy wall-clock budget`() {
+        val limits = org.strand.core.EvaluationLimits.DEFAULTS.copy(wallClockBudgetMillis = 1234)
+        val ctx = HostContext.fromPolicy(HostPolicy.OPEN.copy(limits = limits))
+        assertEquals(1234L, ctx.builtinLimits.connectTimeoutMillis)
+        assertEquals(1234L, ctx.builtinLimits.readTimeoutMillis)
+        assertEquals(1234L, ctx.builtinLimits.maxSleepMillis)
+        assertEquals(0, BuiltinLimits.from(org.strand.core.EvaluationLimits.PERMISSIVE).readTimeoutInt)
+    }
+
     @Test
     fun `well-formed path with query still reaches the server`() {
         val seen = mutableListOf<String>()

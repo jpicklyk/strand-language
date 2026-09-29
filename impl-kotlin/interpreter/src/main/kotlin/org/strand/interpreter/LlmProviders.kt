@@ -232,8 +232,14 @@ class InputStreamLlmStream(
     }
 }
 
-/** Default JVM HttpURLConnection-backed transport. */
-object DefaultLlmHttpClient : LlmHttpClient {
+/**
+ * JVM HttpURLConnection-backed transport. Review H2 / M2: redirects are
+ * never followed, connections carry the connect / read timeouts of
+ * [limits], and response bodies are read under
+ * [BuiltinLimits.maxResponseBytes]. The streaming read timeout stays the
+ * Q-045 [Builtins.streamReceiveTimeoutMillis].
+ */
+open class BoundedLlmHttpClient(private val limits: BuiltinLimits) : LlmHttpClient {
     override fun post(
         url: String,
         headers: List<Pair<String, String>>,
@@ -246,15 +252,14 @@ object DefaultLlmHttpClient : LlmHttpClient {
             conn.requestMethod = "POST"
             conn.doInput = true
             conn.doOutput = true
-            conn.connectTimeout = 30_000
-            conn.readTimeout = 60_000
+            limits.applyTimeouts(conn)
             for ((name, value) in headers) conn.setRequestProperty(name, value)
             conn.outputStream.use { it.write(body) }
             val status = conn.responseCode
             NetIo.rejectRedirect(conn, status)
             val respBody = try {
-                (if (status in 200..299) conn.inputStream else conn.errorStream)?.readBytes()
-                    ?: ByteArray(0)
+                (if (status in 200..299) conn.inputStream else conn.errorStream)
+                    ?.let { limits.readBounded(it) } ?: ByteArray(0)
             } catch (_: java.io.IOException) {
                 ByteArray(0)
             }
@@ -285,7 +290,7 @@ object DefaultLlmHttpClient : LlmHttpClient {
         conn.requestMethod = "POST"
         conn.doInput = true
         conn.doOutput = true
-        conn.connectTimeout = 30_000
+        conn.connectTimeout = limits.connectTimeoutInt
         val timeout = Builtins.streamReceiveTimeoutMillis
         conn.readTimeout = if (timeout in 1..Int.MAX_VALUE.toLong()) timeout.toInt() else 0
         for ((name, value) in headers) conn.setRequestProperty(name, value)
@@ -294,7 +299,7 @@ object DefaultLlmHttpClient : LlmHttpClient {
         NetIo.rejectRedirect(conn, status)
         if (status !in 200..299) {
             val errBody = try {
-                conn.errorStream?.readBytes() ?: ByteArray(0)
+                conn.errorStream?.let { limits.readBounded(it) } ?: ByteArray(0)
             } catch (_: java.io.IOException) {
                 ByteArray(0)
             }
@@ -307,6 +312,13 @@ object DefaultLlmHttpClient : LlmHttpClient {
         return InputStreamLlmStream(conn.inputStream, conn)
     }
 }
+
+/**
+ * The default LLM transport: [BoundedLlmHttpClient] under
+ * [BuiltinLimits.DEFAULT] with the historical 60 s read timeout (a model
+ * generation routinely takes longer than the 30 s connect budget).
+ */
+object DefaultLlmHttpClient : BoundedLlmHttpClient(BuiltinLimits.DEFAULT.copy(readTimeoutMillis = 60_000L))
 
 // ----------------------------------------------------------------------
 // JSON helpers shared across providers
