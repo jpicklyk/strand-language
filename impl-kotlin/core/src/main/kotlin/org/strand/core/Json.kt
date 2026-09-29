@@ -186,6 +186,7 @@ object JsonIngest {
     }
 
     private fun parseValidated(element: JsonElement, limits: EvaluationLimits): IngestResult {
+        validateWellFormedStrings(element)
         val obj = element.requireObject("root document")
 
         val version = obj["version"]?.jsonPrimitive?.intOrNull
@@ -289,6 +290,54 @@ object JsonIngest {
         }
 
         return IngestResult(rawStore, nameToId.getValue(rootName), nameToId)
+    }
+
+    /**
+     * Review H2: reject ill-formed UTF-16 (an unpaired surrogate, reachable
+     * through a JSON `\ud800` escape) in every string of the document —
+     * object keys and string values alike. The canonical encoding carries
+     * string content fields as UTF-8, and an unpaired surrogate has no UTF-8
+     * encoding: the JVM's lenient encoder substitutes `?`, which would make
+     * two different values hash identically. Iterative, since the element
+     * tree may be up to [EvaluationLimits.maxJsonDepth] deep.
+     */
+    private fun validateWellFormedStrings(root: JsonElement) {
+        val pending = ArrayDeque<JsonElement>()
+        pending.addLast(root)
+        while (pending.isNotEmpty()) {
+            when (val e = pending.removeLast()) {
+                is JsonObject -> for ((key, value) in e) {
+                    requireWellFormedUtf16(key, "object key")
+                    pending.addLast(value)
+                }
+                is kotlinx.serialization.json.JsonArray -> e.forEach { pending.addLast(it) }
+                is JsonPrimitive -> if (e.isString) requireWellFormedUtf16(e.content, "string value")
+            }
+        }
+    }
+
+    private fun requireWellFormedUtf16(s: String, what: String) {
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 < s.length && Character.isLowSurrogate(s[i + 1])) {
+                    i += 2
+                    continue
+                }
+                throw IngestError.Malformed(
+                    "Ill-formed UTF-16 in $what: unpaired high surrogate at offset $i " +
+                        "(string content must be valid Unicode to have a canonical UTF-8 encoding)"
+                )
+            }
+            if (Character.isLowSurrogate(c)) {
+                throw IngestError.Malformed(
+                    "Ill-formed UTF-16 in $what: unpaired low surrogate at offset $i " +
+                        "(string content must be valid Unicode to have a canonical UTF-8 encoding)"
+                )
+            }
+            i++
+        }
     }
 
     /**

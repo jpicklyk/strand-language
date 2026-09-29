@@ -2,6 +2,10 @@ package org.strand.hashing
 
 import org.strand.core.ConsumerMode
 import org.strand.core.EffectProjection
+import org.strand.core.IngestError
+import java.nio.CharBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
@@ -220,7 +224,7 @@ internal class CanonicalEncoder(
             CanonicalCbor.encodeBytes(doubleToBytes(node.value))
         ))
         is Node.StringLit -> encodeWithTag(CategoryTag.StringLit, listOf(
-            CanonicalCbor.encodeBytes(node.value.toByteArray(Charsets.UTF_8))
+            CanonicalCbor.encodeBytes(utf8(node.value))
         ))
         is Node.BoolLit -> encodeWithTag(CategoryTag.BoolLit, listOf(
             CanonicalCbor.encodeUint(if (node.value) 1L else 0L)
@@ -307,7 +311,7 @@ internal class CanonicalEncoder(
 
     private fun encodeProductTypeField(node: Node.ProductTypeField, stack: BinderStack): ByteArray {
         return encodeWithTag(CategoryTag.ProductTypeField, listOf(
-            CanonicalCbor.encodeBytes(node.fieldName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.fieldName)),
             encodeTypePositionChild(node.fieldType, stack),
         ))
     }
@@ -337,7 +341,7 @@ internal class CanonicalEncoder(
             )
         }
         return encodeWithTag(CategoryTag.SumTypeCase, listOf(
-            CanonicalCbor.encodeBytes(node.caseName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.caseName)),
         ) + typeFields)
     }
 
@@ -427,11 +431,11 @@ internal class CanonicalEncoder(
     private fun encodeProjectionStep(step: ProjectionStep): ByteArray = when (step) {
         is ProjectionStep.Case -> CanonicalCbor.encodeArray(listOf(
             CanonicalCbor.encodeUint(0L),
-            CanonicalCbor.encodeBytes(step.caseName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(step.caseName)),
         ))
         is ProjectionStep.Field -> CanonicalCbor.encodeArray(listOf(
             CanonicalCbor.encodeUint(1L),
-            CanonicalCbor.encodeBytes(step.fieldName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(step.fieldName)),
         ))
         ProjectionStep.Unfold -> CanonicalCbor.encodeArray(listOf(
             CanonicalCbor.encodeUint(2L),
@@ -582,7 +586,7 @@ internal class CanonicalEncoder(
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         val baseFields = listOf(
-            CanonicalCbor.encodeBytes(node.target.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.target)),
             CanonicalCbor.encodeBytes(hash(node.foreignType, stack)),
             CanonicalCbor.encodeArray(effectHashes),
         )
@@ -678,7 +682,7 @@ internal class CanonicalEncoder(
             encodeTypePositionChild(paramId, stack)
         }
         return encodeWithTag(CategoryTag.EffectCategory, listOf(
-            CanonicalCbor.encodeBytes(node.categoryName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.categoryName)),
             CanonicalCbor.encodeArray(paramEncodings),
         ))
     }
@@ -755,7 +759,7 @@ internal class CanonicalEncoder(
 
     private fun encodeProductFieldValue(node: Node.ProductFieldValue, stack: BinderStack): ByteArray {
         return encodeWithTag(CategoryTag.ProductFieldValue, listOf(
-            CanonicalCbor.encodeBytes(node.fieldName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.fieldName)),
             encodeExpressionChild(node.value, stack),
         ))
     }
@@ -763,7 +767,7 @@ internal class CanonicalEncoder(
     private fun encodeProductFieldGet(node: Node.ProductFieldGet, stack: BinderStack): ByteArray {
         return encodeWithTag(CategoryTag.ProductFieldGet, listOf(
             encodeExpressionChild(node.target, stack),
-            CanonicalCbor.encodeBytes(node.fieldName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.fieldName)),
         ))
     }
 
@@ -780,7 +784,7 @@ internal class CanonicalEncoder(
         }
         return encodeWithTag(CategoryTag.SumValue, listOf(
             CanonicalCbor.encodeBytes(hash(node.ofType, stack)),
-            CanonicalCbor.encodeBytes(node.caseName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.caseName)),
         ) + payloadFields)
     }
 
@@ -849,7 +853,7 @@ internal class CanonicalEncoder(
                 encodeWithTag(CategoryTag.Pattern, listOf(
                     CanonicalCbor.encodeUint(KIND_CONSTRUCTOR),
                     encodeTypePositionChild(node.patternType, stack),
-                    CanonicalCbor.encodeBytes(node.caseName.toByteArray(Charsets.UTF_8)),
+                    CanonicalCbor.encodeBytes(utf8(node.caseName)),
                 ) + payloadFields)
             }
         }
@@ -1011,7 +1015,7 @@ internal class CanonicalEncoder(
             .sortedWith(byteArrayLexicographicComparator)
             .map { CanonicalCbor.encodeBytes(it) }
         return encodeWithTag(CategoryTag.Schema, listOf(
-            CanonicalCbor.encodeBytes(node.schemaName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.schemaName)),
             CanonicalCbor.encodeBytes(hash(node.valueType, stack)),
             CanonicalCbor.encodeArray(invariantHashes),
         ))
@@ -1133,7 +1137,7 @@ internal class CanonicalEncoder(
         // different Schema nodes; the Schema that lists them is the
         // authoritative association.
         return encodeWithTag(CategoryTag.Invariant, listOf(
-            CanonicalCbor.encodeBytes(node.invariantName.toByteArray(Charsets.UTF_8)),
+            CanonicalCbor.encodeBytes(utf8(node.invariantName)),
             CanonicalCbor.encodeBytes(hash(node.body, stack)),
         ))
     }
@@ -1235,6 +1239,34 @@ internal class CanonicalEncoder(
             "Expected ParameterDecl at $id, got ${node::class.simpleName}"
         )
     }
+
+    /**
+     * Strict UTF-8 encoding of a string content field. `String.toByteArray`
+     * silently replaces an unpaired surrogate with `?` (0x3F), which made
+     * `StringLit("\ud800")` and `StringLit("?")` hash identically although
+     * they are different runtime values (review H2). Ill-formed UTF-16 is
+     * instead reported: JSON ingest rejects it up front, and a
+     * programmatically built store carrying one fails loudly here with
+     * [IngestError.Malformed] rather than colliding.
+     */
+    private fun utf8(s: String): ByteArray {
+        val encoder = utf8Encoder.reset()
+        val buffer = try {
+            encoder.encode(CharBuffer.wrap(s))
+        } catch (e: CharacterCodingException) {
+            throw IngestError.Malformed(
+                "String content is not well-formed UTF-16 (unpaired surrogate) and has no " +
+                    "canonical UTF-8 encoding"
+            )
+        }
+        val out = ByteArray(buffer.remaining())
+        buffer.get(out)
+        return out
+    }
+
+    private val utf8Encoder = Charsets.UTF_8.newEncoder()
+        .onMalformedInput(CodingErrorAction.REPORT)
+        .onUnmappableCharacter(CodingErrorAction.REPORT)
 
     private fun doubleToBytes(d: Double): ByteArray {
         val bits = d.toRawBits()
