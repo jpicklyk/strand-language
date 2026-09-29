@@ -289,6 +289,110 @@ class VerifierSoundnessTest {
         assertEquals(r.names.getValue("fb"), err.at)
     }
 
+    // ---- A9: Handler signature check covers polymorphic and callback calls --
+
+    @Test
+    fun `a Handler around a polymorphic effectful callee is signature-checked at its instantiation`() {
+        // polyF = Λa. λ(x: a) ![Time.Now]. x ; handler handle : () -> Int.
+        // The intercepted call polyF[Int](3) passes one Int, so the handler's
+        // zero-parameter signature disagrees; the check used to return early
+        // because the callee's recorded type was a Forall.
+        val r = verify("""{
+          "version": 1, "root": "h",
+          "nodes": {
+            "T_a":    { "type": "TypeParameter", "name": "a" },
+            "intT":   { "type": "PrimitiveType", "kind": "Int" },
+            "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+            "x":      { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+            "xRef":   { "type": "VarRef", "binder": "x" },
+            "lam":    { "type": "Lambda", "parameters": ["x"], "body": "xRef", "effects": ["timeFx"] },
+            "polyF":  { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "lam" },
+            "three":  { "type": "IntLit", "value": 3 },
+            "call":   { "type": "Application", "function": "polyF", "arguments": ["three"], "typeArguments": ["intT"] },
+            "mock":   { "type": "IntLit", "value": 0 },
+            "mockFn": { "type": "Lambda", "parameters": [], "body": "mock" },
+            "h":      { "type": "Handler", "intercept": "timeFx", "handle": "mockFn", "body": "call" }
+          }
+        }""")
+        assertRejects<VerifyError.HandlerSignatureMismatch>(r)
+    }
+
+    @Test
+    fun `a Handler is signature-checked against calls inside a callback run by a higher-order builtin`() {
+        // cb = λ(n: Int) ![Time.Now]. now()   (Let-bound outside the Handler)
+        // Handler(Time.Now, handle: λ(k: Int). k, body: List.Map(xs, cb))
+        // List.Map's row does not carry Time.Now, so the static closure of the
+        // body has no Time.Now and the check used to be skipped; at runtime
+        // the handler is invoked for now() with zero arguments.
+        val r = verify("""{
+          "version": 1, "root": "cbLet",
+          "nodes": {
+            "intT":   { "type": "PrimitiveType", "kind": "Int" },
+            "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+            "nowT":   { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+            "now":    { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+            "n":      { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+            "callNow":{ "type": "Application", "function": "now", "arguments": [] },
+            "cb":     { "type": "Lambda", "parameters": ["n"], "body": "callNow", "effects": ["timeFx"] },
+            "cbT":    { "type": "FunctionType", "parameters": ["intT"], "result": "intT", "effects": ["timeFx"] },
+            "headF":  { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+            "tailF":  { "type": "ProductTypeField", "name": "tail", "fieldType": "self" },
+            "consP":  { "type": "ProductType", "fields": ["headF", "tailF"] },
+            "consC":  { "type": "SumTypeCase", "name": "Cons", "caseType": "consP" },
+            "nilC":   { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+            "body":   { "type": "SumType", "cases": ["consC", "nilC"] },
+            "self":   { "type": "RecursiveSelf" },
+            "listT":  { "type": "RecursiveType", "body": "body" },
+            "xs":     { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+            "mapT":   { "type": "FunctionType", "parameters": ["listT", "cbT"], "result": "listT" },
+            "listMap":{ "type": "ForeignNode", "target": "strand-builtin:List.Map", "foreignType": "mapT" },
+            "cbRef":  { "type": "VarRef", "binder": "cbLet" },
+            "mapped": { "type": "Application", "function": "listMap", "arguments": ["xs", "cbRef"] },
+            "k":      { "type": "ParameterDecl", "name": "k", "paramType": "intT" },
+            "kRef":   { "type": "VarRef", "binder": "k" },
+            "mockFn": { "type": "Lambda", "parameters": ["k"], "body": "kRef" },
+            "h":      { "type": "Handler", "intercept": "timeFx", "handle": "mockFn", "body": "mapped" },
+            "cbLet":  { "type": "Let", "name": "cb", "value": "cb", "body": "h" }
+          }
+        }""")
+        assertRejects<VerifyError.HandlerSignatureMismatch>(r)
+    }
+
+    @Test
+    fun `a Handler whose signature matches the callback's inner call still verifies`() {
+        val r = verify("""{
+          "version": 1, "root": "cbLet",
+          "nodes": {
+            "intT":   { "type": "PrimitiveType", "kind": "Int" },
+            "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+            "nowT":   { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+            "now":    { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+            "n":      { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+            "callNow":{ "type": "Application", "function": "now", "arguments": [] },
+            "cb":     { "type": "Lambda", "parameters": ["n"], "body": "callNow", "effects": ["timeFx"] },
+            "cbT":    { "type": "FunctionType", "parameters": ["intT"], "result": "intT", "effects": ["timeFx"] },
+            "headF":  { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+            "tailF":  { "type": "ProductTypeField", "name": "tail", "fieldType": "self" },
+            "consP":  { "type": "ProductType", "fields": ["headF", "tailF"] },
+            "consC":  { "type": "SumTypeCase", "name": "Cons", "caseType": "consP" },
+            "nilC":   { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+            "body":   { "type": "SumType", "cases": ["consC", "nilC"] },
+            "self":   { "type": "RecursiveSelf" },
+            "listT":  { "type": "RecursiveType", "body": "body" },
+            "xs":     { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null },
+            "mapT":   { "type": "FunctionType", "parameters": ["listT", "cbT"], "result": "listT" },
+            "listMap":{ "type": "ForeignNode", "target": "strand-builtin:List.Map", "foreignType": "mapT" },
+            "cbRef":  { "type": "VarRef", "binder": "cbLet" },
+            "mapped": { "type": "Application", "function": "listMap", "arguments": ["xs", "cbRef"] },
+            "mock":   { "type": "IntLit", "value": 0 },
+            "mockFn": { "type": "Lambda", "parameters": [], "body": "mock" },
+            "h":      { "type": "Handler", "intercept": "timeFx", "handle": "mockFn", "body": "mapped" },
+            "cbLet":  { "type": "Let", "name": "cb", "value": "cb", "body": "h" }
+          }
+        }""")
+        assertTrue(r is VerifyResult.Ok) { "got $r" }
+    }
+
     // ---- A8: NodeRefs in type position must be closed ----------------------
 
     @Test

@@ -429,6 +429,15 @@ class Verifier(
             return ContextKey(id, recursiveDepth, values)
         }
 
+        /**
+         * The instantiated FunctionType each Application's callee was checked
+         * at (after substituting the Application's typeArguments into a
+         * polymorphic callee). The Handler signature check reads this rather
+         * than the callee's raw type, so a polymorphic callee is checked at
+         * its instantiation (review H1).
+         */
+        val appFunTypes = HashMap<NodeId, TypeExpr.Fun>()
+
         private val inferMemo = HashMap<ContextKey, Inferred>()
         private val typeMemo = HashMap<ContextKey, TypeExpr>()
 
@@ -976,6 +985,8 @@ class Verifier(
                     throw VerifyAbort()
                 }
             }
+
+            appFunTypes[id] = funType
 
             if (funType.parameters.size != node.arguments.size) {
                 report(VerifyError.ArityMismatch(
@@ -1961,10 +1972,12 @@ class Verifier(
             // 4. Per-Application signature check. Walk the body's structural
             //    subtree; for every Application whose callee declares the
             //    intercepted category, confirm the value-argument types and
-            //    result type match the handler's signature.
-            if (node.intercept in bodyClosure) {
-                checkHandlerSignatureAgreement(id, node.intercept, handleFun, node.body)
-            }
+            //    result type match the handler's signature. The walk runs
+            //    whether or not the intercept is in the body's static
+            //    closure (review H1): a callback run by a higher-order
+            //    builtin can reach the category at runtime even though the
+            //    builtin's own row does not carry it (Q-070).
+            checkHandlerSignatureAgreement(id, node.intercept, handleFun, node.body)
 
             // 5. Closure subtraction. Per § 6.3 of the proposal:
             //    closureOf(handler) = (closureOf(body) - {intercept})
@@ -2006,6 +2019,25 @@ class Verifier(
             bodyId: NodeId,
         ) {
             val visited = HashSet<NodeId>()
+            lateinit var visitRef: (NodeId) -> Unit
+            // A callback argument handed to a higher-order builtin: follow a
+            // Let-bound name to the function it names, so a Lambda defined
+            // outside the Handler body is still checked.
+            fun visitCallback(argId: NodeId) {
+                var current = argId
+                repeat(64) {
+                    when (val n = store.getOrNull(current) ?: return) {
+                        is Node.VarRef -> {
+                            val binder = store.getOrNull(n.binder) as? Node.Let ?: return
+                            current = binder.value
+                        }
+                        is Node.NodeRef -> current = resolveRefTarget(n.target) ?: return
+                        is Node.TypeAbstraction -> current = n.body
+                        is Node.Lambda, is Node.Fixpoint -> { visitRef(current); return }
+                        else -> return
+                    }
+                }
+            }
             fun visit(id: NodeId) {
                 if (!visited.add(id)) return
                 val node = store.getOrNull(id) ?: return
@@ -2018,12 +2050,26 @@ class Verifier(
                         node.typeArguments.forEach(::visit)
                         node.effectInstances.forEach(::visit)
 
-                        val fnType = nodeTypes[node.function] ?: return
-                        val fnFun: TypeExpr.Fun = when (fnType) {
-                            is TypeExpr.Fun -> fnType
-                            else -> return  // not a directly-typed function call here
+                        // The callee's type at THIS call: a polymorphic
+                        // callee is taken at its instantiation (review H1).
+                        val fnFun: TypeExpr.Fun = appFunTypes[id]
+                            ?: (nodeTypes[node.function] as? TypeExpr.Fun)
+                            ?: return
+                        if (intercept !in fnFun.effects) {
+                            // Not intercepted here. A higher-order builtin
+                            // does not carry its callbacks' effects in its
+                            // row, so a callback whose row carries the
+                            // intercept runs un-intercepted at this call and
+                            // is intercepted at the calls inside its body:
+                            // walk the callback's body.
+                            if (calleeIsForeign(node.function)) {
+                                for (argId in node.arguments) {
+                                    val argFun = nodeTypes[argId] as? TypeExpr.Fun ?: continue
+                                    if (intercept in argFun.effects) visitCallback(argId)
+                                }
+                            }
+                            return
                         }
-                        if (intercept !in fnFun.effects) return
 
                         // This Application would be intercepted by the
                         // handler. Confirm signature agreement.
@@ -2127,7 +2173,26 @@ class Verifier(
                     is Node.ModuleManifest -> Unit
                 }
             }
+            visitRef = ::visit
             visit(bodyId)
+        }
+
+        /**
+         * True when [functionExprId] resolves (through Let-bound names,
+         * NodeRefs and TypeAbstractions) to a [Node.ForeignNode].
+         */
+        private fun calleeIsForeign(functionExprId: NodeId): Boolean {
+            var current = functionExprId
+            repeat(64) {
+                when (val n = store.getOrNull(current) ?: return false) {
+                    is Node.ForeignNode -> return true
+                    is Node.NodeRef -> current = resolveRefTarget(n.target) ?: return false
+                    is Node.VarRef -> current = (store.getOrNull(n.binder) as? Node.Let)?.value ?: return false
+                    is Node.TypeAbstraction -> current = n.body
+                    else -> return false
+                }
+            }
+            return false
         }
 
         /**
