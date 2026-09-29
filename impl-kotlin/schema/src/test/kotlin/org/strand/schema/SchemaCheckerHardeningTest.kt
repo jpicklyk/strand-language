@@ -4,7 +4,6 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.strand.core.EvaluationLimits
@@ -130,7 +129,6 @@ class SchemaCheckerHardeningTest {
         }
     }
 
-    @Disabled("pending Stream A merge")
     @Test
     fun `an invariant body calling Fs Write with under-declared effects is rejected at admission`() {
         val c = prepare(program(underDeclaredWriteNodes("/tmp/strand-invariant-under-declared.bin")))
