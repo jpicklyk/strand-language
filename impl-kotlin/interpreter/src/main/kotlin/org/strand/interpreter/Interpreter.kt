@@ -23,9 +23,10 @@ import org.strand.core.NodeStore
  *    interpreter halts with [InterpretError.RefinementViolation]. When
  *    the Application carries `effectInstances`, the parameter expressions
  *    of each EffectDecl are evaluated before dispatch and supplied to the
- *    refinement check; when it does not (pre-Q-031 call sites), the check
- *    runs against an empty requirement list, which is trivially covered
- *    by [CapabilityPattern]s built by [CapabilitySet.ofCategories].
+ *    refinement check; when it does not (pre-Q-031 call sites), a Lambda
+ *    call only checks category presence (it propagates the requirement),
+ *    while a ForeignNode dispatch of a parameterized category requires an
+ *    unrefined grant such as those built by [CapabilitySet.ofCategories].
  *  - Let evaluates its value, binds the Let's id to that value, evaluates
  *    the body.
  *  - VarRef looks up its binder id in the environment.
@@ -1127,7 +1128,7 @@ class Interpreter(
             } else {
                 emptyMap()
             }
-        checkCapabilities(id, foreignEffectRow(node), effectiveInstances, context, limits)
+        checkCapabilities(id, foreignEffectRow(node), effectiveInstances, context, limits, performs = true)
         try {
             foreignDispatcher?.dispatch(node.target, args)?.let { return it }
             // Higher-order lookup wins over standard lookup; the registries
@@ -1300,6 +1301,18 @@ class Interpreter(
      * (logger → Filesystem.Write) does supply an effectInstance and is
      * checked against the granted pattern.
      *
+     * Review H3 (refinement bypass): the pass-through above applies only
+     * to *propagating* sites — calls of Lambdas and Fixpoints, which do not
+     * themselves exercise the effect. At a *performing* site ([performs] =
+     * true: a ForeignNode dispatch, where the effect actually fires) a
+     * parameterized category (one whose EffectCategory declares parameters)
+     * with no instance has no concrete requirement to match, so it is
+     * covered only by an unrefined grant (every pattern argument a
+     * wildcard). A refined grant such as `Filesystem.Read{path:"/tmp/x"}`
+     * denies the unprojected, instance-free call with a
+     * [InterpretError.RefinementViolation] whose report shows the request
+     * as `*` per parameter. Parameterless categories are unaffected.
+     *
      * Implicit forwarding (§ Delegation semantics) is preserved: the
      * capability flows down the call chain unchanged, and refinement is
      * checked at the specific call site that actually exercises the
@@ -1318,6 +1331,7 @@ class Interpreter(
         instances: Map<NodeId, List<Value>>,
         context: CapabilitySet,
         limits: EvaluationLimits,
+        performs: Boolean = false,
     ) {
         // First pass: surface every category that is entirely absent in
         // one error. Mirrors the pre-Q-031 CapabilityViolation shape so
@@ -1349,7 +1363,11 @@ class Interpreter(
         // without an explicit instance pass through (the call is
         // propagating the requirement, not exercising it concretely).
         for (category in declared) {
-            val requirement = instances[category] ?: continue
+            val requirement = instances[category]
+            if (requirement == null) {
+                if (performs) checkUnrefinedGrant(at, category, context, limits)
+                continue
+            }
             val grants = context.grants[category]!! // non-null: first pass filtered missing
             val matched = grants.any { covers(it, requirement) }
             if (!matched) {
@@ -1404,6 +1422,45 @@ class Interpreter(
                 detail = "ForeignNode under-declares the target's effects; missing ${missing.sorted()}",
             ))
         }
+    }
+
+    /**
+     * A performing call exercises [category] with no instance: when the
+     * category is parameterized, the grant must hold an unrefined pattern
+     * (see [checkCapabilities]). Raises a [InterpretError.RefinementViolation]
+     * whose report renders the request as `*` per parameter otherwise.
+     */
+    private fun checkUnrefinedGrant(
+        at: NodeId,
+        category: NodeId,
+        context: CapabilitySet,
+        limits: EvaluationLimits,
+    ) {
+        val categoryNode = store.getOrNull(category) as? Node.EffectCategory ?: return
+        if (categoryNode.parameters.isEmpty()) return
+        val grants = context.grants[category] ?: return // absent categories already raised
+        val unrefined = grants.any { pattern ->
+            pattern.arguments.isNotEmpty() && pattern.arguments.all { it is CapabilityArgument.Wildcard }
+        }
+        if (unrefined) return
+        val name = categoryNameOf(category)
+        val report = buildDenialReport(
+            at = at,
+            categoryName = name,
+            requested = emptyList(),
+            held = grants,
+            heldCategoryName = name,
+            limits = limits,
+        )
+        throw InterpretException(InterpretError.RefinementViolation(
+            at = at,
+            category = category,
+            requirement = emptyList(),
+            available = grants,
+            report = report.copy(
+                requested = report.requested?.let { List(categoryNode.parameters.size) { "*" } },
+            ),
+        ))
     }
 
     /** The EffectCategory's declared name, falling back to the `#N` NodeId rendering. */

@@ -811,12 +811,16 @@ class Verifier(
             }
 
             // Q-031: validate effectInstances against the callee's declared
-            // effects. Empty effectInstances are permitted only when the
-            // callee has no declared effects (pre-Q-031 back-compat: every
+            // effects. An empty effectInstances list is always admitted,
+            // whatever the callee declares (pre-Q-031 back-compat: every
             // existing corpus call site that didn't supply effect instances
-            // continues to verify cleanly). When non-empty, every EffectDecl
-            // must be well-formed (shape, arity, parameter types) AND the
-            // set of EffectCategories covered must equal the callee's
+            // continues to verify cleanly). The refinement consequence is
+            // enforced at runtime: an instance-free call that performs a
+            // parameterized category (a ForeignNode dispatch with no
+            // projection) is covered only by an unrefined grant (see the
+            // interpreter's checkCapabilities). When non-empty, every
+            // EffectDecl must be well-formed (shape, arity, parameter types)
+            // AND the set of EffectCategories covered must equal the callee's
             // FunctionType.effects set exactly.
             if (node.effectInstances.isNotEmpty()) {
                 val coveredCategories = LinkedHashSet<NodeId>()

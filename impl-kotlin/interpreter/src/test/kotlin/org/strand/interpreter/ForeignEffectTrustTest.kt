@@ -229,6 +229,56 @@ class ForeignEffectTrustTest {
         assertTrue(ex.error is InterpretError.CapabilityViolation) { "got ${ex.error}" }
     }
 
+    // ---- A4: an instance-free performing call needs an unrefined grant ----
+
+    private val unprojectedFsReadJson = """{
+        "version": 1, "root": "app",
+        "nodes": {
+          "strT":   { "type": "PrimitiveType", "kind": "String" },
+          "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+          "readFx": { "type": "EffectCategory", "categoryName": "Filesystem.Read", "parameters": ["strT"] },
+          "readT":  { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT", "effects": ["readFx"] },
+          "fsRead": { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "readT",
+                      "effects": ["readFx"] },
+          "path":   { "type": "StringLit", "value": "strand-a4-missing.txt" },
+          "app":    { "type": "Application", "function": "fsRead", "arguments": ["path"] }
+        }
+      }"""
+
+    @Test
+    fun `an unprojected read with no effectInstances is denied under a refined grant`() {
+        val l = load(unprojectedFsReadJson)
+        assertTrue(verify(l) is VerifyResult.Ok) { "the verifier admits omitted effectInstances: ${verify(l)}" }
+        val readFx = l.names.getValue("readFx")
+        val refined = CapabilitySet(mapOf(readFx to listOf(
+            CapabilityPattern(listOf(CapabilityArgument.Concrete(Value.StringV("/tmp/allowed.txt")))),
+        )))
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, refined)
+        }
+        val err = ex.error as? InterpretError.RefinementViolation
+            ?: error("expected RefinementViolation, got ${ex.error}")
+        assertEquals(readFx, err.category)
+        assertEquals(listOf("*"), err.report.requested)
+    }
+
+    @Test
+    fun `an unprojected read with no effectInstances passes the check under an unrefined grant`() {
+        val l = load(unprojectedFsReadJson)
+        val readFx = l.names.getValue("readFx")
+        val unrefined = CapabilitySet(mapOf(readFx to listOf(
+            CapabilityPattern(listOf(CapabilityArgument.Wildcard)),
+        )))
+        // The capability check passes; the read itself then fails on the
+        // missing file (or the sandbox), which is not a capability denial.
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, unrefined)
+        }
+        assertTrue(ex.error !is InterpretError.RefinementViolation && ex.error !is InterpretError.CapabilityViolation) {
+            "unrefined grant must admit the call; got ${ex.error}"
+        }
+    }
+
     @Test
     fun `a Closure callback's declared effects are capability-checked`() {
         val l = load(mapFsReadJson.replace("CALLBACK", "cb"))
