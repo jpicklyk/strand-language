@@ -187,14 +187,29 @@ internal sealed class StreamBus {
         private val perConsumer: MutableMap<Any, Channel<Value>> = LinkedHashMap()
         private val perConsumerDispatchers: MutableMap<Channel<Value>, OverflowDispatcher> = HashMap()
 
+        /** Set once the pump has closed every consumer channel (producer EOF). */
+        private var consumersClosed = false
+
+        /**
+         * Review M3: the consumer map is read by the pump coroutine while
+         * spawns (from actors on other threads, or the host) add to it, so
+         * every access is synchronized on this bus. A consumer that
+         * subscribes after the stream has ended receives an already-closed
+         * channel and halts immediately instead of waiting forever.
+         */
+        @Synchronized
         override fun consumerChannel(consumerKey: Any, scope: CoroutineScope): Channel<Value> {
             perConsumer[consumerKey]?.let { return it }
             val channel = Channel<Value>(capacity = perConsumerBufferCapacity)
             perConsumer[consumerKey] = channel
             val pumpPolicy = if (consumerPolicy is OverflowPolicy.Sample) OverflowPolicy.BlockProducer else consumerPolicy
             perConsumerDispatchers[channel] = OverflowDispatcher(channel, pumpPolicy)
+            if (consumersClosed) channel.close()
             return channel
         }
+
+        @Synchronized
+        private fun dispatcherFor(channel: Channel<Value>): OverflowDispatcher = perConsumerDispatchers.getValue(channel)
 
         /**
          * Forward [value] to every live per-consumer channel under the
@@ -207,7 +222,7 @@ internal sealed class StreamBus {
             for (channel in perConsumerChannels()) {
                 @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
                 if (channel.isClosedForSend) continue
-                val dispatcher = perConsumerDispatchers.getValue(channel)
+                val dispatcher = dispatcherFor(channel)
                 try {
                     dispatcher.send(value)
                 } catch (_: ClosedSendChannelException) {
@@ -217,6 +232,7 @@ internal sealed class StreamBus {
         }
 
         /** Events the pump dropped across all consumers under a dropping policy. */
+        @Synchronized
         internal fun consumerDrops(): Long = perConsumerDispatchers.values.sumOf { it.droppedCount }
 
         /**
@@ -226,6 +242,7 @@ internal sealed class StreamBus {
          * live map) to avoid concurrent-modification surprises during
          * pump iteration if a consumer subscribes late.
          */
+        @Synchronized
         internal fun perConsumerChannels(): List<Channel<Value>> = perConsumer.values.toList()
 
         /**
@@ -234,7 +251,9 @@ internal sealed class StreamBus {
          * closed and the pump has drained any remaining values. After this
          * returns, the consumer actors see EOF on their inputs and halt.
          */
+        @Synchronized
         internal fun closeAllConsumerChannels() {
+            consumersClosed = true
             for (channel in perConsumer.values) {
                 channel.close()
             }

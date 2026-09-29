@@ -162,8 +162,16 @@ class MachineGroupHandle internal constructor(
      * before the actor sees cancellation, but no new transition starts after.
      */
     suspend fun cancel() {
-        for (job in jobs) job.cancel()
-        for (job in jobs) job.join()
+        // Review M3: cancel the LIVE actor set (initial plus dynamically
+        // spawned), not the frozen initial list, and refuse further spawns
+        // so nothing started during teardown outlives it.
+        context?.cancelled = true
+        while (true) {
+            val live = jobs + (context?.actorJobs?.toList() ?: emptyList())
+            for (job in live) job.cancel()
+            for (job in live) job.join()
+            if (live.containsAll(context?.actorJobs?.toList() ?: emptyList())) break
+        }
     }
 
     /**
@@ -174,7 +182,11 @@ class MachineGroupHandle internal constructor(
      * replay-determinism property.
      */
     fun recordedEvents(instance: InstanceId): List<Value>? =
-        instances[instance]?.recordedEvents()
+        liveInstance(instance)?.recordedEvents()
+
+    /** Review M3: resolve an instance through the live registry (initial or spawned). */
+    private fun liveInstance(id: InstanceId): MachineInstanceHandle? =
+        context?.instances?.get(id)?.let { MachineInstanceHandle(it) } ?: instances[id]
 
     /**
      * Snapshot every per-instance and per-stream counter (Layer 6 step 3
@@ -191,18 +203,14 @@ class MachineGroupHandle internal constructor(
     /**
      * Capture a [Snapshot] of a running instance (Layer 6 step 3 slice 3.3).
      *
-     * Reads `currentState`, `transitionsExecuted`, and (when recorder is
-     * enabled) the recorded event list directly from the actor. The read is
-     * a best-effort consistent point: transitions are atomic from the
-     * actor's perspective (it updates `currentState` after `applyCallable`
-     * returns), so a snapshot taken between transitions sees a coherent
-     * post-transition state. A snapshot taken concurrently with a transition
-     * may see either the pre- or post-transition value — both are valid
-     * snapshot points, just at slightly different times.
-     *
-     * For tight mid-transition consistency, the proposal §6.3 describes a
-     * control-mailbox protocol; that's a hardening follow-up. For the slice
-     * 3.3 MVP, this best-effort read is the contract.
+     * The capture is atomic with respect to a transition (review M1): the
+     * actor commits each new state together with its transition count under
+     * the instance's transition lock, the snapshot reads the pair under the
+     * same lock, and the recorded events are cut to exactly that many — so
+     * `recordedEventsPreSnapshot.size == processedEventCount` and the state
+     * is the one those events produce, even when the snapshot races a
+     * transition on another thread. A snapshot concurrent with a transition
+     * sees either the pre- or the post-transition point, never a mix.
      *
      * Throws [SnapshotUnknownInstance] when [instance] is not part of this
      * group. Throws `IllegalStateException` when the group was constructed
@@ -210,19 +218,23 @@ class MachineGroupHandle internal constructor(
      * machine-hash integrity check).
      */
     fun snapshot(instance: InstanceId): Snapshot {
-        val handle = instances[instance] ?: throw SnapshotUnknownInstance(instance)
+        val handle = liveInstance(instance) ?: throw SnapshotUnknownInstance(instance)
         return handle.captureSnapshot(nodeIdToHash)
     }
 
     @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
     fun metrics(): RuntimeMetrics {
-        val perInstance = instances.mapValues { (_, handle) ->
+        // Review M3: the live registry, so spawned instances are included.
+        val perInstance = allInstances.mapValues { (_, handle) ->
             handle.instanceMetricsSnapshot()
         }
         val perStream = streamDispatchers.entries.associate { (streamId, dispatcher) ->
             val producerChannel = streamProducerChannels[streamId]
+            // Review H1: a broadcast stream also counts drops the pump made
+            // per consumer under a dropping policy.
+            val consumerDrops = (context?.streamBuses?.get(streamId) as? StreamBus.Broadcast)?.consumerDrops() ?: 0L
             streamId to StreamMetrics(
-                overflowDrops = dispatcher.droppedCount,
+                overflowDrops = dispatcher.droppedCount + consumerDrops,
                 // isClosedForSend is marked DelicateCoroutinesApi because
                 // racing it with a send is unreliable; here we use it only
                 // for an informational metrics snapshot, where a stale-by-one
@@ -272,8 +284,7 @@ class MachineInstanceHandle internal constructor(
      * counter cells plus the current state and halt flag. The returned
      * [InstanceMetrics] is an immutable snapshot at the moment of the call.
      */
-    internal fun instanceMetricsSnapshot(): InstanceMetrics =
-        instance.counters.snapshot(halted = instance.halted, currentState = instance.currentState)
+    internal fun instanceMetricsSnapshot(): InstanceMetrics = instance.readCommitted()
 
     /**
      * Internal accessor for [MachineGroupHandle.snapshot]. Reads the actor's
@@ -302,14 +313,16 @@ class MachineInstanceHandle internal constructor(
                     "machine $machineId; the group was constructed without it. " +
                     "Pass finalized.nodeIdToHash when constructing the MachineGroup."
             )
+        // Review M1: state and transition count are read together under the
+        // instance's transition lock, and the recording is cut to exactly
+        // that many events (the actor records an event before its
+        // transition commits, so the live recording may be one ahead).
+        val committed = instance.readCommitted()
         return Snapshot(
             machineHash = machineHash,
-            snapshotState = instance.currentState,
-            processedEventCount = instance.counters.snapshot(
-                halted = instance.halted,
-                currentState = instance.currentState,
-            ).transitionsExecuted,
-            recordedEventsPreSnapshot = instance.recorder?.snapshot(),
+            snapshotState = committed.currentState,
+            processedEventCount = committed.transitionsExecuted,
+            recordedEventsPreSnapshot = instance.recorder?.prefix(committed.transitionsExecuted.toInt()),
         )
     }
 }

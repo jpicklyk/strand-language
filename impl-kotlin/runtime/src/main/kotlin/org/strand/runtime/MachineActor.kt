@@ -246,11 +246,11 @@ internal class MachineActor(
                 counters = counters,
                 limits = eventLimits,
             )
-        // Slice 3.4 metrics: record transition latency immediately after the
-        // interpreter call returns; counter increment is paired so a snapshot
-        // taken between the two updates can't show `transitionsExecuted++`
-        // without a corresponding latency value.
-        instance.counters.recordTransitionCompleted(System.nanoTime() - startNanos)
+        // Slice 3.4 metrics: latency is measured immediately after the
+        // interpreter call returns. Review M1: the counter increment is
+        // committed together with the new state (below) under the
+        // instance's transition lock.
+        val latencyNanos = System.nanoTime() - startNanos
         val resultProduct = result as? Value.ProductV
             ?: error(
                 "transition function returned a non-product value " +
@@ -261,7 +261,7 @@ internal class MachineActor(
             ?: error("transition function result missing 'state' field; got fields ${resultProduct.fields.keys}")
         val outputs = resultProduct.fields["outputs"]
             ?: error("transition function result missing 'outputs' field; got fields ${resultProduct.fields.keys}")
-        instance.currentState = newState
+        instance.commitTransition(newState, latencyNanos)
 
         when (outputs) {
             is Value.ProductV -> dispatchOutputBatch(outputs)
