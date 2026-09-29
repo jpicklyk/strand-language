@@ -441,6 +441,141 @@ class VerifierSoundnessTest {
         assertTrue(verify(latentManifest("curried", "[\"writeFx\"]")) is VerifyResult.Ok)
     }
 
+    // ---- A11: medium findings ------------------------------------------------
+
+    @Test
+    fun `a StateMachine's effectful initialState must be covered by its declared effects`() {
+        val r = verify("""{
+          "version": 1, "root": "m",
+          "nodes": {
+            "boolT":   { "type": "PrimitiveType", "kind": "Bool" },
+            "unitT":   { "type": "PrimitiveType", "kind": "Unit" },
+            "emptyT":  { "type": "ProductType", "fields": [] },
+            "sft":     { "type": "ProductTypeField", "name": "state",   "fieldType": "boolT" },
+            "oft":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyT" },
+            "resT":    { "type": "ProductType", "fields": ["sft", "oft"] },
+            "sP":      { "type": "ParameterDecl", "name": "s", "paramType": "boolT" },
+            "eP":      { "type": "ParameterDecl", "name": "e", "paramType": "unitT" },
+            "sRef":    { "type": "VarRef", "binder": "sP" },
+            "sV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "sRef" },
+            "emptyV":  { "type": "ProductValue", "ofType": "emptyT", "fields": [] },
+            "oV":      { "type": "ProductFieldValue", "fieldName": "outputs", "value": "emptyV" },
+            "result":  { "type": "ProductValue", "ofType": "resT", "fields": ["sV", "oV"] },
+            "transitionLambda": { "type": "Lambda", "parameters": ["sP", "eP"], "body": "result" },
+            "timeFx":  { "type": "EffectCategory", "categoryName": "Time.Now" },
+            "f":       { "type": "BoolLit", "value": false },
+            "effInit": { "type": "Lambda", "parameters": [], "body": "f", "effects": ["timeFx"] },
+            "initialState": { "type": "Application", "function": "effInit", "arguments": [] },
+            "receiveFx": { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+            "inputStream": { "type": "EventStream", "eventType": "unitT", "streamKind": "external" },
+            "m": { "type": "StateMachine", "transitionFn": "transitionLambda", "initialState": "initialState",
+                   "inputStreams": ["inputStream"], "outputStreams": [], "effects": ["receiveFx"] }
+          }
+        }""")
+        val err = assertRejects<VerifyError.StateMachineEffectCoverageViolation>(r)
+        assertEquals(1, err.missing.size)
+    }
+
+    @Test
+    fun `a graph too deep for the recursive descent is a typed error, not a StackOverflowError`() {
+        val store = org.strand.core.NodeStore()
+        val boolT = store.add(org.strand.core.Node.PrimitiveType(org.strand.core.Primitive.Bool))
+        val notT = store.add(org.strand.core.Node.FunctionType(parameters = listOf(boolT), result = boolT))
+        val not = store.add(org.strand.core.Node.ForeignNode(target = "strand-builtin:Bool.Not", foreignType = notT))
+        var cur = store.add(org.strand.core.Node.BoolLit(true))
+        repeat(300_000) {
+            cur = store.add(org.strand.core.Node.Application(function = not, arguments = listOf(cur)))
+        }
+        val r = Verifier(store).verify(cur)
+        assertRejects<VerifyError.VerificationTooDeep>(r)
+    }
+
+    @Test
+    fun `a handler's own effects must survive a CapabilityScope between it and the intercepted call`() {
+        // Handler(Time.Now, handle: λ() ![Log.Write]. 0,
+        //         body: CapabilityScope([Time.Now], now()))
+        // The handler runs at now()'s site, inside the narrowed context that
+        // no longer holds Log.Write, so it would always be denied at runtime.
+        val r = verify("""{
+          "version": 1, "root": "h",
+          "nodes": {
+            "intT":   { "type": "PrimitiveType", "kind": "Int" },
+            "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+            "logFx":  { "type": "EffectCategory", "categoryName": "Log.Write" },
+            "nowT":   { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+            "now":    { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+            "call":   { "type": "Application", "function": "now", "arguments": [] },
+            "scope":  { "type": "CapabilityScope", "capabilities": ["timeFx"], "body": "call" },
+            "zero":   { "type": "IntLit", "value": 0 },
+            "mockFn": { "type": "Lambda", "parameters": [], "body": "zero", "effects": ["logFx"] },
+            "h":      { "type": "Handler", "intercept": "timeFx", "handle": "mockFn", "body": "scope" }
+          }
+        }""")
+        val err = assertRejects<VerifyError.CapabilityScopeUnsatisfiable>(r)
+        assertEquals(1, err.missing.size)
+    }
+
+    private fun schemaSumMatch(cases: String) = """{
+      "version": 1, "root": "m",
+      "nodes": {
+        "intT":  { "type": "PrimitiveType", "kind": "Int" },
+        "boolT": { "type": "PrimitiveType", "kind": "Bool" },
+        "aC":    { "type": "SumTypeCase", "name": "A", "caseType": null },
+        "bC":    { "type": "SumTypeCase", "name": "B", "caseType": null },
+        "sT":    { "type": "SumType", "cases": ["aC", "bC"] },
+        "x":     { "type": "ParameterDecl", "name": "x", "paramType": "sT" },
+        "tru":   { "type": "BoolLit", "value": true },
+        "pred":  { "type": "Lambda", "parameters": ["x"], "body": "tru" },
+        "inv":   { "type": "Invariant", "invariantName": "any", "targetSchema": "sch", "body": "pred" },
+        "sch":   { "type": "Schema", "schemaName": "S", "valueType": "sT", "invariants": ["inv"] },
+        "p":     { "type": "ParameterDecl", "name": "p", "paramType": "sch" },
+        "pRef":  { "type": "VarRef", "binder": "p" },
+        "one":   { "type": "IntLit", "value": 1 },
+        "two":   { "type": "IntLit", "value": 2 },
+        "pA":    { "type": "Pattern", "kind": "constructor", "patternType": "sT", "caseName": "A" },
+        "pB":    { "type": "Pattern", "kind": "constructor", "patternType": "sT", "caseName": "B" },
+        "cA":    { "type": "MatchCase", "pattern": "pA", "body": "one" },
+        "cB":    { "type": "MatchCase", "pattern": "pB", "body": "two" },
+        "match": { "type": "Match", "scrutinee": "pRef", "cases": $cases },
+        "m":     { "type": "Lambda", "parameters": ["p"], "body": "match" }
+      }
+    }"""
+
+    @Test
+    fun `an exhaustive Match over a Schema-wrapped Sum verifies`() {
+        val r = verify(schemaSumMatch("[\"cA\", \"cB\"]"))
+        assertTrue(r is VerifyResult.Ok) { "got $r" }
+    }
+
+    @Test
+    fun `a non-exhaustive Match over a Schema-wrapped Sum names the missing case`() {
+        val err = assertRejects<VerifyError.NonExhaustiveMatch>(verify(schemaSumMatch("[\"cA\"]")))
+        assertEquals(listOf("B"), err.missingCases)
+    }
+
+    @Test
+    fun `ProductFieldGet reads through a Schema-wrapped Product`() {
+        val r = verify("""{
+          "version": 1, "root": "m",
+          "nodes": {
+            "intT":  { "type": "PrimitiveType", "kind": "Int" },
+            "fX":    { "type": "ProductTypeField", "name": "x", "fieldType": "intT" },
+            "pT":    { "type": "ProductType", "fields": ["fX"] },
+            "v":     { "type": "ParameterDecl", "name": "v", "paramType": "pT" },
+            "tru":   { "type": "BoolLit", "value": true },
+            "pred":  { "type": "Lambda", "parameters": ["v"], "body": "tru" },
+            "inv":   { "type": "Invariant", "invariantName": "any", "targetSchema": "sch", "body": "pred" },
+            "sch":   { "type": "Schema", "schemaName": "P", "valueType": "pT", "invariants": ["inv"] },
+            "p":     { "type": "ParameterDecl", "name": "p", "paramType": "sch" },
+            "pRef":  { "type": "VarRef", "binder": "p" },
+            "get":   { "type": "ProductFieldGet", "target": "pRef", "fieldName": "x" },
+            "m":     { "type": "Lambda", "parameters": ["p"], "body": "get" }
+          }
+        }""")
+        val ok = r as? VerifyResult.Ok ?: error("got $r")
+        assertEquals(TypeExpr.Prim(org.strand.core.Primitive.Int), (ok.rootType as TypeExpr.Fun).result)
+    }
+
     // ---- A8: NodeRefs in type position must be closed ----------------------
 
     @Test

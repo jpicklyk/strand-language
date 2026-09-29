@@ -1173,6 +1173,18 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * The graph under [at] is nested too deeply for the verifier's recursive
+     * descent: the JVM stack was exhausted before verification finished. A
+     * resource-exhaustion outcome rather than a well-formedness verdict; the
+     * graph is rejected because it could not be checked. Ingest-time depth
+     * caps (Q-040) normally stop such documents first; this variant covers
+     * stores built programmatically or admitted under looser caps.
+     */
+    data class VerificationTooDeep(
+        override val at: NodeId,
+    ) : VerifyError()
+
+    /**
      * A TypeAbstraction or ForallType at [at] binds TypeParameter [param]
      * while [param] is already bound by an enclosing binder (or repeats it in
      * its own binder list), or an Application's type argument would be

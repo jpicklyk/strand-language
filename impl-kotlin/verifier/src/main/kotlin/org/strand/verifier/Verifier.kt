@@ -39,7 +39,8 @@ import org.strand.core.translateNodeIds
  *  [VerifyError.UnboundTypeParameter]. In particular, a Lambda whose
  *  parameter type mentions a TypeParameter not in scope is ill-formed.
  *
- *  Effects are deliberately out of scope (Layer 3).
+ *  Effect closures, capability scopes, handlers, and the registry-target
+ *  effect floor (BuiltinEffectTable) are checked alongside types.
  */
 /**
  * Constructed over a canonical [NodeStore] (produced by `Hasher.finalize`)
@@ -118,17 +119,26 @@ class Verifier(
                 VerifyError.DanglingReference(at = root, missing = root, fromField = "<root>")
             ))
         }
+        // Review A11(b): the recursive descent is as deep as the graph; a
+        // graph deep enough to exhaust the JVM stack is reported as a typed
+        // VerificationTooDeep rather than surfacing a raw StackOverflowError.
         val rootType = try {
             state.infer(root, scope = emptyMap(), typeParams = emptySet())
         } catch (_: VerifyAbort) {
             return VerifyResult.Failed(state.errors)
+        } catch (_: StackOverflowError) {
+            return VerifyResult.Failed(state.errors + VerifyError.VerificationTooDeep(at = root))
         }
         // N-046 (Q-043): certify every ModuleManifest admitted to the store.
         // Each export's declaredEffects must exactly equal its target's effect
         // closure. Runs whether or not a manifest is reachable from `root` — a
         // published library's root may be the manifest itself, or a manifest
         // may sit alongside the program it documents.
-        state.checkManifests()
+        try {
+            state.checkManifests()
+        } catch (_: StackOverflowError) {
+            return VerifyResult.Failed(state.errors + VerifyError.VerificationTooDeep(at = root))
+        }
         if (state.errors.isNotEmpty()) return VerifyResult.Failed(state.errors)
         return VerifyResult.Ok(
             rootType,
@@ -1291,9 +1301,13 @@ class Verifier(
 
             // Constructor patterns check against a Recursive scrutinee by
             // unfolding to the underlying Sum; exhaustiveness mirrors that.
-            val effective = when (scrutineeType) {
-                is TypeExpr.Recursive -> unfoldRecursive(scrutineeType)
-                else -> scrutineeType
+            // A Schema<T> scrutinee is matched as its T (patterns already
+            // check against it by value-flow compatibility); unwrap before
+            // enumerating cases, then unfold a Recursive.
+            val unwrapped = (scrutineeType as? TypeExpr.SchemaType)?.valueType ?: scrutineeType
+            val effective = when (unwrapped) {
+                is TypeExpr.Recursive -> unfoldRecursive(unwrapped)
+                else -> unwrapped
             }
             when {
                 effective is TypeExpr.Sum -> {
@@ -1686,7 +1700,9 @@ class Verifier(
             scope: Map<NodeId, TypeExpr>,
             typeParams: Set<NodeId>,
         ): TypeExpr {
-            val targetType = infer(node.target, scope, typeParams)
+            val inferredTarget = infer(node.target, scope, typeParams)
+            // A Schema<Product> value is read as its Product.
+            val targetType = (inferredTarget as? TypeExpr.SchemaType)?.valueType ?: inferredTarget
             if (targetType !is TypeExpr.Product) {
                 report(VerifyError.CategoryMismatch(
                     at = id, field = "ProductFieldGet.target type",
@@ -2038,7 +2054,16 @@ class Verifier(
             expected: TypeExpr.Fun,
             bodyId: NodeId,
         ) {
-            val visited = HashSet<NodeId>()
+            // Review A11(c): the interpreter runs the handler at the
+            // intercepted call site, under that site's capability context,
+            // which a CapabilityScope between the Handler and the call may
+            // have narrowed. The walk tracks the narrowing (intersection of
+            // enclosing scopes' capabilities, null when none) and requires
+            // the handler's own effects to survive it. A node reached under
+            // two different narrowings is visited under each.
+            var narrowed: Set<NodeId>? = null
+            var narrowedAt: NodeId? = null
+            val visited = HashSet<Pair<NodeId, Set<NodeId>?>>()
             lateinit var visitRef: (NodeId) -> Unit
             // A callback argument handed to a higher-order builtin: follow a
             // Let-bound name to the function it names, so a Lambda defined
@@ -2059,7 +2084,7 @@ class Verifier(
                 }
             }
             fun visit(id: NodeId) {
-                if (!visited.add(id)) return
+                if (!visited.add(id to narrowed)) return
                 val node = store.getOrNull(id) ?: return
                 when (node) {
                     is Node.Application -> {
@@ -2113,6 +2138,16 @@ class Verifier(
                             ))
                             throw VerifyAbort()
                         }
+                        val scopeCaps = narrowed
+                        if (scopeCaps != null) {
+                            val missing = expected.effects - scopeCaps
+                            if (missing.isNotEmpty()) {
+                                report(VerifyError.CapabilityScopeUnsatisfiable(
+                                    at = narrowedAt ?: id, missing = missing,
+                                ))
+                                throw VerifyAbort()
+                            }
+                        }
                     }
                     is Node.Lambda -> {
                         // Walk the body; handlers cross Lambda boundaries —
@@ -2126,7 +2161,19 @@ class Verifier(
                         visit(node.body)
                     }
                     is Node.TypeAbstraction -> visit(node.body)
-                    is Node.CapabilityScope -> visit(node.body)
+                    is Node.CapabilityScope -> {
+                        val saved = narrowed
+                        val savedAt = narrowedAt
+                        val caps = node.capabilities.toSet()
+                        narrowed = saved?.intersect(caps) ?: caps
+                        narrowedAt = id
+                        try {
+                            visit(node.body)
+                        } finally {
+                            narrowed = saved
+                            narrowedAt = savedAt
+                        }
+                    }
                     is Node.NodeRef -> {
                         val targetId = resolveRefTarget(node.target) ?: return
                         visit(targetId)
@@ -2639,7 +2686,10 @@ class Verifier(
             val declaredEffects = validateEffectCategoryEdges(
                 id, node.effects, "StateMachine.effects"
             )
-            val missing = transitionFnType.effects - declaredEffects
+            // Review A11(a): the runtime evaluates initialState when the
+            // machine starts, under the machine's grant, so its closure is
+            // part of what the declaration must cover.
+            val missing = (transitionFnType.effects + closureOf(node.initialState)) - declaredEffects
             if (missing.isNotEmpty()) {
                 report(VerifyError.StateMachineEffectCoverageViolation(
                     at = id, missing = missing
