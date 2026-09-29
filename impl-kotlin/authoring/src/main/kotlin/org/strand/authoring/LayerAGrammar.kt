@@ -21,7 +21,7 @@ package org.strand.authoring
  *
  * Integers: `42`, `-3`, `0`.
  *
- * Floats: must contain a `.` (`3.14`, `-0.5`, `1.0`).
+ * Floats: digits with a `.` fraction and/or an exponent (`3.14`, `-0.5`, `1.0`, `1.0E10`, `2e-3`).
  *
  * Booleans: `true` or `false`.
  *
@@ -105,7 +105,7 @@ object LayerAGrammar {
         STRING,
         /** Signed integer. */
         INT,
-        /** Float (must contain a dot). */
+        /** Float (fraction and/or exponent). */
         FLOAT,
         /** `true` / `false`. */
         BOOL,

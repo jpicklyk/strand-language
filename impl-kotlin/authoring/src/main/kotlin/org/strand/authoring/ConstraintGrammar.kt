@@ -115,10 +115,12 @@ object ConstraintGrammar {
         // policy as PARAM_LIST / FIELD_LIST).
         sb.append("identifier ::= [A-Za-z_] [A-Za-z0-9_.]*\n")
         sb.append("int ::= \"-\"? [0-9]+\n")
-        sb.append("float ::= \"-\"? [0-9]+ \".\" [0-9]+\n")
+        // Float: digits with a fraction and/or an exponent (`3.14`, `1.0E10`,
+        // `2e-3`); a bare digit run is an int. Mirrors LayerAParser.readNumeric.
+        sb.append("float ::= \"-\"? [0-9]+ (\".\" [0-9]+ ([eE] [+-]? [0-9]+)? | [eE] [+-]? [0-9]+)\n")
         sb.append("bool ::= \"true\" | \"false\"\n")
         sb.append("string ::= \"\\\"\" string_char* \"\\\"\"\n")
-        sb.append("string_char ::= [^\\\"\\\\] | \"\\\\\" [\\\"\\\\nt]\n")
+        sb.append("string_char ::= [^\\\"\\\\] | \"\\\\\" [\\\"\\\\ntr] | \"\\\\u\" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]\n")
         sb.append("list_ref ::= \"[\" (identifier (\" \" identifier)*)? \"]\"\n")
         sb.append("nullable_ref ::= identifier | \"_\"\n")
         // Density v5 slice b: the effect-instances slot admits the @auto

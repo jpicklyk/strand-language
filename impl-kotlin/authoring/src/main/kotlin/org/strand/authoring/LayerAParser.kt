@@ -16,8 +16,9 @@ package org.strand.authoring
  *  * Tokens are space-separated except inside `[...]` lists or `"..."`
  *    strings, where whitespace is significant only as a separator
  *    inside the bracket / string body.
- *  * Integer: `-?[0-9]+`. Float: `-?[0-9]+\.[0-9]+`. Bool: `true`/`false`.
- *    Null: `_`. String: `"..."` with `\"`, `\\`, `\n`, `\t`.
+ *  * Integer: `-?[0-9]+`. Float: `-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?` with a fraction
+ *    and/or exponent (`1.5`, `1.0E10`, `2e-3`); NaN/Infinity have no literal. Bool: `true`/`false`.
+ *    Null: `_`. String: `"..."` with `\"`, `\\`, `\n`, `\t`, `\r`, `\uXXXX`.
  *  * Bare identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
  *
  * Errors are accumulated across the whole document so the user sees the
@@ -25,6 +26,15 @@ package org.strand.authoring
  * [AuthoringException] at end-of-document if any error was recorded.
  */
 object LayerAParser {
+
+    /** Layer A header versions the pipeline ingests (`@v=<n>`); any other value is rejected at parse time. */
+    val SUPPORTED_VERSIONS: Set<Int> = setOf(1)
+
+    /** 1-based column of the first occurrence of [id] in [raw] (the id position), or null. */
+    private fun idColumn(raw: String, id: String): Int? {
+        val first = raw.indexOfFirst { !it.isWhitespace() }
+        return if (first >= 0 && raw.startsWith(id, first)) first + 1 else null
+    }
 
     /**
      * Parse [text] into a [LayerADocument]. Throws [AuthoringException]
@@ -47,7 +57,7 @@ object LayerAParser {
                 AuthoringError.HeaderError(line = 1, detail = "empty document — expected '@v=1 root=<id>' header")
             ))
         }
-        val (version, rootId) = parseHeader(lines[headerLineIdx], headerLineIdx + 1, errors)
+        val (version, rootId) = parseHeader(lines[headerLineIdx].trimEnd(), headerLineIdx + 1, errors)
 
         val nodes = mutableListOf<NodeDecl>()
         val seenIds = HashSet<String>()
@@ -55,9 +65,11 @@ object LayerAParser {
             val raw = lines[i]
             val trimmed = raw.trim()
             if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
-            val decl = parseNodeLine(trimmed, i + 1, errors) ?: continue
+            // Tokenize the indent-preserving line (trailing whitespace / CR
+            // dropped) so reported columns index into the source line.
+            val decl = parseNodeLine(raw.trimEnd(), i + 1, errors) ?: continue
             if (!seenIds.add(decl.id)) {
-                errors += AuthoringError.DuplicateNodeId(line = decl.line, id = decl.id)
+                errors += AuthoringError.DuplicateNodeId(line = decl.line, id = decl.id, column = idColumn(raw, decl.id))
                 continue
             }
             nodes += decl
@@ -112,6 +124,13 @@ object LayerAParser {
             errors += AuthoringError.HeaderError(
                 line = lineNum,
                 detail = "header version '$versionStr' is not a valid integer",
+            )
+            return -1 to null
+        }
+        if (version !in SUPPORTED_VERSIONS) {
+            errors += AuthoringError.HeaderError(
+                line = lineNum,
+                detail = "unsupported Layer A version @v=$version (supported: ${SUPPORTED_VERSIONS.joinToString(", ")})",
             )
             return -1 to null
         }
@@ -173,11 +192,17 @@ object LayerAParser {
                 return null
             }
         }
+        val idCol = line.indexOfFirst { !it.isWhitespace() } + 1
         if (idArg is Arg.Bare && !isBareIdentifier(idArg.text)) {
             errors += AuthoringError.TokenError(
                 line = lineNum,
                 detail = "node id '${idArg.text}' is not a valid author identifier",
+                column = idCol,
             )
+            return null
+        }
+        if (idArg is Arg.Bare && idArg.text.startsWith("__")) {
+            errors += AuthoringError.ReservedNodeId(line = lineNum, id = idArg.text, column = idCol)
             return null
         }
         val codeArg = tokens[1]
@@ -235,7 +260,7 @@ object LayerAParser {
                     out += Arg.Null
                     i++
                 }
-                c == '-' || c.isDigit() -> {
+                c == '-' || isAsciiDigit(c) -> {
                     val (arg, end) = readNumeric(line, i, lineNum, errors) ?: return out
                     out += arg
                     i = end
@@ -248,7 +273,8 @@ object LayerAParser {
                 else -> {
                     errors += AuthoringError.TokenError(
                         line = lineNum,
-                        detail = "unexpected character '${c}' at column ${i + 1}",
+                        detail = "unexpected character '${c}' at column ${i + 1}${nonAsciiNote(c)}",
+                        column = i + 1,
                     )
                     return out
                 }
@@ -275,6 +301,7 @@ object LayerAParser {
                         errors += AuthoringError.TokenError(
                             line = lineNum,
                             detail = "unterminated escape at end of line in string starting at column ${start + 1}",
+                            column = start + 1,
                         )
                         return null
                     }
@@ -282,10 +309,27 @@ object LayerAParser {
                         '"', '\\' -> sb.append(esc)
                         'n' -> sb.append('\n')
                         't' -> sb.append('\t')
+                        'r' -> sb.append('\r')
+                        'u' -> {
+                            val hex = if (i + 6 <= line.length) line.substring(i + 2, i + 6) else ""
+                            val cp = if (hex.length == 4 && hex.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' })
+                                hex.toInt(16) else -1
+                            if (cp < 0) {
+                                errors += AuthoringError.TokenError(
+                                    line = lineNum,
+                                    detail = "malformed \\u escape at column ${i + 1}: expected 4 hex digits",
+                                    column = i + 1,
+                                )
+                                return null
+                            }
+                            sb.append(cp.toChar())
+                            i += 4
+                        }
                         else -> {
                             errors += AuthoringError.TokenError(
                                 line = lineNum,
                                 detail = "unknown escape '\\$esc' at column ${i + 1}",
+                                column = i + 1,
                             )
                             sb.append(esc)
                         }
@@ -301,6 +345,7 @@ object LayerAParser {
         errors += AuthoringError.TokenError(
             line = lineNum,
             detail = "unterminated string starting at column ${start + 1}",
+            column = start + 1,
         )
         return null
     }
@@ -327,6 +372,7 @@ object LayerAParser {
                     errors += AuthoringError.TokenError(
                         line = lineNum,
                         detail = "nested lists are not supported in the first Layer A slice (column ${i + 1})",
+                        column = i + 1,
                     )
                     val (inner, end) = readList(line, i, lineNum, errors) ?: return null
                     items += inner
@@ -348,7 +394,7 @@ object LayerAParser {
                     items += Arg.Null
                     i++
                 }
-                c == '-' || c.isDigit() -> {
+                c == '-' || isAsciiDigit(c) -> {
                     val (arg, end) = readNumeric(line, i, lineNum, errors) ?: return null
                     items += arg
                     i = end
@@ -361,7 +407,8 @@ object LayerAParser {
                 else -> {
                     errors += AuthoringError.TokenError(
                         line = lineNum,
-                        detail = "unexpected character '${c}' inside list at column ${i + 1}",
+                        detail = "unexpected character '${c}' inside list at column ${i + 1}${nonAsciiNote(c)}",
+                        column = i + 1,
                     )
                     return null
                 }
@@ -370,6 +417,7 @@ object LayerAParser {
         errors += AuthoringError.TokenError(
             line = lineNum,
             detail = "unterminated list starting at column ${start + 1}",
+            column = start + 1,
         )
         return null
     }
@@ -399,6 +447,7 @@ object LayerAParser {
             errors += AuthoringError.TokenError(
                 line = lineNum,
                 detail = "unterminated nested expression starting at column ${start + 1}",
+                column = start + 1,
             )
             return null
         }
@@ -406,7 +455,8 @@ object LayerAParser {
         if (!isBareStartChar(line[i])) {
             errors += AuthoringError.TokenError(
                 line = lineNum,
-                detail = "expected code identifier after '(' at column ${i + 1}; got '${line[i]}'",
+                detail = "expected code identifier after '(' at column ${i + 1}; got '${line[i]}'${nonAsciiNote(line[i])}",
+                column = i + 1,
             )
             return null
         }
@@ -439,7 +489,7 @@ object LayerAParser {
                     items += Arg.Null
                     i++
                 }
-                c == '-' || c.isDigit() -> {
+                c == '-' || isAsciiDigit(c) -> {
                     val (arg, end) = readNumeric(line, i, lineNum, errors) ?: return null
                     items += arg
                     i = end
@@ -452,7 +502,8 @@ object LayerAParser {
                 else -> {
                     errors += AuthoringError.TokenError(
                         line = lineNum,
-                        detail = "unexpected character '${c}' inside nested expression at column ${i + 1}",
+                        detail = "unexpected character '${c}' inside nested expression at column ${i + 1}${nonAsciiNote(c)}",
+                        column = i + 1,
                     )
                     return null
                 }
@@ -461,6 +512,7 @@ object LayerAParser {
         errors += AuthoringError.TokenError(
             line = lineNum,
             detail = "unterminated nested expression starting at column ${start + 1}",
+            column = start + 1,
         )
         return null
     }
@@ -473,23 +525,46 @@ object LayerAParser {
     ): Pair<Arg, Int>? {
         var i = start
         if (line[i] == '-') i++
-        if (i >= line.length || !line[i].isDigit()) {
+        if (i >= line.length || !isAsciiDigit(line[i])) {
             errors += AuthoringError.TokenError(
                 line = lineNum,
                 detail = "expected digit after '-' at column ${start + 1}",
+                column = start + 1,
             )
             return null
         }
-        while (i < line.length && line[i].isDigit()) i++
+        while (i < line.length && isAsciiDigit(line[i])) i++
+        var isFloat = false
         if (i < line.length && line[i] == '.') {
+            isFloat = true
             i++
-            while (i < line.length && line[i].isDigit()) i++
+            while (i < line.length && isAsciiDigit(line[i])) i++
+        }
+        if (i < line.length && (line[i] == 'e' || line[i] == 'E')) {
+            // Exponent form: (e|E)[+-]digits. An `e` glued to a number must be a
+            // complete exponent; otherwise the token is malformed.
+            var j = i + 1
+            if (j < line.length && (line[j] == '+' || line[j] == '-')) j++
+            if (j >= line.length || !isAsciiDigit(line[j])) {
+                errors += AuthoringError.TokenError(
+                    line = lineNum,
+                    detail = "malformed float exponent at column ${i + 1}: expected [+-]digits after '${line[i]}'",
+                    column = i + 1,
+                )
+                return null
+            }
+            while (j < line.length && isAsciiDigit(line[j])) j++
+            isFloat = true
+            i = j
+        }
+        if (isFloat) {
             val text = line.substring(start, i)
             val value = text.toDoubleOrNull()
-            if (value == null) {
+            if (value == null || value.isInfinite() || value.isNaN()) {
                 errors += AuthoringError.TokenError(
                     line = lineNum,
                     detail = "malformed float '$text' at column ${start + 1}",
+                    column = start + 1,
                 )
                 return null
             }
@@ -501,6 +576,7 @@ object LayerAParser {
             errors += AuthoringError.TokenError(
                 line = lineNum,
                 detail = "malformed integer '$text' at column ${start + 1}",
+                column = start + 1,
             )
             return null
         }
@@ -533,11 +609,11 @@ object LayerAParser {
      * lenient and the per-code emitter enforces the actual rules.
      */
     private fun isBareChar(c: Char): Boolean =
-        c.isLetterOrDigit() || c == '_' || c == '@' || c == '=' || c == ':' || c == '.'
+        isAsciiLetter(c) || isAsciiDigit(c) || c == '_' || c == '@' || c == '=' || c == ':' || c == '.'
 
     /** First-character predicate for bare tokens. Digits are excluded so numerics dispatch first. */
     private fun isBareStartChar(c: Char): Boolean =
-        c.isLetter() || c == '_' || c == '@'
+        isAsciiLetter(c) || c == '_' || c == '@'
 
     /**
      * True if [text] is a pure author-id identifier (no `=` / `@` / `:`
@@ -546,7 +622,15 @@ object LayerAParser {
      */
     private fun isBareIdentifier(text: String): Boolean {
         if (text.isEmpty()) return false
-        if (!(text[0].isLetter() || text[0] == '_')) return false
-        return text.all { it.isLetterOrDigit() || it == '_' }
+        if (!(isAsciiLetter(text[0]) || text[0] == '_')) return false
+        return text.all { isAsciiLetter(it) || isAsciiDigit(it) || it == '_' }
     }
+
+    private fun isAsciiLetter(c: Char): Boolean = c in 'A'..'Z' || c in 'a'..'z'
+
+    private fun isAsciiDigit(c: Char): Boolean = c in '0'..'9'
+
+    /** Trailer appended to lexer errors for a non-ASCII character so the cause is explicit. */
+    private fun nonAsciiNote(c: Char): String =
+        if (c.code > 127) " (U+%04X; identifiers and digits are ASCII-only: [A-Za-z_][A-Za-z0-9_]*, [0-9])".format(c.code) else ""
 }
