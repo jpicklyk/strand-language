@@ -89,18 +89,30 @@ import kotlinx.serialization.json.longOrNull
  *                         "parameterSchema": <Schema id>, "implementation": <Expression id> }
  *   ResponseSchemaSpec  { "type": "ResponseSchemaSpec", "schema": <Schema id> }
  *
- * State machines (excerpt — full schema in impl/CLAUDE.md):
+ * State machines:
+ *   StateMachine { "type": "StateMachine", "transitionFn": <id>, "initialState": <id>,
+ *                  "inputStreams": [<id>, ...], "outputStreams": [<id>, ...]?,
+ *                  "effects": [<id>, ...]? }
  *   EventStream  { "type": "EventStream", "eventType": <id>,
  *                  "streamKind": "external|internal|output",
- *                  "bufferSize": <int>?  (optional; default 1024 at runtime),
- *                  "overflowPolicy": <policy>?  (optional; default BlockProducer) }
+ *                  "bufferSize": <positive int>?  (optional; default 1024 at runtime),
+ *                  "overflowPolicy": <policy>?  (optional; default BlockProducer),
+ *                  "consumerMode": "Single|Broadcast"?  (optional; default Single),
+ *                  "source": <id>?  (optional; Q-046 source edge) }
+ *   Transition   { "type": "Transition", "guard": <id>?, "body": <id> }
  *
  *   overflowPolicy may be either a shorthand string ("BlockProducer",
  *   "DropNewest", "DropOldest") or an object form for the parameterized
- *   variant: `{ "kind": "Sample", "intervalNanos": <long> }`. When omitted
- *   (or for any of the three nullary variants), the canonical encoder gates
- *   both `bufferSize` and `overflowPolicy` on non-default values so pre-step-3
- *   EventStream hashes are byte-identical to the new form (additive versioning).
+ *   variant: `{ "kind": "Sample", "intervalNanos": <long> }`. The canonical
+ *   encoder emits the bufferSize / overflowPolicy / consumerMode group only
+ *   when at least one of them is non-default, and always emits the `source`
+ *   field under the epoch-2 (Q-062) presence prefix; see
+ *   design/canonical-encoding.md for the exact layout.
+ *
+ * Every scalar is type-checked strictly: a string field must be a JSON
+ * string, a numeric or boolean field a JSON number or boolean (never a
+ * quoted one), and every reference a string author id. Strings must be
+ * well-formed UTF-16 (no unpaired surrogates).
  */
 object JsonIngest {
 
@@ -944,9 +956,13 @@ object JsonIngest {
                 bufferSize = obj.optionalInt("bufferSize", ctx)?.also {
                     // Q-066: the canonical encoding carries bufferSize as a
                     // CBOR uint, so a negative value is unencodable; it is
-                    // also meaningless as a channel capacity.
-                    if (it < 0) throw IngestError.Malformed(
-                        "EventStream bufferSize in $ctx must be non-negative, got $it"
+                    // also meaningless as a channel capacity. Zero is
+                    // rejected too (review hashing Low): the encoder uses 0
+                    // as the "unset" sentinel, so an explicit 0 would hash
+                    // identically to an absent bufferSize, and the verifier
+                    // rejects bufferSize <= 0 anyway.
+                    if (it <= 0) throw IngestError.Malformed(
+                        "EventStream bufferSize in $ctx must be positive, got $it"
                     )
                 },
                 overflowPolicy = obj.optionalOverflowPolicy("overflowPolicy", ctx),

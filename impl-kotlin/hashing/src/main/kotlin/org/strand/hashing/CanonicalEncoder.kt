@@ -1103,9 +1103,9 @@ internal class CanonicalEncoder(
         // Slice 3.1 / 3.6 fields: bufferSize (sentinel 0 for unset / default),
         // policy tag + optional Sample param, then consumerMode (sentinel 0 =
         // Single). Using 0 as "unset" for bufferSize is safe because a real
-        // bufferSize of 0 makes no semantic sense (no events could be queued);
-        // the verifier could reject it as MalformedOverflowPolicy for future
-        // tightening.
+        // bufferSize of 0 makes no semantic sense (no events could be queued)
+        // and is never admitted: JSON ingest rejects bufferSize <= 0, and the
+        // verifier rejects it for programmatically built stores.
         val bufferEncoded = CanonicalCbor.encodeUint((node.bufferSize ?: 0).toLong())
         val policyFields = encodeOverflowPolicy(node.overflowPolicy ?: OverflowPolicy.BlockProducer)
         val modeEncoded = CanonicalCbor.encodeUint((node.consumerMode ?: ConsumerMode.Single).ordinal.toLong())

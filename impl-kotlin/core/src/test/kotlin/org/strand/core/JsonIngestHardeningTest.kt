@@ -150,6 +150,18 @@ class JsonIngestHardeningTest {
         }
     }
 
+    // ----- Low: bufferSize 0 -----
+
+    @Test
+    fun `EventStream bufferSize 0 is rejected - it collided with the unset encoding`() {
+        fun stream(size: Int) = doc("""
+            "int": { "type": "PrimitiveType", "kind": "Int" },
+            "r": { "type": "EventStream", "eventType": "int", "streamKind": "external", "bufferSize": $size }
+        """)
+        assertThrows<IngestError.Malformed> { JsonIngest.parse(stream(0)) }
+        JsonIngest.parse(stream(1))
+    }
+
     // ----- H3: graph depth -----
 
     private fun letChain(n: Int): String {

@@ -29,6 +29,10 @@ import org.strand.core.StoredNode
  * independently hashed. ParameterDecl is intrinsic to its enclosing Lambda
  * and is encoded inline there; TypeParameter has no standalone encoding
  * (its identity is positional). Both are skipped during the walk.
+ *
+ * **Not thread-safe.** A [Hasher] owns one [CanonicalEncoder], whose caches
+ * and traversal state are mutable; confine each instance to one thread (or
+ * create one per thread — construction is cheap).
  */
 class Hasher(private val rawStore: RawNodeStore) {
 
