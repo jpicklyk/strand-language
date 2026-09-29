@@ -789,6 +789,8 @@ object Builtins {
             val port = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("network-connect", "expected IntV port, got ${args[1]::class.simpleName}")
             val resolvedAddr = NetSandbox.checkConnect(sandboxPolicy.net, host, port.toInt(), nameResolver)
+            // Review M5: DnsPolicy.RecheckAtConnect re-resolves just before connecting.
+            NetSandbox.recheckAtConnect(sandboxPolicy.net, host, resolvedAddr, nameResolver)
             try {
                 val socket = java.net.Socket(resolvedAddr, port.toInt())
                 // Q-045: install the host-policy per-read ceiling as the
@@ -1075,6 +1077,8 @@ object Builtins {
             // and port are exactly the pinned address and the refined
             // port, so a path can never become userinfo or extend the port.
             val pinnedUri = NetIo.buildPinnedUri(scheme, resolvedAddr, port.toInt(), pathArg)
+            // Review M5: DnsPolicy.RecheckAtConnect re-resolves just before connecting.
+            NetSandbox.recheckAtConnect(sandboxPolicy.net, host, resolvedAddr, nameResolver)
             val urlStr = pinnedUri.toString()
             try {
                 val url = pinnedUri.toURL()

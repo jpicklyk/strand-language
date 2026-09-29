@@ -68,6 +68,17 @@ data class SandboxPolicy(
             IpRange("169.254.169.254/32"),  // AWS / GCP / Azure IMDS
             IpRange("169.254.170.2/32"),    // AWS ECS task-role
             IpRange("100.100.100.200/32"),  // Alibaba
+            // Review M5: "this network" (0.0.0.0 reaches the local host
+            // on common stacks) and the IPv6 unspecified address.
+            IpRange("0.0.0.0/8"),
+            IpRange("::/128"),
+            // Review M5: NAT64 prefixes (RFC 6052 well-known, RFC 8215
+            // local-use) translate to arbitrary IPv4 destinations,
+            // including the blocked ones. IPv4-mapped / IPv4-compatible
+            // forms are handled by checking the embedded IPv4 address
+            // (see NetSandbox.checkConnect).
+            IpRange("64:ff9b::/96"),
+            IpRange("64:ff9b:1::/48"),
         )
 
         /**
@@ -190,6 +201,17 @@ data class NetPolicy(
     val dnsPolicy: DnsPolicy = DnsPolicy.PinAtCheck,
 )
 
+/**
+ * DNS handling between the sandbox check and the connect.
+ *
+ *  - [PinAtCheck]: resolve once in [NetSandbox.checkConnect] and connect to
+ *    that address.
+ *  - [RecheckAtConnect]: as [PinAtCheck], and additionally re-resolve
+ *    immediately before connecting ([NetSandbox.recheckAtConnect]); a pinned
+ *    address no longer in the answer set raises
+ *    [SandboxViolationKind.NetDnsRebindingDetected].
+ *  - [RequireIpLiteral]: refuse hostnames outright.
+ */
 enum class DnsPolicy { PinAtCheck, RecheckAtConnect, RequireIpLiteral }
 
 /**
@@ -539,12 +561,18 @@ object NetSandbox {
             )
         }
         for (addr in resolved) {
-            val blocked = policy.blockedRanges.firstOrNull { it.contains(addr) }
-            if (blocked != null) {
-                throw SandboxViolation(
-                    SandboxViolationKind.NetHostBlocked,
-                    "host '$host' resolves to ${addr.hostAddress} which is in blocked range $blocked",
-                )
+            // Review M5: an IPv6 address that embeds an IPv4 address
+            // (IPv4-mapped, IPv4-compatible, NAT64 well-known prefix) is
+            // checked in both forms, so `::ffff:169.254.169.254` cannot
+            // slip past the IPv4 ranges.
+            for (form in listOfNotNull(addr, embeddedIpv4(addr))) {
+                val blocked = policy.blockedRanges.firstOrNull { it.contains(form) }
+                if (blocked != null) {
+                    throw SandboxViolation(
+                        SandboxViolationKind.NetHostBlocked,
+                        "host '$host' resolves to ${addr.hostAddress} which is in blocked range $blocked",
+                    )
+                }
             }
         }
 
@@ -553,6 +581,60 @@ object NetSandbox {
         // returned addresses passed the blocklist check, so this
         // choice is safe regardless of which one we hand back.
         return resolved.first()
+    }
+
+    /**
+     * Review M5: [DnsPolicy.RecheckAtConnect]. Called by `Net.Connect` and
+     * `Http.Request` immediately before the socket opens: re-resolves
+     * [host] and raises [SandboxViolationKind.NetDnsRebindingDetected]
+     * when the [pinned] address checked by [checkConnect] is no longer
+     * among the answers. The connection itself still goes to [pinned]
+     * (the pin-at-check defence is unchanged); the recheck turns a
+     * rebinding that the pin silently defeats into a visible, uncatchable
+     * denial. A no-op under every other [DnsPolicy], for IP literals, and
+     * when [NetPolicy.defaultDeny] is false.
+     */
+    fun recheckAtConnect(
+        policy: NetPolicy,
+        host: String,
+        pinned: InetAddress,
+        resolver: NameResolver = SystemNameResolver,
+    ) {
+        if (!policy.defaultDeny || policy.dnsPolicy != DnsPolicy.RecheckAtConnect || isIpLiteral(host)) return
+        val again = try {
+            resolver.resolve(host)
+        } catch (e: java.net.UnknownHostException) {
+            throw SandboxViolation(
+                SandboxViolationKind.NetDnsRebindingDetected,
+                "host '$host' no longer resolves at connect time: ${e.message}",
+            )
+        }
+        if (again.none { it == pinned }) {
+            throw SandboxViolation(
+                SandboxViolationKind.NetDnsRebindingDetected,
+                "host '$host' was checked at ${pinned.hostAddress} but resolves to " +
+                    "${again.joinToString { it.hostAddress }} at connect time",
+            )
+        }
+    }
+
+    /**
+     * The IPv4 address embedded in an IPv6 [addr], if any: IPv4-mapped
+     * (`::ffff:a.b.c.d`), IPv4-compatible (`::a.b.c.d`, excluding `::`
+     * and `::1`), or the NAT64 well-known prefix (`64:ff9b::a.b.c.d`).
+     * Null for IPv4 addresses and other IPv6 addresses.
+     */
+    internal fun embeddedIpv4(addr: InetAddress): InetAddress? {
+        val b = addr.address
+        if (b.size != 16) return null
+        val tail = b.copyOfRange(12, 16)
+        val zeroTo = { end: Int -> (0 until end).all { b[it] == 0.toByte() } }
+        val mapped = zeroTo(10) && b[10] == 0xff.toByte() && b[11] == 0xff.toByte()
+        val compatible = zeroTo(12) && !(tail[0] == 0.toByte() && tail[1] == 0.toByte() && tail[2] == 0.toByte() &&
+            (tail[3] == 0.toByte() || tail[3] == 1.toByte()))
+        val nat64 = b[0] == 0.toByte() && b[1] == 0x64.toByte() && b[2] == 0xff.toByte() && b[3] == 0x9b.toByte() &&
+            (4 until 12).all { b[it] == 0.toByte() }
+        return if (mapped || compatible || nat64) InetAddress.getByAddress(tail) else null
     }
 
     /**
