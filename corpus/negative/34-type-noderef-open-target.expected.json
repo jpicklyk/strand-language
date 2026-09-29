@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "NodeRefTargetMustBeClosed",
+  "notes": "A NodeRef in type position targets a ProductType whose tail is a RecursiveSelf bound by a RecursiveType outside the target. Type-position NodeRefs used to inherit the caller's TypeParameter set and recursive depth, so the open fragment hashed to a sentinel and verified (review H4). The target now resolves closed, as a term-position NodeRef target does."
+}

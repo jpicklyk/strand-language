@@ -1171,6 +1171,71 @@ sealed class VerifyError {
         val rejectedType: TypeExpr,
         val reason: String,
     ) : VerifyError()
+
+    /**
+     * The graph under [at] is nested too deeply for the verifier's recursive
+     * descent: the JVM stack was exhausted before verification finished. A
+     * resource-exhaustion outcome rather than a well-formedness verdict; the
+     * graph is rejected because it could not be checked. Ingest-time depth
+     * caps (Q-040) normally stop such documents first; this variant covers
+     * stores built programmatically or admitted under looser caps.
+     */
+    data class VerificationTooDeep(
+        override val at: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A TypeAbstraction or ForallType at [at] binds TypeParameter [param]
+     * while [param] is already bound by an enclosing binder (or repeats it in
+     * its own binder list), or an Application's type argument would be
+     * captured by a callee Forall that binds [param] (at is then the
+     * Application). Forall equality compares TypeParameter NodeIds, not
+     * alpha-equivalence, and substitution does not rename, so a rebound
+     * binder makes two distinct type variables indistinguishable: a rank-2
+     * program could type a function returning a String as `forall a. a -> a`
+     * and use it at Int (review C2).
+     */
+    data class TypeParameterRebound(
+        override val at: NodeId,
+        val param: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A [Node.ProductType] declares two fields with the same [name]. Field
+     * lookup is by name, so a duplicate lets a ProductValue check a value
+     * against one declaration while ProductFieldGet types the read by
+     * another (review C1: a verified program reaching a runtime type error).
+     * [at] is the ProductType.
+     */
+    data class DuplicateFieldName(
+        override val at: NodeId,
+        val name: String,
+    ) : VerifyError()
+
+    /**
+     * A [Node.SumType] declares two cases with the same [name]; the Sum
+     * analogue of [DuplicateFieldName]. [at] is the SumType.
+     */
+    data class DuplicateCaseName(
+        override val at: NodeId,
+        val name: String,
+    ) : VerifyError()
+
+    /**
+     * A [Node.ForeignNode] binds a registry target whose effect floor
+     * ([org.strand.core.BuiltinEffectTable]) is not covered by its declared
+     * effect row. The declared row is the union of `ForeignNode.effects` and
+     * the `foreignType` FunctionType's effects, compared by EffectCategory
+     * `categoryName`. [missing] lists the required category names the row
+     * omits. Without this rule a graph could bind `strand-builtin:Fs.Write`
+     * with `effects: []`, surface an empty effect closure, and write under an
+     * empty capability grant.
+     */
+    data class ForeignEffectUnderDeclared(
+        override val at: NodeId,
+        val target: String,
+        val missing: Set<String>,
+    ) : VerifyError()
 }
 
 /** Outcome of verification: either a successful inference or one or more structured errors. */

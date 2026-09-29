@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "DuplicateFieldName",
+  "notes": "ProductType {x: Int, x: String}. The ProductValue checked x against the last duplicate (String) while ProductFieldGet typed the read by the first (Int), so a verified program handed a String to Int.Add at runtime (review C1). If ingest later rejects duplicate field names first, this entry's stage moves to ingest."
+}

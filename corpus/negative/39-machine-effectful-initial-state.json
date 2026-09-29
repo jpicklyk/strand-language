@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "root": "m",
+  "nodes": {
+    "boolT":   { "type": "PrimitiveType", "kind": "Bool" },
+    "unitT":   { "type": "PrimitiveType", "kind": "Unit" },
+    "emptyT":  { "type": "ProductType", "fields": [] },
+    "sft":     { "type": "ProductTypeField", "name": "state",   "fieldType": "boolT" },
+    "oft":     { "type": "ProductTypeField", "name": "outputs", "fieldType": "emptyT" },
+    "resT":    { "type": "ProductType", "fields": ["sft", "oft"] },
+    "sP":      { "type": "ParameterDecl", "name": "s", "paramType": "boolT" },
+    "eP":      { "type": "ParameterDecl", "name": "e", "paramType": "unitT" },
+    "sRef":    { "type": "VarRef", "binder": "sP" },
+    "sV":      { "type": "ProductFieldValue", "fieldName": "state",   "value": "sRef" },
+    "emptyV":  { "type": "ProductValue", "ofType": "emptyT", "fields": [] },
+    "oV":      { "type": "ProductFieldValue", "fieldName": "outputs", "value": "emptyV" },
+    "result":  { "type": "ProductValue", "ofType": "resT", "fields": ["sV", "oV"] },
+    "transitionLambda": { "type": "Lambda", "parameters": ["sP", "eP"], "body": "result" },
+    "timeFx":  { "type": "EffectCategory", "categoryName": "Time.Now" },
+    "f":       { "type": "BoolLit", "value": false },
+    "effInit": { "type": "Lambda", "parameters": [], "body": "f", "effects": ["timeFx"] },
+    "initialState": { "type": "Application", "function": "effInit", "arguments": [] },
+    "receiveFx": { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
+    "inputStream": { "type": "EventStream", "eventType": "unitT", "streamKind": "external" },
+    "m": {
+      "type": "StateMachine",
+      "transitionFn": "transitionLambda",
+      "initialState": "initialState",
+      "inputStreams": ["inputStream"],
+      "outputStreams": [],
+      "effects": ["receiveFx"]
+    }
+  }
+}

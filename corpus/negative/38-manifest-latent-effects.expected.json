@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "ManifestExportEffectMismatch",
+  "notes": "A ModuleManifest exports a record whose field is an effectful Fs.Write wrapper and declares no effects. The export surface used to be the record's construction closure (empty), so the manifest certified with declaredEffects [] (review H5). The surface now includes every effect row latent in the export's type."
+}

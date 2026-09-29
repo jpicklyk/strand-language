@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "root": "app",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "strT":   { "type": "PrimitiveType", "kind": "String" },
+    "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+    "writeT": { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT" },
+    "write":  { "type": "ForeignNode", "target": "strand-builtin:Fs.Write",
+                "foreignType": "writeT", "effects": [] },
+    "path":   { "type": "StringLit", "value": "pwned.txt" },
+    "data":   { "type": "BytesLit", "value": "deadbeef" },
+    "app":    { "type": "Application", "function": "write", "arguments": ["path", "data"] }
+  }
+}
