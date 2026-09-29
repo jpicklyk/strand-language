@@ -335,6 +335,20 @@ object Builtins {
     object RealExitHandler : ExitHandler {
         override fun exit(code: Int): Unit = kotlin.system.exitProcess(code)
     }
+    /**
+     * The [HostPolicy.SECURE] exit handler: an embedded program must not
+     * terminate the embedding host. `System.Exit(code)` becomes an
+     * uncatchable [SandboxViolation] ([SandboxViolationKind.SystemExitRefused])
+     * that ends the evaluation instead of the JVM.
+     */
+    object RefusingExitHandler : ExitHandler {
+        override fun exit(code: Int) {
+            throw SandboxViolation(
+                SandboxViolationKind.SystemExitRefused,
+                "System.Exit($code) refused: the host policy does not let a program terminate the host process",
+            )
+        }
+    }
     class SystemExitInvoked(val code: Int) : RuntimeException("System.Exit($code)")
     class TestExitHandler : ExitHandler {
         var lastCode: Int? = null

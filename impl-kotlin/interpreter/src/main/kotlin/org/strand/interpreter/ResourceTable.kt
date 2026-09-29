@@ -246,4 +246,11 @@ enum class SandboxViolationKind {
      * policy-approved address and port.
      */
     HttpPathRejected,
+
+    /**
+     * `System.Exit` was called under a host policy whose exit handler
+     * refuses to terminate the host process ([Builtins.RefusingExitHandler],
+     * installed by [HostPolicy.SECURE]).
+     */
+    SystemExitRefused,
 }

@@ -32,17 +32,26 @@ class HostPolicyTest {
     }
 
     @Test
-    fun `SECURE differs from OPEN only in the sandbox and host-environment fields`() {
+    fun `SECURE differs from OPEN only in the sandbox and host-protection fields`() {
         val open = HostPolicy.OPEN
         val secure = HostPolicy.SECURE
-        // The intended differences: the sandbox, and (review H5) an empty
-        // environment-variable table.
+        // The intended differences: the sandbox, (review H5) an empty
+        // environment-variable table, and a System.Exit that cannot kill
+        // the host.
         assertSame(SandboxPolicy.SECURE_DEFAULT, secure.sandbox)
         assertNotEquals(open.sandbox, secure.sandbox)
         assertTrue(secure.osEnv is Builtins.EmptyEnvOsEnv)
-        // Everything else equal: copying SECURE back to the open sandbox and
-        // the system environment reproduces OPEN exactly.
-        assertEquals(open, secure.copy(sandbox = SandboxPolicy.OPEN_DEFAULT, osEnv = Builtins.SystemOsEnv))
+        assertSame(Builtins.RefusingExitHandler, secure.exitHandler)
+        // Everything else equal: copying SECURE back to the open sandbox, the
+        // system environment and the real exit handler reproduces OPEN exactly.
+        assertEquals(
+            open,
+            secure.copy(
+                sandbox = SandboxPolicy.OPEN_DEFAULT,
+                osEnv = Builtins.SystemOsEnv,
+                exitHandler = Builtins.RealExitHandler,
+            ),
+        )
     }
 
     @Test

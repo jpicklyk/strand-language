@@ -96,16 +96,19 @@ data class HostPolicy(
         /**
          * Agent-facing surface: the [SandboxPolicy.SECURE_DEFAULT] sandbox
          * (workspace-rooted filesystem, default-deny network with the full
-         * blocked-range list), everything else as [OPEN] except the host
-         * environment: [osEnv] is a [Builtins.EmptyEnvOsEnv], so
+         * blocked-range list), everything else as [OPEN] except two
+         * host-protection fields: [osEnv] is a [Builtins.EmptyEnvOsEnv], so
          * `Process.EnvVar` sees no variables and `Process.Spawn` children
-         * start with an empty environment (review H5 / M1). A host that
-         * wants to expose specific variables supplies its own
-         * [Builtins.OsEnv] via `.copy(osEnv = ...)`.
+         * start with an empty environment (review H5 / M1); and
+         * [exitHandler] is [Builtins.RefusingExitHandler], so `System.Exit`
+         * ends the evaluation with a sandbox violation instead of killing
+         * the embedding host. A host that wants to expose specific
+         * variables supplies its own [Builtins.OsEnv] via `.copy(osEnv = ...)`.
          */
         val SECURE: HostPolicy = OPEN.copy(
             sandbox = SandboxPolicy.SECURE_DEFAULT,
             osEnv = Builtins.EmptyEnvOsEnv(Builtins.SystemOsEnv),
+            exitHandler = Builtins.RefusingExitHandler,
         )
     }
 }
