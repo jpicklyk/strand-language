@@ -192,6 +192,10 @@ enum class EscapePolicy { Allow, Deny }
  *   [DnsPolicy.PinAtCheck]: resolve once, pass the resolved IP to the
  *   JVM `Socket(InetAddress, port)` constructor so the second
  *   resolution cannot subvert the check.
+ * @property listenOnAllInterfaces review M7: when false (the default in
+ *   every shipped policy), `Http.Listen` binds the loopback interface
+ *   only; a host must opt in explicitly to accept connections from other
+ *   machines.
  */
 data class NetPolicy(
     val defaultDeny: Boolean = true,
@@ -199,6 +203,7 @@ data class NetPolicy(
     val blockedRanges: List<IpRange> = SandboxPolicy.SECURE_DEFAULT_BLOCKED_RANGES,
     val blockedHostnames: Set<String> = SandboxPolicy.SECURE_DEFAULT_BLOCKED_HOSTNAMES,
     val dnsPolicy: DnsPolicy = DnsPolicy.PinAtCheck,
+    val listenOnAllInterfaces: Boolean = false,
 )
 
 /**

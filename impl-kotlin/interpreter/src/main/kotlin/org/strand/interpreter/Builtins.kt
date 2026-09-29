@@ -424,9 +424,13 @@ object Builtins {
     /**
      * Per-server state for the `Http.Listen` / `Http.Accept` builtins.
      * The handler thread enqueues a [HttpPending] for each request and
-     * blocks on its latch until Strand calls Http.Respond. The queue
-     * is unbounded — backpressure is the agent's responsibility.
+     * blocks on its latch until Strand calls Http.Respond. Review M7: the
+     * queue holds at most [HTTP_LISTEN_MAX_PENDING] requests; a request
+     * arriving when it is full is answered `503` immediately.
      */
+    /** Review M7: bound on requests waiting for `Http.Accept` (and on handler threads) per server. */
+    const val HTTP_LISTEN_MAX_PENDING: Int = 64
+
     internal data class HttpServerHolder(
         val server: com.sun.net.httpserver.HttpServer,
         val queue: java.util.concurrent.BlockingQueue<HttpPending>,
@@ -1241,7 +1245,15 @@ object Builtins {
                     ?: throw IoFailure("process-spawn", "Process.Spawn args list missing tail")
             }
             try {
+                // Review M1: the child gets the tenant's host environment
+                // (HostContext.osEnv — empty under HostPolicy.SECURE), not
+                // the JVM's, and runs in the workspace root when the
+                // filesystem sandbox has one. The child's own effects stay
+                // opaque to the capability system (Q-044 scope note).
                 val builder = ProcessBuilder(listOf(cmd) + argList).inheritIO()
+                builder.environment().clear()
+                builder.environment().putAll(osEnv.environment())
+                sandboxPolicy.fs.workspaceRoot?.let { builder.directory(it.toFile()) }
                 val proc = builder.start()
                 ResourceTable.register("process", proc)
             } catch (e: java.io.IOException) {
@@ -2381,20 +2393,35 @@ object Builtins {
             require(args.size == 1) { "Http.Listen expects 1 arg (port: Int), got ${args.size}" }
             val port = (args[0] as Value.IntV).v.toInt()
             try {
-                val server = com.sun.net.httpserver.HttpServer.create(
-                    java.net.InetSocketAddress(port), 0,
-                )
-                val queue = java.util.concurrent.LinkedBlockingQueue<HttpPending>()
+                // Review M7: loopback only unless the host's net policy
+                // explicitly opts in to every interface.
+                val bindAddress = if (sandboxPolicy.net.listenOnAllInterfaces) {
+                    java.net.InetSocketAddress(port)
+                } else {
+                    java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), port)
+                }
+                val server = com.sun.net.httpserver.HttpServer.create(bindAddress, HTTP_LISTEN_MAX_PENDING)
+                val queue = java.util.concurrent.LinkedBlockingQueue<HttpPending>(HTTP_LISTEN_MAX_PENDING)
                 server.createContext("/") { exchange ->
                     val latch = java.util.concurrent.CountDownLatch(1)
-                    queue.put(HttpPending(exchange, latch))
+                    if (!queue.offer(HttpPending(exchange, latch))) {
+                        // Review M7: full — shed load instead of queueing without bound.
+                        exchange.sendResponseHeaders(503, -1)
+                        exchange.close()
+                        return@createContext
+                    }
                     // Block the handler thread until Respond releases.
                     // 30s safety timeout so an unresponsive Strand
                     // program doesn't hang the server thread forever;
                     // Respond is the normal release path.
                     latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
                 }
-                server.executor = java.util.concurrent.Executors.newCachedThreadPool()
+                // Review M7: a bounded handler pool (each handler parks until
+                // Respond or its 30 s safety timeout) instead of an
+                // unbounded cached pool.
+                server.executor = java.util.concurrent.Executors.newFixedThreadPool(HTTP_LISTEN_MAX_PENDING) { r ->
+                    Thread(r, "strand-http-listen").apply { isDaemon = true }
+                }
                 server.start()
                 ResourceTable.register("http-server", HttpServerHolder(server, queue))
             } catch (e: java.io.IOException) {
