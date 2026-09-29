@@ -257,6 +257,7 @@ class StateMachineRuntime(
                         producerChannel = producerChannel,
                         producerCount = producerCount,
                         perConsumerBufferCapacity = capacity,
+                        consumerPolicy = streamNode.overflowPolicy ?: org.strand.core.OverflowPolicy.BlockProducer,
                     )
                 }
             }
@@ -541,17 +542,21 @@ class StateMachineRuntime(
      *
      * Per-consumer channels are allocated in Pass 2 of `runGroup` before
      * this pump launches, so [StreamBus.Broadcast.perConsumerChannels] is
-     * complete at pump-start time. If a consumer subscribes late (no
-     * mechanism for this in slice 3.6, but defensive), it sees only events
-     * from its subscription point forward — the snapshot taken at every
-     * drain pass picks up new consumers on the next iteration.
+     * complete at pump-start time. A consumer that subscribes late (a
+     * dynamically spawned instance) sees only events from its subscription
+     * point forward — the snapshot taken at every drain pass picks up new
+     * consumers on the next iteration.
+     *
+     * Review H1: delivery goes through [StreamBus.Broadcast.deliver], which
+     * applies the stream's declared overflow policy per consumer and skips
+     * consumers whose actor has halted (a halted actor closes its
+     * per-consumer channel), so one stalled or halted consumer never stalls
+     * the others.
      */
     private suspend fun runBroadcastPump(bus: StreamBus.Broadcast) {
         try {
             for (value in bus.producerChannel) {
-                for (channel in bus.perConsumerChannels()) {
-                    channel.send(value)
-                }
+                bus.deliver(value)
             }
         } finally {
             bus.closeAllConsumerChannels()

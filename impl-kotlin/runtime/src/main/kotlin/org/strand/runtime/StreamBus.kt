@@ -2,6 +2,8 @@ package org.strand.runtime
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
+import org.strand.core.OverflowPolicy
 import org.strand.interpreter.Value
 
 /**
@@ -171,16 +173,51 @@ internal sealed class StreamBus {
         override val producerChannel: Channel<Value>,
         override val producerCount: Int,
         private val perConsumerBufferCapacity: Int,
+        /**
+         * The stream's declared overflow policy, applied by the pump to each
+         * per-consumer channel independently (review H1): under
+         * `DropNewest` / `DropOldest` a slow consumer loses events without
+         * stalling its siblings; under `BlockProducer` the pump waits for a
+         * live consumer's buffer. `Sample` is applied once at the producer
+         * dispatcher and treated as `BlockProducer` here.
+         */
+        private val consumerPolicy: OverflowPolicy = OverflowPolicy.BlockProducer,
     ) : StreamBus() {
         init { initProducerCount() }
         private val perConsumer: MutableMap<Any, Channel<Value>> = LinkedHashMap()
+        private val perConsumerDispatchers: MutableMap<Channel<Value>, OverflowDispatcher> = HashMap()
 
         override fun consumerChannel(consumerKey: Any, scope: CoroutineScope): Channel<Value> {
             perConsumer[consumerKey]?.let { return it }
             val channel = Channel<Value>(capacity = perConsumerBufferCapacity)
             perConsumer[consumerKey] = channel
+            val pumpPolicy = if (consumerPolicy is OverflowPolicy.Sample) OverflowPolicy.BlockProducer else consumerPolicy
+            perConsumerDispatchers[channel] = OverflowDispatcher(channel, pumpPolicy)
             return channel
         }
+
+        /**
+         * Forward [value] to every live per-consumer channel under the
+         * stream's [consumerPolicy]. A consumer whose actor has halted closes
+         * its channel (see [MachineActor]); the pump skips closed channels
+         * instead of blocking on them, so one halted consumer never stalls
+         * the stream (review H1).
+         */
+        internal suspend fun deliver(value: Value) {
+            for (channel in perConsumerChannels()) {
+                @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+                if (channel.isClosedForSend) continue
+                val dispatcher = perConsumerDispatchers.getValue(channel)
+                try {
+                    dispatcher.send(value)
+                } catch (_: ClosedSendChannelException) {
+                    // The consumer halted between the check and the send.
+                }
+            }
+        }
+
+        /** Events the pump dropped across all consumers under a dropping policy. */
+        internal fun consumerDrops(): Long = perConsumerDispatchers.values.sumOf { it.droppedCount }
 
         /**
          * The per-consumer channels allocated so far. The runtime's

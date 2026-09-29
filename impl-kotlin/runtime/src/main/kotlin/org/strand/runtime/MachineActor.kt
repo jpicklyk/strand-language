@@ -31,6 +31,11 @@ import org.strand.interpreter.Value
  *     examining the `outputs` field type.
  *  6. Send each emitted payload to the corresponding output channel.
  *  7. When all input channels close, halt and close output channels.
+ *  8. On an abnormal halt (denial, exhaustion) signal the output buses, then
+ *     keep draining and discarding the inputs until their producers close
+ *     them, so an upstream producer never blocks on a halted consumer
+ *     (review H1). Discards are counted in
+ *     [InstanceMetrics.eventsDiscardedAfterHalt].
  *
  * The interpreter call is synchronous — transitions are pure by spec
  * (ADR-007); only the actor loop suspends. This keeps `Interpreter.eval`
@@ -116,23 +121,47 @@ internal class MachineActor(
             }
             instance.halted = true
         } finally {
-            // Signal halt on each output bus. The bus closes its producer
-            // channel only when all producers have halted (slice 3.6
-            // multi-producer fan-in support). Pre-slice-3.6 buses are
-            // single-producer Direct buses; the count drops from 1 to 0
-            // and the channel closes exactly as before.
-            //
-            // Legacy: when no buses are present (e.g., MachineGroupTest
-            // fixtures built without going through StateMachineRuntime.runGroup),
-            // fall back to closing the output channels directly.
-            if (instance.outputBuses.isNotEmpty()) {
-                for (bus in instance.outputBuses.values) {
-                    bus.producerHalted()
-                }
+            signalOutputsHalted()
+        }
+        // Review H1: an abnormal halt (denial, exhaustion) leaves input
+        // channels open. Upstream producers would fill them and, under the
+        // default BlockProducer policy, suspend forever. Detach: close
+        // broadcast per-consumer channels (the pump skips closed consumers)
+        // and discard everything that still arrives until every producer
+        // closes, so the rest of the group runs to completion. Reached only
+        // on a normal exit from the loop — a cancelled actor does not drain.
+        if (openChannels.isNotEmpty()) discardUntilClosed(openChannels)
+    }
+
+    private suspend fun discardUntilClosed(openChannels: MutableMap<NodeId, Channel<Value>>) {
+        for ((streamId, channel) in openChannels) {
+            if (instance.inputBuses[streamId] is StreamBus.Broadcast) channel.close()
+        }
+        while (openChannels.isNotEmpty()) {
+            val (streamId, result) = selectNext(openChannels) ?: break
+            if (result.isClosed) {
+                openChannels.remove(streamId)
             } else {
-                for (channel in instance.outputChannels.values) {
-                    channel.close()
-                }
+                instance.counters.recordEventDiscardedAfterHalt()
+            }
+        }
+    }
+
+    /**
+     * Signal halt on each output bus. The bus closes its producer channel
+     * only when all producers have halted (slice 3.6 multi-producer fan-in
+     * support). Legacy: when no buses are present (fixtures built without
+     * going through [StateMachineRuntime.runGroup]), close the output
+     * channels directly.
+     */
+    private fun signalOutputsHalted() {
+        if (instance.outputBuses.isNotEmpty()) {
+            for (bus in instance.outputBuses.values) {
+                bus.producerHalted()
+            }
+        } else {
+            for (channel in instance.outputChannels.values) {
+                channel.close()
             }
         }
     }

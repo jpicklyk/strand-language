@@ -106,6 +106,15 @@ internal class MachineInstance(
      * Empty in the step 1 sync `runMachine` path.
      */
     val outputBuses: Map<NodeId, StreamBus> = emptyMap(),
+    /**
+     * Per-input-stream [StreamBus] handle. Consulted when the actor halts
+     * abnormally (review H1): a [StreamBus.Broadcast] per-consumer channel is
+     * private to this instance and is closed so the broadcast pump skips it;
+     * a [StreamBus.Direct] channel is shared with its producers and is
+     * drained-and-discarded until they close it. Empty in the sync path and
+     * in fixtures built outside the runtime (treated as Direct).
+     */
+    val inputBuses: Map<NodeId, StreamBus> = emptyMap(),
     val recorder: EventRecorder? = null,
     var halted: Boolean = false,
     /**

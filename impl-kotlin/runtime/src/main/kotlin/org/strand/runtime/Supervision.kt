@@ -163,6 +163,7 @@ internal class RuntimeContext(
             outputChannels = outputChannels,
             outputDispatchers = outputDispatchers,
             outputBuses = outputBuses,
+            inputBuses = node.inputStreams.associateWith { streamBuses.getValue(it) },
             recorder = recorder,
             halted = false,
             limits = limits,
