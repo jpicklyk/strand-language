@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "root": "root",
+  "nodes": {
+    "T_a":      { "type": "TypeParameter", "name": "a" },
+    "intT":     { "type": "PrimitiveType", "kind": "Int" },
+    "strT":     { "type": "PrimitiveType", "kind": "String" },
+    "x":        { "type": "ParameterDecl", "name": "x", "paramType": "T_a" },
+    "y":        { "type": "ParameterDecl", "name": "y", "paramType": "T_a" },
+    "xRef":     { "type": "VarRef", "binder": "x" },
+    "innerLam": { "type": "Lambda", "parameters": ["y"], "body": "xRef" },
+    "innerTA":  { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "innerLam" },
+    "outerLam": { "type": "Lambda", "parameters": ["x"], "body": "innerTA" },
+    "outerTA":  { "type": "TypeAbstraction", "typeParameters": ["T_a"], "body": "outerLam" },
+    "s":        { "type": "StringLit", "value": "s" },
+    "five":     { "type": "IntLit", "value": 5 },
+    "app1":     { "type": "Application", "function": "outerTA", "arguments": ["s"], "typeArguments": ["strT"] },
+    "app2":     { "type": "Application", "function": "app1", "arguments": ["five"], "typeArguments": ["intT"] },
+    "addT":     { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+    "add":      { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+    "root":     { "type": "Application", "function": "add", "arguments": ["app2", "five"] }
+  }
+}

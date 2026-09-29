@@ -197,7 +197,15 @@ object Elaborator {
             if (afterAllNodeRewrites == current) return current
             current = afterAllNodeRewrites
         }
-        return current
+        // The loop exhausted its iteration bound without a no-change pass:
+        // the last iteration still rewrote the document, so the fixed
+        // point was never reached. Returning `current` here would emit a
+        // possibly half-elaborated document silently. Fail structurally
+        // instead so the non-convergence is a definite, attributable error
+        // rather than a mysterious downstream verifier failure.
+        throw AuthoringException(
+            listOf(AuthoringError.ElaborationDidNotConverge(FIXED_POINT_MAX_ITERATIONS)),
+        )
     }
 
     /**

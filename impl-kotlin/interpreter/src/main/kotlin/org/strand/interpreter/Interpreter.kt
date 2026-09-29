@@ -23,9 +23,10 @@ import org.strand.core.NodeStore
  *    interpreter halts with [InterpretError.RefinementViolation]. When
  *    the Application carries `effectInstances`, the parameter expressions
  *    of each EffectDecl are evaluated before dispatch and supplied to the
- *    refinement check; when it does not (pre-Q-031 call sites), the check
- *    runs against an empty requirement list, which is trivially covered
- *    by [CapabilityPattern]s built by [CapabilitySet.ofCategories].
+ *    refinement check; when it does not (pre-Q-031 call sites), a Lambda
+ *    call only checks category presence (it propagates the requirement),
+ *    while a ForeignNode dispatch of a parameterized category requires an
+ *    unrefined grant such as those built by [CapabilitySet.ofCategories].
  *  - Let evaluates its value, binds the Let's id to that value, evaluates
  *    the body.
  *  - VarRef looks up its binder id in the environment.
@@ -904,7 +905,9 @@ class Interpreter(
      * decide whether any active handler intercepts a particular call.
      *
      *  - Closure: the Lambda's `effects` list.
-     *  - ForeignFn: the ForeignNode's `effects` list.
+     *  - ForeignFn: the ForeignNode's effect row ([foreignEffectRow]): its
+     *    `effects` list unioned with its foreignType's effects, matching the
+     *    verifier's typing of the ForeignNode.
      *  - FixpointFn: the body Lambda's `effects` list. The body's effects
      *    are equal (by verifier construction) to the recursionType's
      *    effects.
@@ -914,7 +917,7 @@ class Interpreter(
      */
     private fun effectsOf(value: Value): Set<NodeId> = when (value) {
         is Value.Closure -> value.lambda.effects.toSet()
-        is Value.ForeignFn -> value.node.effects.toSet()
+        is Value.ForeignFn -> foreignEffectRow(value.node).toSet()
         is Value.FixpointFn -> value.bodyLambda.effects.toSet()
         else -> emptySet()
     }
@@ -922,9 +925,11 @@ class Interpreter(
     /**
      * Invoke a pre-evaluated callable [callable] on already-evaluated
      * [args]. Mirrors [applyCall]'s dispatch but skips the argument
-     * evaluation step (the caller — the handler dispatch path — already
-     * evaluated arguments once). Capability checks DO run for the handler
-     * itself (its own effects must be covered by the surrounding context).
+     * evaluation step (the caller — the handler dispatch path, or a
+     * higher-order builtin via [applyValueToArgs] — already evaluated the
+     * arguments). Capability checks DO run for the callable itself (its own
+     * effects must be covered by the surrounding context); a ForeignFn goes
+     * through [dispatchForeign].
      *
      * The handler is invoked under the SAME handlers list as the
      * intercepted call site: a handler that itself calls into a handled
@@ -964,44 +969,11 @@ class Interpreter(
             }
             eval(callable.lambda.body, callEnv, context, handlers, counters, limits)
         }
-        is Value.ForeignFn -> {
-            checkCapabilities(id, callable.node.effects, emptyMap(), context, limits)
-            try {
-                foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
-            } catch (io: IoFailure) {
-                throw InterpretException(translateIoFailure(id, io, limits))
-            } catch (sv: SandboxViolation) {
-                throw InterpretException(translateSandboxViolation(id, sv, limits))
-            }
-            val builtin = Builtins.lookup(callable.node.target)
-                ?: throw InterpretException(
-                    InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
-                )
-            try {
-                builtin.invoke(hostContext, args)
-            } catch (io: IoFailure) {
-                throw InterpretException(translateIoFailure(id, io, limits))
-            } catch (sv: SandboxViolation) {
-                throw InterpretException(translateSandboxViolation(id, sv, limits))
-            } catch (e: IllegalArgumentException) {
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = callable.node.target,
-                    detail = e.message ?: "builtin contract violation",
-                ))
-            } catch (e: ClassCastException) {
-                // Q-066: the declared foreignType is graph-supplied and is
-                // not checked against the builtin's actual JVM contract, so
-                // a hostile graph can hand a builtin type-confused argument
-                // values. The cast failure is a contract violation, not an
-                // implementation crash.
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = callable.node.target,
-                    detail = e.message ?: "builtin argument type confusion",
-                ))
-            }
-        }
+        is Value.ForeignFn ->
+            // A handler that is itself a ForeignNode: its own row fires in
+            // the surrounding context. Projected refinements are synthesized
+            // from the handler's arguments by [dispatchForeign].
+            dispatchForeign(id, callable.node, args, null, context, handlers, counters, limits)
         is Value.FixpointFn -> {
             val userArity = callable.bodyLambda.parameters.size - 1
             if (userArity != args.size) {
@@ -1120,80 +1092,91 @@ class Interpreter(
         } else {
             evalEffectInstances(env, context, handlers, app, counters, limits)
         }
-        checkCapabilities(id, fn.node.effects, instances, context, limits)
+        return dispatchForeign(id, fn.node, args, instances, context, handlers, counters, limits)
+    }
+
+    /**
+     * The single foreign-dispatch path (review H3). Every route that invokes
+     * a [Node.ForeignNode] — a direct Application ([applyForeign]), a handler
+     * standing in for an intercepted call ([applyValue]), and a callback run
+     * by a higher-order builtin ([applyValueToArgs]) — goes through here, so
+     * the effect-floor check, the capability check, and the exception
+     * translation cannot drift between copies.
+     *
+     * [instances] is the call site's refinement map when the caller already
+     * computed it (a direct Application's authored EffectDecls or projected
+     * instances). When null (no enclosing Application: handler and callback
+     * dispatch), a projected ForeignNode's instances are synthesized from
+     * [args] exactly as a direct call would — the value checked is the value
+     * the foreign code receives — and an unprojected one supplies none.
+     */
+    private fun dispatchForeign(
+        id: NodeId,
+        node: Node.ForeignNode,
+        args: List<Value>,
+        instances: Map<NodeId, List<Value>>?,
+        context: CapabilitySet,
+        handlers: List<ActiveHandler>,
+        counters: EvalCounters,
+        limits: EvaluationLimits,
+    ): Value {
+        checkForeignFloor(id, node)
+        val effectiveInstances = instances
+            ?: if (node.effectProjections.isNotEmpty()) {
+                // LiteralNode sources are closed literals; the env is irrelevant.
+                synthesizeProjectedInstances(emptyMap(), context, handlers, node, args, counters, limits)
+            } else {
+                emptyMap()
+            }
+        // A higher-order builtin (`List.Map`, `List.Fold`, ...) performs no
+        // effect of its own: its declared row is the latent row of the
+        // callbacks it runs, and each callback invocation re-enters here
+        // with its own (projected) instances. It is therefore a propagating
+        // site, not a performing one, so an instance-free parameterized
+        // category does not demand an unrefined grant at the combinator
+        // (main's Q-070 callback refinement check relies on this).
+        val performs = Builtins.lookupHigherOrder(node.target) == null
+        checkCapabilities(id, foreignEffectRow(node), effectiveInstances, context, limits, performs = performs)
         try {
-            foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
+            foreignDispatcher?.dispatch(node.target, args)?.let { return it }
+            // Higher-order lookup wins over standard lookup; the registries
+            // are disjoint so this ordering is conservative.
+            val higherOrder = Builtins.lookupHigherOrder(node.target)
+            if (higherOrder != null) {
+                val apply = Builtins.ApplyFn { callable, callbackArgs ->
+                    applyValueToArgs(id, callable, callbackArgs, context, handlers, counters, limits)
+                }
+                return higherOrder.invoke(hostContext, args, apply)
+            }
+            val builtin = Builtins.lookup(node.target)
+                ?: throw InterpretException(
+                    InterpretError.UnknownForeignTarget(at = id, target = node.target)
+                )
+            return builtin.invoke(hostContext, args)
         } catch (io: IoFailure) {
+            // Q-042: runtime IoFailure → structured InterpretError, honouring
+            // the active ErrorVerbosity.
             throw InterpretException(translateIoFailure(id, io, limits))
         } catch (sv: SandboxViolation) {
-            throw InterpretException(translateSandboxViolation(id, sv, limits))
-        }
-        // Higher-order lookup wins over standard lookup; the registries
-        // are disjoint so this ordering is conservative.
-        val higherOrder = Builtins.lookupHigherOrder(fn.node.target)
-        if (higherOrder != null) {
-            val apply = Builtins.ApplyFn { callable, callbackArgs ->
-                applyValueToArgs(id, callable, callbackArgs, context, handlers, counters, limits)
-            }
-            return try {
-                higherOrder.invoke(hostContext, args, apply)
-            } catch (io: IoFailure) {
-                throw InterpretException(translateIoFailure(id, io, limits))
-            } catch (sv: SandboxViolation) {
-                throw InterpretException(translateSandboxViolation(id, sv, limits))
-            } catch (e: IllegalArgumentException) {
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = fn.node.target,
-                    detail = e.message ?: "builtin contract violation",
-                ))
-            } catch (e: ClassCastException) {
-                throw InterpretException(InterpretError.BuiltinContractViolation(
-                    at = id,
-                    target = fn.node.target,
-                    detail = e.message ?: "builtin argument type confusion",
-                ))
-            }
-        }
-        val builtin = Builtins.lookup(fn.node.target)
-            ?: throw InterpretException(
-                InterpretError.UnknownForeignTarget(at = id, target = fn.node.target)
-            )
-        return try {
-            builtin.invoke(hostContext, args)
-        } catch (io: IoFailure) {
-            // Translate runtime IoFailure (thrown by Layer 4 step 2
-            // builtins on actual OS failures) into a structured
-            // InterpretError carrying the call-site NodeId. Q-042
-            // routes through [translateIoFailure] to honour the active
-            // [ErrorVerbosity] in the threaded limits.
-            throw InterpretException(translateIoFailure(id, io, limits))
-        } catch (sv: SandboxViolation) {
-            // Q-041: runtime SandboxViolation thrown by FsSandbox /
-            // NetSandbox / Http scheme validation. Translated through
-            // the verbosity-aware helper so detail is scrubbed when
-            // policy demands.
+            // Q-041: FsSandbox / NetSandbox / Http scheme rejection.
             throw InterpretException(translateSandboxViolation(id, sv, limits))
         } catch (e: IllegalArgumentException) {
-            // Builtin contract violation (e.g. division by zero from
-            // Int.Div / Int.Mod / Math.Mod's require(b != 0L) guard).
-            // The boundary catch intentionally covers every IAE escaping
-            // any builtin — every such IAE is a contract failure.
+            // Builtin contract violation (e.g. a require() guard such as
+            // division by zero). Every IAE escaping a builtin is a contract
+            // failure.
             throw InterpretException(InterpretError.BuiltinContractViolation(
                 at = id,
-                target = fn.node.target,
+                target = node.target,
                 detail = e.message ?: "builtin contract violation",
             ))
         } catch (e: ClassCastException) {
-            // Q-066: builtins cast their argument Values to the shapes the
-            // real builtin contract expects, but the declared foreignType is
-            // graph-supplied and nothing checks it against that contract —
-            // a graph declaring Int.Add at (String, String) -> Int verifies
-            // and hands the builtin StringV arguments. The cast failure is
-            // a structured contract violation, not an implementation crash.
+            // Q-066: the declared foreignType is graph-supplied and nothing
+            // checks it against the builtin's JVM contract, so a hostile graph
+            // can hand a builtin type-confused arguments. The cast failure is
+            // a contract violation, not an implementation crash.
             throw InterpretException(InterpretError.BuiltinContractViolation(
                 at = id,
-                target = fn.node.target,
+                target = node.target,
                 detail = e.message ?: "builtin argument type confusion",
             ))
         }
@@ -1202,25 +1185,22 @@ class Interpreter(
     /**
      * Apply a runtime [Value] callable to pre-evaluated [args] without
      * an enclosing Application node. Used by higher-order builtins
-     * (Slice 2 of stdlib expansion round 2) to invoke user-supplied
-     * lambdas on each element of a collection.
+     * (`List.Map`, `List.Fold`, ...) to invoke a user-supplied callable on
+     * each element, and by the LLM tool-use loop to run a ToolDef
+     * implementation.
      *
      * Reuses the current [context] and [handlers] from the enclosing
-     * higher-order builtin's call site — the verifier guarantees that
-     * the surrounding Application's effect declarations cover the
-     * callback's effects (the higher-order builtin's signature
-     * propagates the callable's effects to its own).
-     *
-     * Effect-instance evaluation is skipped because the callback has
-     * no per-call Application node and therefore no `effectInstances`
-     * to evaluate — refinement checking for parameterized effects
-     * inside higher-order callbacks is a follow-up (current
-     * higher-order builtins only deal with collections of plain
-     * values).
+     * higher-order builtin's call site. The callback is dispatched through
+     * [applyValue], so it gets the same checks as any other call: a
+     * Closure's or FixpointFn's declared effects must be present in the
+     * context, and a ForeignFn goes through [dispatchForeign] (effect floor,
+     * capability check, projected refinements synthesized from the callback
+     * arguments). Review H3 / Q-070: before this, callbacks ran with no
+     * capability check at all, so `List.Map(fsRead, paths)` read any path
+     * under a refined grant.
      *
      * @param id NodeId of the enclosing higher-order builtin call (used
-     *           for error reporting if [callable] is not callable or
-     *           has wrong arity).
+     *           for error reporting).
      */
     private fun applyValueToArgs(
         id: NodeId,
@@ -1230,75 +1210,7 @@ class Interpreter(
         handlers: List<ActiveHandler>,
         counters: EvalCounters,
         limits: EvaluationLimits,
-    ): Value {
-        return when (callable) {
-            is Value.Closure -> {
-                if (callable.lambda.parameters.size != args.size) {
-                    throw InterpretException(InterpretError.ArityMismatch(
-                        at = id, expected = callable.lambda.parameters.size, actual = args.size,
-                    ))
-                }
-                var callEnv = callable.env
-                for ((paramId, value) in callable.lambda.parameters.zip(args)) {
-                    callEnv = callEnv + (paramId to value)
-                }
-                eval(callable.lambda.body, callEnv, context, handlers, counters, limits)
-            }
-            is Value.FixpointFn -> {
-                // Body has args.size + 1 parameters: param[0] is the self-slot.
-                val userArity = callable.bodyLambda.parameters.size - 1
-                if (userArity != args.size) {
-                    throw InterpretException(InterpretError.ArityMismatch(
-                        at = id, expected = userArity, actual = args.size,
-                    ))
-                }
-                var callEnv = callable.env + (callable.bodyLambda.parameters[0] to callable)
-                for ((i, paramId) in callable.bodyLambda.parameters.drop(1).withIndex()) {
-                    callEnv = callEnv + (paramId to args[i])
-                }
-                eval(callable.bodyLambda.body, callEnv, context, handlers, counters, limits)
-            }
-            is Value.ForeignFn -> {
-                // Dispatch directly to the builtin registry. ForeignFn
-                // callbacks (passing e.g. Bool.Not as a List.Map fn) are
-                // rare but legitimate — and they don't recurse into the
-                // higher-order machinery because Bool.Not is a standard Fn.
-                try {
-                    foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
-                } catch (io: IoFailure) {
-                    throw InterpretException(translateIoFailure(id, io, limits))
-                } catch (sv: SandboxViolation) {
-                    throw InterpretException(translateSandboxViolation(id, sv, limits))
-                }
-                val builtin = Builtins.lookup(callable.node.target)
-                    ?: throw InterpretException(
-                        InterpretError.UnknownForeignTarget(at = id, target = callable.node.target)
-                    )
-                try {
-                    builtin.invoke(hostContext, args)
-                } catch (io: IoFailure) {
-                    throw InterpretException(translateIoFailure(id, io, limits))
-                } catch (sv: SandboxViolation) {
-                    throw InterpretException(translateSandboxViolation(id, sv, limits))
-                } catch (e: IllegalArgumentException) {
-                    throw InterpretException(InterpretError.BuiltinContractViolation(
-                        at = id,
-                        target = callable.node.target,
-                        detail = e.message ?: "builtin contract violation",
-                    ))
-                } catch (e: ClassCastException) {
-                    throw InterpretException(InterpretError.BuiltinContractViolation(
-                        at = id,
-                        target = callable.node.target,
-                        detail = e.message ?: "builtin argument type confusion",
-                    ))
-                }
-            }
-            else -> throw InterpretException(
-                InterpretError.NotCallable(at = id, gotKind = callable::class.simpleName ?: "Value")
-            )
-        }
-    }
+    ): Value = applyValue(id, callable, args, context, handlers, counters, limits)
 
     /**
      * Evaluate every [Node.EffectDecl] in `app.effectInstances` to a
@@ -1397,6 +1309,18 @@ class Interpreter(
      * (logger → Filesystem.Write) does supply an effectInstance and is
      * checked against the granted pattern.
      *
+     * Review H3 (refinement bypass): the pass-through above applies only
+     * to *propagating* sites — calls of Lambdas and Fixpoints, which do not
+     * themselves exercise the effect. At a *performing* site ([performs] =
+     * true: a ForeignNode dispatch, where the effect actually fires) a
+     * parameterized category (one whose EffectCategory declares parameters)
+     * with no instance has no concrete requirement to match, so it is
+     * covered only by an unrefined grant (every pattern argument a
+     * wildcard). A refined grant such as `Filesystem.Read{path:"/tmp/x"}`
+     * denies the unprojected, instance-free call with a
+     * [InterpretError.RefinementViolation] whose report shows the request
+     * as `*` per parameter. Parameterless categories are unaffected.
+     *
      * Implicit forwarding (§ Delegation semantics) is preserved: the
      * capability flows down the call chain unchanged, and refinement is
      * checked at the specific call site that actually exercises the
@@ -1415,6 +1339,7 @@ class Interpreter(
         instances: Map<NodeId, List<Value>>,
         context: CapabilitySet,
         limits: EvaluationLimits,
+        performs: Boolean = false,
     ) {
         // First pass: surface every category that is entirely absent in
         // one error. Mirrors the pre-Q-031 CapabilityViolation shape so
@@ -1428,17 +1353,21 @@ class Interpreter(
             // category is absent, the context holds nothing for it.
             val missingInOrder = declared.filter { it in missing }.distinct()
             val requestedValues = missingInOrder.flatMap { instances[it].orEmpty() }
+            val report = buildDenialReport(
+                at = at,
+                categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
+                requested = requestedValues,
+                held = emptyList(),
+                heldCategoryName = "",
+                limits = limits,
+            )
+            // Q-055: emit the denied audit record reusing the Q-064 report so
+            // the two reconcile.
+            emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
             throw InterpretException(InterpretError.CapabilityViolation(
                 at = at,
                 missing = missing,
-                report = buildDenialReport(
-                    at = at,
-                    categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
-                    requested = requestedValues,
-                    held = emptyList(),
-                    heldCategoryName = "",
-                    limits = limits,
-                ),
+                report = report,
             ))
         }
         // Second pass: per-category refinement check. Only fires when the
@@ -1446,28 +1375,185 @@ class Interpreter(
         // without an explicit instance pass through (the call is
         // propagating the requirement, not exercising it concretely).
         for (category in declared) {
-            val requirement = instances[category] ?: continue
+            val requirement = instances[category]
+            if (requirement == null) {
+                if (performs) checkUnrefinedGrant(at, category, context, limits)
+                continue
+            }
             val grants = context.grants[category]!! // non-null: first pass filtered missing
             val matched = grants.any { covers(it, requirement) }
+            val name = categoryNameOf(category)
             if (!matched) {
-                val name = categoryNameOf(category)
+                val report = buildDenialReport(
+                    at = at,
+                    categoryName = name,
+                    requested = requirement,
+                    held = grants,
+                    heldCategoryName = name,
+                    limits = limits,
+                )
+                emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
                 throw InterpretException(InterpretError.RefinementViolation(
                     at = at,
                     category = category,
                     requirement = requirement,
                     available = grants,
-                    report = buildDenialReport(
-                        at = at,
-                        categoryName = name,
-                        requested = requirement,
-                        held = grants,
-                        heldCategoryName = name,
-                        limits = limits,
-                    ),
+                    report = report,
                 ))
             }
+            // Q-055: the capability check passed for a category the call site
+            // concretely exercised (an EffectDecl instance was present). Emit
+            // an Allowed record — the new information the audit log adds over
+            // the always-on denial surface. Refinement values are rendered and
+            // scrubbed through the per-context Scrubber, exactly as the denial
+            // report scrubs its requested list.
+            emitAudit(AuditRecord(
+                callSiteNodeId = at.takeIf { it.value != -1 },
+                effectCategory = name,
+                refinementParameters = requirement.map { renderAuditParameter(it) },
+                outcome = AuditOutcome.Allowed,
+                phase = if (inInvariant) DenialPhase.Invariant else DenialPhase.Expression,
+            ))
         }
     }
+
+    /**
+     * The effect row of a [Node.ForeignNode]: its own `effects` list unioned
+     * with the effects its `foreignType` FunctionType carries. This is the
+     * same union the verifier assigns as the ForeignNode's function type, so
+     * handler interception and capability checks at runtime see exactly the
+     * row the verifier's closure computation charged.
+     */
+    private fun foreignEffectRow(node: Node.ForeignNode): List<NodeId> {
+        val typeEffects = (store.getOrNull(node.foreignType) as? Node.FunctionType)?.effects.orEmpty()
+        if (typeEffects.isEmpty()) return node.effects
+        return (typeEffects + node.effects).distinct()
+    }
+
+    /**
+     * The effect categories a registry target really exercises: the Q-056
+     * [org.strand.verifier.BuiltinSignatures] oracle's name set when an
+     * oracle is resolvable (the `:authoring` provider on the classpath) and
+     * the target is known to it, else the core
+     * [org.strand.core.BuiltinEffectTable] floor (which also covers the
+     * `strand-runtime:` targets and exempts the `strand-builtin:Test.`
+     * namespace). `BuiltinEffectTableOracleConsistencyTest` (`:corpus`)
+     * proves the two agree for every effectful `strand-builtin:` target.
+     */
+    private fun foreignEffectFloor(target: String): Set<String>? {
+        if (org.strand.core.BuiltinEffectTable.isExempt(target)) return null
+        if (target.startsWith("strand-builtin:")) {
+            org.strand.verifier.BuiltinSignatures.effectNamesFor(target)?.let { return it }
+        }
+        return org.strand.core.BuiltinEffectTable.requiredCategories(target)
+    }
+
+    /**
+     * Defence in depth for review finding 1: before dispatching a registry
+     * target with an effect floor ([foreignEffectFloor]), confirm the
+     * ForeignNode's declared row covers it. The verifier's Q-056
+     * `BuiltinEffectMismatch` rule rejects such graphs at admission; this
+     * re-check holds for stores that reach the interpreter without
+     * verification (programmatic construction, a skipped verify step).
+     */
+    private fun checkForeignFloor(at: NodeId, node: Node.ForeignNode) {
+        val required = foreignEffectFloor(node.target) ?: return
+        if (required.isEmpty()) return
+        val declaredNames = foreignEffectRow(node).map { categoryNameOf(it) }.toSet()
+        val missing = required - declaredNames
+        if (missing.isNotEmpty()) {
+            throw InterpretException(InterpretError.BuiltinContractViolation(
+                at = at,
+                target = node.target,
+                detail = "ForeignNode under-declares the target's effects; missing ${missing.sorted()}",
+            ))
+        }
+    }
+
+    /**
+     * A performing call exercises [category] with no instance: when the
+     * category is parameterized, the grant must hold an unrefined pattern
+     * (see [checkCapabilities]). Raises a [InterpretError.RefinementViolation]
+     * whose report renders the request as `*` per parameter otherwise.
+     */
+    private fun checkUnrefinedGrant(
+        at: NodeId,
+        category: NodeId,
+        context: CapabilitySet,
+        limits: EvaluationLimits,
+    ) {
+        val categoryNode = store.getOrNull(category) as? Node.EffectCategory ?: return
+        if (categoryNode.parameters.isEmpty()) return
+        val grants = context.grants[category] ?: return // absent categories already raised
+        val unrefined = grants.any { pattern ->
+            pattern.arguments.isNotEmpty() && pattern.arguments.all { it is CapabilityArgument.Wildcard }
+        }
+        if (unrefined) return
+        val name = categoryNameOf(category)
+        val baseReport = buildDenialReport(
+            at = at,
+            categoryName = name,
+            requested = emptyList(),
+            held = grants,
+            heldCategoryName = name,
+            limits = limits,
+        )
+        val report = baseReport.copy(
+            requested = baseReport.requested?.let { List(categoryNode.parameters.size) { "*" } },
+        )
+        // Q-055: the denied audit record carries the same report.
+        emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
+        throw InterpretException(InterpretError.RefinementViolation(
+            at = at,
+            category = category,
+            requirement = emptyList(),
+            available = grants,
+            report = report,
+        ))
+    }
+
+    /**
+     * Q-055: emit [record] to the per-context audit sink. The default
+     * [NoOpAuditSink] discards it, so every non-auditing run is unaffected.
+     */
+    private fun emitAudit(record: AuditRecord) {
+        hostContext.auditSink.record(record)
+    }
+
+    /**
+     * Q-055: build the denied [AuditRecord] from a reused Q-064 [DenialReport]
+     * so the audit log and denial surface carry the same call-site, category,
+     * scrubbed refinement values, instance/event, and phase.
+     */
+    private fun auditRecordFor(report: DenialReport, outcome: AuditOutcome): AuditRecord =
+        AuditRecord(
+            callSiteNodeId = report.node,
+            effectCategory = report.category,
+            refinementParameters = report.requested ?: emptyList(),
+            outcome = outcome,
+            instanceId = report.instanceId,
+            eventIndex = report.eventIndex,
+            phase = report.phase,
+        )
+
+    /**
+     * Q-055: render one refinement parameter value for an allowed audit
+     * record, scrubbing through the per-context [Scrubber] (a credential-
+     * bearing value cannot leak through the audit surface). Mirrors
+     * [DenialReport.renderParameter]'s primitive rendering but scrubs with the
+     * active tenant's scrubber rather than the process-global one.
+     */
+    private fun renderAuditParameter(v: Value): String = hostContext.scrubber.scrub(
+        when (v) {
+            is Value.StringV -> v.v
+            is Value.IntV -> v.v.toString()
+            is Value.FloatV -> v.v.toString()
+            is Value.BoolV -> v.v.toString()
+            Value.UnitV -> "()"
+            is Value.BytesV -> "bytes[${v.v.size}]"
+            else -> v.toString()
+        }
+    )
 
     /** The EffectCategory's declared name, falling back to the `#N` NodeId rendering. */
     private fun categoryNameOf(id: NodeId): String =

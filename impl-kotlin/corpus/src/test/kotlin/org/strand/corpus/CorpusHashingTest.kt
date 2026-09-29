@@ -110,7 +110,7 @@ class CorpusHashingTest {
     @Test
     fun `corpus program 10 dedups the shared NodeRef subgraph`() {
         // Program 10 wires a single IntLit into two Application sites via
-        // NodeRef. The NodeStore retains every unique NodeId; the HashStore
+        // NodeRef. The NodeStore retains every unique NodeId; hashing
         // collapses the shared IntLit and any subgraphs equivalent under
         // alpha-equivalence and structural equality.
         val text = loadResource("/corpus/10-noderef-shared.json")

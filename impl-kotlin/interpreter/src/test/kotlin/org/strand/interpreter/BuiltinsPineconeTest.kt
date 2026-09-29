@@ -33,6 +33,10 @@ class BuiltinsPineconeTest {
         CredentialScrubber.resetForTesting()
         transport = InMemoryHttpTransport()
         Builtins.vectorHttpTransport = transport
+        // Vector-store hosts pass through NetSandbox (review H6) and the
+        // library default is SECURE_DEFAULT (Q-075), which blocks the
+        // loopback test host; opt into the open sandbox explicitly.
+        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
         Builtins.credentialProvider = InMemoryCredentialProvider(mapOf(
             ("pinecone" to "api_key") to "pk-test-1234",
         ))
@@ -41,6 +45,7 @@ class BuiltinsPineconeTest {
     @AfterEach
     fun tearDown() {
         Builtins.vectorHttpTransport = JdkHttpTransport
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         Builtins.credentialProvider = EnvCredentialProvider
         ResourceTable.resetForTest()
         CredentialScrubber.resetForTesting()

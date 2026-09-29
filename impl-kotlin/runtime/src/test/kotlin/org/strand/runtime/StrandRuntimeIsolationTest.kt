@@ -143,7 +143,8 @@ class StrandRuntimeIsolationTest {
     // --- Scenario 5: the facade does not touch the host-routed singletons -----
     // Q-054 follow-up: the facade no longer installs/restores. Policy flows as
     // a HostContext value, so a SECURE run must leave the process-global
-    // Builtins.sandboxPolicy (an OPEN default in the test JVM) completely
+    // Builtins.sandboxPolicy (whatever it is at the time — SECURE_DEFAULT by
+    // the Q-075 library default, or a value another test installed) completely
     // unchanged — there is nothing to restore because nothing was installed.
 
     @Test

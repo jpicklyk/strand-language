@@ -139,3 +139,16 @@ state-machines reference.
 
 Verifier checks, the JSON-Schema-projectable type subset, and usage in
 GenerateRequest: see the llm-vector reference.
+
+## Capability manifests (N-046 ModuleManifest, Q-057)
+
+- `MEX target:ref declaredEffects:[refs] displayName:String` — ManifestExport. NOT a standalone dag-json node — always inlined into the referencing `MFT`'s `exports` array as `{target, declaredEffects, displayName}`. A MEX line never appears in the emitted `nodes` map on its own; it is only meaningful when an `MFT` line names its id.
+- `MFT exports:[MEX ids] [signature:String]` — ModuleManifest (declaration only, not value-producing — no Application ever targets it). `exports` is a list of `MEX` author ids; `signature` is an optional hex-encoded `manifestSignature`.
+
+```
+idExport MEX idFn [] "Int.identity"
+writerExport MEX writer [writeFx] "Fs.writeFile"
+lib MFT [idExport writerExport]
+```
+
+The verifier certifies each export's `declaredEffects` exactly equals its `target`'s effect closure — mismatch in either direction (under- or over-declaration) is `ManifestExportEffectMismatch`. `displayName` and `signature` are metadata excluded from the canonical hash.

@@ -74,6 +74,12 @@ data class InstanceMetrics(
     val lastTransitionLatencyNanos: Long,
     val halted: Boolean,
     val currentState: Value,
+    /**
+     * Events that reached this instance's inputs after it halted abnormally
+     * (denial, exhaustion, failure) and were discarded so upstream producers
+     * do not block on a consumer that will never read again (review H1).
+     */
+    val eventsDiscardedAfterHalt: Long = 0,
 )
 
 /**
@@ -110,8 +116,14 @@ internal class InstanceCounters {
     private val transitionsExecuted = AtomicLong(0)
     private val lastTransitionLatencyNanos = AtomicLong(0)
 
+    private val eventsDiscardedAfterHalt = AtomicLong(0)
+
     fun recordEventReceived() {
         eventsReceived.incrementAndGet()
+    }
+
+    fun recordEventDiscardedAfterHalt() {
+        eventsDiscardedAfterHalt.incrementAndGet()
     }
 
     fun recordTransitionCompleted(latencyNanos: Long) {
@@ -125,5 +137,6 @@ internal class InstanceCounters {
         lastTransitionLatencyNanos = lastTransitionLatencyNanos.get(),
         halted = halted,
         currentState = currentState,
+        eventsDiscardedAfterHalt = eventsDiscardedAfterHalt.get(),
     )
 }

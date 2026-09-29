@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "A cross-store NodeRef whose targetHash carries the unassigned multi-hash prefix 0xff (ADR-003 assigns 0x1e to BLAKE3). HashFunction.fromPrefix raised a raw IllegalStateException that escaped ingest's IllegalArgumentException translation (review hashing M3). Ingest validates the prefix and digest length and rejects with IngestError.Malformed; fromPrefix now reports bad input as IllegalArgumentException for the other hex parsers."
+}

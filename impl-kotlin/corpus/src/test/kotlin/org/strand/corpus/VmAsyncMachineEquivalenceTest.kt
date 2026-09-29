@@ -225,11 +225,10 @@ class VmAsyncMachineEquivalenceTest {
  * VM-backed [TransitionDispatcherFactory]. Each `build` call lowers the
  * machine's `transitionFn` into a chunk table, evaluates it once via
  * `Vm.evaluate` to obtain a VmClosure, then returns a dispatcher that
- * applies that closure to per-event `(state, event)` args. Capabilities
- * are converted from [CapabilitySet] (structured patterns) to the VM's
- * `Set<Int>` (EffectCategory NodeId .values) — the wildcard patterns
- * produced by `CapabilitySet.ofCategories` cover category presence,
- * which is what the VM checks.
+ * applies that closure to per-event `(state, event)` args. The group's
+ * [CapabilitySet] is passed through unchanged — the VM enforces its
+ * refinement patterns exactly as the interpreter does (review H2) — and
+ * the runtime's per-event limits are honoured (review M2).
  */
 internal class VmTransitionDispatcherFactory(
     private val store: NodeStore,
@@ -242,17 +241,23 @@ internal class VmTransitionDispatcherFactory(
     ): TransitionDispatcher {
         val table = Lowerer(store, hashToNodeId).lower(machineNode.transitionFn)
         val vm = Vm(table)
-        val intCaps = capabilities.grants.keys.map { it.value }.toSet()
-        val closure = vm.evaluate(intCaps)
-        return VmTransitionDispatcher(vm, closure, intCaps)
+        val closure = vm.evaluate(capabilities)
+        return VmTransitionDispatcher(vm, closure, capabilities)
     }
 }
 
 internal class VmTransitionDispatcher(
     private val vm: Vm,
     private val closure: Any,
-    private val caps: Set<Int>,
+    private val caps: CapabilitySet,
 ) : TransitionDispatcher {
     override fun applyTransition(state: Value, event: Value): Value =
         vm.applyClosure(closure, listOf(state, event), caps)
+
+    override fun applyTransition(
+        state: Value,
+        event: Value,
+        limits: org.strand.core.EvaluationLimits,
+        counters: org.strand.interpreter.Interpreter.EvalCounters,
+    ): Value = vm.applyClosure(closure, listOf(state, event), caps, limits)
 }

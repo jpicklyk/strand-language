@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "root": "events",
+  "nodes": {
+    "intT": { "type": "PrimitiveType", "kind": "Int" },
+    "events": {
+      "type": "EventStream",
+      "eventType": "intT",
+      "streamKind": "external",
+      "bufferSize": 0,
+      "overflowPolicy": "DropNewest"
+    }
+  }
+}

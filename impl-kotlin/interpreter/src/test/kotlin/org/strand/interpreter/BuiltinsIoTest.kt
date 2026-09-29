@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -16,11 +17,24 @@ import java.nio.file.Path
  * builtin's contract is "given evaluated args, return a value" — that's
  * what gets exercised end-to-end here. The interpreter-level capability
  * check is covered by the broader InterpreterTest suite.
+ *
+ * Q-075: the library sandbox default is now [SandboxPolicy.SECURE_DEFAULT]
+ * (workspace-rooted fs, default-deny network). These tests deliberately
+ * exercise real IO against `@TempDir` paths (outside the JVM's working
+ * directory) and loopback sockets/process spawns, so the class installs
+ * [SandboxPolicy.OPEN_DEFAULT] for the duration — an explicit opt-in, not
+ * an ambient default.
  */
 class BuiltinsIoTest {
 
+    @BeforeEach
+    fun setUp() {
+        Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+    }
+
     @AfterEach
     fun cleanupResourceTable() {
+        Builtins.sandboxPolicy = Builtins.DEFAULT_SANDBOX_POLICY
         ResourceTable.resetForTest()
     }
 

@@ -40,7 +40,7 @@ class BridgedStreamTest {
     @BeforeEach
     fun setUp() {
         // The feeder opens a loopback socket via Net.Connect; OPEN_DEFAULT
-        // permits 127.0.0.1 (the CLI's SECURE_DEFAULT would block it).
+        // permits 127.0.0.1 (the library/CLI SECURE_DEFAULT would block it).
         Builtins.sandboxPolicy = SandboxPolicy.OPEN_DEFAULT
     }
 

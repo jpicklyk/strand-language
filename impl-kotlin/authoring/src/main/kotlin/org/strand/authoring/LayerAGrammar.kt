@@ -21,7 +21,7 @@ package org.strand.authoring
  *
  * Integers: `42`, `-3`, `0`.
  *
- * Floats: must contain a `.` (`3.14`, `-0.5`, `1.0`).
+ * Floats: digits with a `.` fraction and/or an exponent (`3.14`, `-0.5`, `1.0`, `1.0E10`, `2e-3`).
  *
  * Booleans: `true` or `false`.
  *
@@ -105,7 +105,7 @@ object LayerAGrammar {
         STRING,
         /** Signed integer. */
         INT,
-        /** Float (must contain a dot). */
+        /** Float (fraction and/or exponent). */
         FLOAT,
         /** `true` / `false`. */
         BOOL,
@@ -2529,6 +2529,48 @@ object LayerAGrammar {
                 FieldSpec("schema", ArgKind.REFERENCE, "schema"),
             ),
             producesValue = true,
+        ),
+
+        // Capability manifests (N-046 ModuleManifest / ManifestExport, Q-057)
+        //
+        // MEX <target: REFERENCE> <declaredEffects: [refs]> <displayName: STRING>
+        // MFT <exports: [MEX ids]> [<signature: STRING hex>]
+        //
+        // ManifestExport (MEX) has no canonical dag-json node of its own —
+        // per the N-046 encoding, an export is always an inline
+        // `{target, declaredEffects, displayName}` object embedded in the
+        // referencing ModuleManifest's `exports` array (see
+        // org.strand.core.StoredNode.RawManifestExport / Node.ManifestExport).
+        // MEX is a Layer A authoring convenience only: [DagJsonEmitter]
+        // resolves each `exports` id to its MEX NodeDecl and inlines the
+        // object directly, so a MEX line never appears as a standalone
+        // entry in the emitted `nodes` map. `schema.required.size` still
+        // drives arity validation for a MEX line written standalone or
+        // misreferenced.
+        //
+        // MFT (ModuleManifest) is passive (Value.UnitV if ever evaluated);
+        // it need not be value-producing for authoring purposes (no
+        // Application ever targets it), so producesValue is left false —
+        // matching the Layer A treatment of other declaration-only
+        // categories (EFC, SCH). The optional `signature` slot carries
+        // hex-encoded `manifestSignature` bytes, mirroring BYT's hex
+        // convention.
+        "MEX" to CodeSchema(
+            jsonType = "ManifestExport",
+            required = listOf(
+                FieldSpec("target", ArgKind.REFERENCE, "target"),
+                FieldSpec("declaredEffects", ArgKind.LIST_REF, "declaredEffects"),
+                FieldSpec("displayName", ArgKind.STRING, "displayName"),
+            ),
+        ),
+        "MFT" to CodeSchema(
+            jsonType = "ModuleManifest",
+            required = listOf(
+                FieldSpec("exports", ArgKind.LIST_REF, "exports"),
+            ),
+            optional = listOf(
+                FieldSpec("signature", ArgKind.STRING, "manifestSignature"),
+            ),
         ),
     )
 }

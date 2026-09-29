@@ -82,7 +82,7 @@ internal class MachineInstance(
      * populate this via the [MachineGroup.dispatcherFactory] when present.
      */
     val dispatcher: TransitionDispatcher? = null,
-    var currentState: Value,
+    @Volatile var currentState: Value,
     val capabilities: CapabilitySet,
     val inputQueues: Map<NodeId, ArrayDeque<Value>> = emptyMap(),
     val outputSinks: Map<NodeId, MutableList<Value>> = emptyMap(),
@@ -106,8 +106,17 @@ internal class MachineInstance(
      * Empty in the step 1 sync `runMachine` path.
      */
     val outputBuses: Map<NodeId, StreamBus> = emptyMap(),
+    /**
+     * Per-input-stream [StreamBus] handle. Consulted when the actor halts
+     * abnormally (review H1): a [StreamBus.Broadcast] per-consumer channel is
+     * private to this instance and is closed so the broadcast pump skips it;
+     * a [StreamBus.Direct] channel is shared with its producers and is
+     * drained-and-discarded until they close it. Empty in the sync path and
+     * in fixtures built outside the runtime (treated as Direct).
+     */
+    val inputBuses: Map<NodeId, StreamBus> = emptyMap(),
     val recorder: EventRecorder? = null,
-    var halted: Boolean = false,
+    @Volatile var halted: Boolean = false,
     /**
      * Q-064: set when this instance halted because a per-event transition
      * invocation hit a capability or refinement denial. Carries the
@@ -116,7 +125,15 @@ internal class MachineInstance(
      * Null for every other halt cause. Surfaced read-only through
      * [MachineInstanceHandle.denialReport].
      */
-    var denialHalt: org.strand.interpreter.DenialReport? = null,
+    @Volatile var denialHalt: org.strand.interpreter.DenialReport? = null,
+    /**
+     * Why this async instance halted, set once when the actor leaves its
+     * event loop: [HaltReason.EventsExhausted] when every input closed,
+     * [HaltReason.ResourceExhaustion], [HaltReason.CapabilityDenial], or
+     * [HaltReason.InstanceFailure] (review M6). Null while running and for
+     * a cancelled (terminated) instance.
+     */
+    @Volatile var haltReason: HaltReason? = null,
     /**
      * Per-instance counter cells for Layer 6 step 3 slice 3.4 metrics. Updated
      * by [MachineActor] on every event dequeued and on every completed
@@ -130,4 +147,28 @@ internal class MachineInstance(
      * per-event closure invocations. Defaults to [EvaluationLimits.DEFAULTS].
      */
     val limits: EvaluationLimits = EvaluationLimits.DEFAULTS,
-)
+) {
+    /**
+     * Review M1: guards the commit of one transition — the [currentState]
+     * write paired with the transition-counter increment — so a host
+     * snapshot or metrics scrape on another thread reads a state and a
+     * count that belong together. The recorder is append-only; a snapshot
+     * pairs the atomically-read count with the recording's prefix of that
+     * length, so it never carries an event whose transition has not
+     * committed.
+     */
+    internal val transitionLock = Any()
+
+    /** Commit one completed transition atomically with respect to [readCommitted]. */
+    internal fun commitTransition(newState: Value, latencyNanos: Long) {
+        synchronized(transitionLock) {
+            currentState = newState
+            counters.recordTransitionCompleted(latencyNanos)
+        }
+    }
+
+    /** Read the committed state together with its metrics counters. */
+    internal fun readCommitted(): InstanceMetrics = synchronized(transitionLock) {
+        counters.snapshot(halted = halted, currentState = currentState)
+    }
+}

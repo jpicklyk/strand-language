@@ -60,10 +60,20 @@ delayed APP sleep [1000]
 `procWait` is in the prelude. `Process.Spawn` and `Process.EnvVar` are not (they return polymorphic types). Declare explicitly:
 
 ```layer-a
-argsT FNT [bytesT] bytesT   -- placeholder; real signature varies
-spawnT FNT [argsT stringT] intT [procWaitFx]
-spawn FN "strand-builtin:Process.Spawn" spawnT [procWaitFx]
+procSpawnFx EFC "Process.Spawn"
+sSelf RS
+sHead PRF "head" stringT
+sTail PRF "tail" sSelf
+sCons PRD [sHead sTail]
+sConsCase SCS "Cons" sCons
+sNilCase SCS "Nil" _
+sSum SUM [sConsCase sNilCase]
+strListT RT sSum
+spawnT FNT [stringT strListT] intT [procSpawnFx]
+spawn FN "strand-builtin:Process.Spawn" spawnT [procSpawnFx]
 ```
+
+`Process.Spawn` must declare the `Process.Spawn` effect category (`procWaitFx` is `Process.Wait`, and the prelude's `spawnFx` is `StateMachine.Spawn`); the verifier checks every `strand-builtin:` ForeignNode's declared effects (on the ForeignNode or its FunctionType) against the builtin registry and rejects a mismatch with `BuiltinEffectMismatch`.
 
 ## HTTP — prelude or declare
 
@@ -162,3 +172,17 @@ lookupTool TLD "Lookup" "Look up data by id" paramSchema implLam
 ```
 
 See [the Q-037/N-044 system prompt section] for the full schema, including how tool calls dispatch back into the LLM loop with bounded iteration.
+
+## Capability manifests (N-046 ModuleManifest)
+
+`MFT`/`MEX` (Q-057) author a capability manifest — a machine-checked statement of what a module exports and which effects each export carries. `MEX` (ManifestExport) is not a standalone dag-json node: it is a Layer A authoring convenience that the emitter always inlines into its referencing `MFT`'s `exports` array as `{target, declaredEffects, displayName}`, matching the N-046 canonical encoding exactly.
+
+```layer-a
+idExport MEX idFn [] "Int.identity"
+writerExport MEX writer [writeFx] "Fs.writeFile"
+lib MFT [idExport writerExport]
+```
+
+`MFT`'s optional second argument is a hex-encoded `manifestSignature` string. The verifier certifies, per export, that `declaredEffects` exactly equals the target's effect closure — under-declaration (hiding a real effect) and over-declaration (claiming an unused one) both surface as `VerifyError.ManifestExportEffectMismatch`. `displayName` and `manifestSignature` are metadata excluded from the canonical hash, so two manifests differ in hash only when their `(target, declaredEffects)` pairs differ.
+
+ModuleManifest is passive — no Application ever targets it; it evaluates to `Unit` if reached. Its role is verifier-time capability certification and tooling-time distribution/signing.

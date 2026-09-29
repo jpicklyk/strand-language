@@ -109,6 +109,24 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * A [Node.TypeParameter] carries a non-null `bound`. Bounded polymorphism
+     * is not implemented: the verifier neither checks the bound at
+     * instantiation sites nor uses it during compatibility, so a bounded
+     * parameter would be silently unchecked. Per Q-049 a silently-ignored
+     * bound is worse than rejection — an agent writing bounded polymorphism
+     * receives no error and no checking — so a non-null bound is a hard
+     * verify error. The `bound` field stays on the ADT (and in ingest) so this
+     * error can fire with a good message; it is not part of the canonical
+     * encoding (TypeParameter encodes as positional (depth, index) refs only),
+     * so its presence is hash-neutral. Schema-level removal of the field
+     * rides a future encoding epoch (Q-062).
+     */
+    data class TypeParameterBoundUnsupported(
+        override val at: NodeId,
+        val bound: NodeId
+    ) : VerifyError()
+
+    /**
      * Application of a polymorphic value yielded a residual ForallType after
      * type-argument substitution. Partial instantiation is not supported in
      * Layer 1: every Application of a Forall must supply enough type
@@ -1171,6 +1189,96 @@ sealed class VerifyError {
         val rejectedType: TypeExpr,
         val reason: String,
     ) : VerifyError()
+
+    /**
+     * The graph under [at] is nested too deeply for the verifier's recursive
+     * descent: the JVM stack was exhausted before verification finished. A
+     * resource-exhaustion outcome rather than a well-formedness verdict; the
+     * graph is rejected because it could not be checked. Ingest-time depth
+     * caps (Q-040) normally stop such documents first; this variant covers
+     * stores built programmatically or admitted under looser caps.
+     */
+    data class VerificationTooDeep(
+        override val at: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A TypeAbstraction or ForallType at [at] binds TypeParameter [param]
+     * while [param] is already bound by an enclosing binder (or repeats it in
+     * its own binder list), or an Application's type argument would be
+     * captured by a callee Forall that binds [param] (at is then the
+     * Application). Forall equality compares TypeParameter NodeIds, not
+     * alpha-equivalence, and substitution does not rename, so a rebound
+     * binder makes two distinct type variables indistinguishable: a rank-2
+     * program could type a function returning a String as `forall a. a -> a`
+     * and use it at Int (review C2).
+     */
+    data class TypeParameterRebound(
+        override val at: NodeId,
+        val param: NodeId,
+    ) : VerifyError()
+
+    /**
+     * A [Node.ProductType] declares two fields with the same [name]. Field
+     * lookup is by name, so a duplicate lets a ProductValue check a value
+     * against one declaration while ProductFieldGet types the read by
+     * another (review C1: a verified program reaching a runtime type error).
+     * [at] is the ProductType.
+     */
+    data class DuplicateFieldName(
+        override val at: NodeId,
+        val name: String,
+    ) : VerifyError()
+
+    /**
+     * A [Node.SumType] declares two cases with the same [name]; the Sum
+     * analogue of [DuplicateFieldName]. [at] is the SumType.
+     */
+    data class DuplicateCaseName(
+        override val at: NodeId,
+        val name: String,
+    ) : VerifyError()
+
+    /**
+     * Q-056: a `strand-builtin:` [Node.ForeignNode]'s declared effect set
+     * does not equal the co-resident registry's ground-truth effect-category
+     * name set for [target]. [declared] is the set of category names the
+     * ForeignNode's declared row resolves to (the union of its `effects`
+     * edges and its `foreignType` FunctionType's effects); [actual] is the registry's
+     * known set; [missing] = [actual] − [declared] is the soundness-critical
+     * under-declaration (effects the builtin really has but the ForeignNode
+     * omits, which would shrink the ADR-010 effect closure below the truth).
+     * Over-declaration ([declared] − [actual] non-empty with [missing] empty)
+     * is also a mismatch, matching the N-046 ModuleManifest exact-surface
+     * precedent. With no [BuiltinSignatureOracle] resolvable, and for targets
+     * the oracle does not model (the `strand-runtime:` supervision targets,
+     * the streaming LLM opens, the legacy Q-031 stubs), [actual] is the
+     * `org.strand.core.BuiltinEffectTable` floor and only under-declaration
+     * is reported (the table is a floor, not the exact surface).
+     */
+    data class BuiltinEffectMismatch(
+        override val at: NodeId,
+        val target: String,
+        val declared: Set<String>,
+        val actual: Set<String>,
+        val missing: Set<String>,
+    ) : VerifyError()
+
+    /**
+     * Q-056: a monomorphic `strand-builtin:` [Node.ForeignNode]'s declared
+     * `foreignType` does not structurally equal the co-resident registry's
+     * canonical signature shape for [target]. [declared] and [actual] are the
+     * canonicalized [BuiltinShape] forms. Emitted only for builtins the oracle
+     * models as monomorphic; polymorphic and agent-typed families are checked
+     * for arity only and never raise this variant. Emitted only when the
+     * [BuiltinSignatureOracle] is resolvable.
+     */
+    data class BuiltinSignatureMismatch(
+        override val at: NodeId,
+        val target: String,
+        val declared: BuiltinShape,
+        val actual: BuiltinShape,
+    ) : VerifyError()
 }
 
 /** Outcome of verification: either a successful inference or one or more structured errors. */
@@ -1202,6 +1310,25 @@ sealed class VerifyResult {
      * subtracts the category it intercepts), so it is the exact closure the
      * verifier enforced rather than a looser upper bound. [VerifyResult] is not
      * part of the canonical node encoding, so carrying it moves no hash.
+     *
+     * [latentClosures] (Q-070 / Q-071) is the parallel channel for the effect
+     * surface reachable only through *indirect* invocation — effects the model
+     * or a higher-order builtin may release at runtime, which therefore never
+     * reach an Application the verifier walks and so are absent from
+     * [nodeClosures]. Two contributors fold into it: (a) N-044 ToolDef
+     * implementations, whose effect surface fires only inside the provider's
+     * tool-use loop (keyed by the ToolDef NodeId, and unioned into the root's
+     * latent set); (b) higher-order callbacks — any effectful value passed as an
+     * *argument* into an Application (a value whose inferred type is a
+     * FunctionType with a non-empty effect row, or which resolves to an
+     * effect-bearing ForeignNode), which the callee may invoke indirectly. Read
+     * the program root's latent surface via [rootLatentClosure], and the total
+     * pre-execution reach an orchestrating principal reasons about via
+     * [totalClosure] = [rootClosure] ∪ [rootLatentClosure]. Keeping the two
+     * channels distinguishable leaves the Q-044 harm-bound arithmetic and the
+     * Handler closure-subtraction semantics of `closure(g)` (directly performed)
+     * undisturbed. Like [nodeClosures], this lives on the verify result only —
+     * [VerifyResult] is not encoded, so it is hash-neutral.
      */
     data class Ok(
         val rootType: TypeExpr,
@@ -1209,6 +1336,7 @@ sealed class VerifyResult {
         val deferredChecks: List<VerifyError.SchemaInvariantDeferred> = emptyList(),
         val warnings: List<VerifyWarning> = emptyList(),
         val nodeClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
+        val latentClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
     ) : VerifyResult() {
         /**
          * Q-067: the effect closure of the program [root] — the set of
@@ -1217,6 +1345,27 @@ sealed class VerifyResult {
          * no effects, and (defensively) empty if [root] has no recorded closure.
          */
         fun rootClosure(root: NodeId): Set<NodeId> = nodeClosures[root] ?: emptySet()
+
+        /**
+         * Q-070 / Q-071: the latent effect surface of the program [root] — the
+         * union of effect surfaces reachable only through indirect invocation
+         * (ToolDef implementations and higher-order callbacks). Empty for a
+         * program that constructs no effectful tool and passes no effectful
+         * value in argument position. This is NOT part of the directly-performed
+         * `closure(g)`; it is the additional reach a latent capability could
+         * exercise if invoked.
+         */
+        fun rootLatentClosure(root: NodeId): Set<NodeId> = latentClosures[root] ?: emptySet()
+
+        /**
+         * Q-070 / Q-071: the total pre-execution effect reach of [root] — the
+         * union of the directly-performed [rootClosure] and the indirectly-
+         * reachable [rootLatentClosure]. This is the value the reasoning surface
+         * (ADR-010) reports when a host must reason about everything a program
+         * could reach, latent capabilities included.
+         */
+        fun totalClosure(root: NodeId): Set<NodeId> =
+            rootClosure(root) + rootLatentClosure(root)
     }
     data class Failed(val errors: List<VerifyError>) : VerifyResult()
 }

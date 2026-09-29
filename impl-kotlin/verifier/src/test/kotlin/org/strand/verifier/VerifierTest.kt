@@ -14,6 +14,26 @@ class VerifierTest {
         return Verifier(finalized.store, finalized.hashToNodeId).verify(finalized.root)
     }
 
+    /**
+     * Ingest and finalize a well-formed [json] document, then overwrite one
+     * node in the finalized store with [patch] before verifying. Used for
+     * shapes JsonIngest refuses (duplicate field names, a zero bufferSize),
+     * so the verifier's own rule for them stays exercised on stores built
+     * programmatically. The patched node is not re-hashed; none of these
+     * programs contain NodeRefs, so no hash is consulted.
+     */
+    private fun verifyPatched(
+        json: String,
+        authorId: String,
+        patch: (org.strand.core.Node) -> org.strand.core.Node,
+    ): VerifyResult {
+        val ingest = JsonIngest.parse(json)
+        val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
+        val id = ingest.nameMap.getValue(authorId)
+        finalized.store.set(id, patch(finalized.store.get(id)))
+        return Verifier(finalized.store, finalized.hashToNodeId).verify(finalized.root)
+    }
+
     @Test
     fun `int literal verifies to Int`() {
         val r = verify("""{
@@ -625,16 +645,18 @@ class VerifierTest {
 
     @Test
     fun `ProductValue with a duplicate field is rejected`() {
-        val r = verify("""{
+        // JsonIngest rejects a duplicate ProductValue field name, so the
+        // duplicate is introduced by patching the finalized store.
+        val r = verifyPatched("""{
           "version": 1, "root": "point",
           "nodes": {
             $pointProgramHeader
             "xValue":    { "type": "ProductFieldValue", "fieldName": "x", "value": "lit3" },
-            "xAgain":    { "type": "ProductFieldValue", "fieldName": "x", "value": "lit4" },
+            "xAgain":    { "type": "ProductFieldValue", "fieldName": "xx", "value": "lit4" },
             "yValue":    { "type": "ProductFieldValue", "fieldName": "y", "value": "lit4" },
             "point":     { "type": "ProductValue", "ofType": "pointType", "fields": ["xValue", "xAgain", "yValue"] }
           }
-        }""")
+        }""", "xAgain") { (it as org.strand.core.Node.ProductFieldValue).copy(fieldName = "x") }
         val failed = r as VerifyResult.Failed
         assertTrue(failed.errors.any { it is VerifyError.DuplicateProductValueField }) {
             "expected DuplicateProductValueField, got: ${failed.errors}"
@@ -983,13 +1005,15 @@ class VerifierTest {
         // The callee declares no effects. The Application supplies an
         // EffectDecl. The set covered (1 category) does not equal the
         // declared set (empty); verifier flags EffectInstanceCoverageMismatch.
+        // The target is a non-registry binding: a registry target such as
+        // Time.Now with an empty row is a BuiltinEffectMismatch (Q-056).
         val r = verify("""{
           "version": 1, "root": "app",
           "nodes": {
             "intT":     { "type": "PrimitiveType", "kind": "Int" },
             "timeFx":   { "type": "EffectCategory", "categoryName": "Time.Now" },
             "fnT":      { "type": "FunctionType", "parameters": [], "result": "intT" },
-            "fn":       { "type": "ForeignNode", "target": "strand-builtin:Time.Now",
+            "fn":       { "type": "ForeignNode", "target": "host:Clock.Now",
                           "foreignType": "fnT" },
             "timeDecl": { "type": "EffectDecl", "effectType": "timeFx" },
             "app":      { "type": "Application", "function": "fn", "arguments": [],
@@ -1535,10 +1559,11 @@ class VerifierTest {
 
     @Test
     fun `EventStream with bufferSize zero is rejected as MalformedOverflowPolicy (slice 3-1)`() {
-        // Use a manually-crafted JSON that overrides the inputStream's
-        // bufferSize to 0. The verifier should fire MalformedOverflowPolicy
-        // when it reaches the stream during resolveEventStream.
-        val r = verify("""{
+        // JsonIngest rejects bufferSize <= 0, so the stream is authored
+        // with bufferSize 1 and patched to 0 in the finalized store. The
+        // verifier should fire MalformedOverflowPolicy when it reaches the
+        // stream during resolveEventStream.
+        val r = verifyPatched("""{
           "version": 1, "root": "m",
           "nodes": {
             "boolT":   { "type": "PrimitiveType", "kind": "Bool" },
@@ -1560,7 +1585,7 @@ class VerifierTest {
             "transitionLambda": { "type": "Lambda", "parameters": ["sP", "eP"], "body": "result" },
             "initialState":     { "type": "BoolLit", "value": false },
             "receiveFx":        { "type": "EffectCategory", "categoryName": "StateMachine.Receive" },
-            "inputStream":      { "type": "EventStream", "eventType": "unitT", "streamKind": "external", "bufferSize": 0 },
+            "inputStream":      { "type": "EventStream", "eventType": "unitT", "streamKind": "external", "bufferSize": 1 },
             "m": {
               "type": "StateMachine",
               "transitionFn": "transitionLambda",
@@ -1570,7 +1595,7 @@ class VerifierTest {
               "effects": ["receiveFx"]
             }
           }
-        }""")
+        }""", "inputStream") { (it as org.strand.core.Node.EventStream).copy(bufferSize = 0) }
         val f = r as VerifyResult.Failed
         assertTrue(f.errors.any { it is VerifyError.MalformedOverflowPolicy }) {
             "expected MalformedOverflowPolicy for bufferSize=0, got ${f.errors}"

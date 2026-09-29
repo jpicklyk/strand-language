@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "TypeParameterRebound",
+  "notes": "outer = Λa. λ(x: a). (Λa. λ(y: a). x). The inner TypeAbstraction rebinds the in-scope TypeParameter a, so the inner function (which returns the outer x) types as forall a. a -> a. outer[String](\"s\")[Int](5) was typed Int while evaluating to \"s\", a String -> Int identity (review C2). Forall equality is by NodeId, so rebinding is rejected."
+}

@@ -29,6 +29,10 @@ import org.strand.core.StoredNode
  * independently hashed. ParameterDecl is intrinsic to its enclosing Lambda
  * and is encoded inline there; TypeParameter has no standalone encoding
  * (its identity is positional). Both are skipped during the walk.
+ *
+ * **Not thread-safe.** A [Hasher] owns one [CanonicalEncoder], whose caches
+ * and traversal state are mutable; confine each instance to one thread (or
+ * create one per thread — construction is cheap).
  */
 class Hasher(private val rawStore: RawNodeStore) {
 
@@ -62,7 +66,11 @@ class Hasher(private val rawStore: RawNodeStore) {
      */
     fun hashReachable(rootId: NodeId): Map<NodeId, Hash> {
         val out = LinkedHashMap<NodeId, Hash>()
-        walk(rootId, emptyList(), out)
+        // The walk recurses once per graph level like the encoder; the same
+        // backstop turns a JVM StackOverflowError into a typed
+        // IngestError.ResourceExhaustion(GraphDepth) for stores that bypass
+        // the ingest-time graph-depth cap.
+        encoder.stackGuard { walk(rootId, BinderStack.EMPTY, out) }
         return out
     }
 
@@ -71,9 +79,17 @@ class Hasher(private val rawStore: RawNodeStore) {
      *
      * Replaces every [StoredNode.RawNodeRef] entry with a canonical
      * [Node.NodeRef] whose `target` is the BLAKE3 multi-hash of the referenced
-     * subgraph (computed under an empty binder stack — the verifier's
-     * `NodeRefTargetMustBeClosed` rule guarantees this is the same hash the
-     * encoder would emit for the target in any position).
+     * subgraph computed under the EMPTY binder context (no binder frames, no
+     * enclosing recursive binders), per design/canonical-encoding.md. This is
+     * the same hash the encoder emits inside the NodeRef's own canonical
+     * bytes, so re-hashing the finalized store reproduces every hash exactly.
+     * For a closed target (the verifier's `NodeRefTargetMustBeClosed` rule)
+     * the empty-context hash is also the target's hash in any position; for
+     * a target that is not closed, `nodeIdToHash[target]` may record the
+     * target's hash in the context it was first reached from, so the
+     * empty-context hash is additionally registered in `hashToNodeId` and the
+     * NodeRef still resolves. ModuleManifest export targets follow the same
+     * rule.
      *
      * Preserves [NodeId]s exactly: the canonical [NodeStore] assigns the same
      * id to each node that the raw store did, so downstream NodeId-keyed
@@ -89,16 +105,20 @@ class Hasher(private val rawStore: RawNodeStore) {
 
         val canonicalStore = NodeStore()
         val hashToNodeId = LinkedHashMap<Hash, NodeId>()
+        // Empty-context reference-target hashes, registered after the main
+        // loop (putIfAbsent) so they never displace a node's own hash entry.
+        val targetRegistrations = mutableListOf<Pair<Hash, NodeId>>()
         for ((id, stored) in rawStore.entries()) {
             val canonical: Node = when (stored) {
                 is StoredNode.Canonical -> stored.node
                 is StoredNode.RawNodeRef -> {
-                    val targetHash = nodeIdToHash[stored.targetId]
-                        ?: error(
-                            "RawNodeRef at $id targets ${stored.targetId}, which was not " +
-                                "hashed (unreachable from root $rootId). Every authored node " +
-                                "must be reachable from the program root."
-                        )
+                    if (stored.targetId !in nodeIdToHash) error(
+                        "RawNodeRef at $id targets ${stored.targetId}, which was not " +
+                            "hashed (unreachable from root $rootId). Every authored node " +
+                            "must be reachable from the program root."
+                    )
+                    val targetHash = referenceTargetHash(stored.targetId)
+                    targetRegistrations += targetHash to stored.targetId
                     Node.NodeRef(target = targetHash)
                 }
                 is StoredNode.RawModuleManifest -> {
@@ -106,12 +126,13 @@ class Hasher(private val rawStore: RawNodeStore) {
                     // its content hash, admitting the canonical Node.ModuleManifest.
                     // Same raw→canonical bridge as RawNodeRef, one hash per export.
                     val canonicalExports = stored.exports.map { rawExport ->
-                        val targetHash = nodeIdToHash[rawExport.target]
-                            ?: error(
-                                "RawModuleManifest at $id has export target ${rawExport.target}, " +
-                                    "which was not hashed (unreachable from root $rootId). Every " +
-                                    "manifest export target must be reachable from the program root."
-                            )
+                        if (rawExport.target !in nodeIdToHash) error(
+                            "RawModuleManifest at $id has export target ${rawExport.target}, " +
+                                "which was not hashed (unreachable from root $rootId). Every " +
+                                "manifest export target must be reachable from the program root."
+                        )
+                        val targetHash = referenceTargetHash(rawExport.target)
+                        targetRegistrations += targetHash to rawExport.target
                         ManifestExport(
                             target = targetHash,
                             declaredEffects = rawExport.declaredEffects,
@@ -135,8 +156,13 @@ class Hasher(private val rawStore: RawNodeStore) {
             // equivalent and either is a valid resolution target.
             nodeIdToHash[id]?.let { hash -> hashToNodeId.putIfAbsent(hash, id) }
         }
+        for ((hash, targetId) in targetRegistrations) hashToNodeId.putIfAbsent(hash, targetId)
         return FinalizedProgram(canonicalStore, rootId, nodeIdToHash, hashToNodeId)
     }
+
+    /** Empty-context hash of a NodeRef / manifest-export target (see [finalize]). */
+    private fun referenceTargetHash(targetId: NodeId): Hash =
+        Hash(encoder.hashReferenceTarget(targetId))
 
     private fun fetchCanonicalNode(id: NodeId): Node {
         val stored = rawStore.get(id)
@@ -155,9 +181,12 @@ class Hasher(private val rawStore: RawNodeStore) {
             is StoredNode.RawNodeRef -> {
                 // Hash this NodeRef first so re-entry via a shared subgraph
                 // sees the hash already populated; then recurse into the
-                // target to populate its hash entry too.
+                // target to populate its hash entry too. The target sits
+                // behind a content-addressing boundary: it is walked (and
+                // hashed) in the EMPTY context, exactly as the encoder hashes
+                // it when emitting this NodeRef's bytes.
                 out[id] = Hash(encoder.hash(id, stack))
-                walk(stored.targetId, stack, out)
+                encoder.inEmptyContext { walk(stored.targetId, BinderStack.EMPTY, out) }
             }
             is StoredNode.RawModuleManifest -> {
                 // Hash the manifest itself, then recurse into each export's
@@ -166,7 +195,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                 // each declaredEffect EffectCategory (referenced by hash).
                 out[id] = Hash(encoder.hash(id, stack))
                 for (export in stored.exports) {
-                    walk(export.target, stack, out)
+                    encoder.inEmptyContext { walk(export.target, BinderStack.EMPTY, out) }
                     export.declaredEffects.forEach { walk(it, stack, out) }
                 }
             }
@@ -205,9 +234,10 @@ class Hasher(private val rawStore: RawNodeStore) {
                 node.parameters.forEach { walk(it, stack, out) }
                 walk(node.result, stack, out)
                 node.effects.forEach { walk(it, stack, out) }
+                walkProjections(node.effectProjections, stack, out)
             }
             is Node.ForallType -> {
-                walk(node.body, stack + listOf(node.typeParameters), out)
+                walk(node.body, encoder.push(stack, node.typeParameters), out)
             }
 
             is Node.Lambda -> {
@@ -218,14 +248,14 @@ class Hasher(private val rawStore: RawNodeStore) {
                     val pd = fetchCanonicalNode(paramId) as Node.ParameterDecl
                     walk(pd.paramType, stack, out)
                 }
-                walk(node.body, stack + listOf(node.parameters), out)
+                walk(node.body, encoder.push(stack, node.parameters), out)
                 // Effects are visited in the OUTER stack (they reference
                 // EffectCategory nodes that exist outside the Lambda's body
                 // scope).
                 node.effects.forEach { walk(it, stack, out) }
             }
             is Node.TypeAbstraction -> {
-                walk(node.body, stack + listOf(node.typeParameters), out)
+                walk(node.body, encoder.push(stack, node.typeParameters), out)
             }
             is Node.Application -> {
                 walk(node.function, stack, out)
@@ -235,7 +265,7 @@ class Hasher(private val rawStore: RawNodeStore) {
             }
             is Node.Let -> {
                 walk(node.value, stack, out)
-                walk(node.body, stack + listOf(listOf(id)), out)
+                walk(node.body, encoder.push(stack, listOf(id)), out)
             }
             is Node.VarRef -> Unit  // binder is referenced positionally, not walked
 
@@ -261,6 +291,7 @@ class Hasher(private val rawStore: RawNodeStore) {
             is Node.ForeignNode -> {
                 walk(node.foreignType, stack, out)
                 node.effects.forEach { walk(it, stack, out) }
+                walkProjections(node.effectProjections, stack, out)
             }
 
             is Node.EffectCategory -> node.parameters.forEach { walk(it, stack, out) }
@@ -285,7 +316,7 @@ class Hasher(private val rawStore: RawNodeStore) {
                 // helper at encoding time so the stacks line up.
                 val patternNode = fetchCanonicalNode(node.pattern) as Node.Pattern
                 val binders = collectPatternBinders(rawNodeStoreLookup(rawStore), node.pattern, patternNode)
-                val bodyStack = if (binders.isEmpty()) stack else stack + listOf(binders)
+                val bodyStack = if (binders.isEmpty()) stack else encoder.push(stack, binders)
                 walk(node.body, bodyStack, out)
             }
             is Node.Pattern -> {
@@ -388,6 +419,26 @@ class Hasher(private val rawStore: RawNodeStore) {
             }
 
             is Node.ParameterDecl, is Node.TypeParameter -> Unit  // unreachable, guarded above
+        }
+    }
+
+    /**
+     * Visit what the encoder hashes inside an `effectProjections` list: each
+     * projection's EffectCategory and each `LiteralNode` source target
+     * (review hashing M2 — nodes reachable only through a projection were
+     * missing from `nodeIdToHash`, so they had no hash and no
+     * `hashToNodeId` entry). `ArgRef` sources carry no NodeId.
+     */
+    private fun walkProjections(
+        projections: List<org.strand.core.EffectProjection>,
+        stack: BinderStack,
+        out: MutableMap<NodeId, Hash>,
+    ) {
+        for (proj in projections) {
+            walk(proj.category, stack, out)
+            for (src in proj.sources) {
+                if (src is org.strand.core.ProjectionSource.LiteralNode) walk(src.target, stack, out)
+            }
         }
     }
 

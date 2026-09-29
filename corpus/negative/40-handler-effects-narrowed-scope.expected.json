@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "CapabilityScopeUnsatisfiable",
+  "notes": "A Handler for Time.Now whose handle function performs Log.Write wraps a CapabilityScope narrowed to Time.Now. The interpreter runs the handler at the intercepted call site, inside the narrowed context, where Log.Write is absent; the verifier used to charge the handler's effects at the Handler node instead (review A11c)."
+}

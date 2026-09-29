@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "root": "nil",
+  "nodes": {
+    "intT":  { "type": "PrimitiveType", "kind": "Int" },
+    "self":  { "type": "RecursiveSelf" },
+    "hF":    { "type": "ProductTypeField", "name": "head", "fieldType": "intT" },
+    "tF":    { "type": "ProductTypeField", "name": "tail", "fieldType": "self" },
+    "open":  { "type": "ProductType", "fields": ["hF", "tF"] },
+    "cons":  { "type": "NodeRef", "target": "open" },
+    "cC":    { "type": "SumTypeCase", "name": "Cons", "caseType": "cons" },
+    "nC":    { "type": "SumTypeCase", "name": "Nil", "caseType": null },
+    "body":  { "type": "SumType", "cases": ["cC", "nC"] },
+    "listT": { "type": "RecursiveType", "body": "body" },
+    "nil":   { "type": "SumValue", "ofType": "listT", "caseName": "Nil", "payload": null }
+  }
+}

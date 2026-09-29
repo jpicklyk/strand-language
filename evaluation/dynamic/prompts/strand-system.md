@@ -76,14 +76,17 @@ Every subsequent non-blank, non-comment line declares one node:
 
     <author-id> <CODE> <arg>...
 
-`<author-id>` is an alphanumeric+underscore identifier unique within the
-document. The special id `_` declares an anonymous node; `@last` refers to
-the most recently declared node. `<CODE>` is a 1-3 letter uppercase
+`<author-id>` is an ASCII identifier (`[A-Za-z_][A-Za-z0-9_]*`) unique
+within the document; ids beginning with `__` (two underscores) are reserved
+for the compiler and rejected. The special id `_` declares an anonymous
+node; `@last` refers to the most recently declared node. `<CODE>` is a 1-3 letter uppercase
 mnemonic; arguments are positional, per the code's schema.
 
 Lists use square brackets: `[a b c]`; `[]` is empty. Strings are
-double-quoted with `\"`, `\\`, `\n`, `\t` escapes. Integers: `42`, `-3`.
-Floats must contain a dot: `3.14`. Booleans: `true` / `false`. Null /
+double-quoted with `\"`, `\\`, `\n`, `\r`, `\t`, `\uXXXX` escapes. Integers:
+`42`, `-3`. Floats must contain a dot and may carry an exponent: `3.14`,
+`1.0E10`, `2.5e-3` (NaN and infinities have no syntax). Booleans: `true` /
+`false`. Null /
 absent reference: `_`. Comments: lines whose first non-whitespace
 character is `#`.
 

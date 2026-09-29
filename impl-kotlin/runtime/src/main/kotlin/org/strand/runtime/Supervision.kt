@@ -110,10 +110,18 @@ internal class RuntimeContext(
     val actorJobs: Collection<Job> get() = actorJobsMap.values
 
     /**
+     * Set by [MachineGroupHandle.cancel]; a spawn after teardown is refused
+     * so no actor outlives the cancelled group (review M3).
+     */
+    @Volatile
+    var cancelled: Boolean = false
+
+    /**
      * Allocate, register, and launch a [MachineInstance] for the supplied
      * StateMachine [machineId]. Returns the new InstanceId.
      */
     fun spawn(machineId: NodeId): InstanceId {
+        check(!cancelled) { "spawn: the group has been cancelled" }
         val node = store.get(machineId) as? Node.StateMachine
             ?: error(
                 "spawn: expected StateMachine at $machineId, got " +
@@ -132,10 +140,14 @@ internal class RuntimeContext(
         // streams declared by the spawned machine must already exist in
         // [streamBuses] — dynamic stream creation at spawn time is out of
         // scope for slice 3.2 MVP.
+        // Review M3: broadcast consumers are keyed by INSTANCE id, so two
+        // instances of one machine each get their own per-consumer channel
+        // (and each sees every event) instead of splitting one channel.
+        val instanceId = InstanceId.generate()
         val inputChannels = node.inputStreams.associateWith { streamId ->
             (streamBuses[streamId] ?: error(
                 "spawn: machine $machineId references input stream $streamId not in group topology"
-            )).consumerChannel(machineId, scope)
+            )).consumerChannel(instanceId, scope)
         }
         val outputChannels = node.outputStreams.associateWith { streamId ->
             (streamBuses[streamId] ?: error(
@@ -150,9 +162,12 @@ internal class RuntimeContext(
         }
         val recorder = if (recordInputs) EventRecorder() else null
 
-        val dispatcher = dispatcherFactory?.build(node, machineId, capabilities)
+        val dispatcher = dispatcherFactory?.build(
+            node, machineId, capabilities,
+            DispatcherWiring(hostContext, foreignDispatcher, resolveTarget, limits),
+        )
         val instance = MachineInstance(
-            instanceId = InstanceId.generate(),
+            instanceId = instanceId,
             node = node,
             machineNodeId = machineId,
             transitionFnValue = transitionFnValue,
@@ -163,6 +178,7 @@ internal class RuntimeContext(
             outputChannels = outputChannels,
             outputDispatchers = outputDispatchers,
             outputBuses = outputBuses,
+            inputBuses = node.inputStreams.associateWith { streamBuses.getValue(it) },
             recorder = recorder,
             halted = false,
             limits = limits,

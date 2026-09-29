@@ -183,6 +183,19 @@ object Builtins {
     private fun detH(fn: (List<Value>, ApplyFn) -> Value): Registration<FnH> =
         Registration(FnH { _, args, apply -> fn(args, apply) }, effectful = false, declared = Determinism.Deterministic)
 
+    /**
+     * Registration helper: effect-free and Deterministic like [det], but
+     * with a [HostContext] receiver so the body can read
+     * [HostContext.builtinLimits] (review H7). Used by the pure builtins
+     * whose output size is chosen by an argument (`List.Range`,
+     * `String.Repeat`, `Compress.Gunzip`, `Regex.*`, ...): the limit is
+     * host policy, so the result for given arguments is still fixed under
+     * a given policy, and exceeding it is an uncatchable
+     * `ResourceExhaustion` rather than a different value.
+     */
+    private fun detBounded(fn: HostContext.(List<Value>) -> Value): Registration<Fn> =
+        Registration(Fn { ctx, args -> ctx.fn(args) }, effectful = false, declared = Determinism.Deterministic)
+
     /** Registration helper: effect-declaring higher-order, defaults Stateful; [HostContext] receiver. */
     private fun fxH(fn: HostContext.(List<Value>, ApplyFn) -> Value): Registration<FnH> =
         Registration(FnH { ctx, args, apply -> ctx.fn(args, apply) }, effectful = true)
@@ -258,6 +271,34 @@ object Builtins {
         fun hostname(): String
         fun platform(): String
         fun cwd(): String
+
+        /**
+         * Review H5 / M1: the environment-variable table visible to the
+         * program (`Process.EnvVar`) and handed to spawned children
+         * (`Process.Spawn`). The default is EMPTY: an [OsEnv] exposes the
+         * host environment only by overriding this ([SystemOsEnv] does),
+         * so a custom or test source never leaks the JVM's variables by
+         * accident.
+         */
+        fun environment(): Map<String, String> = emptyMap()
+
+        /** One variable from [environment]; null when unset. */
+        fun envVar(name: String): String? = environment()[name]
+    }
+
+    /**
+     * Review H5: the [HostPolicy.SECURE] environment. Delegates hostname /
+     * platform / cwd to [delegate] but exposes no environment variables,
+     * so `OS.Read` granted for `OS.Platform` does not also grant
+     * `Process.EnvVar("ANTHROPIC_API_KEY")`. A host that wants to expose
+     * specific variables supplies its own [OsEnv] with a scrubbed table.
+     */
+    class EmptyEnvOsEnv(private val delegate: OsEnv) : OsEnv {
+        override fun hostname(): String = delegate.hostname()
+        override fun platform(): String = delegate.platform()
+        override fun cwd(): String = delegate.cwd()
+        override fun environment(): Map<String, String> = emptyMap()
+        override fun envVar(name: String): String? = null
     }
     object SystemOsEnv : OsEnv {
         override fun hostname(): String =
@@ -274,6 +315,8 @@ object Builtins {
                 }
             }
         override fun cwd(): String = System.getProperty("user.dir", ".")
+        override fun environment(): Map<String, String> = System.getenv()
+        override fun envVar(name: String): String? = System.getenv(name)
     }
     @Volatile
     var osEnv: OsEnv = SystemOsEnv
@@ -291,6 +334,20 @@ object Builtins {
     }
     object RealExitHandler : ExitHandler {
         override fun exit(code: Int): Unit = kotlin.system.exitProcess(code)
+    }
+    /**
+     * The [HostPolicy.SECURE] exit handler: an embedded program must not
+     * terminate the embedding host. `System.Exit(code)` becomes an
+     * uncatchable [SandboxViolation] ([SandboxViolationKind.SystemExitRefused])
+     * that ends the evaluation instead of the JVM.
+     */
+    object RefusingExitHandler : ExitHandler {
+        override fun exit(code: Int) {
+            throw SandboxViolation(
+                SandboxViolationKind.SystemExitRefused,
+                "System.Exit($code) refused: the host policy does not let a program terminate the host process",
+            )
+        }
     }
     class SystemExitInvoked(val code: Int) : RuntimeException("System.Exit($code)")
     class TestExitHandler : ExitHandler {
@@ -381,9 +438,13 @@ object Builtins {
     /**
      * Per-server state for the `Http.Listen` / `Http.Accept` builtins.
      * The handler thread enqueues a [HttpPending] for each request and
-     * blocks on its latch until Strand calls Http.Respond. The queue
-     * is unbounded — backpressure is the agent's responsibility.
+     * blocks on its latch until Strand calls Http.Respond. Review M7: the
+     * queue holds at most [HTTP_LISTEN_MAX_PENDING] requests; a request
+     * arriving when it is full is answered `503` immediately.
      */
+    /** Review M7: bound on requests waiting for `Http.Accept` (and on handler threads) per server. */
+    const val HTTP_LISTEN_MAX_PENDING: Int = 64
+
     internal data class HttpServerHolder(
         val server: com.sun.net.httpserver.HttpServer,
         val queue: java.util.concurrent.BlockingQueue<HttpPending>,
@@ -410,25 +471,39 @@ object Builtins {
     var vectorHttpTransport: VectorHttpTransport = JdkHttpTransport
 
     /**
-     * Q-041: active sandbox policy mediating every `Fs.*` /
-     * `Net.Connect` / `Http.Request` foreign call. The singleton
-     * default is [SandboxPolicy.OPEN_DEFAULT] — no workspace
-     * constraint, no network blocklist — so pre-Q-041 tests and
-     * library callers see unchanged behaviour. The CLI installs
-     * [SandboxPolicy.SECURE_DEFAULT] (or a custom flag-driven
-     * policy) at startup so agent-facing invocations get the
-     * default-deny surface.
+     * Q-075: the single source of truth for the [sandboxPolicy] singleton
+     * default (and the value every test-reset helper restores). Strand's
+     * thesis is containment — every surface defaults default-deny, and the
+     * library default is no exception. A test asserts this constant is
+     * [SandboxPolicy.SECURE_DEFAULT] so a future regression toward
+     * [SandboxPolicy.OPEN_DEFAULT] fails loudly rather than silently
+     * reopening the ambient sandbox.
+     */
+    val DEFAULT_SANDBOX_POLICY: SandboxPolicy = SandboxPolicy.SECURE_DEFAULT
+
+    /**
+     * Q-041/Q-075: active sandbox policy mediating every `Fs.*` /
+     * `Net.Connect` / `Http.Request` foreign call. The singleton default is
+     * [DEFAULT_SANDBOX_POLICY] (= [SandboxPolicy.SECURE_DEFAULT]) —
+     * workspace-rooted filesystem, default-deny network with the OWASP
+     * blocked ranges, default-deny process spawn. The library default and
+     * the CLI default now agree: both are secure-by-default. A caller that
+     * genuinely needs the open surface (tests exercising real IO against
+     * `@TempDir` paths or loopback sockets, or an embedder that has made a
+     * deliberate decision to run unsandboxed) installs
+     * [SandboxPolicy.OPEN_DEFAULT] explicitly — it is an opt-in, not an
+     * ambient default.
      *
      * The volatile-singleton pattern matches [clock] /
      * [credentialProvider] / [random] / [llmHttpClient]: tests
      * that install a custom policy must not run in parallel with
      * other tests that touch this field, and must restore the
-     * pre-test value in `@AfterEach`. Per-interpreter policy
+     * pre-test value ([DEFAULT_SANDBOX_POLICY]) in `@AfterEach`. Per-interpreter policy
      * injection is a future refactor flagged in the proposal §
      * 4.4 as non-blocking cleanup.
      */
     @Volatile
-    var sandboxPolicy: SandboxPolicy = SandboxPolicy.OPEN_DEFAULT
+    var sandboxPolicy: SandboxPolicy = DEFAULT_SANDBOX_POLICY
 
     /**
      * Q-041: pluggable DNS resolver used by [NetSandbox]. Defaults
@@ -550,6 +625,13 @@ object Builtins {
             require(args.size == 1) { "Time.Sleep expects 1 arg (millis: Int), got ${args.size}" }
             val millis = (args[0] as Value.IntV).v
             require(millis >= 0) { "Time.Sleep millis must be non-negative, got $millis" }
+            // Review M2: a sleep advances no interpreter step, so the sampled
+            // wall-clock budget cannot interrupt it. Refuse, up front, any
+            // sleep longer than the whole budget (it could never finish
+            // inside it). Capping at the *remaining* budget needs the
+            // evaluation start time, which the interpreter does not expose
+            // to builtins yet.
+            builtinLimits.checkSleep(millis)
             clock.sleep(millis)
             Value.UnitV
         },
@@ -739,6 +821,8 @@ object Builtins {
             val port = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("network-connect", "expected IntV port, got ${args[1]::class.simpleName}")
             val resolvedAddr = NetSandbox.checkConnect(sandboxPolicy.net, host, port.toInt(), nameResolver)
+            // Review M5: DnsPolicy.RecheckAtConnect re-resolves just before connecting.
+            NetSandbox.recheckAtConnect(sandboxPolicy.net, host, resolvedAddr, nameResolver)
             try {
                 val socket = java.net.Socket(resolvedAddr, port.toInt())
                 // Q-045: install the host-policy per-read ceiling as the
@@ -783,9 +867,13 @@ object Builtins {
             }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("network-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
-            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+            val maxBytesLong = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("network-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
-            require(maxBytes >= 0) { "Net.Receive maxBytes must be non-negative, got $maxBytes" }
+            require(maxBytesLong >= 0) { "Net.Receive maxBytes must be non-negative, got $maxBytesLong" }
+            // Review H7: the receive buffer is allocated up front at
+            // maxBytes; bound it before allocating (and before narrowing).
+            builtinLimits.checkBytes(maxBytesLong)
+            val maxBytes = maxBytesLong.toInt()
             val socket = ResourceTable.get(handle, "socket") as java.net.Socket
             try {
                 val buf = ByteArray(maxBytes)
@@ -826,9 +914,13 @@ object Builtins {
             }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("network-stream-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
-            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+            val maxBytesLong = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("network-stream-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
-            require(maxBytes >= 0) { "Net.Stream.Receive maxBytes must be non-negative, got $maxBytes" }
+            require(maxBytesLong >= 0) { "Net.Stream.Receive maxBytes must be non-negative, got $maxBytesLong" }
+            // Review H7: the receive buffer is allocated up front at
+            // maxBytes; bound it before allocating (and before narrowing).
+            builtinLimits.checkBytes(maxBytesLong)
+            val maxBytes = maxBytesLong.toInt()
             val socket = ResourceTable.get(handle, ResourceTable.KIND_SOCKET) as java.net.Socket
             try {
                 val buf = ByteArray(maxBytes)
@@ -878,9 +970,13 @@ object Builtins {
             }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("llm-stream-receive", "expected Resource handle, got ${args[0]::class.simpleName}")
-            val maxBytes = (args[1] as? Value.IntV)?.v?.toInt()
+            val maxBytesLong = (args[1] as? Value.IntV)?.v
                 ?: throw IoFailure("llm-stream-receive", "expected IntV maxBytes, got ${args[1]::class.simpleName}")
-            require(maxBytes >= 0) { "LLM.Stream.Receive maxBytes must be non-negative, got $maxBytes" }
+            require(maxBytesLong >= 0) { "LLM.Stream.Receive maxBytes must be non-negative, got $maxBytesLong" }
+            // Review H7: the receive buffer is allocated up front at
+            // maxBytes; bound it before allocating (and before narrowing).
+            builtinLimits.checkBytes(maxBytesLong)
+            val maxBytes = maxBytesLong.toInt()
             val holder = ResourceTable.get(handle, ResourceTable.KIND_LLM_STREAM) as LlmStreamHolder
             try {
                 val chunk = holder.stream.read(maxBytes)
@@ -1006,13 +1102,22 @@ object Builtins {
             // and pick a different address. The Host: header still
             // names the original hostname so the upstream sees a
             // well-formed request (set explicitly below).
-            val resolvedHost = resolvedAddr.hostAddress.let { addr ->
-                if (resolvedAddr is java.net.Inet6Address) "[$addr]" else addr
-            }
-            val urlStr = "${scheme.lowercase()}://$resolvedHost:$port$pathArg"
+            //
+            // Review H1: the path is graph data. NetIo.buildPinnedUri
+            // validates it (leading '/', no '@' / '\' / '#' / whitespace /
+            // control characters) and asserts that the parsed URI's host
+            // and port are exactly the pinned address and the refined
+            // port, so a path can never become userinfo or extend the port.
+            val pinnedUri = NetIo.buildPinnedUri(scheme, resolvedAddr, port.toInt(), pathArg)
+            // Review M5: DnsPolicy.RecheckAtConnect re-resolves just before connecting.
+            NetSandbox.recheckAtConnect(sandboxPolicy.net, host, resolvedAddr, nameResolver)
+            val urlStr = pinnedUri.toString()
             try {
-                val url = java.net.URI(urlStr).toURL()
-                val conn = url.openConnection() as java.net.HttpURLConnection
+                val url = pinnedUri.toURL()
+                // Review H2: redirects are never followed (NetIo.openConnection).
+                val conn = NetIo.openConnection(url)
+                // Review M2: connect/read timeouts from the host wall-clock budget.
+                builtinLimits.applyTimeouts(conn)
                 conn.requestMethod = method.uppercase()
                 conn.doInput = true
                 // Preserve the original hostname in the Host header so
@@ -1029,9 +1134,11 @@ object Builtins {
                     conn.outputStream.use { it.write(body) }
                 }
                 val status = conn.responseCode
+                NetIo.rejectRedirect(conn, status)
+                // Review M2: the body is read under the host's maxResponseBytes cap.
                 val responseBody = try {
                     (if (status in 200..299) conn.inputStream else conn.errorStream)
-                        ?.readBytes() ?: ByteArray(0)
+                        ?.let { builtinLimits.readBounded(it) } ?: ByteArray(0)
                 } catch (_: java.io.IOException) {
                     ByteArray(0)
                 }
@@ -1165,8 +1272,23 @@ object Builtins {
                 cur = payload.fields["tail"]
                     ?: throw IoFailure("process-spawn", "Process.Spawn args list missing tail")
             }
+            // Q-041 follow-up: process-spawn sandbox gate. Under the CLI's
+            // SECURE_DEFAULT this denies any non-allowlisted command; under
+            // the library OPEN_DEFAULT it is a no-op. Runs before the JVM
+            // spawn, mirroring FsSandbox.resolve / NetSandbox.checkConnect.
+            // The SandboxViolation propagates to dispatchForeign, which
+            // translates it to InterpretError.SandboxViolation.
+            ProcessSandbox.check(sandboxPolicy.process, cmd)
             try {
+                // Review M1: the child gets the tenant's host environment
+                // (HostContext.osEnv — empty under HostPolicy.SECURE), not
+                // the JVM's, and runs in the workspace root when the
+                // filesystem sandbox has one. The child's own effects stay
+                // opaque to the capability system (Q-044 scope note).
                 val builder = ProcessBuilder(listOf(cmd) + argList).inheritIO()
+                builder.environment().clear()
+                builder.environment().putAll(osEnv.environment())
+                sandboxPolicy.fs.workspaceRoot?.let { builder.directory(it.toFile()) }
                 val proc = builder.start()
                 ResourceTable.register("process", proc)
             } catch (e: java.io.IOException) {
@@ -1203,7 +1325,10 @@ object Builtins {
             }
             val name = (args[0] as? Value.StringV)?.v
                 ?: throw IoFailure("process-envvar", "expected StringV name, got ${args[0]::class.simpleName}")
-            val value = System.getenv(name)
+            // Review H5: read the tenant's host environment, never the JVM's
+            // directly, so a HostPolicy can supply a scrubbed or empty table
+            // (HostPolicy.SECURE exposes none).
+            val value = osEnv.envVar(name)
             if (value != null) Value.SumV(case = "Some", payload = Value.StringV(value))
             else Value.SumV(case = "None", payload = null)
         },
@@ -1381,7 +1506,7 @@ object Builtins {
             Value.StringV(out.toString())
         },
 
-        "strand-builtin:String.PadLeft" to det { args ->
+        "strand-builtin:String.PadLeft" to detBounded { args ->
             // (s: String, n: Int, pad: String) -> String.
             // Pads s on the left with `pad` (must be non-empty) until
             // length >= n. If s is already >= n chars, returns s
@@ -1389,9 +1514,13 @@ object Builtins {
             // exactly n chars.
             require(args.size == 3) { "String.PadLeft expects 3 args (s, n, pad), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
-            val n = (args[1] as Value.IntV).v.toInt()
+            val nLong = (args[1] as Value.IntV).v
+            // Review H7: the output length is argument-chosen; bound it
+            // before allocating (and before the Int narrowing).
+            builtinLimits.checkBytes(nLong)
+            val n = nLong.toInt()
             val pad = (args[2] as Value.StringV).v
-            if (s.length >= n) return@det Value.StringV(s)
+            if (s.length >= n) return@detBounded Value.StringV(s)
             require(pad.isNotEmpty()) { "String.PadLeft pad must be non-empty" }
             val needed = n - s.length
             val out = StringBuilder()
@@ -1399,12 +1528,16 @@ object Builtins {
             Value.StringV(out.substring(0, needed) + s)
         },
 
-        "strand-builtin:String.PadRight" to det { args ->
+        "strand-builtin:String.PadRight" to detBounded { args ->
             require(args.size == 3) { "String.PadRight expects 3 args (s, n, pad), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
-            val n = (args[1] as Value.IntV).v.toInt()
+            val nLong = (args[1] as Value.IntV).v
+            // Review H7: the output length is argument-chosen; bound it
+            // before allocating (and before the Int narrowing).
+            builtinLimits.checkBytes(nLong)
+            val n = nLong.toInt()
             val pad = (args[2] as Value.StringV).v
-            if (s.length >= n) return@det Value.StringV(s)
+            if (s.length >= n) return@detBounded Value.StringV(s)
             require(pad.isNotEmpty()) { "String.PadRight pad must be non-empty" }
             val needed = n - s.length
             val out = StringBuilder()
@@ -1412,17 +1545,25 @@ object Builtins {
             Value.StringV(s + out.substring(0, needed))
         },
 
-        "strand-builtin:String.Repeat" to det { args ->
+        "strand-builtin:String.Repeat" to detBounded { args ->
             // (s: String, n: Int) -> String. Non-negative n only;
-            // n=0 yields "". The repeated output capacity is bounded
-            // by Q-040's allocated-values limit indirectly (one
-            // BytesV allocation), so very-large n still gets caught
-            // at the limit boundary.
+            // n=0 yields "". Review H7: the result is ONE allocation that
+            // the Q-040 allocated-values counter counts as a single value,
+            // so it does not bound the length; the output length
+            // `s.length * n` is checked against
+            // BuiltinLimits.maxBuiltinBytes before anything is allocated
+            // (and before n is narrowed to Int, which used to truncate).
             require(args.size == 2) { "String.Repeat expects 2 args (s, n), got ${args.size}" }
             val s = (args[0] as Value.StringV).v
-            val n = (args[1] as Value.IntV).v.toInt()
-            require(n >= 0) { "String.Repeat n must be non-negative, got $n" }
-            Value.StringV(s.repeat(n))
+            val nLong = (args[1] as Value.IntV).v
+            require(nLong >= 0) { "String.Repeat n must be non-negative, got $nLong" }
+            if (s.isNotEmpty()) {
+                val total = if (nLong > Long.MAX_VALUE / s.length) Long.MAX_VALUE else nLong * s.length
+                builtinLimits.checkBytes(total)
+            } else if (nLong > Int.MAX_VALUE) {
+                return@detBounded Value.StringV("")
+            }
+            Value.StringV(s.repeat(nLong.toInt()))
         },
 
         "strand-builtin:String.Lines" to det { args ->
@@ -2006,12 +2147,20 @@ object Builtins {
         // ops (Range/Zip/Unzip/Distinct) cover gaps in the round-2
         // primitives.
 
-        "strand-builtin:List.Range" to det { args ->
+        "strand-builtin:List.Range" to detBounded { args ->
             // (start: Int, end: Int) -> List<Int>
             // Inclusive start, exclusive end. Empty if start >= end.
+            // Review H7: the element count is argument-chosen and the
+            // cells are built outside the interpreter's allocation
+            // counter, so it is checked against
+            // BuiltinLimits.maxCollectionElements first.
             require(args.size == 2) { "List.Range expects 2 args (start, end: Int), got ${args.size}" }
             val start = (args[0] as Value.IntV).v
             val end = (args[1] as Value.IntV).v
+            if (end > start) {
+                val count = if (start < 0 && end > Long.MAX_VALUE + start) Long.MAX_VALUE else end - start
+                builtinLimits.checkElements(count)
+            }
             var result: Value = Value.SumV("Nil", null)
             var i = end - 1
             while (i >= start) {
@@ -2239,8 +2388,11 @@ object Builtins {
         "strand-builtin:Random.Bytes" to nondet { args ->
             // (n: Int) -> Bytes. Exactly n random bytes.
             require(args.size == 1) { "Random.Bytes expects 1 arg (n: Int), got ${args.size}" }
-            val n = (args[0] as Value.IntV).v.toInt()
-            require(n >= 0) { "Random.Bytes n must be non-negative, got $n" }
+            val nLong = (args[0] as Value.IntV).v
+            require(nLong >= 0) { "Random.Bytes n must be non-negative, got $nLong" }
+            // Review H7: bound the argument-chosen allocation (and the Int narrowing).
+            builtinLimits.checkBytes(nLong)
+            val n = nLong.toInt()
             val out = ByteArray(n)
             random.nextBytes(out)
             Value.BytesV(out)
@@ -2276,20 +2428,35 @@ object Builtins {
             require(args.size == 1) { "Http.Listen expects 1 arg (port: Int), got ${args.size}" }
             val port = (args[0] as Value.IntV).v.toInt()
             try {
-                val server = com.sun.net.httpserver.HttpServer.create(
-                    java.net.InetSocketAddress(port), 0,
-                )
-                val queue = java.util.concurrent.LinkedBlockingQueue<HttpPending>()
+                // Review M7: loopback only unless the host's net policy
+                // explicitly opts in to every interface.
+                val bindAddress = if (sandboxPolicy.net.listenOnAllInterfaces) {
+                    java.net.InetSocketAddress(port)
+                } else {
+                    java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), port)
+                }
+                val server = com.sun.net.httpserver.HttpServer.create(bindAddress, HTTP_LISTEN_MAX_PENDING)
+                val queue = java.util.concurrent.LinkedBlockingQueue<HttpPending>(HTTP_LISTEN_MAX_PENDING)
                 server.createContext("/") { exchange ->
                     val latch = java.util.concurrent.CountDownLatch(1)
-                    queue.put(HttpPending(exchange, latch))
+                    if (!queue.offer(HttpPending(exchange, latch))) {
+                        // Review M7: full — shed load instead of queueing without bound.
+                        exchange.sendResponseHeaders(503, -1)
+                        exchange.close()
+                        return@createContext
+                    }
                     // Block the handler thread until Respond releases.
                     // 30s safety timeout so an unresponsive Strand
                     // program doesn't hang the server thread forever;
                     // Respond is the normal release path.
                     latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
                 }
-                server.executor = java.util.concurrent.Executors.newCachedThreadPool()
+                // Review M7: a bounded handler pool (each handler parks until
+                // Respond or its 30 s safety timeout) instead of an
+                // unbounded cached pool.
+                server.executor = java.util.concurrent.Executors.newFixedThreadPool(HTTP_LISTEN_MAX_PENDING) { r ->
+                    Thread(r, "strand-http-listen").apply { isDaemon = true }
+                }
                 server.start()
                 ResourceTable.register("http-server", HttpServerHolder(server, queue))
             } catch (e: java.io.IOException) {
@@ -2301,17 +2468,31 @@ object Builtins {
 
         "strand-builtin:Http.Accept" to fx { args ->
             // (server: serverHandle) -> {method, path, body, responder}
-            // Blocks until a request arrives.
+            // Blocks until a request arrives or the host accept timeout
+            // (BuiltinLimits.acceptTimeoutMillis) expires.
             require(args.size == 1) { "Http.Accept expects 1 arg (server: serverHandle), got ${args.size}" }
             val handle = args[0] as? Value.Resource
                 ?: throw IoFailure("http-accept", "expected Resource handle, got ${args[0]::class.simpleName}")
             val holder = ResourceTable.get(handle, "http-server") as HttpServerHolder
             try {
-                val pending = holder.queue.take()  // blocks
+                // Review M2: bounded wait. A native blocking take advances no
+                // interpreter step, so without a timeout the wall-clock budget
+                // could never fire; expiry is a catchable IoFailure so a
+                // server loop can poll again.
+                val waitMillis = builtinLimits.acceptTimeoutMillis
+                val pending = (if (waitMillis in 1 until Long.MAX_VALUE) {
+                    holder.queue.poll(waitMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+                } else {
+                    holder.queue.take()
+                }) ?: throw IoFailure(
+                    "http-accept-timeout",
+                    "no request arrived within ${waitMillis}ms (host accept timeout)",
+                )
                 val exchange = pending.exchange
                 val method = exchange.requestMethod
                 val path = exchange.requestURI.toString()
-                val body = exchange.requestBody.readAllBytes()
+                // Review M2: inbound bodies are capped like response bodies.
+                val body = builtinLimits.readBounded(exchange.requestBody)
                 val responderHandle = ResourceTable.register("http-pending", pending)
                 Value.ProductV(mapOf(
                     "method" to Value.StringV(method),
@@ -2476,13 +2657,23 @@ object Builtins {
         // (?:...), ^, $, |, *, +, ?, {n,m}, anchors, and groups all
         // work. Named groups are not exposed in this slice (would need
         // a richer return type than Option<String>).
+        //
+        // Review H7: pattern and input lengths are capped at
+        // BuiltinLimits.maxRegexInputChars, which bounds the cost of a
+        // linear-time match. It does NOT bound catastrophic backtracking
+        // (e.g. `(a+)+$` against "aaaa...b"): java.util.regex exposes no
+        // step limit, so a hostile pattern can still spend time
+        // super-linear in the capped input length. That residual is
+        // recorded rather than fixed here.
 
-        "strand-builtin:Regex.Match" to det { args ->
+        "strand-builtin:Regex.Match" to detBounded { args ->
             // (pattern: String, input: String) -> Option<String>
             // Returns the first full-match substring, or None if no match.
             require(args.size == 2) { "Regex.Match expects 2 args (pattern, input), got ${args.size}" }
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -2492,12 +2683,14 @@ object Builtins {
             else Value.SumV("None", null)
         },
 
-        "strand-builtin:Regex.FindAll" to det { args ->
+        "strand-builtin:Regex.FindAll" to detBounded { args ->
             // (pattern: String, input: String) -> List<String>
             // Returns every non-overlapping match as a Cons/Nil chain.
             require(args.size == 2) { "Regex.FindAll expects 2 args (pattern, input), got ${args.size}" }
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -2512,7 +2705,7 @@ object Builtins {
             listValue
         },
 
-        "strand-builtin:Regex.Replace" to det { args ->
+        "strand-builtin:Regex.Replace" to detBounded { args ->
             // (pattern: String, input: String, replacement: String) -> String
             // Replaces every non-overlapping match. The replacement
             // string supports $1/$2/etc. backreferences for capture
@@ -2521,6 +2714,8 @@ object Builtins {
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
             val replacement = (args[2] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -2528,13 +2723,15 @@ object Builtins {
             Value.StringV(regex.replace(input, replacement))
         },
 
-        "strand-builtin:Regex.Split" to det { args ->
+        "strand-builtin:Regex.Split" to detBounded { args ->
             // (pattern: String, input: String) -> List<String>
             // Splits on every non-overlapping match. Adjacent matches
             // produce empty-string entries (matches Kotlin's split).
             require(args.size == 2) { "Regex.Split expects 2 args (pattern, input), got ${args.size}" }
             val pattern = (args[0] as Value.StringV).v
             val input = (args[1] as Value.StringV).v
+            builtinLimits.checkRegexInput(pattern.length)
+            builtinLimits.checkRegexInput(input.length)
             val regex = try { Regex(pattern) }
                 catch (e: java.util.regex.PatternSyntaxException) {
                     throw IoFailure("regex-compile", "pattern '$pattern': ${e.description}")
@@ -2640,7 +2837,9 @@ object Builtins {
                 "Pinecone.Index.Open expects 1 arg (config: PineconeIndexConfig), got ${args.size}"
             }
             val config = VectorValueMarshal.toPineconeConfig(args[0])
-            PineconeProvider.open(config, credentialProvider)
+            // Review H4: the program-chosen host passes the network sandbox
+            // before the API key is resolved or any request is built.
+            PineconeProvider.open(config, credentialProvider) { url -> NetIo.checkUrl(url, sandboxPolicy.net, nameResolver) }
         },
 
         "strand-builtin:Pinecone.Index.Close" to det { args ->
@@ -2664,7 +2863,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-upsert",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val items = VectorValueMarshal.toUpsertItems(args[1])
-            PineconeProvider.upsert(handle, items, vectorHttpTransport)
+            PineconeProvider.upsert(handle, items, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2678,7 +2877,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-query",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val request = VectorValueMarshal.toQueryRequest(args[1])
-            VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(PineconeProvider.query(handle, request, sandboxedVectorTransport()))
         },
 
         "strand-builtin:Pinecone.Index.Delete" to fx { args ->
@@ -2691,7 +2890,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-delete",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            PineconeProvider.delete(handle, ids, vectorHttpTransport)
+            PineconeProvider.delete(handle, ids, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2705,7 +2904,7 @@ object Builtins {
                 ?: throw IoFailure("pinecone-fetch",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            VectorValueMarshal.fromQueryHits(PineconeProvider.fetch(handle, ids, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(PineconeProvider.fetch(handle, ids, sandboxedVectorTransport()))
         },
 
         // Q-038 Phase 1 — Chroma vector-store builtins. Same shape
@@ -2721,7 +2920,7 @@ object Builtins {
                 "Chroma.Collection.Open expects 1 arg (config: ChromaCollectionConfig), got ${args.size}"
             }
             val config = VectorValueMarshal.toChromaConfig(args[0])
-            ChromaProvider.open(config, credentialProvider, vectorHttpTransport)
+            ChromaProvider.open(config, credentialProvider, sandboxedVectorTransport())
         },
 
         "strand-builtin:Chroma.Collection.Close" to det { args ->
@@ -2745,7 +2944,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-upsert",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val items = VectorValueMarshal.toUpsertItems(args[1])
-            ChromaProvider.add(handle, items, vectorHttpTransport)
+            ChromaProvider.add(handle, items, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2759,7 +2958,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-query",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val request = VectorValueMarshal.toQueryRequest(args[1])
-            VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(ChromaProvider.query(handle, request, sandboxedVectorTransport()))
         },
 
         "strand-builtin:Chroma.Collection.Delete" to fx { args ->
@@ -2772,7 +2971,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-delete",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            ChromaProvider.delete(handle, ids, vectorHttpTransport)
+            ChromaProvider.delete(handle, ids, sandboxedVectorTransport())
             Value.UnitV
         },
 
@@ -2787,7 +2986,7 @@ object Builtins {
                 ?: throw IoFailure("chroma-get",
                     "expected Resource handle, got ${args[0]::class.simpleName}")
             val ids = VectorValueMarshal.toStringList(args[1])
-            VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids, vectorHttpTransport))
+            VectorValueMarshal.fromQueryHits(ChromaProvider.get(handle, ids, sandboxedVectorTransport()))
         },
 
         // ===== Stdlib expansion round 4 (2026-05-27) =====
@@ -3211,14 +3410,19 @@ object Builtins {
             Value.BytesV(sink.toByteArray())
         },
 
-        "strand-builtin:Compress.Gunzip" to det { args ->
+        "strand-builtin:Compress.Gunzip" to detBounded { args ->
             // (b: Bytes) -> Option<Bytes>. None on malformed gzip
             // (truncated header / CRC mismatch / etc.).
+            // Review H7: decompression is streamed under
+            // BuiltinLimits.maxBuiltinBytes, so a gzip bomb raises
+            // ResourceExhaustion as soon as the output crosses the cap.
             require(args.size == 1) { "Compress.Gunzip expects 1 arg (b: Bytes), got ${args.size}" }
             val bytes = (args[0] as Value.BytesV).v
             try {
                 val out = java.io.ByteArrayInputStream(bytes).use { src ->
-                    java.util.zip.GZIPInputStream(src).use { it.readBytes() }
+                    java.util.zip.GZIPInputStream(src).use {
+                        BuiltinLimits.readBounded(it, builtinLimits.maxBuiltinBytes)
+                    }
                 }
                 Value.SumV("Some", Value.BytesV(out))
             } catch (_: java.util.zip.ZipException) {

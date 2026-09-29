@@ -23,14 +23,25 @@ import org.strand.interpreter.Value
 class EventRecorder {
     private val events = mutableListOf<Value>()
 
-    /** Append [event] to the recording. Thread-safety is owned by the calling actor. */
+    /**
+     * Append [event] to the recording. The actor appends while hosts copy
+     * concurrently (snapshots, `recordedEvents`), so every access is
+     * synchronized on the list (review M1).
+     */
     fun record(event: Value) {
-        events.add(event)
+        synchronized(events) { events.add(event) }
     }
 
     /** Snapshot of the recorded events in arrival order. */
-    fun snapshot(): List<Value> = events.toList()
+    fun snapshot(): List<Value> = synchronized(events) { events.toList() }
+
+    /**
+     * The first [count] recorded events (fewer if fewer were recorded). The
+     * recording is append-only, so a prefix is stable once taken; snapshots
+     * use it to pair the recording with an atomically-read transition count.
+     */
+    fun prefix(count: Int): List<Value> = synchronized(events) { events.take(count) }
 
     /** Number of recorded events without copying. */
-    val size: Int get() = events.size
+    val size: Int get() = synchronized(events) { events.size }
 }

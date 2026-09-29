@@ -17,9 +17,24 @@ sealed class AuthoringError {
     abstract val line: Int
     abstract val detail: String
 
+    /**
+     * 1-based column within the source line, when the producing phase knows
+     * the offset (lexer and per-line parser errors). Null when only the line
+     * is known (emitter-phase errors on already-tokenized args, dag-json
+     * translation). Drivers print `line N, col M:` when present.
+     */
+    open val column: Int? get() = null
+
+    companion object {
+        /** `line N` or `line N, col M` (no trailing colon). */
+        fun location(e: AuthoringError): String =
+            if (e.column != null) "line ${e.line}, col ${e.column}" else "line ${e.line}"
+    }
+
     data class UnknownCode(
         override val line: Int,
         val code: String,
+        override val column: Int? = null,
     ) : AuthoringError() {
         override val detail: String
             get() = "unknown Layer A node code '$code' — see LayerAGrammar.codes for the supported set"
@@ -30,6 +45,7 @@ sealed class AuthoringError {
         val code: String,
         val expected: IntRange,
         val actual: Int,
+        override val column: Int? = null,
     ) : AuthoringError() {
         override val detail: String
             get() = "code '$code' expects ${expected.first}..${expected.last} positional arguments but got $actual"
@@ -41,6 +57,7 @@ sealed class AuthoringError {
         val position: Int,
         val expectedKind: String,
         val actualKind: String,
+        override val column: Int? = null,
     ) : AuthoringError() {
         override val detail: String
             get() = "code '$code' at position $position expected $expectedKind but got $actualKind"
@@ -49,6 +66,7 @@ sealed class AuthoringError {
     data class TokenError(
         override val line: Int,
         override val detail: String,
+        override val column: Int? = null,
     ) : AuthoringError()
 
     /**
@@ -75,9 +93,51 @@ sealed class AuthoringError {
     data class DuplicateNodeId(
         override val line: Int,
         val id: String,
+        override val column: Int? = null,
     ) : AuthoringError() {
         override val detail: String
             get() = "duplicate node id '$id'"
+    }
+
+    /**
+     * A user-declared node id starts with `__`, the prefix reserved for
+     * compiler-minted ids (`__lit<n>`, `__var<n>`, `__anon<line>`, `__if<n>_*`,
+     * `__when<n>_*`, `__res<n>_*`, `__expr<n>`, ...). Accepting such ids would
+     * let a user node collide with, or hijack (`@last` tracks `__anon*`), a
+     * synthesized node.
+     */
+    data class ReservedNodeId(
+        override val line: Int,
+        val id: String,
+        override val column: Int? = null,
+    ) : AuthoringError() {
+        override val detail: String
+            get() = "node id '$id' is invalid: the '__' prefix is reserved for the compiler " +
+                "(synthesized literals, variable references, anonymous nodes, sugar expansions)"
+    }
+
+    /**
+     * The emitter minted a synthesized node id that already exists (as a user
+     * node or an earlier synthesized node). Never expected once
+     * [ReservedNodeId] is enforced at parse time; retained as a hard assertion
+     * so a collision fails loudly instead of silently overwriting a node.
+     */
+    data class SynthesizedIdCollision(
+        override val line: Int,
+        val id: String,
+    ) : AuthoringError() {
+        override val detail: String
+            get() = "internal error: compiler-synthesized node id '$id' collides with an existing node id " +
+                "(ids with the '__' prefix are reserved for the compiler)"
+    }
+
+    /** A NaN or infinite float reached the renderer; Layer A has no literal for it. */
+    data class UnrenderableFloat(
+        override val line: Int,
+        val value: String,
+    ) : AuthoringError() {
+        override val detail: String
+            get() = "float value $value has no Layer A literal (only finite floats can be rendered)"
     }
 
     data class UnknownRoot(
@@ -86,6 +146,52 @@ sealed class AuthoringError {
     ) : AuthoringError() {
         override val detail: String
             get() = "root '$rootId' is not declared in the document"
+    }
+
+    /**
+     * The [Elaborator]'s fixed-point inference loop did not reach a stable
+     * document within its iteration bound. A converging document produces
+     * a no-change pass and returns early; exhausting the bound while the
+     * last pass still rewrites the document means the inference passes are
+     * cycling (or a genuinely large document needs more iterations than
+     * the defensive bound allows). Rather than emit a possibly
+     * half-elaborated document silently, elaboration fails structurally so
+     * the caller sees a definite non-convergence rather than a mysterious
+     * downstream verifier error. Synthesized diagnostic (no source line).
+     */
+    data class ElaborationDidNotConverge(
+        val iterations: Int,
+    ) : AuthoringError() {
+        override val line: Int
+            get() = 0
+        override val detail: String
+            get() = "elaboration did not converge within $iterations fixed-point " +
+                "iterations; the document may be too large for the iteration bound or " +
+                "the inference passes are cycling"
+    }
+}
+
+/**
+ * Non-fatal authoring diagnostic. Unlike [AuthoringError] a warning never
+ * blocks emission; drivers print it on the same channel as verifier warnings.
+ */
+sealed class AuthoringWarning {
+    abstract val line: Int
+    abstract val message: String
+
+    /**
+     * A user node id equals a prelude reserved name (`intT`, `ok`, ...). By the
+     * "local declarations win" rule the user node silently replaces the prelude
+     * node, and every reserved node that depends on it then resolves to the
+     * user's declaration. Legal, but almost always unintended.
+     */
+    data class ShadowedReservedName(
+        override val line: Int,
+        val name: String,
+    ) : AuthoringWarning() {
+        override val message: String
+            get() = "node id '$name' shadows the prelude reserved name '$name'; the local declaration " +
+                "wins, and every reserved node that references '$name' now resolves to it"
     }
 }
 
@@ -101,4 +207,4 @@ class AuthoringException(
      * failure.
      */
     val elaborationGaps: List<ElaborationGap> = emptyList(),
-) : RuntimeException("Layer A authoring failed:\n" + errors.joinToString("\n") { "  line ${it.line}: ${it.detail}" })
+) : RuntimeException("Layer A authoring failed:\n" + errors.joinToString("\n") { "  ${AuthoringError.location(it)}: ${it.detail}" })

@@ -2,7 +2,6 @@ package org.strand.interpreter
 
 import java.net.InetAddress
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -36,6 +35,7 @@ import java.nio.file.Paths
 data class SandboxPolicy(
     val fs: FsPolicy,
     val net: NetPolicy,
+    val process: ProcessPolicy = ProcessPolicy(),
 ) {
     companion object {
         /**
@@ -69,6 +69,17 @@ data class SandboxPolicy(
             IpRange("169.254.169.254/32"),  // AWS / GCP / Azure IMDS
             IpRange("169.254.170.2/32"),    // AWS ECS task-role
             IpRange("100.100.100.200/32"),  // Alibaba
+            // Review M5: "this network" (0.0.0.0 reaches the local host
+            // on common stacks) and the IPv6 unspecified address.
+            IpRange("0.0.0.0/8"),
+            IpRange("::/128"),
+            // Review M5: NAT64 prefixes (RFC 6052 well-known, RFC 8215
+            // local-use) translate to arbitrary IPv4 destinations,
+            // including the blocked ones. IPv4-mapped / IPv4-compatible
+            // forms are handled by checking the embedded IPv4 address
+            // (see NetSandbox.checkConnect).
+            IpRange("64:ff9b::/96"),
+            IpRange("64:ff9b:1::/48"),
         )
 
         /**
@@ -85,38 +96,49 @@ data class SandboxPolicy(
         )
 
         /**
-         * **Open default — opt-out.** No filesystem workspace constraint,
-         * no network default-deny, no blocked ranges. Used by the
-         * singleton on [Builtins.sandboxPolicy] so library and test
-         * callers that exercise `Fs.*` / `Net.Connect` / `Http.Request`
-         * against `@TempDir` paths or local sockets see the pre-Q-041
-         * behaviour unchanged. CLI invocations from agents override
-         * this with [SECURE_DEFAULT] (or a custom flag-driven policy)
-         * at startup.
+         * **Open policy — explicit opt-in, not a default.** No filesystem
+         * workspace constraint, no network default-deny, no blocked ranges.
+         * Q-075 removed this as the [Builtins.sandboxPolicy] singleton
+         * default; the library and CLI defaults are now both
+         * [SECURE_DEFAULT]. A caller installs [OPEN_DEFAULT] explicitly
+         * when it genuinely needs the open surface — tests that exercise
+         * real `Fs.*` / `Net.Connect` / `Http.Request` I/O against
+         * `@TempDir` paths or loopback sockets, or an embedder that has
+         * made a deliberate decision to run unsandboxed.
          *
-         * The deliberate inversion — "open" as the singleton default,
-         * "secure" as the CLI default — keeps the 895-test pre-Q-041
-         * baseline running unchanged while still establishing the
-         * agent-facing surface as default-deny. The sandbox-aware
-         * test files (FsSandboxTest, NetSandboxTest, HttpSandboxTest)
-         * install [SECURE_DEFAULT] or a custom policy in `@BeforeEach`
-         * and reset to [OPEN_DEFAULT] in `@AfterEach`.
+         * Before Q-075, this was the ambient singleton default (the
+         * "deliberate inversion" that kept the pre-Q-041 test baseline
+         * running unchanged while the CLI alone defaulted to secure). That
+         * inversion's justification expired once the baseline it protected
+         * was no longer at risk; see
+         * `proposals/implemented/secure-by-default.md`. The sandbox-aware
+         * test files (SandboxPolicyTest, CorpusSandboxTest, and every test
+         * class that exercises real IO) now install [OPEN_DEFAULT] or a
+         * scoped policy explicitly in `@BeforeEach` and reset to
+         * [Builtins.DEFAULT_SANDBOX_POLICY] (= [SECURE_DEFAULT]) in
+         * `@AfterEach`.
          */
         val OPEN_DEFAULT = SandboxPolicy(
             fs = FsPolicy(workspaceRoot = null, escape = EscapePolicy.Allow, followSymlinks = true),
             net = NetPolicy(defaultDeny = false, allowedHosts = emptyList(), blockedRanges = emptyList()),
+            process = ProcessPolicy(defaultDeny = false, allowedCommands = emptyList()),
         )
 
         /**
-         * **Secure default — the policy the CLI installs by default.**
-         * Workspace rooted at the JVM working directory with escape
-         * detection and symlink rejection; network default-deny on
-         * loopback, RFC1918, link-local, multicast, broadcast, IPv6
-         * ULA, and the cloud-metadata literals; DNS pin-at-check.
+         * **Secure default — the policy both the library and the CLI
+         * install by default (Q-075).** Workspace rooted at the JVM
+         * working directory with escape detection and symlink rejection;
+         * network default-deny on loopback, RFC1918, link-local,
+         * multicast, broadcast, IPv6 ULA, and the cloud-metadata literals;
+         * DNS pin-at-check.
          *
          * The CLI's `--workspace-root`, `--allow-fs-escape`,
          * `--allow-host`, and `--allow-net-internal` flags relax
-         * this default; absent flags inherit from here.
+         * this default; absent flags inherit from here. A library or
+         * embedder caller inherits the same default via
+         * [Builtins.sandboxPolicy] / [Builtins.DEFAULT_SANDBOX_POLICY] and
+         * relaxes it the same way — by installing a different
+         * [SandboxPolicy], not by relying on an open ambient default.
          */
         val SECURE_DEFAULT = SandboxPolicy(
             fs = FsPolicy(
@@ -131,6 +153,10 @@ data class SandboxPolicy(
                 blockedHostnames = SECURE_DEFAULT_BLOCKED_HOSTNAMES,
                 dnsPolicy = DnsPolicy.PinAtCheck,
             ),
+            process = ProcessPolicy(
+                defaultDeny = true,
+                allowedCommands = emptyList(),
+            ),
         )
     }
 }
@@ -141,14 +167,15 @@ data class SandboxPolicy(
  * @property workspaceRoot if non-null, every resolved path must lie
  *   lexically beneath this directory after canonicalisation. The
  *   resolver applies `..`-normalisation, then re-checks containment.
- *   Null disables fs sandboxing entirely (test / library default).
+ *   Null disables fs sandboxing entirely — the explicit opt-out
+ *   ([SandboxPolicy.OPEN_DEFAULT]), not the library default.
  * @property escape behaviour when a path resolves outside [workspaceRoot]:
  *   [EscapePolicy.Deny] raises [SandboxViolation]; [EscapePolicy.Allow]
  *   passes through.
  * @property followSymlinks when false (secure default), the resolver
- *   refuses any path whose canonical form differs from its lexical
- *   form due to a symlink component. When true, follow the symlink and
- *   re-check containment against the link target.
+ *   refuses any path with a symlink component, the leaf included
+ *   (dangling or not). When true, follow every link (a dangling leaf
+ *   to its target) and check containment of where the call lands.
  */
 data class FsPolicy(
     val workspaceRoot: Path?,
@@ -163,8 +190,9 @@ enum class EscapePolicy { Allow, Deny }
  *
  * @property defaultDeny when true, the IP-range and hostname blocklists
  *   below are enforced; when false, every host is admitted. The toggle
- *   exists so the test default ([SandboxPolicy.OPEN_DEFAULT]) can opt
- *   out wholesale without separately clearing the blocklists.
+ *   exists so an explicit opt-out policy ([SandboxPolicy.OPEN_DEFAULT],
+ *   installed by a test or embedder that needs it) can disable the
+ *   network gate wholesale without separately clearing the blocklists.
  * @property allowedHosts non-empty list narrows the policy to only
  *   permit hosts matching one of these glob patterns (`*.example.com`
  *   etc.); empty list means "no allowlist gate, only the blocklist
@@ -182,6 +210,10 @@ enum class EscapePolicy { Allow, Deny }
  *   [DnsPolicy.PinAtCheck]: resolve once, pass the resolved IP to the
  *   JVM `Socket(InetAddress, port)` constructor so the second
  *   resolution cannot subvert the check.
+ * @property listenOnAllInterfaces review M7: when false (the default in
+ *   every shipped policy), `Http.Listen` binds the loopback interface
+ *   only; a host must opt in explicitly to accept connections from other
+ *   machines.
  */
 data class NetPolicy(
     val defaultDeny: Boolean = true,
@@ -189,9 +221,49 @@ data class NetPolicy(
     val blockedRanges: List<IpRange> = SandboxPolicy.SECURE_DEFAULT_BLOCKED_RANGES,
     val blockedHostnames: Set<String> = SandboxPolicy.SECURE_DEFAULT_BLOCKED_HOSTNAMES,
     val dnsPolicy: DnsPolicy = DnsPolicy.PinAtCheck,
+    val listenOnAllInterfaces: Boolean = false,
 )
 
+/**
+ * DNS handling between the sandbox check and the connect.
+ *
+ *  - [PinAtCheck]: resolve once in [NetSandbox.checkConnect] and connect to
+ *    that address.
+ *  - [RecheckAtConnect]: as [PinAtCheck], and additionally re-resolve
+ *    immediately before connecting ([NetSandbox.recheckAtConnect]); a pinned
+ *    address no longer in the answer set raises
+ *    [SandboxViolationKind.NetDnsRebindingDetected].
+ *  - [RequireIpLiteral]: refuse hostnames outright.
+ */
 enum class DnsPolicy { PinAtCheck, RecheckAtConnect, RequireIpLiteral }
+
+/**
+ * Q-041 follow-up: process-spawn sandbox policy. Mirrors the shape of
+ * [FsPolicy] / [NetPolicy] — a default-deny toggle plus an allowlist of
+ * permitted commands.
+ *
+ * `Process.Spawn` shells out to an arbitrary executable, which is the
+ * broadest single capability a host can grant: the child process runs
+ * outside every Strand sandbox and outside the effect-closure guarantees
+ * (its transitive effects are opaque). This policy is the runtime gate on
+ * that call, analogous to [FsSandbox] for `Fs.*` and [NetSandbox] for the
+ * network builtins.
+ *
+ * @property defaultDeny when true, only commands matching an entry in
+ *   [allowedCommands] may spawn; every other command raises
+ *   [SandboxViolationKind.ProcessSpawnBlocked]. When false, every command
+ *   is admitted — the open library default, matching the pre-policy
+ *   behaviour so the existing test baseline stays green.
+ * @property allowedCommands the set of permitted executables. A command
+ *   argument matches when it equals an entry exactly, or when its
+ *   filename component (the last path segment) equals an entry — so a
+ *   host may allowlist either a bare name (`git`) or an absolute path
+ *   (`/usr/bin/git`). Only consulted when [defaultDeny] is true.
+ */
+data class ProcessPolicy(
+    val defaultDeny: Boolean = false,
+    val allowedCommands: List<String> = emptyList(),
+)
 
 /**
  * Pluggable name resolver used by [NetSandbox]. The production
@@ -295,39 +367,82 @@ data class IpRange(val cidr: String) {
  * Filesystem-side sandbox enforcer. Each `Fs.*` builtin calls
  * [resolve] on its first argument before invoking the JVM file API.
  *
- * Per § 4.1 of the proposal:
+ * Per § 4.1 of the proposal, amended by review H6:
  *  1. If `policy.workspaceRoot` is null, no constraint — return
  *     [Paths.get] of the supplied string. The host opted out.
  *  2. Otherwise resolve the supplied string against the workspace
- *     root. `resolve` against an absolute path discards the root
- *     (which the canonicalisation in step 3 catches).
- *  3. Canonicalise: `toRealPath(NOFOLLOW_LINKS)` when
- *     `followSymlinks=false`, else `toRealPath()`. On a non-existent
- *     target — common for `Fs.Write` to a new file — fall back to
- *     `normalize().toAbsolutePath()`.
- *  4. Check that the canonical form is lexically prefixed by the
- *     canonicalised workspace root. If not: [EscapePolicy.Deny]
- *     raises [SandboxViolation(FsPathEscape)]; [EscapePolicy.Allow]
- *     proceeds.
- *  5. If `followSymlinks=false` and the supplied path's lexical
- *     resolution differs from its canonical form due to symlink
- *     traversal, raise [SandboxViolation(FsSymlinkRejected)].
- *  6. Return the canonical (or lexical fallback) path.
+ *     root and normalise lexically. `resolve` against an absolute path
+ *     discards the root (which the containment check in step 4 catches).
+ *  3. Canonicalise.
+ *     - `followSymlinks=false`: every existing component of the path,
+ *       **including the leaf**, is inspected without following links; any
+ *       symlink — dangling or not — raises
+ *       [SandboxViolationKind.FsSymlinkRejected]. The canonical form is
+ *       the real path when the leaf exists, the lexical form otherwise.
+ *     - `followSymlinks=true`: the path is resolved fully. An existing
+ *       path resolves to its real path; a dangling symlink leaf resolves
+ *       to its target (recursively, bounded at [MAX_LINK_DEPTH] hops) so
+ *       the containment check sees where a write would actually land; a
+ *       plain missing leaf resolves under its (resolved) parent.
+ *  4. Check that the canonical form is prefixed by the canonicalised
+ *     workspace root. If not: [EscapePolicy.Deny] raises
+ *     [SandboxViolation(FsPathEscape)]; [EscapePolicy.Allow] proceeds.
+ *  5. Return the canonical path; the builtin operates on it.
+ *
+ * The pre-H6 fallback for a non-existent leaf checked only the parents,
+ * so a dangling symlink at the leaf let `Fs.Write` create the link's
+ * target outside the workspace.
+ *
+ * The filesystem is consulted through a [PathProbe] so the decision logic
+ * is testable without creating real symlinks.
  */
 object FsSandbox {
-    fun resolve(policy: FsPolicy, supplied: String): Path {
+    /** Upper bound on symlink hops followed while resolving one path. */
+    const val MAX_LINK_DEPTH: Int = 40
+
+    /**
+     * The filesystem queries [resolve] makes. [JdkPathProbe] is the real
+     * one; tests supply a fake to exercise the decision logic without
+     * symlink privileges.
+     */
+    interface PathProbe {
+        /** True when [p] itself is a symbolic link (not followed). */
+        fun isSymlink(p: Path): Boolean
+
+        /** True when [p] exists, following links. */
+        fun exists(p: Path): Boolean
+
+        /** The raw target of the symbolic link [p]. */
+        fun readLink(p: Path): Path
+
+        /** The real path of the existing [p], following links. */
+        fun realPath(p: Path): Path
+    }
+
+    /** [PathProbe] over `java.nio.file.Files`. */
+    object JdkPathProbe : PathProbe {
+        override fun isSymlink(p: Path): Boolean = Files.isSymbolicLink(p)
+        override fun exists(p: Path): Boolean = Files.exists(p)
+        override fun readLink(p: Path): Path = Files.readSymbolicLink(p)
+        override fun realPath(p: Path): Path = p.toRealPath()
+    }
+
+    fun resolve(policy: FsPolicy, supplied: String): Path = resolve(policy, supplied, JdkPathProbe)
+
+    /** [resolve] against an explicit [probe] (the pure decision logic; see [PathProbe]). */
+    fun resolve(policy: FsPolicy, supplied: String, probe: PathProbe): Path {
         val workspaceRoot = policy.workspaceRoot
             ?: return Paths.get(supplied)
 
         // Step 2: lexical resolution. An absolute supplied path
         // discards workspaceRoot here, which step 4 catches.
-        val candidate = workspaceRoot.resolve(supplied)
+        val candidate = workspaceRoot.resolve(supplied).toAbsolutePath().normalize()
 
-        // Step 3: canonicalise the workspace root once. The root
-        // itself must exist (otherwise the policy is misconfigured;
-        // we surface that as FsWorkspaceNotConfigured).
+        // The root itself must exist (otherwise the policy is
+        // misconfigured; surfaced as FsWorkspaceNotConfigured).
         val canonicalRoot = try {
-            workspaceRoot.toRealPath()
+            if (!probe.exists(workspaceRoot)) throw java.nio.file.NoSuchFileException(workspaceRoot.toString())
+            probe.realPath(workspaceRoot)
         } catch (e: java.io.IOException) {
             throw SandboxViolation(
                 SandboxViolationKind.FsWorkspaceNotConfigured,
@@ -335,36 +450,14 @@ object FsSandbox {
             )
         }
 
-        // Step 5 (interleaved with 3): if symlinks are disallowed,
-        // refuse a path whose canonical form requires following a
-        // symlink. We detect by computing both the symlink-following
-        // canonical form and the symlink-rejecting canonical form
-        // and comparing; a difference means a symlink is involved.
-        // Path may not yet exist (Fs.Write to a new file) — fall
-        // back to lexical normalisation in that case.
+        // Step 3: canonicalise.
         val canonicalCandidate: Path = try {
             if (policy.followSymlinks) {
-                candidate.toRealPath()
+                resolveFollowing(candidate, supplied, probe, linkDepth = 0)
             } else {
-                val noFollow = candidate.toRealPath(LinkOption.NOFOLLOW_LINKS)
-                val follow = candidate.toRealPath()
-                if (follow != noFollow) {
-                    throw SandboxViolation(
-                        SandboxViolationKind.FsSymlinkRejected,
-                        "path '$supplied' resolves through a symlink (forbidden when followSymlinks=false)",
-                    )
-                }
-                noFollow
+                rejectSymlinkComponents(candidate, supplied, probe)
+                if (probe.exists(candidate)) probe.realPath(candidate) else candidate
             }
-        } catch (_: java.nio.file.NoSuchFileException) {
-            // Common path for Fs.Write of a new file: the leaf does
-            // not yet exist. Lexically normalise so the containment
-            // check below still sees a deterministic absolute path.
-            // We must additionally check whether *any prefix* of the
-            // path is a symlink (a non-leaf symlink would let a write
-            // land outside the workspace even though the leaf is new).
-            checkNoSymlinkInPrefix(candidate, policy)
-            candidate.normalize().toAbsolutePath()
         } catch (e: java.io.IOException) {
             throw SandboxViolation(
                 SandboxViolationKind.FsPathEscape,
@@ -388,26 +481,45 @@ object FsSandbox {
     }
 
     /**
-     * When a path's leaf does not exist (Fs.Write of a new file),
-     * canonicalisation falls back to lexical normalisation. Lexical
-     * normalisation doesn't catch a symlink at a parent directory.
-     * Walk the path upward and reject if any *existing* prefix is a
-     * symlink.
+     * `followSymlinks=false`: reject when the leaf or any ancestor of
+     * [candidate] is a symbolic link. The leaf is checked whether or not
+     * the link dangles (review H6) — a dangling link is exactly the shape
+     * that lets a write create a file outside the workspace.
      */
-    private fun checkNoSymlinkInPrefix(candidate: Path, policy: FsPolicy) {
-        if (policy.followSymlinks) return
-        var p: Path? = candidate.normalize().parent
+    private fun rejectSymlinkComponents(candidate: Path, supplied: String, probe: PathProbe) {
+        var p: Path? = candidate
         while (p != null) {
-            if (Files.exists(p, LinkOption.NOFOLLOW_LINKS) &&
-                Files.isSymbolicLink(p)
-            ) {
+            if (probe.isSymlink(p)) {
                 throw SandboxViolation(
                     SandboxViolationKind.FsSymlinkRejected,
-                    "path '$candidate' has a symlink at prefix '$p' (forbidden when followSymlinks=false)",
+                    "path '$supplied' has a symlink at '$p' (forbidden when followSymlinks=false)",
                 )
             }
             p = p.parent
         }
+    }
+
+    /**
+     * `followSymlinks=true`: where does an operation on [p] actually land?
+     * An existing path is its real path; a dangling symlink is its target,
+     * resolved again; a missing plain leaf sits under its resolved parent.
+     */
+    private fun resolveFollowing(p: Path, supplied: String, probe: PathProbe, linkDepth: Int): Path {
+        if (linkDepth > MAX_LINK_DEPTH) {
+            throw SandboxViolation(
+                SandboxViolationKind.FsSymlinkRejected,
+                "path '$supplied' follows more than $MAX_LINK_DEPTH symlinks",
+            )
+        }
+        if (probe.exists(p)) return probe.realPath(p)
+        if (probe.isSymlink(p)) {
+            val parent = p.parent ?: p
+            val target = parent.resolve(probe.readLink(p)).toAbsolutePath().normalize()
+            return resolveFollowing(target, supplied, probe, linkDepth + 1)
+        }
+        val parent = p.parent ?: return p
+        val name = p.fileName ?: return p
+        return resolveFollowing(parent, supplied, probe, linkDepth).resolve(name)
     }
 }
 
@@ -430,7 +542,7 @@ object FsSandbox {
  *     `Socket(InetAddress, port)` (pin-at-check).
  *
  * Honours [NetPolicy.defaultDeny]: when false, blocked ranges and
- * blocked hostnames are not enforced (test mode).
+ * blocked hostnames are not enforced (the explicit opt-out policy).
  *
  * @param resolver injectable for tests; defaults to [SystemNameResolver].
  */
@@ -441,10 +553,10 @@ object NetSandbox {
         port: Int,
         resolver: NameResolver = SystemNameResolver,
     ): InetAddress {
-        // The `defaultDeny = false` test policy disables every check,
-        // returning whatever DNS resolves to. This is the test-mode
-        // bypass for `BuiltinsIoTest` and similar that connect to
-        // local sockets on 127.0.0.1.
+        // The `defaultDeny = false` opt-out policy (SandboxPolicy.OPEN_DEFAULT,
+        // installed explicitly) disables every check, returning whatever DNS
+        // resolves to. This is the bypass tests use for `BuiltinsIoTest` and
+        // similar that connect to local sockets on 127.0.0.1.
         if (!policy.defaultDeny) {
             return resolver.resolve(host).first()
         }
@@ -500,12 +612,18 @@ object NetSandbox {
             )
         }
         for (addr in resolved) {
-            val blocked = policy.blockedRanges.firstOrNull { it.contains(addr) }
-            if (blocked != null) {
-                throw SandboxViolation(
-                    SandboxViolationKind.NetHostBlocked,
-                    "host '$host' resolves to ${addr.hostAddress} which is in blocked range $blocked",
-                )
+            // Review M5: an IPv6 address that embeds an IPv4 address
+            // (IPv4-mapped, IPv4-compatible, NAT64 well-known prefix) is
+            // checked in both forms, so `::ffff:169.254.169.254` cannot
+            // slip past the IPv4 ranges.
+            for (form in listOfNotNull(addr, embeddedIpv4(addr))) {
+                val blocked = policy.blockedRanges.firstOrNull { it.contains(form) }
+                if (blocked != null) {
+                    throw SandboxViolation(
+                        SandboxViolationKind.NetHostBlocked,
+                        "host '$host' resolves to ${addr.hostAddress} which is in blocked range $blocked",
+                    )
+                }
             }
         }
 
@@ -514,6 +632,60 @@ object NetSandbox {
         // returned addresses passed the blocklist check, so this
         // choice is safe regardless of which one we hand back.
         return resolved.first()
+    }
+
+    /**
+     * Review M5: [DnsPolicy.RecheckAtConnect]. Called by `Net.Connect` and
+     * `Http.Request` immediately before the socket opens: re-resolves
+     * [host] and raises [SandboxViolationKind.NetDnsRebindingDetected]
+     * when the [pinned] address checked by [checkConnect] is no longer
+     * among the answers. The connection itself still goes to [pinned]
+     * (the pin-at-check defence is unchanged); the recheck turns a
+     * rebinding that the pin silently defeats into a visible, uncatchable
+     * denial. A no-op under every other [DnsPolicy], for IP literals, and
+     * when [NetPolicy.defaultDeny] is false.
+     */
+    fun recheckAtConnect(
+        policy: NetPolicy,
+        host: String,
+        pinned: InetAddress,
+        resolver: NameResolver = SystemNameResolver,
+    ) {
+        if (!policy.defaultDeny || policy.dnsPolicy != DnsPolicy.RecheckAtConnect || isIpLiteral(host)) return
+        val again = try {
+            resolver.resolve(host)
+        } catch (e: java.net.UnknownHostException) {
+            throw SandboxViolation(
+                SandboxViolationKind.NetDnsRebindingDetected,
+                "host '$host' no longer resolves at connect time: ${e.message}",
+            )
+        }
+        if (again.none { it == pinned }) {
+            throw SandboxViolation(
+                SandboxViolationKind.NetDnsRebindingDetected,
+                "host '$host' was checked at ${pinned.hostAddress} but resolves to " +
+                    "${again.joinToString { it.hostAddress }} at connect time",
+            )
+        }
+    }
+
+    /**
+     * The IPv4 address embedded in an IPv6 [addr], if any: IPv4-mapped
+     * (`::ffff:a.b.c.d`), IPv4-compatible (`::a.b.c.d`, excluding `::`
+     * and `::1`), or the NAT64 well-known prefix (`64:ff9b::a.b.c.d`).
+     * Null for IPv4 addresses and other IPv6 addresses.
+     */
+    internal fun embeddedIpv4(addr: InetAddress): InetAddress? {
+        val b = addr.address
+        if (b.size != 16) return null
+        val tail = b.copyOfRange(12, 16)
+        val zeroTo = { end: Int -> (0 until end).all { b[it] == 0.toByte() } }
+        val mapped = zeroTo(10) && b[10] == 0xff.toByte() && b[11] == 0xff.toByte()
+        val compatible = zeroTo(12) && !(tail[0] == 0.toByte() && tail[1] == 0.toByte() && tail[2] == 0.toByte() &&
+            (tail[3] == 0.toByte() || tail[3] == 1.toByte()))
+        val nat64 = b[0] == 0.toByte() && b[1] == 0x64.toByte() && b[2] == 0xff.toByte() && b[3] == 0x9b.toByte() &&
+            (4 until 12).all { b[it] == 0.toByte() }
+        return if (mapped || compatible || nat64) InetAddress.getByAddress(tail) else null
     }
 
     /**
@@ -541,5 +713,38 @@ object NetSandbox {
             }
         }
         return false
+    }
+}
+
+/**
+ * Process-side sandbox enforcer. The `Process.Spawn` builtin calls
+ * [check] with the command string before invoking `ProcessBuilder.start`.
+ *
+ *  1. If `policy.defaultDeny` is false, no constraint — the host opted
+ *     out (the [SandboxPolicy.OPEN_DEFAULT] library default).
+ *  2. Otherwise the command must match an entry in
+ *     `policy.allowedCommands`, either exactly or by filename component
+ *     (last path segment), so a host may allowlist a bare name or an
+ *     absolute path. A non-match raises
+ *     [SandboxViolation(ProcessSpawnBlocked)].
+ */
+object ProcessSandbox {
+    fun check(policy: ProcessPolicy, cmd: String) {
+        if (!policy.defaultDeny) return
+
+        val cmdFileName = Paths.get(cmd).fileName?.toString()
+        val permitted = policy.allowedCommands.any { allowed ->
+            allowed == cmd || allowed == cmdFileName
+        }
+        if (!permitted) {
+            throw SandboxViolation(
+                SandboxViolationKind.ProcessSpawnBlocked,
+                if (policy.allowedCommands.isEmpty())
+                    "command '$cmd' is blocked (process spawning is denied by default and no command is allowlisted)"
+                else
+                    "command '$cmd' is not in the process allowlist " +
+                        "(${policy.allowedCommands.joinToString(", ")})",
+            )
+        }
     }
 }

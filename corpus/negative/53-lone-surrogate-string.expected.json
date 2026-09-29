@@ -1,0 +1,5 @@
+{
+  "stage": "ingest",
+  "family": "Malformed",
+  "notes": "A StringLit whose value is the JSON escape for an unpaired UTF-16 high surrogate (U+D800). It has no UTF-8 encoding; the JVM's lenient encoder substituted '?', so the node hashed identically to StringLit(\"?\") while being a different runtime value (review H2). Ingest rejects ill-formed UTF-16 in every string of the document, and the canonical encoder reports it for programmatically built stores."
+}

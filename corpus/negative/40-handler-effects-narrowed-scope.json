@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "root": "h",
+  "nodes": {
+    "intT":   { "type": "PrimitiveType", "kind": "Int" },
+    "timeFx": { "type": "EffectCategory", "categoryName": "Time.Now" },
+    "logFx":  { "type": "EffectCategory", "categoryName": "Log.Write" },
+    "nowT":   { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+    "now":    { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+    "call":   { "type": "Application", "function": "now", "arguments": [] },
+    "scope":  { "type": "CapabilityScope", "capabilities": ["timeFx"], "body": "call" },
+    "zero":   { "type": "IntLit", "value": 0 },
+    "mockFn": { "type": "Lambda", "parameters": [], "body": "zero", "effects": ["logFx"] },
+    "h":      { "type": "Handler", "intercept": "timeFx", "handle": "mockFn", "body": "scope" }
+  }
+}

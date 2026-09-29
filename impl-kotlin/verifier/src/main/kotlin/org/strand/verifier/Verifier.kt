@@ -1,5 +1,6 @@
 package org.strand.verifier
 
+import org.strand.core.BuiltinEffectTable
 import org.strand.core.EffectProjection
 import org.strand.core.Hash
 import org.strand.core.Node
@@ -8,6 +9,7 @@ import org.strand.core.NodeStore
 import org.strand.core.Primitive
 import org.strand.core.ProjectionSource
 import org.strand.core.ProjectionStep
+import org.strand.core.childNodeIds
 import org.strand.core.translateNodeIds
 
 /**
@@ -37,7 +39,9 @@ import org.strand.core.translateNodeIds
  *  [VerifyError.UnboundTypeParameter]. In particular, a Lambda whose
  *  parameter type mentions a TypeParameter not in scope is ill-formed.
  *
- *  Effects are deliberately out of scope (Layer 3).
+ *  Effect closures, capability scopes, handlers, and the registry-target
+ *  effect row (BuiltinSignatureOracle, falling back to the core
+ *  BuiltinEffectTable floor) are checked alongside types.
  */
 /**
  * Constructed over a canonical [NodeStore] (produced by `Hasher.finalize`)
@@ -60,6 +64,34 @@ import org.strand.core.translateNodeIds
  * [hashToNodeId] to observe the admitted nodes, a federated caller must pass
  * the same mutable [FederatedProgram] instances the callback extends.
  */
+
+/** Memo-key marker: a referenced TypeParameter that is in scope. */
+private val IN_SCOPE = Any()
+
+private val EMPTY_REFS: Array<NodeId> = emptyArray()
+
+/** Memo key: node, recursive depth, and the observable slice of the context. */
+private class ContextKey(
+    val id: NodeId,
+    val depth: Int,
+    val values: Array<Any?>,
+) {
+    private val hash: Int = run {
+        var h = id.value * 31 + depth
+        for (v in values) h = h * 31 + System.identityHashCode(v)
+        h
+    }
+    override fun hashCode(): Int = hash
+    override fun equals(other: Any?): Boolean {
+        if (other !is ContextKey) return false
+        if (id != other.id || depth != other.depth || values.size != other.values.size) return false
+        for (i in values.indices) if (values[i] !== other.values[i]) return false
+        return true
+    }
+}
+
+/** A memoized inference result: the type and the effect closure recorded with it. */
+private class Inferred(val type: TypeExpr, val closure: Set<NodeId>?)
 
 /**
  * Q-046: the registry of IO-opening builtin targets a `source`-bound
@@ -88,18 +120,43 @@ class Verifier(
                 VerifyError.DanglingReference(at = root, missing = root, fromField = "<root>")
             ))
         }
+        // Review A11(b): the recursive descent is as deep as the graph; a
+        // graph deep enough to exhaust the JVM stack is reported as a typed
+        // VerificationTooDeep rather than surfacing a raw StackOverflowError.
         val rootType = try {
             state.infer(root, scope = emptyMap(), typeParams = emptySet())
         } catch (_: VerifyAbort) {
             return VerifyResult.Failed(state.errors)
+        } catch (_: StackOverflowError) {
+            return VerifyResult.Failed(state.errors + VerifyError.VerificationTooDeep(at = root))
         }
         // N-046 (Q-043): certify every ModuleManifest admitted to the store.
         // Each export's declaredEffects must exactly equal its target's effect
         // closure. Runs whether or not a manifest is reachable from `root` — a
         // published library's root may be the manifest itself, or a manifest
         // may sit alongside the program it documents.
-        state.checkManifests()
+        try {
+            state.checkManifests()
+        } catch (_: StackOverflowError) {
+            return VerifyResult.Failed(state.errors + VerifyError.VerificationTooDeep(at = root))
+        }
         if (state.errors.isNotEmpty()) return VerifyResult.Failed(state.errors)
+        // Q-070 / Q-071: surface the latent effect channel keyed by NodeId as
+        // the per-site map, plus the program root's aggregate latent set — the
+        // union of every recorded contribution (ToolDef implementations and
+        // higher-order callback arguments). The root aggregate is computed here,
+        // the single Ok construction site, rather than threaded through the
+        // recursive `infer` (which does not carry the root NodeId). If the root
+        // already has a per-site entry (it is itself an effectful ToolDef or
+        // Application argument — not a shape any current program takes, but
+        // defensively handled) it is unioned in rather than overwritten.
+        val latentBySite = state.latentClosures.toMap()
+        val rootLatentAggregate = latentBySite.values.flatten().toSet()
+        val latentClosures = if (rootLatentAggregate.isEmpty()) {
+            latentBySite
+        } else {
+            latentBySite + (root to ((latentBySite[root] ?: emptySet()) + rootLatentAggregate))
+        }
         return VerifyResult.Ok(
             rootType,
             state.nodeTypes.toMap(),
@@ -109,6 +166,9 @@ class Verifier(
             // UncoveredEffects) so a host reads the harm bound's `closure(g)`
             // instead of re-deriving it. `VerifyResult` is not encoded — hash-neutral.
             nodeClosures = state.nodeClosures.toMap(),
+            // Q-070 / Q-071: the parallel latent-effect channel (indirectly-
+            // reachable effect surface). Also not encoded — hash-neutral.
+            latentClosures = latentClosures,
         )
     }
 
@@ -267,6 +327,21 @@ class Verifier(
         val nodeClosures = mutableMapOf<NodeId, Set<NodeId>>()
 
         /**
+         * Q-070 / Q-071: latent effect surface — the union of effect surfaces
+         * reachable only through indirect invocation, keyed by NodeId exactly as
+         * [nodeClosures] is. Distinct from [nodeClosures], which holds the
+         * directly-performed closure the verifier walks through Application
+         * edges. Two contributors fold in during [infer]: N-044 ToolDef
+         * implementations (at [inferToolDef]) and higher-order callbacks — any
+         * effectful value in argument position (at [inferApplication]). Every
+         * contribution is also unioned into the program root's entry via
+         * [addLatent], so [VerifyResult.Ok.rootLatentClosure] reads the whole
+         * latent surface off the root. Surfaced on [VerifyResult.Ok] additively;
+         * [VerifyResult] is not encoded, so this is hash-neutral.
+         */
+        val latentClosures = mutableMapOf<NodeId, Set<NodeId>>()
+
+        /**
          * Q-039: per-verification structural-equality cache for
          * [ProjectionSource.LiteralNode] targets and the EffectDecl
          * literal parameters they're matched against. Keyed by the
@@ -277,13 +352,167 @@ class Verifier(
          */
         private val literalEqualityCache = mutableMapOf<Pair<NodeId, NodeId>, Boolean>()
 
+        /**
+         * Record [t] as the type of [id]. A SchemaType obligation recorded by a
+         * value-flow site (an Application argument, ProductFieldValue or
+         * SumValue payload flowing into a `Schema<T>` position) is sticky:
+         * a later record of the plain `T` for the same node (a re-inference
+         * through another parent that uses the node at a plain position)
+         * does not erase it (review H2). Two distinct schema obligations on
+         * one shared node still resolve last-write-wins.
+         */
         fun record(id: NodeId, t: TypeExpr) {
+            val prev = nodeTypes[id]
+            if (prev is TypeExpr.SchemaType && t !is TypeExpr.SchemaType && prev.valueType == t) return
             nodeTypes[id] = t
         }
+
+        // ---- Review C3: memoized inference over shared DAGs ----------------
+        //
+        // `infer` and `resolveType` are functions of the node and the part of
+        // the context the node's subgraph can observe: the scope entries of
+        // the term binders it references freely, the membership in the
+        // in-scope TypeParameter set of every TypeParameter it mentions (free
+        // or bound, so the rebinding rule sees its binders), and the
+        // RecursiveType depth. Keying the memo on exactly that makes a shared
+        // child verify once per distinct observable context instead of once
+        // per parent edge, which turns the exponential blow-up on
+        // `x_i = f(x_{i-1}, x_{i-1})` chains into linear work.
+        //
+        // Scope values are compared by reference. Every scope value for a
+        // given binder is produced by a memoized `infer`/`resolveType` call,
+        // so equal types arrive as the same object; the identity compare
+        // never hashes a TypeExpr tree. A missed hit costs time, never
+        // soundness.
+
+        /** Sorted referenced-name array per node (see [refsOf]). */
+        private val refsMemo = HashMap<NodeId, Array<NodeId>>()
+        private val refsInProgress = HashSet<NodeId>()
+
+        /**
+         * The binder and TypeParameter NodeIds [id]'s subgraph can observe
+         * from its context, sorted by NodeId; null when the walk hit a cycle
+         * (the caller then skips memoization for that node). Over-approximate
+         * by construction: a binder is subtracted only where Lambda, Let and
+         * MatchCase bind it.
+         */
+        private fun refsOf(id: NodeId): Array<NodeId>? {
+            refsMemo[id]?.let { return it }
+            val node = store.getOrNull(id) ?: return EMPTY_REFS
+            if (!refsInProgress.add(id)) return null
+            val out = HashSet<NodeId>()
+            try {
+                fun addAll(child: NodeId): Boolean {
+                    val r = refsOf(child) ?: return false
+                    out.addAll(r)
+                    return true
+                }
+                val complete = when (node) {
+                    is Node.VarRef -> { out += node.binder; true }
+                    is Node.TypeParameter -> { out += id; true }
+                    is Node.Lambda -> {
+                        val ok = node.childNodeIds().all(::addAll)
+                        out.removeAll(node.parameters.toSet())
+                        ok
+                    }
+                    is Node.Let -> {
+                        val bodyRefs = refsOf(node.body)
+                        val valueOk = addAll(node.value)
+                        if (bodyRefs != null) bodyRefs.filterTo(out) { it != id }
+                        valueOk && bodyRefs != null
+                    }
+                    is Node.MatchCase -> {
+                        val bodyRefs = refsOf(node.body)
+                        val patternOk = addAll(node.pattern)
+                        val bound = patternBinders(node.pattern)
+                        if (bodyRefs != null) bodyRefs.filterTo(out) { it !in bound }
+                        patternOk && bodyRefs != null
+                    }
+                    is Node.TypeAbstraction -> { out += node.typeParameters; addAll(node.body) }
+                    is Node.ForallType -> { out += node.typeParameters; addAll(node.body) }
+                    else -> node.childNodeIds().all(::addAll)
+                }
+                if (!complete) return null
+            } finally {
+                refsInProgress.remove(id)
+            }
+            val sorted = out.toTypedArray()
+            sorted.sortBy { it.value }
+            refsMemo[id] = sorted
+            return sorted
+        }
+
+        /** VariablePattern NodeIds bound by the pattern tree rooted at [patternId]. */
+        private fun patternBinders(patternId: NodeId): Set<NodeId> {
+            val out = HashSet<NodeId>()
+            val seen = HashSet<NodeId>()
+            var cur: NodeId? = patternId
+            while (cur != null && seen.add(cur)) {
+                val at: NodeId = cur
+                cur = when (val p = store.getOrNull(at)) {
+                    is Node.Pattern.VariablePattern -> { out += at; null }
+                    is Node.Pattern.ConstructorPattern -> p.payloadPattern
+                    else -> null
+                }
+            }
+            return out
+        }
+
+        /**
+         * Build the memo key for [id] under [scope] / [typeParams], or null
+         * when [id]'s reference set is incomplete. Each referenced name
+         * contributes its scope value (by reference), a marker when it is an
+         * in-scope TypeParameter, or null when it is neither.
+         */
+        private fun contextKey(id: NodeId, scope: Map<NodeId, TypeExpr>, typeParams: Set<NodeId>): ContextKey? {
+            val refs = refsOf(id) ?: return null
+            val values = arrayOfNulls<Any>(refs.size)
+            for (i in refs.indices) {
+                val r = refs[i]
+                values[i] = scope[r] ?: if (r in typeParams) IN_SCOPE else null
+            }
+            return ContextKey(id, recursiveDepth, values)
+        }
+
+        /**
+         * The instantiated FunctionType each Application's callee was checked
+         * at (after substituting the Application's typeArguments into a
+         * polymorphic callee). The Handler signature check reads this rather
+         * than the callee's raw type, so a polymorphic callee is checked at
+         * its instantiation (review H1).
+         */
+        val appFunTypes = HashMap<NodeId, TypeExpr.Fun>()
+
+        private val inferMemo = HashMap<ContextKey, Inferred>()
+        private val typeMemo = HashMap<ContextKey, TypeExpr>()
 
         fun recordClosure(id: NodeId, c: Set<NodeId>) {
             nodeClosures[id] = c
         }
+
+        /**
+         * Q-070 / Q-071: fold a latent effect surface [surface] into the
+         * latent channel at site [id]. No-op for an empty surface. The
+         * per-site entry accumulates (unions) across multiple contributions
+         * at the same NodeId; the program root's aggregate latent set is
+         * computed at the single [VerifyResult.Ok] construction site as the
+         * union of every recorded contribution (see [verify]).
+         */
+        fun addLatent(id: NodeId, surface: Set<NodeId>) {
+            if (surface.isEmpty()) return
+            latentClosures[id] = (latentClosures[id] ?: emptySet()) + surface
+        }
+
+        /**
+         * Q-070 / Q-071: the effect surface of a value whose inferred type is
+         * [type] — the effect row of a [TypeExpr.Fun] (empty for any other
+         * shape). For both a Lambda and a ForeignNode implementation the
+         * inferred value type is a `Fun` whose `effects` set is the surface
+         * (ForeignNode folds its declared effects into that row, see
+         * [inferForeignNode]).
+         */
+        fun effectSurfaceOf(type: TypeExpr): Set<NodeId> =
+            (type as? TypeExpr.Fun)?.effects ?: emptySet()
 
         /**
          * Type-compatibility for value-flow positions (Application argument
@@ -366,6 +595,65 @@ class Verifier(
             return false
         }
 
+        /**
+         * Value-flow compatibility: the check used where a *value* flows into
+         * an *expected position* (Application argument, ProductFieldValue,
+         * SumValue payload). It is [typesCompatible] plus one further
+         * relaxation, Q-049 effect-set inclusion at the outermost arrow.
+         *
+         * When a function-typed value flows into a function-typed expected
+         * position, the position is accepted if the parameter types and result
+         * type are strictly equal (existing discipline — with the SchemaType
+         * and equirecursive relaxations that already apply at
+         * [typesCompatible]) AND the actual function's effect set is a *subset*
+         * of the expected function's effect set. A function with FEWER effects
+         * than the position declares is always safe: the canonical friction
+         * case is a pure lambda flowing into a callback parameter declared with
+         * an effect row. The reverse (actual effects ⊃ expected) stays
+         * rejected, and any structural difference in parameters or result is
+         * rejected exactly as before.
+         *
+         * The relaxation is applied only at the OUTERMOST arrow of the compared
+         * types. Nested arrows — a function type inside a product field of the
+         * compared types, or in the parameter position of the compared arrows —
+         * keep strict equality this slice; variance machinery (contravariant
+         * argument / covariant result positions) is explicitly deferred to a
+         * future Q-049 increment. Only value-flow sites call this; the
+         * structural-equivalence sites (Match case-body divergence, Fixpoint
+         * body shape, Handler signature agreement, StateMachine transition
+         * shape, ToolDef implementation type) stay on strict [typesCompatible]
+         * (or `==`), so effect-exact equality is preserved wherever structural
+         * equivalence — not assignment-compatibility — is what matters.
+         *
+         * Soundness: this does not weaken the Q-044 effect-closure bound.
+         * `inferApplication` adds the *declared* effect row of the resolved
+         * callee/parameter type at each call site, so when a pure function is
+         * accepted at an effectful position the closure keeps the position's
+         * (larger) declared row — the closure over-approximates rather than
+         * under-approximates.
+         */
+        fun typesCompatibleAtValueFlow(expected: TypeExpr, actual: TypeExpr): Boolean {
+            if (typesCompatible(expected, actual)) return true
+            // Q-049: outermost-arrow effect-set inclusion. Strip a SchemaType
+            // wrapper on either side to its valueType first (value-flow already
+            // permits T ↔ Schema<T>), so an effectful callback carried through
+            // a schema position is still compared arrow-to-arrow.
+            val e = if (expected is TypeExpr.SchemaType) expected.valueType else expected
+            val a = if (actual is TypeExpr.SchemaType) actual.valueType else actual
+            if (e is TypeExpr.Fun && a is TypeExpr.Fun) {
+                // Parameters and result stay strict (equality via typesCompatible
+                // preserves the existing SchemaType / equirecursive relaxations
+                // but adds no variance). Only the outermost effect row is
+                // relaxed to subset inclusion.
+                val paramsEqual = e.parameters.size == a.parameters.size &&
+                    e.parameters.indices.all { typesCompatible(e.parameters[it], a.parameters[it]) }
+                val resultEqual = typesCompatible(e.result, a.result)
+                val effectsIncluded = e.effects.containsAll(a.effects)
+                if (paramsEqual && resultEqual && effectsIncluded) return true
+            }
+            return false
+        }
+
         fun closureOf(id: NodeId): Set<NodeId> =
             nodeClosures[id] ?: emptySet()
 
@@ -431,32 +719,54 @@ class Verifier(
         }
 
         /**
-         * The effect surface a consumer incurs by *using* a manifest export.
+         * The effect surface a consumer incurs by *using* a manifest export:
+         * the effects evaluating the export itself exercises (its
+         * construction closure, empty for a Lambda) together with every
+         * effect row latent in its type (review H5).
          *
-         * For a function-typed export (the common case) this is the function's
-         * declared effect row — releasing those effects is exactly what calling
-         * the export does. A bare Lambda has an empty *closure* (constructing a
-         * closure value is pure; effects release at call sites, see
-         * [inferApplication]), so `closureOf` would wrongly report no effects
-         * for an effectful function. For a non-function (value) export, the
-         * surface is the node's construction closure.
+         * A function-typed export's surface is its declared row plus the
+         * latent rows of its result, so a curried function whose inner
+         * function performs an effect surfaces that effect. A record, sum or
+         * schema-wrapped value exposes the latent rows of every function it
+         * carries, so a record of effectful functions cannot certify with
+         * `declaredEffects = []`. Parameter positions are not counted: a
+         * callback's effects are the consumer's own, supplied by the
+         * consumer. A polymorphic export uses its body.
          *
-         * This clarifies proposal § 5.4's "closure of the target": for function
-         * exports the meaningful quantity is the function's effect row, not the
-         * always-empty closure of the Lambda value. Polymorphic functions
-         * (a Forall over a Fun) use the inner Fun's effect row.
+         * This clarifies proposal § 5.4's "closure of the target": for
+         * function exports the meaningful quantity is what calling (and
+         * calling the results of calling) releases, not the always-empty
+         * closure of the Lambda value.
          */
         private fun exportEffectSurface(targetId: NodeId, targetType: TypeExpr): Set<NodeId> =
-            when (targetType) {
-                is TypeExpr.Fun -> targetType.effects
-                is TypeExpr.Forall ->
-                    (targetType.body as? TypeExpr.Fun)?.effects ?: closureOf(targetId)
-                else -> closureOf(targetId)
+            closureOf(targetId) + latentEffects(targetType)
+
+        /** Every effect row reachable in [t] outside function-parameter positions. */
+        private fun latentEffects(t: TypeExpr): Set<NodeId> {
+            val out = LinkedHashSet<NodeId>()
+            val seen = HashSet<TypeExpr>()
+            fun walk(x: TypeExpr) {
+                when (x) {
+                    is TypeExpr.Fun -> { out += x.effects; walk(x.result) }
+                    is TypeExpr.Forall -> walk(x.body)
+                    is TypeExpr.Product -> x.fields.forEach { walk(it.type) }
+                    is TypeExpr.Sum -> x.cases.forEach { c -> c.type?.let(::walk) }
+                    // A μ-body is walked once; its RecursiveSelf occurrences
+                    // add no new rows.
+                    is TypeExpr.Recursive -> if (seen.add(x)) walk(x.body)
+                    is TypeExpr.SchemaType -> walk(x.valueType)
+                    is TypeExpr.Prim, is TypeExpr.Param, is TypeExpr.RecursiveSelf -> Unit
+                }
             }
+            walk(t)
+            return out
+        }
 
         /**
-         * After verifying a NodeRef's target subgraph under an empty scope,
-         * fold any [VerifyError.UnboundVariable] / [VerifyError.UnboundTypeParameter]
+         * After verifying a NodeRef's target subgraph under an empty scope
+         * (term position) or an empty TypeParameter set and zero recursive
+         * depth (type position), fold any [VerifyError.UnboundVariable] /
+         * [VerifyError.UnboundTypeParameter] / [VerifyError.UnboundRecursiveSelf]
          * errors raised between [errorsBefore] and now into a single
          * [VerifyError.NodeRefTargetMustBeClosed] report. Closure-check errors
          * are removed; any unrelated errors raised during the recursive verify
@@ -469,13 +779,17 @@ class Verifier(
                 when (err) {
                     is VerifyError.UnboundVariable -> err.binder
                     is VerifyError.UnboundTypeParameter -> err.typeParameter
+                    // A RecursiveSelf escaping a type-position NodeRef target
+                    // (review H4) is an open reference to an outer binder.
+                    is VerifyError.UnboundRecursiveSelf -> err.at
                     else -> null
                 }
             }
             if (openRefs.isEmpty()) return
             // Strip the closure-related errors; keep any others.
             val kept = window.filter { err ->
-                err !is VerifyError.UnboundVariable && err !is VerifyError.UnboundTypeParameter
+                err !is VerifyError.UnboundVariable && err !is VerifyError.UnboundTypeParameter &&
+                    err !is VerifyError.UnboundRecursiveSelf
             }
             window.clear()
             errors += kept
@@ -509,6 +823,22 @@ class Verifier(
          * checks consult this set when resolving TypeParameter references.
          */
         fun infer(id: NodeId, scope: Map<NodeId, TypeExpr>, typeParams: Set<NodeId>): TypeExpr {
+            val key = contextKey(id, scope, typeParams)
+            if (key != null) {
+                inferMemo[key]?.let { hit ->
+                    // Replay the recorded outputs a parent reads right after
+                    // this call returns: the node's type and effect closure.
+                    record(id, hit.type)
+                    if (hit.closure != null) nodeClosures[id] = hit.closure else nodeClosures.remove(id)
+                    return hit.type
+                }
+            }
+            val t = inferUncached(id, scope, typeParams)
+            if (key != null) inferMemo[key] = Inferred(t, nodeClosures[id])
+            return t
+        }
+
+        private fun inferUncached(id: NodeId, scope: Map<NodeId, TypeExpr>, typeParams: Set<NodeId>): TypeExpr {
             val node = store.getOrNull(id)
                 ?: reportFatal(VerifyError.DanglingReference(at = id, missing = id, fromField = "<resolve>"))
 
@@ -709,7 +1039,23 @@ class Verifier(
                     ))
                     throw VerifyAbort()
                 }
+                // Q-049: reject a bounded abstracted parameter at the
+                // declaration site (the body may never reference it, so
+                // resolveType alone would not fire on the bound).
+                val tpBound = tpNode.bound
+                if (tpBound != null) {
+                    report(VerifyError.TypeParameterBoundUnsupported(
+                        at = tpId, bound = tpBound
+                    ))
+                    throw VerifyAbort()
+                }
             }
+            // Review C2: Forall equality is by TypeParameter NodeId, so an
+            // inner binder that rebinds an in-scope TypeParameter makes two
+            // different variables indistinguishable (an inner `forall a.`
+            // under an outer `forall a.` lets a function returning the outer
+            // `a` type as the identity). Rebinding is rejected outright.
+            checkNoRebinding(id, node.typeParameters, typeParams)
             val extendedTypeParams = typeParams + node.typeParameters
             val bodyType = infer(node.body, scope, extendedTypeParams)
             // TypeAbstraction is transparent for effect-closure purposes: its
@@ -718,6 +1064,21 @@ class Verifier(
             // typically resolves to ∅.
             recordClosure(id, closureOf(node.body))
             return TypeExpr.Forall(node.typeParameters, bodyType)
+        }
+
+        /**
+         * Reject a TypeAbstraction / ForallType at [at] whose binder list
+         * repeats a TypeParameter or names one already bound by an enclosing
+         * binder ([VerifyError.TypeParameterRebound]).
+         */
+        private fun checkNoRebinding(at: NodeId, binders: List<NodeId>, typeParams: Set<NodeId>) {
+            val seen = HashSet<NodeId>()
+            for (tp in binders) {
+                if (tp in typeParams || !seen.add(tp)) {
+                    report(VerifyError.TypeParameterRebound(at = at, param = tp))
+                    throw VerifyAbort()
+                }
+            }
         }
 
         private fun inferApplication(
@@ -757,7 +1118,14 @@ class Verifier(
                     for ((i, tp) in fnType.typeParameters.withIndex()) {
                         subst[tp] = resolvedTypeArgs[i]
                     }
-                    val instantiated = substitute(fnType.body, subst)
+                    val instantiated = try {
+                        substitute(fnType.body, subst)
+                    } catch (capture: TypeParameterCapture) {
+                        // Review C2: a type argument mentions a TypeParameter
+                        // that an inner Forall of the callee rebinds.
+                        report(VerifyError.TypeParameterRebound(at = id, param = capture.param))
+                        throw VerifyAbort()
+                    }
                     when (instantiated) {
                         is TypeExpr.Fun -> instantiated
                         is TypeExpr.Forall -> {
@@ -776,6 +1144,8 @@ class Verifier(
                 }
             }
 
+            appFunTypes[id] = funType
+
             if (funType.parameters.size != node.arguments.size) {
                 report(VerifyError.ArityMismatch(
                     id, expected = funType.parameters.size, actual = node.arguments.size
@@ -787,7 +1157,7 @@ class Verifier(
             for (i in funType.parameters.indices) {
                 val expected = funType.parameters[i]
                 val actual = argTypes[i]
-                if (!typesCompatible(expected, actual)) {
+                if (!typesCompatibleAtValueFlow(expected, actual)) {
                     report(VerifyError.ParameterTypeMismatch(
                         at = id,
                         parameterIndex = i,
@@ -810,12 +1180,16 @@ class Verifier(
             }
 
             // Q-031: validate effectInstances against the callee's declared
-            // effects. Empty effectInstances are permitted only when the
-            // callee has no declared effects (pre-Q-031 back-compat: every
+            // effects. An empty effectInstances list is always admitted,
+            // whatever the callee declares (pre-Q-031 back-compat: every
             // existing corpus call site that didn't supply effect instances
-            // continues to verify cleanly). When non-empty, every EffectDecl
-            // must be well-formed (shape, arity, parameter types) AND the
-            // set of EffectCategories covered must equal the callee's
+            // continues to verify cleanly). The refinement consequence is
+            // enforced at runtime: an instance-free call that performs a
+            // parameterized category (a ForeignNode dispatch with no
+            // projection) is covered only by an unrefined grant (see the
+            // interpreter's checkCapabilities). When non-empty, every
+            // EffectDecl must be well-formed (shape, arity, parameter types)
+            // AND the set of EffectCategories covered must equal the callee's
             // FunctionType.effects set exactly.
             if (node.effectInstances.isNotEmpty()) {
                 val coveredCategories = LinkedHashSet<NodeId>()
@@ -878,6 +1252,32 @@ class Verifier(
             for (argId in node.arguments) closure += closureOf(argId)
             closure += funType.effects
             recordClosure(id, closure)
+
+            // Q-071: higher-order callbacks. Any effectful value passed as an
+            // ARGUMENT (not as the applied function `node.function`) may be
+            // invoked indirectly inside the callee — e.g. a `List.Map` over an
+            // effectful callback releases the callback's effects at a call site
+            // the verifier never walks. Its effect surface is therefore absent
+            // from the closure above and folds into the latent channel instead.
+            // A value that is BOTH an argument here and directly applied
+            // elsewhere already contributes its direct use to `closure`; this
+            // adds only its indirect reach. Two shapes are surfaced: (a) an
+            // argument whose inferred type carries a non-empty effect row, and
+            // (b) an argument that resolves through the projected-ForeignNode
+            // chain to an effect-bearing ForeignNode (whose type-level effect
+            // row may be empty at the reference site but whose declared effects
+            // are the surface the runtime releases).
+            for ((i, argId) in node.arguments.withIndex()) {
+                val surface = effectSurfaceOf(argTypes[i]).toMutableSet()
+                // The projected-ForeignNode fallback reads the already-validated
+                // declared effects off the resolved node (the argument was
+                // inferred above, so `inferForeignNode` has already checked those
+                // edges — we only read them here).
+                resolveProjectedForeignNode(argId)?.let { foreign ->
+                    surface += foreign.effects
+                }
+                addLatent(argId, surface)
+            }
 
             return funType.result
         }
@@ -1055,9 +1455,13 @@ class Verifier(
 
             // Constructor patterns check against a Recursive scrutinee by
             // unfolding to the underlying Sum; exhaustiveness mirrors that.
-            val effective = when (scrutineeType) {
-                is TypeExpr.Recursive -> unfoldRecursive(scrutineeType)
-                else -> scrutineeType
+            // A Schema<T> scrutinee is matched as its T (patterns already
+            // check against it by value-flow compatibility); unwrap before
+            // enumerating cases, then unfold a Recursive.
+            val unwrapped = (scrutineeType as? TypeExpr.SchemaType)?.valueType ?: scrutineeType
+            val effective = when (unwrapped) {
+                is TypeExpr.Recursive -> unfoldRecursive(unwrapped)
+                else -> unwrapped
             }
             when {
                 effective is TypeExpr.Sum -> {
@@ -1322,7 +1726,7 @@ class Verifier(
                     throw VerifyAbort()
                 }
                 val actualType = infer(fieldNode.value, scope, typeParams)
-                if (!typesCompatible(expectedType, actualType)) {
+                if (!typesCompatibleAtValueFlow(expectedType, actualType)) {
                     report(VerifyError.ProductFieldValueTypeMismatch(
                         at = id,
                         fieldName = fieldNode.fieldName,
@@ -1415,7 +1819,7 @@ class Verifier(
                     ))
                 expectedPayloadType != null && payload != null -> {
                     val actualType = infer(payload, scope, typeParams)
-                    if (!typesCompatible(expectedPayloadType, actualType)) {
+                    if (!typesCompatibleAtValueFlow(expectedPayloadType, actualType)) {
                         reportAndAbort(VerifyError.SumPayloadTypeMismatch(
                             at = id, caseName = node.caseName,
                             expected = expectedPayloadType,
@@ -1450,7 +1854,9 @@ class Verifier(
             scope: Map<NodeId, TypeExpr>,
             typeParams: Set<NodeId>,
         ): TypeExpr {
-            val targetType = infer(node.target, scope, typeParams)
+            val inferredTarget = infer(node.target, scope, typeParams)
+            // A Schema<Product> value is read as its Product.
+            val targetType = (inferredTarget as? TypeExpr.SchemaType)?.valueType ?: inferredTarget
             if (targetType !is TypeExpr.Product) {
                 report(VerifyError.CategoryMismatch(
                     at = id, field = "ProductFieldGet.target type",
@@ -1615,11 +2021,14 @@ class Verifier(
             typeParams: Set<NodeId>
         ): TypeExpr {
             // The ForeignNode's value-level type is its foreignType (which
-            // must be a FunctionType). Its declared effects are authoritative
-            // per ADR-005 and override any effects the foreignType itself
-            // happens to carry — agents typically declare effects at the
+            // must be a FunctionType). Its effect row is the union of the
+            // ForeignNode's declared effects and any effects the foreignType
+            // itself carries (agents typically declare effects at the
             // ForeignNode level and leave the FunctionType signature purely
-            // for parameters/result.
+            // for parameters/result). The interpreter uses the same union at
+            // dispatch. Declared effects are trusted per ADR-005 except for
+            // `strand-builtin:` targets, whose row is cross-checked against
+            // the registry (Q-056, checkBuiltinSignatureAndEffects).
             val fType = resolveType(node.foreignType, typeParams)
             if (fType !is TypeExpr.Fun) {
                 report(VerifyError.CategoryMismatch(
@@ -1630,6 +2039,13 @@ class Verifier(
                 throw VerifyAbort()
             }
             val declaredEffects = validateEffectCategoryEdges(id, node.effects, "ForeignNode.effects")
+            // The declared row compared against the builtin's truth is the
+            // same union the returned Fun carries (foreignType ∪ node
+            // effects), matched by categoryName since EffectCategory nodes
+            // are per-program declarations.
+            val declaredNames = (fType.effects + declaredEffects).mapNotNull { effectId ->
+                (store.getOrNull(effectId) as? Node.EffectCategory)?.categoryName
+            }.toSet()
             // Q-039: validate the optional effectProjections against the
             // declared effects list and the signature's parameter shape.
             // Empty list is the legacy path (Q-031 semantics retained).
@@ -1639,6 +2055,11 @@ class Verifier(
                 effectProjections = node.effectProjections,
                 signatureParameterTypes = fType.parameters,
             )
+            // Q-056: for a `strand-builtin:` target the truth is co-resident.
+            // Cross-check the declared effects and (for monomorphic targets)
+            // the declared signature against the registry oracle. Degrades to
+            // skip when no oracle is registered.
+            checkBuiltinSignatureAndEffects(id, node, fType, declaredNames)
             // Evaluating a ForeignNode produces a callable value — no effects
             // fire at construction. Effects release at call sites (handled
             // in inferApplication via the function's type effects).
@@ -1648,6 +2069,135 @@ class Verifier(
                 result = fType.result,
                 effects = fType.effects + declaredEffects,
             )
+        }
+
+        /**
+         * Q-056: cross-check a `strand-builtin:` ForeignNode's declared
+         * effects and signature against the co-resident registry oracle.
+         *
+         * Effects: the declared row [declaredEffectNames] (the union of the
+         * foreignType's effects and ForeignNode.effects, as category names)
+         * is required to EQUAL the oracle's name set. Under-declaration (a category the builtin really has but the
+         * ForeignNode omits) is the soundness-critical case for ADR-010's
+         * effect closure; over-declaration is also rejected, matching the
+         * N-046 ModuleManifest exact-surface precedent.
+         *
+         * Signature: for a monomorphic target the declared [fType] must
+         * structurally equal the oracle's canonical shape. For polymorphic /
+         * agent-typed families the oracle returns no monomorphic shape and
+         * only the parameter arity is checked — the structural remainder is
+         * deferred so a legitimate polymorphic use is never over-rejected.
+         *
+         * With no oracle registered (a verifier-only classpath), or for a
+         * target the oracle does not model, the check falls back to the core
+         * BuiltinEffectTable floor for effects (under-declaration only) and
+         * skips the signature. It skips entirely for a target in neither (a
+         * `wasm:` / `process:` binding, or a `Test.` builtin).
+         */
+        private fun checkBuiltinSignatureAndEffects(
+            id: NodeId,
+            node: Node.ForeignNode,
+            fType: TypeExpr.Fun,
+            declaredEffectNames: Set<String>,
+        ) {
+            val target = node.target
+            val oracleEffectNames = if (target.startsWith("strand-builtin:")) {
+                BuiltinSignatures.effectNamesFor(target)
+            } else {
+                null
+            }
+            if (oracleEffectNames == null) {
+                // Targets the oracle does not know (the runtime-intercepted
+                // `strand-runtime:` supervision targets, registry entries
+                // outside the prelude and signature table such as the
+                // streaming LLM opens) and every target on a classpath
+                // without an oracle (a verifier-only host) fall back to the
+                // core BuiltinEffectTable floor: under-declaration is
+                // rejected; over-declaration and signatures are not checked
+                // without the full table. A target in neither skips.
+                val floor = BuiltinEffectTable.requiredCategories(target) ?: return
+                val missing = floor - declaredEffectNames
+                if (missing.isNotEmpty()) {
+                    report(VerifyError.BuiltinEffectMismatch(
+                        at = id,
+                        target = target,
+                        declared = declaredEffectNames,
+                        actual = floor,
+                        missing = missing,
+                    ))
+                    throw VerifyAbort()
+                }
+                return
+            }
+            val actualEffectNames: Set<String> = oracleEffectNames
+
+            // Effect cross-check over the declared row (foreignType effects
+            // ∪ ForeignNode.effects, resolved to category names by the caller).
+            if (declaredEffectNames != actualEffectNames) {
+                report(VerifyError.BuiltinEffectMismatch(
+                    at = id,
+                    target = target,
+                    declared = declaredEffectNames,
+                    actual = actualEffectNames,
+                    missing = actualEffectNames - declaredEffectNames,
+                ))
+                throw VerifyAbort()
+            }
+
+            // Signature cross-check.
+            val canonicalShape = BuiltinSignatures.signatureShapeFor(target)
+            if (canonicalShape != null) {
+                // Monomorphic: require exact structural equality.
+                val declaredShape = builtinShapeOf(fType)
+                if (declaredShape != canonicalShape) {
+                    report(VerifyError.BuiltinSignatureMismatch(
+                        at = id,
+                        target = target,
+                        declared = declaredShape,
+                        actual = canonicalShape,
+                    ))
+                    throw VerifyAbort()
+                }
+            }
+            // Polymorphic / agent-typed targets (canonicalShape == null but
+            // known to the oracle): parameter arity is checked at each
+            // Application site by the standard ArityMismatch rule; the
+            // structural signature remainder is deferred rather than
+            // over-rejected here, per the proposal's polymorphic scope.
+        }
+
+        /**
+         * Q-056: canonicalize a resolved [TypeExpr] into the oracle-comparable
+         * [BuiltinShape]. Effects on function types are dropped (the effect
+         * surface is cross-checked separately via the ForeignNode's declared
+         * `effects`, not via the FunctionType's effect row). Product/Sum
+         * origin NodeIds are dropped (structural identity), matching
+         * [TypeExpr]'s own equality. Recursive self-references use the same
+         * positional depth [TypeExpr.RecursiveSelf] carries.
+         */
+        private fun builtinShapeOf(t: TypeExpr): BuiltinShape = when (t) {
+            is TypeExpr.Prim -> BuiltinShape.Prim(t.kind.name)
+            is TypeExpr.Fun -> BuiltinShape.Fun(
+                parameters = t.parameters.map { builtinShapeOf(it) },
+                result = builtinShapeOf(t.result),
+            )
+            is TypeExpr.Product -> BuiltinShape.Product(
+                fields = t.fields.map { it.name to builtinShapeOf(it.type) },
+            )
+            is TypeExpr.Sum -> BuiltinShape.Sum(
+                cases = t.cases.map { it.name to it.type?.let { ty -> builtinShapeOf(ty) } },
+            )
+            is TypeExpr.Recursive -> BuiltinShape.Recursive(builtinShapeOf(t.body))
+            is TypeExpr.RecursiveSelf -> BuiltinShape.RecSelf(t.depth)
+            // A monomorphic builtin's foreignType mentions no type parameter,
+            // Forall, or SchemaType. If one appears the target is not the
+            // monomorphic shape the oracle claimed; encode it as an unshared
+            // primitive marker so structural equality fails cleanly rather
+            // than throwing (the resulting BuiltinSignatureMismatch is the
+            // right diagnostic).
+            is TypeExpr.Param -> BuiltinShape.Prim("<param#${t.origin.value}>")
+            is TypeExpr.Forall -> BuiltinShape.Prim("<forall>")
+            is TypeExpr.SchemaType -> builtinShapeOf(t.valueType)
         }
 
         private fun inferCapabilityScope(
@@ -1739,10 +2289,12 @@ class Verifier(
             // 4. Per-Application signature check. Walk the body's structural
             //    subtree; for every Application whose callee declares the
             //    intercepted category, confirm the value-argument types and
-            //    result type match the handler's signature.
-            if (node.intercept in bodyClosure) {
-                checkHandlerSignatureAgreement(id, node.intercept, handleFun, node.body)
-            }
+            //    result type match the handler's signature. The walk runs
+            //    whether or not the intercept is in the body's static
+            //    closure (review H1): a callback run by a higher-order
+            //    builtin can reach the category at runtime even though the
+            //    builtin's own row does not carry it (Q-070).
+            checkHandlerSignatureAgreement(id, node.intercept, handleFun, node.body)
 
             // 5. Closure subtraction. Per § 6.3 of the proposal:
             //    closureOf(handler) = (closureOf(body) - {intercept})
@@ -1783,9 +2335,37 @@ class Verifier(
             expected: TypeExpr.Fun,
             bodyId: NodeId,
         ) {
-            val visited = HashSet<NodeId>()
+            // Review A11(c): the interpreter runs the handler at the
+            // intercepted call site, under that site's capability context,
+            // which a CapabilityScope between the Handler and the call may
+            // have narrowed. The walk tracks the narrowing (intersection of
+            // enclosing scopes' capabilities, null when none) and requires
+            // the handler's own effects to survive it. A node reached under
+            // two different narrowings is visited under each.
+            var narrowed: Set<NodeId>? = null
+            var narrowedAt: NodeId? = null
+            val visited = HashSet<Pair<NodeId, Set<NodeId>?>>()
+            lateinit var visitRef: (NodeId) -> Unit
+            // A callback argument handed to a higher-order builtin: follow a
+            // Let-bound name to the function it names, so a Lambda defined
+            // outside the Handler body is still checked.
+            fun visitCallback(argId: NodeId) {
+                var current = argId
+                repeat(64) {
+                    when (val n = store.getOrNull(current) ?: return) {
+                        is Node.VarRef -> {
+                            val binder = store.getOrNull(n.binder) as? Node.Let ?: return
+                            current = binder.value
+                        }
+                        is Node.NodeRef -> current = resolveRefTarget(n.target) ?: return
+                        is Node.TypeAbstraction -> current = n.body
+                        is Node.Lambda, is Node.Fixpoint -> { visitRef(current); return }
+                        else -> return
+                    }
+                }
+            }
             fun visit(id: NodeId) {
-                if (!visited.add(id)) return
+                if (!visited.add(id to narrowed)) return
                 val node = store.getOrNull(id) ?: return
                 when (node) {
                     is Node.Application -> {
@@ -1796,12 +2376,26 @@ class Verifier(
                         node.typeArguments.forEach(::visit)
                         node.effectInstances.forEach(::visit)
 
-                        val fnType = nodeTypes[node.function] ?: return
-                        val fnFun: TypeExpr.Fun = when (fnType) {
-                            is TypeExpr.Fun -> fnType
-                            else -> return  // not a directly-typed function call here
+                        // The callee's type at THIS call: a polymorphic
+                        // callee is taken at its instantiation (review H1).
+                        val fnFun: TypeExpr.Fun = appFunTypes[id]
+                            ?: (nodeTypes[node.function] as? TypeExpr.Fun)
+                            ?: return
+                        if (intercept !in fnFun.effects) {
+                            // Not intercepted here. A higher-order builtin
+                            // does not carry its callbacks' effects in its
+                            // row, so a callback whose row carries the
+                            // intercept runs un-intercepted at this call and
+                            // is intercepted at the calls inside its body:
+                            // walk the callback's body.
+                            if (calleeIsForeign(node.function)) {
+                                for (argId in node.arguments) {
+                                    val argFun = nodeTypes[argId] as? TypeExpr.Fun ?: continue
+                                    if (intercept in argFun.effects) visitCallback(argId)
+                                }
+                            }
+                            return
                         }
-                        if (intercept !in fnFun.effects) return
 
                         // This Application would be intercepted by the
                         // handler. Confirm signature agreement.
@@ -1825,6 +2419,16 @@ class Verifier(
                             ))
                             throw VerifyAbort()
                         }
+                        val scopeCaps = narrowed
+                        if (scopeCaps != null) {
+                            val missing = expected.effects - scopeCaps
+                            if (missing.isNotEmpty()) {
+                                report(VerifyError.CapabilityScopeUnsatisfiable(
+                                    at = narrowedAt ?: id, missing = missing,
+                                ))
+                                throw VerifyAbort()
+                            }
+                        }
                     }
                     is Node.Lambda -> {
                         // Walk the body; handlers cross Lambda boundaries —
@@ -1838,7 +2442,19 @@ class Verifier(
                         visit(node.body)
                     }
                     is Node.TypeAbstraction -> visit(node.body)
-                    is Node.CapabilityScope -> visit(node.body)
+                    is Node.CapabilityScope -> {
+                        val saved = narrowed
+                        val savedAt = narrowedAt
+                        val caps = node.capabilities.toSet()
+                        narrowed = saved?.intersect(caps) ?: caps
+                        narrowedAt = id
+                        try {
+                            visit(node.body)
+                        } finally {
+                            narrowed = saved
+                            narrowedAt = savedAt
+                        }
+                    }
                     is Node.NodeRef -> {
                         val targetId = resolveRefTarget(node.target) ?: return
                         visit(targetId)
@@ -1905,7 +2521,26 @@ class Verifier(
                     is Node.ModuleManifest -> Unit
                 }
             }
+            visitRef = ::visit
             visit(bodyId)
+        }
+
+        /**
+         * True when [functionExprId] resolves (through Let-bound names,
+         * NodeRefs and TypeAbstractions) to a [Node.ForeignNode].
+         */
+        private fun calleeIsForeign(functionExprId: NodeId): Boolean {
+            var current = functionExprId
+            repeat(64) {
+                when (val n = store.getOrNull(current) ?: return false) {
+                    is Node.ForeignNode -> return true
+                    is Node.NodeRef -> current = resolveRefTarget(n.target) ?: return false
+                    is Node.VarRef -> current = (store.getOrNull(n.binder) as? Node.Let)?.value ?: return false
+                    is Node.TypeAbstraction -> current = n.body
+                    else -> return false
+                }
+            }
+            return false
         }
 
         /**
@@ -2034,6 +2669,13 @@ class Verifier(
             // sites during the provider's loop; the surrounding
             // capability context covers them there.
             recordClosure(id, emptySet())
+            // Q-070: the implementation's effect surface — the FunctionType
+            // effect row (a Lambda's declared effects, or a ForeignNode's
+            // declared effects folded into its returned Fun) — is reachable
+            // only through the model's indirect tool-use invocation, so it
+            // belongs in the latent channel keyed by this ToolDef's NodeId,
+            // NOT in the (directly-performed) root closure above.
+            addLatent(id, effectSurfaceOf(implFun))
             // Surface type: opaque Bytes (Strand-side opaque-handle
             // convention, matching Resource / MapV).
             return TypeExpr.Prim(Primitive.Bytes)
@@ -2332,7 +2974,10 @@ class Verifier(
             val declaredEffects = validateEffectCategoryEdges(
                 id, node.effects, "StateMachine.effects"
             )
-            val missing = transitionFnType.effects - declaredEffects
+            // Review A11(a): the runtime evaluates initialState when the
+            // machine starts, under the machine's grant, so its closure is
+            // part of what the declaration must cover.
+            val missing = (transitionFnType.effects + closureOf(node.initialState)) - declaredEffects
             if (missing.isNotEmpty()) {
                 report(VerifyError.StateMachineEffectCoverageViolation(
                     at = id, missing = missing
@@ -3076,6 +3721,14 @@ class Verifier(
          * substitution machinery keys on the TypeParameter NodeId.
          */
         private fun resolveType(typeId: NodeId, typeParams: Set<NodeId>): TypeExpr {
+            val key = contextKey(typeId, emptyMap(), typeParams)
+            if (key != null) typeMemo[key]?.let { return it }
+            val t = resolveTypeUncached(typeId, typeParams)
+            if (key != null) typeMemo[key] = t
+            return t
+        }
+
+        private fun resolveTypeUncached(typeId: NodeId, typeParams: Set<NodeId>): TypeExpr {
             val node = store.getOrNull(typeId)
                 ?: reportFatal(VerifyError.DanglingReference(at = typeId, missing = typeId, fromField = "type"))
             return when (node) {
@@ -3113,6 +3766,16 @@ class Verifier(
                         }
                         TypeExpr.Product.Field(f.fieldName, resolveType(f.fieldType, typeParams))
                     }
+                    // Review C1: a repeated field name makes ProductValue
+                    // check against one declaration while ProductFieldGet
+                    // reads another, a type confusion.
+                    val seenFields = HashSet<String>()
+                    for (f in fields) {
+                        if (!seenFields.add(f.name)) {
+                            report(VerifyError.DuplicateFieldName(at = typeId, name = f.name))
+                            throw VerifyAbort()
+                        }
+                    }
                     TypeExpr.Product(origin = typeId, fields = fields)
                 }
                 is Node.SumType -> {
@@ -3127,9 +3790,36 @@ class Verifier(
                         }
                         TypeExpr.Sum.Case(c.caseName, c.caseType?.let { resolveType(it, typeParams) })
                     }
+                    // Review C1: the Sum analogue — a repeated case name
+                    // lets a SumValue and a pattern resolve different payloads.
+                    val seenCases = HashSet<String>()
+                    for (c in cases) {
+                        if (!seenCases.add(c.name)) {
+                            report(VerifyError.DuplicateCaseName(at = typeId, name = c.name))
+                            throw VerifyAbort()
+                        }
+                    }
                     TypeExpr.Sum(origin = typeId, cases = cases)
                 }
                 is Node.TypeParameter -> {
+                    // Q-049: bounded polymorphism is unimplemented. A non-null
+                    // `bound` is silently ignored today (the verifier neither
+                    // checks it at instantiation sites nor consults it during
+                    // compatibility), which is worse than rejection — an agent
+                    // writing a bounded parameter gets no error and no
+                    // checking. Reject it with a specific error before the
+                    // unbound-scope check, so the diagnostic names the agent's
+                    // actual intent even when the parameter is also unbound.
+                    // Hash-neutral: `bound` is not part of the canonical
+                    // encoding (TypeParameter encodes positional (depth, index)
+                    // refs only).
+                    val boundNode = node.bound
+                    if (boundNode != null) {
+                        report(VerifyError.TypeParameterBoundUnsupported(
+                            at = typeId, bound = boundNode
+                        ))
+                        throw VerifyAbort()
+                    }
                     if (typeId !in typeParams) {
                         report(VerifyError.UnboundTypeParameter(at = typeId, typeParameter = typeId))
                         throw VerifyAbort()
@@ -3154,7 +3844,19 @@ class Verifier(
                             ))
                             throw VerifyAbort()
                         }
+                        // Q-049: reject a bounded quantified parameter at the
+                        // declaration site — resolveType would only fire on a
+                        // bound if the body references the parameter, so an
+                        // unreferenced bounded parameter must be caught here.
+                        val tpBound = tpNode.bound
+                        if (tpBound != null) {
+                            report(VerifyError.TypeParameterBoundUnsupported(
+                                at = tpId, bound = tpBound
+                            ))
+                            throw VerifyAbort()
+                        }
                     }
+                    checkNoRebinding(typeId, node.typeParameters, typeParams)
                     val inner = typeParams + node.typeParameters
                     val body = resolveType(node.body, inner)
                     TypeExpr.Forall(node.typeParameters, body)
@@ -3167,7 +3869,26 @@ class Verifier(
                             else
                                 VerifyError.NodeRefTargetNotFound(at = typeId, targetHash = node.target)
                         )
-                    resolveType(targetId, typeParams)
+                    // Review H4: a NodeRef in type position is subject to the
+                    // same closedness rule as one in term position. Its target
+                    // resolves under an EMPTY TypeParameter set and a zero
+                    // RecursiveType depth, so an open fragment (a free
+                    // TypeParameter, or a RecursiveSelf escaping the target)
+                    // cannot hash to a context-dependent sentinel and mean
+                    // different types in different contexts (ADR-003).
+                    val errorsBefore = errors.size
+                    val savedDepth = recursiveDepth
+                    recursiveDepth = 0
+                    val targetType = try {
+                        resolveType(targetId, emptySet())
+                    } catch (e: VerifyAbort) {
+                        wrapClosureErrors(typeId, targetId, errorsBefore)
+                        throw e
+                    } finally {
+                        recursiveDepth = savedDepth
+                    }
+                    wrapClosureErrors(typeId, targetId, errorsBefore)
+                    targetType
                 }
                 is Node.RecursiveType -> {
                     recursiveDepth++

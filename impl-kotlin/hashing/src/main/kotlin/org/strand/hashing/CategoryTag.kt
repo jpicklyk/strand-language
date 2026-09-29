@@ -84,7 +84,8 @@ value class CategoryTag(val value: Int) {
         val MatchCase = CategoryTag(24)
         // N-025 Pattern is one node category in the algebra; the variant is
         // encoded as a small discriminator within the canonical bytes
-        // (literal=0, variable=1, wildcard=2) so all patterns share tag 25.
+        // (literal=0, variable=1, wildcard=2, constructor=3) so all patterns
+        // share tag 25.
         val Pattern = CategoryTag(25)
         val Fixpoint = CategoryTag(26)
 

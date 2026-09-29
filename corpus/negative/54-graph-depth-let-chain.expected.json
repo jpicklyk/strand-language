@@ -1,0 +1,6 @@
+{
+  "stage": "ingest",
+  "family": "ResourceExhaustion",
+  "exhaustionKind": "GraphDepth",
+  "notes": "A chain of 600 nested Lets (graph depth 602) in shallow, flat JSON: the JSON depth cap never fires, but the canonical encoder, hash walk, verifier and interpreter all recurse once per graph level, and a chain of about 1,000 overflowed the JVM stack with a raw StackOverflowError during hashing (review H3). Ingest computes graph depth iteratively alongside the cycle check and rejects it against the maxGraphDepth cap (512)."
+}
