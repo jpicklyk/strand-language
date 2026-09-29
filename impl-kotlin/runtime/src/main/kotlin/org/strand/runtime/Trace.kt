@@ -84,6 +84,28 @@ sealed class HaltReason {
     data class CapabilityDenial(
         val report: DenialReport,
     ) : HaltReason()
+
+    /**
+     * Review M6: an async actor's transition (or its output dispatch) failed
+     * with an error that is neither a denial nor an exhaustion — an
+     * unexpected JVM throwable or a non-denial [org.strand.interpreter.InterpretError].
+     * The actor is its own supervision boundary: the failure halts THIS
+     * instance only, siblings and the caller's scope keep running, and the
+     * group surfaces it through [MachineGroupHandle.failedInstances].
+     *
+     * [throwableClass] is the fully qualified class of the throwable;
+     * [interpretError] is the structured error when the throwable was an
+     * [org.strand.interpreter.InterpretException]; [atEventIndex] is the
+     * zero-based index of the event whose processing failed. The sync fold
+     * ([StateMachineRuntime.runMachine]) runs on the caller's thread and
+     * rethrows instead.
+     */
+    data class InstanceFailure(
+        val throwableClass: String,
+        val message: String?,
+        val atEventIndex: Int,
+        val interpretError: org.strand.interpreter.InterpretError? = null,
+    ) : HaltReason()
 }
 
 /**

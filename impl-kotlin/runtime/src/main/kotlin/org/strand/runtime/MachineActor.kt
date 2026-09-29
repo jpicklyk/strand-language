@@ -1,5 +1,6 @@
 package org.strand.runtime
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.selects.select
@@ -31,6 +32,15 @@ import org.strand.interpreter.Value
  *     examining the `outputs` field type.
  *  6. Send each emitted payload to the corresponding output channel.
  *  7. When all input channels close, halt and close output channels.
+ *  8. A throwable that is neither a denial nor an exhaustion halts THIS
+ *     instance with [HaltReason.InstanceFailure] (review M6): the actor is
+ *     its own supervision boundary, so one failing actor never cancels its
+ *     siblings or the caller's scope. Cancellation still propagates.
+ *  9. On an abnormal halt (denial, exhaustion) signal the output buses, then
+ *     keep draining and discarding the inputs until their producers close
+ *     them, so an upstream producer never blocks on a halted consumer
+ *     (review H1). Discards are counted in
+ *     [InstanceMetrics.eventsDiscardedAfterHalt].
  *
  * The interpreter call is synchronous — transitions are pure by spec
  * (ADR-007); only the actor loop suspends. This keeps `Interpreter.eval`
@@ -94,7 +104,9 @@ internal class MachineActor(
                     // actors in the same group keep running. The actor
                     // breaks out of its event loop and the `finally` block
                     // closes outputs through the bus producer-halt counter.
-                    if (e.error is InterpretError.ResourceExhaustion) {
+                    val err = e.error
+                    if (err is InterpretError.ResourceExhaustion) {
+                        instance.haltReason = HaltReason.ResourceExhaustion(err.kind, eventIndex)
                         instance.halted = true
                         break
                     }
@@ -107,32 +119,79 @@ internal class MachineActor(
                     // observable to the evaluating graph.
                     val denial = denialReportOf(e.error)
                     if (denial != null) {
-                        instance.denialHalt = denial.atTransition(instance.instanceId, eventIndex)
+                        val report = denial.atTransition(instance.instanceId, eventIndex)
+                        instance.denialHalt = report
+                        instance.haltReason = HaltReason.CapabilityDenial(report)
                         instance.halted = true
                         break
                     }
+                    failInstance(e, eventIndex, err)
+                    break
+                } catch (e: CancellationException) {
                     throw e
+                } catch (e: Throwable) {
+                    // Review M6: the actor is its own supervision boundary.
+                    // An unexpected throwable halts THIS instance with a
+                    // typed reason instead of escaping the coroutine and
+                    // cancelling every sibling and the caller's scope.
+                    failInstance(e, eventIndex, null)
+                    break
                 }
             }
+            if (instance.haltReason == null) instance.haltReason = HaltReason.EventsExhausted
             instance.halted = true
         } finally {
-            // Signal halt on each output bus. The bus closes its producer
-            // channel only when all producers have halted (slice 3.6
-            // multi-producer fan-in support). Pre-slice-3.6 buses are
-            // single-producer Direct buses; the count drops from 1 to 0
-            // and the channel closes exactly as before.
-            //
-            // Legacy: when no buses are present (e.g., MachineGroupTest
-            // fixtures built without going through StateMachineRuntime.runGroup),
-            // fall back to closing the output channels directly.
-            if (instance.outputBuses.isNotEmpty()) {
-                for (bus in instance.outputBuses.values) {
-                    bus.producerHalted()
-                }
+            signalOutputsHalted()
+        }
+        // Review H1: an abnormal halt (denial, exhaustion) leaves input
+        // channels open. Upstream producers would fill them and, under the
+        // default BlockProducer policy, suspend forever. Detach: close
+        // broadcast per-consumer channels (the pump skips closed consumers)
+        // and discard everything that still arrives until every producer
+        // closes, so the rest of the group runs to completion. Reached only
+        // on a normal exit from the loop — a cancelled actor does not drain.
+        if (openChannels.isNotEmpty()) discardUntilClosed(openChannels)
+    }
+
+    private fun failInstance(e: Throwable, eventIndex: Int, err: InterpretError?) {
+        instance.haltReason = HaltReason.InstanceFailure(
+            throwableClass = e::class.java.name,
+            message = e.message,
+            atEventIndex = eventIndex,
+            interpretError = err,
+        )
+        instance.halted = true
+    }
+
+    private suspend fun discardUntilClosed(openChannels: MutableMap<NodeId, Channel<Value>>) {
+        for ((streamId, channel) in openChannels) {
+            if (instance.inputBuses[streamId] is StreamBus.Broadcast) channel.close()
+        }
+        while (openChannels.isNotEmpty()) {
+            val (streamId, result) = selectNext(openChannels) ?: break
+            if (result.isClosed) {
+                openChannels.remove(streamId)
             } else {
-                for (channel in instance.outputChannels.values) {
-                    channel.close()
-                }
+                instance.counters.recordEventDiscardedAfterHalt()
+            }
+        }
+    }
+
+    /**
+     * Signal halt on each output bus. The bus closes its producer channel
+     * only when all producers have halted (slice 3.6 multi-producer fan-in
+     * support). Legacy: when no buses are present (fixtures built without
+     * going through [StateMachineRuntime.runGroup]), close the output
+     * channels directly.
+     */
+    private fun signalOutputsHalted() {
+        if (instance.outputBuses.isNotEmpty()) {
+            for (bus in instance.outputBuses.values) {
+                bus.producerHalted()
+            }
+        } else {
+            for (channel in instance.outputChannels.values) {
+                channel.close()
             }
         }
     }
@@ -179,7 +238,7 @@ internal class MachineActor(
         // through to the legacy interpreter.applyCallable on the cached
         // transitionFnValue when no dispatcher is set.
         val result = instance.dispatcher
-            ?.applyTransition(instance.currentState, event)
+            ?.applyTransition(instance.currentState, event, eventLimits, counters)
             ?: interpreter.applyCallable(
                 fn = instance.transitionFnValue,
                 args = listOf(instance.currentState, event),
@@ -187,11 +246,11 @@ internal class MachineActor(
                 counters = counters,
                 limits = eventLimits,
             )
-        // Slice 3.4 metrics: record transition latency immediately after the
-        // interpreter call returns; counter increment is paired so a snapshot
-        // taken between the two updates can't show `transitionsExecuted++`
-        // without a corresponding latency value.
-        instance.counters.recordTransitionCompleted(System.nanoTime() - startNanos)
+        // Slice 3.4 metrics: latency is measured immediately after the
+        // interpreter call returns. Review M1: the counter increment is
+        // committed together with the new state (below) under the
+        // instance's transition lock.
+        val latencyNanos = System.nanoTime() - startNanos
         val resultProduct = result as? Value.ProductV
             ?: error(
                 "transition function returned a non-product value " +
@@ -202,7 +261,7 @@ internal class MachineActor(
             ?: error("transition function result missing 'state' field; got fields ${resultProduct.fields.keys}")
         val outputs = resultProduct.fields["outputs"]
             ?: error("transition function result missing 'outputs' field; got fields ${resultProduct.fields.keys}")
-        instance.currentState = newState
+        instance.commitTransition(newState, latencyNanos)
 
         when (outputs) {
             is Value.ProductV -> dispatchOutputBatch(outputs)

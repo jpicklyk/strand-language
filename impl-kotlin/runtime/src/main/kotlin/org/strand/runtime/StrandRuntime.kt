@@ -354,6 +354,9 @@ class StrandRuntime(private val policy: HostPolicy) {
             verify,
             resolveTarget = program.resolveTarget,
             limits = policy.limits,
+            // Review H3: invariant bodies run under this runtime's tenant
+            // policy, not the process-global Builtins singletons.
+            hostContext = org.strand.interpreter.HostContext.fromPolicy(policy, verify.nodeTypes),
         ).check()
 }
 

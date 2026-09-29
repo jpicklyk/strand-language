@@ -5,6 +5,8 @@ import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
+import org.strand.interpreter.HostContext
+import org.strand.interpreter.InterpretException
 import org.strand.interpreter.Interpreter
 import org.strand.interpreter.Value
 import org.strand.verifier.TypeExpr
@@ -83,9 +85,16 @@ class SchemaChecker(
      * is not local makes the value non-static, surfacing as a deferred check).
      */
     private val resolveTarget: ((Hash) -> NodeId?)? = null,
+    /**
+     * Review H3: the host context invariant bodies evaluate under — the
+     * tenant's sandbox, clock, credentials — rather than the process-global
+     * [org.strand.interpreter.Builtins] singletons. `StrandRuntime` passes
+     * its policy's context; the default preserves single-tenant behaviour.
+     */
+    private val hostContext: HostContext = HostContext.processDefault(),
 ) {
 
-    private val interpreter = Interpreter(store, hashToNodeId, resolveTarget = resolveTarget)
+    private val interpreter = Interpreter(store, hashToNodeId, resolveTarget = resolveTarget, hostContext = hostContext)
 
     /**
      * Run the check. Returns a [SchemaCheckResult] with the list of
@@ -95,6 +104,7 @@ class SchemaChecker(
     fun check(): SchemaCheckResult {
         val violations = mutableListOf<VerifyError.SchemaInvariantViolation>()
         val deferred = mutableListOf<VerifyError.SchemaInvariantDeferred>()
+        val failures = mutableListOf<InvariantEvaluationFailure>()
         for ((nodeId, type) in verifyResult.nodeTypes) {
             if (type !is TypeExpr.SchemaType) continue
             val staticValue = tryEvaluateStatically(nodeId)
@@ -113,7 +123,24 @@ class SchemaChecker(
                             "store does not contain a Node.Invariant at that NodeId. The " +
                             "verifier should have rejected this graph."
                     )
-                val verdict = evaluateInvariant(invariantNode.body, staticValue)
+                // Review H3: an invariant body that fails to evaluate
+                // (resource exhaustion, a capability or sandbox denial, a
+                // builtin contract violation) is a structured failure that
+                // also rejects the value — never a raw throw out of check().
+                val verdict = try {
+                    evaluateInvariant(invariantNode.body, staticValue)
+                } catch (e: InterpretException) {
+                    failures += InvariantEvaluationFailure(
+                        at = nodeId, schema = type.schemaId, invariant = invariantId, error = e.error,
+                    )
+                    violations += VerifyError.SchemaInvariantViolation(
+                        at = nodeId,
+                        schema = type.schemaId,
+                        invariant = invariantId,
+                        valueDescription = "$staticValue (invariant evaluation failed: ${e.error::class.simpleName})",
+                    )
+                    continue
+                }
                 if (verdict !is Value.BoolV) {
                     error(
                         "Invariant $invariantId's body evaluated to a non-Bool value " +
@@ -130,7 +157,7 @@ class SchemaChecker(
                 }
             }
         }
-        return SchemaCheckResult(violations, deferred)
+        return SchemaCheckResult(violations, deferred, failures)
     }
 
     /**
