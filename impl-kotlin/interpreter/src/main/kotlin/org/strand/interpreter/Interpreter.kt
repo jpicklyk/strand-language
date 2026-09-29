@@ -965,6 +965,7 @@ class Interpreter(
             eval(callable.lambda.body, callEnv, context, handlers, counters, limits)
         }
         is Value.ForeignFn -> {
+            checkForeignFloor(id, callable.node)
             checkCapabilities(id, callable.node.effects, emptyMap(), context, limits)
             try {
                 foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
@@ -1120,6 +1121,7 @@ class Interpreter(
         } else {
             evalEffectInstances(env, context, handlers, app, counters, limits)
         }
+        checkForeignFloor(id, fn.node)
         checkCapabilities(id, fn.node.effects, instances, context, limits)
         try {
             foreignDispatcher?.dispatch(fn.node.target, args)?.let { return it }
@@ -1263,6 +1265,7 @@ class Interpreter(
                 // callbacks (passing e.g. Bool.Not as a List.Map fn) are
                 // rare but legitimate — and they don't recurse into the
                 // higher-order machinery because Bool.Not is a standard Fn.
+                checkForeignFloor(id, callable.node)
                 try {
                     foreignDispatcher?.dispatch(callable.node.target, args)?.let { return it }
                 } catch (io: IoFailure) {
@@ -1466,6 +1469,40 @@ class Interpreter(
                     ),
                 ))
             }
+        }
+    }
+
+    /**
+     * The effect row of a [Node.ForeignNode]: its own `effects` list unioned
+     * with the effects its `foreignType` FunctionType carries. This is the
+     * same union the verifier assigns as the ForeignNode's function type, so
+     * handler interception and capability checks at runtime see exactly the
+     * row the verifier's closure computation charged.
+     */
+    private fun foreignEffectRow(node: Node.ForeignNode): List<NodeId> {
+        val typeEffects = (store.getOrNull(node.foreignType) as? Node.FunctionType)?.effects.orEmpty()
+        if (typeEffects.isEmpty()) return node.effects
+        return (typeEffects + node.effects).distinct()
+    }
+
+    /**
+     * Defence in depth for review finding 1: before dispatching a registry
+     * target with an effect floor ([org.strand.core.BuiltinEffectTable]),
+     * confirm the ForeignNode's declared row covers it. The verifier's
+     * `ForeignEffectUnderDeclared` rule rejects such graphs at admission;
+     * this re-check holds for stores that reach the interpreter without
+     * verification (programmatic construction, a skipped verify step).
+     */
+    private fun checkForeignFloor(at: NodeId, node: Node.ForeignNode) {
+        if (org.strand.core.BuiltinEffectTable.requiredCategories(node.target) == null) return
+        val declaredNames = foreignEffectRow(node).map { categoryNameOf(it) }.toSet()
+        val missing = org.strand.core.BuiltinEffectTable.missingCategories(node.target, declaredNames)
+        if (missing.isNotEmpty()) {
+            throw InterpretException(InterpretError.BuiltinContractViolation(
+                at = at,
+                target = node.target,
+                detail = "ForeignNode under-declares the target's effects; missing ${missing.sorted()}",
+            ))
         }
     }
 

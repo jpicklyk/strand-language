@@ -1171,6 +1171,22 @@ sealed class VerifyError {
         val rejectedType: TypeExpr,
         val reason: String,
     ) : VerifyError()
+
+    /**
+     * A [Node.ForeignNode] binds a registry target whose effect floor
+     * ([org.strand.core.BuiltinEffectTable]) is not covered by its declared
+     * effect row. The declared row is the union of `ForeignNode.effects` and
+     * the `foreignType` FunctionType's effects, compared by EffectCategory
+     * `categoryName`. [missing] lists the required category names the row
+     * omits. Without this rule a graph could bind `strand-builtin:Fs.Write`
+     * with `effects: []`, surface an empty effect closure, and write under an
+     * empty capability grant.
+     */
+    data class ForeignEffectUnderDeclared(
+        override val at: NodeId,
+        val target: String,
+        val missing: Set<String>,
+    ) : VerifyError()
 }
 
 /** Outcome of verification: either a successful inference or one or more structured errors. */

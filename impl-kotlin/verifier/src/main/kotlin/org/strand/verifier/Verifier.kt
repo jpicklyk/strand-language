@@ -1,5 +1,6 @@
 package org.strand.verifier
 
+import org.strand.core.BuiltinEffectTable
 import org.strand.core.EffectProjection
 import org.strand.core.Hash
 import org.strand.core.Node
@@ -1615,11 +1616,13 @@ class Verifier(
             typeParams: Set<NodeId>
         ): TypeExpr {
             // The ForeignNode's value-level type is its foreignType (which
-            // must be a FunctionType). Its declared effects are authoritative
-            // per ADR-005 and override any effects the foreignType itself
-            // happens to carry — agents typically declare effects at the
+            // must be a FunctionType). Its effect row is the union of the
+            // ForeignNode's declared effects and any effects the foreignType
+            // itself carries (agents typically declare effects at the
             // ForeignNode level and leave the FunctionType signature purely
-            // for parameters/result.
+            // for parameters/result). The interpreter uses the same union at
+            // dispatch. Declared effects are trusted per ADR-005 except for
+            // registry targets, whose row must cover BuiltinEffectTable.
             val fType = resolveType(node.foreignType, typeParams)
             if (fType !is TypeExpr.Fun) {
                 report(VerifyError.CategoryMismatch(
@@ -1630,6 +1633,21 @@ class Verifier(
                 throw VerifyAbort()
             }
             val declaredEffects = validateEffectCategoryEdges(id, node.effects, "ForeignNode.effects")
+            // Review finding 1: a registry-bound target's declared row must
+            // cover the target's effect floor. The row compared is the same
+            // union the returned Fun carries (foreignType ∪ node effects),
+            // matched by categoryName since EffectCategory nodes are
+            // per-program declarations.
+            val declaredNames = (fType.effects + declaredEffects).mapNotNull { effectId ->
+                (store.getOrNull(effectId) as? Node.EffectCategory)?.categoryName
+            }.toSet()
+            val missingFloor = BuiltinEffectTable.missingCategories(node.target, declaredNames)
+            if (missingFloor.isNotEmpty()) {
+                report(VerifyError.ForeignEffectUnderDeclared(
+                    at = id, target = node.target, missing = missingFloor,
+                ))
+                throw VerifyAbort()
+            }
             // Q-039: validate the optional effectProjections against the
             // declared effects list and the signature's parameter shape.
             // Empty list is the legacy path (Q-031 semantics retained).

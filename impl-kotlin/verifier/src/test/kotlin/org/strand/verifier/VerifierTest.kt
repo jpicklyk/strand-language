@@ -983,13 +983,15 @@ class VerifierTest {
         // The callee declares no effects. The Application supplies an
         // EffectDecl. The set covered (1 category) does not equal the
         // declared set (empty); verifier flags EffectInstanceCoverageMismatch.
+        // The target is a non-registry binding: a registry target such as
+        // Time.Now with an empty row is now ForeignEffectUnderDeclared.
         val r = verify("""{
           "version": 1, "root": "app",
           "nodes": {
             "intT":     { "type": "PrimitiveType", "kind": "Int" },
             "timeFx":   { "type": "EffectCategory", "categoryName": "Time.Now" },
             "fnT":      { "type": "FunctionType", "parameters": [], "result": "intT" },
-            "fn":       { "type": "ForeignNode", "target": "strand-builtin:Time.Now",
+            "fn":       { "type": "ForeignNode", "target": "host:Clock.Now",
                           "foreignType": "fnT" },
             "timeDecl": { "type": "EffectDecl", "effectType": "timeFx" },
             "app":      { "type": "Application", "function": "fn", "arguments": [],
