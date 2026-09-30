@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "ParameterTypeMismatch",
+  "notes": "A PositiveInt-typed binder is passed to a function whose parameter is SmallInt. Two different schemas over one value type are not interchangeable, but the equirecursive comparison stripped the schema wrapper from both sides and accepted the argument, recording no SmallInt obligation on it. Found while closing entry 60."
+}

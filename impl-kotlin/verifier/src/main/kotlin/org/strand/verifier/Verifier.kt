@@ -556,6 +556,11 @@ class Verifier(
          * provide. The two single-direction relaxations above are the
          * only relaxations needed for the corpus programs.
          *
+         * The plain-T-into-SchemaType direction creates an obligation, which
+         * the three value-flow sites record on the value node. A caller that
+         * has no node to record it on must not use this relation for that
+         * direction; [flowsUnchecked] is the obligation-free subset.
+         *
          * Direct `==` comparison is preserved at sites where structural
          * type equivalence (not assignment-compatibility) matters: Match
          * case body type divergence, Fixpoint body shape, Handler
@@ -564,11 +569,15 @@ class Verifier(
          */
         fun typesCompatible(expected: TypeExpr, actual: TypeExpr): Boolean {
             if (expected == actual) return true
+            // SchemaType-into-SchemaType is the `expected == actual` branch
+            // above: a value known to satisfy one schema says nothing about
+            // another, and no obligation would be recorded for the second.
+            if (expected is TypeExpr.SchemaType && actual is TypeExpr.SchemaType) return false
             // SchemaType-into-plain-T direction.
-            if (actual is TypeExpr.SchemaType && actual.valueType == expected) return true
-            // Plain-T-into-SchemaType direction (and SchemaType-into-
-            // SchemaType is the `expected == actual` branch above).
-            if (expected is TypeExpr.SchemaType && expected.valueType == actual) return true
+            if (actual is TypeExpr.SchemaType) return equirecursivelyEqual(expected, actual.valueType)
+            // Plain-T-into-SchemaType direction; the caller records the
+            // obligation on the value node.
+            if (expected is TypeExpr.SchemaType) return equirecursivelyEqual(expected.valueType, actual)
             // N-048: equirecursive equality at value-flow sites. A
             // RecursiveProjection resolves a selected position to a focus
             // that is sometimes a folded `μ.T` and sometimes its one-step
@@ -600,10 +609,10 @@ class Verifier(
             seen: MutableSet<Pair<TypeExpr, TypeExpr>> = HashSet(),
         ): Boolean {
             if (a == b) return true
-            // Strip a SchemaType wrapper on either side to its valueType —
-            // value-flow compatibility already permits T ↔ Schema<T>.
-            if (a is TypeExpr.SchemaType) return equirecursivelyEqual(a.valueType, b, seen)
-            if (b is TypeExpr.SchemaType) return equirecursivelyEqual(a, b.valueType, seen)
+            // A SchemaType wrapper is never stripped here: which direction a
+            // schema may be dropped or added in is the caller's decision
+            // ([typesCompatible], [flowsUnchecked]). Stripping on both sides
+            // made two different schemas over one valueType interchangeable.
             // Unfold a Recursive on either side once and retry.
             if (a is TypeExpr.Recursive) {
                 if (!seen.add(a to b)) return false
@@ -655,6 +664,7 @@ class Verifier(
          */
         fun typesCompatibleAtValueFlow(expected: TypeExpr, actual: TypeExpr): Boolean {
             if (typesCompatible(expected, actual)) return true
+            if (expected is TypeExpr.SchemaType && actual is TypeExpr.SchemaType) return false
             // Q-049: outermost-arrow effect-set inclusion. Strip a SchemaType
             // wrapper on either side to its valueType first (value-flow already
             // permits T ↔ Schema<T>), so an effectful callback carried through
@@ -662,17 +672,37 @@ class Verifier(
             val e = if (expected is TypeExpr.SchemaType) expected.valueType else expected
             val a = if (actual is TypeExpr.SchemaType) actual.valueType else actual
             if (e is TypeExpr.Fun && a is TypeExpr.Fun) {
-                // Parameters and result stay strict (equality via typesCompatible
-                // preserves the existing SchemaType / equirecursive relaxations
-                // but adds no variance). Only the outermost effect row is
-                // relaxed to subset inclusion.
+                // Parameters and result stay strict up to folding, with the
+                // schema relaxation only in the direction that creates no
+                // obligation ([flowsUnchecked]): a caller of the position
+                // passes values of the expected parameter type into the
+                // actual function and reads the actual result at the expected
+                // result type. The symmetric relaxation admitted a function
+                // with a `Schema<T>` parameter where a `(T) -> R` was
+                // expected, so unchecked values reached the schema-typed
+                // parameter with no node to carry the obligation. Only the
+                // outermost effect row is relaxed to subset inclusion.
                 val paramsEqual = e.parameters.size == a.parameters.size &&
-                    e.parameters.indices.all { typesCompatible(e.parameters[it], a.parameters[it]) }
-                val resultEqual = typesCompatible(e.result, a.result)
+                    e.parameters.indices.all { flowsUnchecked(position = a.parameters[it], value = e.parameters[it]) }
+                val resultEqual = flowsUnchecked(position = e.result, value = a.result)
                 val effectsIncluded = e.effects.containsAll(a.effects)
                 if (paramsEqual && resultEqual && effectsIncluded) return true
             }
             return false
+        }
+
+        /**
+         * Whether a value of type [value] may stand at a position of type
+         * [position] with no schema obligation arising: the types are equal
+         * (up to a fold or unfold), or the value is a `Schema<T>` used at a
+         * plain `T` position. A plain value at a `Schema<T>` position is not
+         * accepted here, and neither is one schema at another's position.
+         */
+        private fun flowsUnchecked(position: TypeExpr, value: TypeExpr): Boolean {
+            if (position == value) return true
+            if (position is TypeExpr.SchemaType) return false
+            val plain = if (value is TypeExpr.SchemaType) value.valueType else value
+            return equirecursivelyEqual(position, plain)
         }
 
         fun closureOf(id: NodeId): Set<NodeId> =
@@ -1632,7 +1662,11 @@ class Verifier(
             // does at value-flow sites. The relaxation only widens
             // acceptance — a strict-equal pattern still passes — so no
             // previously-accepted program changes.
-            if (patternType != expectedType && !equirecursivelyEqual(patternType, expectedType)) {
+            // A `Schema<T>` scrutinee is matched as its `T`; a pattern typed by
+            // a schema the scrutinee does not carry would bind an unchecked
+            // value at that schema and is a mismatch.
+            val scrutineeValueType = (expectedType as? TypeExpr.SchemaType)?.valueType ?: expectedType
+            if (patternType != expectedType && !equirecursivelyEqual(patternType, scrutineeValueType)) {
                 report(VerifyError.PatternTypeMismatch(
                     at = at,
                     scrutineeType = expectedType,
@@ -2707,7 +2741,10 @@ class Verifier(
                 ))
                 throw VerifyAbort()
             }
-            if (!typesCompatible(schemaType.valueType, implFun.parameters[0])) {
+            // The tool-use loop hands the implementation a decoded value of
+            // the schema's valueType with no node to carry an obligation, so
+            // the parameter must be that plain type, not a Schema over it.
+            if (!flowsUnchecked(position = implFun.parameters[0], value = schemaType.valueType)) {
                 report(VerifyError.ToolImplementationParameterTypeMismatch(
                     at = id,
                     expected = schemaType.valueType,

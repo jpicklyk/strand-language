@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "ParameterTypeMismatch",
+  "notes": "A binding whose parameter is typed NonEmptyText is passed where a (String) -> Int callback is expected, and the receiver calls it with the empty string. The function-arrow rule compared parameters with the symmetric Schema<T>/T relaxation, so the binding was accepted and an unchecked value reached the schema-typed parameter with no node to carry the obligation. Parameters now relax only in the direction that creates no obligation. Found by the effect-closure soundness fuzzer (S6)."
+}

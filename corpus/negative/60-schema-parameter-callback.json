@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "root": "call",
+  "nodes": {
+    "intT":     { "type": "PrimitiveType", "kind": "Int" },
+    "strT":     { "type": "PrimitiveType", "kind": "String" },
+    "boolT":    { "type": "PrimitiveType", "kind": "Bool" },
+    "lenT":     { "type": "FunctionType", "parameters": ["strT"], "result": "intT" },
+    "len":      { "type": "ForeignNode", "target": "strand-builtin:String.Length", "foreignType": "lenT" },
+    "gtT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+    "gt":       { "type": "ForeignNode", "target": "strand-builtin:Int.Gt", "foreignType": "gtT" },
+    "zero":     { "type": "IntLit", "value": 0 },
+    "s":        { "type": "ParameterDecl", "name": "s", "paramType": "strT" },
+    "sRef":     { "type": "VarRef", "binder": "s" },
+    "sLen":     { "type": "Application", "function": "len", "arguments": ["sRef"] },
+    "nonEmptyBody": { "type": "Application", "function": "gt", "arguments": ["sLen", "zero"] },
+    "nonEmptyPred": { "type": "Lambda", "parameters": ["s"], "body": "nonEmptyBody" },
+    "nonEmptyInv":  { "type": "Invariant", "invariantName": "non_empty", "targetSchema": "nonEmptyText", "body": "nonEmptyPred" },
+    "nonEmptyText": { "type": "Schema", "schemaName": "NonEmptyText", "valueType": "strT", "invariants": ["nonEmptyInv"] },
+    "sinkT":    { "type": "FunctionType", "parameters": ["nonEmptyText"], "result": "intT" },
+    "sink":     { "type": "ForeignNode", "target": "strand-builtin:String.Length", "foreignType": "sinkT" },
+    "cbT":      { "type": "FunctionType", "parameters": ["strT"], "result": "intT" },
+    "cb":       { "type": "ParameterDecl", "name": "cb", "paramType": "cbT" },
+    "cbRef":    { "type": "VarRef", "binder": "cb" },
+    "empty":    { "type": "StringLit", "value": "" },
+    "inner":    { "type": "Application", "function": "cbRef", "arguments": ["empty"] },
+    "applyToEmpty": { "type": "Lambda", "parameters": ["cb"], "body": "inner" },
+    "call":     { "type": "Application", "function": "applyToEmpty", "arguments": ["sink"] }
+  }
+}
