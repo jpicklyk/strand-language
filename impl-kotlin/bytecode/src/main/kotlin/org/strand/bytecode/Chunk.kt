@@ -179,6 +179,19 @@ sealed class Constant {
      * invariant's body expression to its predicate callable ([chunkIndex]).
      */
     data class InvariantCheckC(val schema: Int, val invariant: Int, val chunkIndex: Int)
+
+    /**
+     * N-044: the static fields of a ToolDef node, consumed by `MAKE_TOOLDEF`,
+     * which pairs them with the evaluated implementation to build the
+     * interpreter's `Value.ToolDefV`. [self] and [parameterSchema] are NodeId
+     * values.
+     */
+    data class ToolDefC(
+        val self: Int,
+        val name: String,
+        val description: String,
+        val parameterSchema: Int,
+    ) : Constant()
 }
 
 /**

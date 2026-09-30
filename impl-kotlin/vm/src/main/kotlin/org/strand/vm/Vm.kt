@@ -429,6 +429,23 @@ class Vm(
                     current.stack.add(VmForeign(targetC.target, effectsC.effectIds, projectionsC.projections))
                 }
 
+                Opcode.MAKE_TOOLDEF -> {
+                    // N-044: the interpreter's Value.ToolDefV, its
+                    // implementation the evaluated VM callable, boxed so a
+                    // builtin handing it back through Builtins.ApplyFn
+                    // reaches applyNested with the callable itself.
+                    val c = current.constant() as Constant.ToolDefC
+                    val implementation = box(current.stack.removeLast())
+                    bumpAllocation()
+                    current.stack.add(Value.ToolDefV(
+                        self = NodeId(c.self),
+                        name = c.name,
+                        description = c.description,
+                        parameterSchemaId = NodeId(c.parameterSchema),
+                        implementation = implementation,
+                    ))
+                }
+
                 Opcode.CAP_PUSH -> {
                     val effectsC = current.constant() as Constant.EffectsC
                     capStack.addLast(currentCaps)

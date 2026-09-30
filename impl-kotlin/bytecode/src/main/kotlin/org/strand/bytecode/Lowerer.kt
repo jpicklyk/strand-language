@@ -433,6 +433,24 @@ class Lowerer(
                 chunk.emit(Opcode.HANDLER_POP)
             }
 
+            // N-044 ToolDef: evaluate the implementation expression (as the
+            // interpreter does, eagerly), then MAKE_TOOLDEF wraps it in a
+            // Value.ToolDefV. The implementation is a VM callable, carried
+            // boxed, so a builtin that runs the tool (a provider's tool-use
+            // loop, a higher-order stand-in) calls back into the VM through
+            // Builtins.ApplyFn and gets the callback checks every
+            // higher-order builtin's callback gets.
+            is Node.ToolDef -> {
+                lowerExpr(node.implementation, chunk, scope)
+                val idx = chunk.constant(Constant.ToolDefC(
+                    self = nodeId.value,
+                    name = node.name,
+                    description = node.description,
+                    parameterSchema = node.parameterSchema.value,
+                ))
+                chunk.emit(Opcode.MAKE_TOOLDEF, idx)
+            }
+
             // Slice-1 out-of-scope: anything else throws so the test
             // surfaces what we haven't implemented yet.
             else -> throw LoweringNotImplemented(
@@ -586,6 +604,7 @@ class Lowerer(
                 walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
             }
             is Node.Fixpoint -> walkExpr(node.body, parameters, localLets, outerScope, captures, visited)
+            is Node.ToolDef -> walkExpr(node.implementation, parameters, localLets, outerScope, captures, visited)
             // Literals and NodeRef have no inner expressions that reference
             // outer binders (NodeRef's target is closed by verifier rule);
             // ForeignNode is closed.

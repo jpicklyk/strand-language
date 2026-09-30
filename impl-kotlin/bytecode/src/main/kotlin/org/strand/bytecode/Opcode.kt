@@ -45,6 +45,10 @@ enum class Opcode(val code: Byte) {
     MAKE_FIXPOINT(0x41),
     MAKE_FOREIGN(0x42),
 
+    // N-044 ToolDef: one operand, a ToolDefC constant index. Pops the
+    // evaluated implementation and pushes a Value.ToolDefV carrying it.
+    MAKE_TOOLDEF(0x43),
+
     // Composite values
     PRODUCT_NEW(0x50),
     PRODUCT_GET(0x51),
