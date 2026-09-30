@@ -140,35 +140,91 @@ object BuiltinEffectTable {
     )
 
     /**
-     * The resource each I/O builtin acts on, as argument positions: target
-     * to category name to the indices of the arguments that are that
-     * category's refinement parameters (`Fs.Write(path, bytes)` writes
-     * `path`; `Net.Connect(host, port)` dials `host:port`).
+     * The resource each I/O builtin acts on: target to category name to the
+     * sources of that category's refinement parameters, in parameter order
+     * (`Fs.Write(path, bytes)` writes `path`; `Net.Connect(host, port)`
+     * dials `host:port`; `OpenAI.Chat.Completions(request)` calls provider
+     * `openai` with `request.model`).
      *
      * This is the registry's side of Q-039. A ForeignNode's
      * `effectProjections`, an Application's EffectDecl parameters, and even
      * the parameter list of the program's EffectCategory declaration are
      * all graph-supplied, so a binding that omits the projection could
-     * declare one path and write another, and a program that declares
+     * declare one path and write another, a call of the OpenAI binding
+     * could declare provider `anthropic`, and a program that declares
      * `Filesystem.Write` with no parameter left a host's path-refined grant
      * nothing to be matched against. At dispatch both backends therefore
-     * take the refinement for these categories from the argument values at
-     * these positions, whatever the graph declared. The rows restate the
-     * prelude's projections (`authoring/LayerAGrammar.kt`) and add
-     * `Fs.List`, whose directory argument the prelude leaves unprojected.
+     * take the refinement for these categories from the sources here,
+     * whatever the graph declared. The filesystem and `Net.Connect` rows
+     * restate the prelude's projections (`authoring/LayerAGrammar.kt`) and
+     * add `Fs.List`, whose directory argument the prelude leaves
+     * unprojected.
+     *
+     * A row exists only for a category in the target's floor ([table]), and
+     * only where the whole refinement is recoverable from what the builtin
+     * receives. Not covered: `Process.Spawn` and `Http.Listen`, whose
+     * registered parameter shapes (E-013, E-002) include values that are
+     * not arguments of the builtin, and the connection-handle categories
+     * `Network.Send` / `Network.Receive`.
      */
-    val resourceProjections: Map<String, Map<String, List<Int>>> = linkedMapOf(
-        "strand-builtin:Fs.Read" to mapOf(FS_READ to listOf(0)),
-        "strand-builtin:Fs.Exists" to mapOf(FS_READ to listOf(0)),
-        "strand-builtin:Fs.List" to mapOf(FS_READ to listOf(0)),
-        "strand-builtin:Fs.Write" to mapOf(FS_WRITE to listOf(0)),
-        "strand-builtin:Fs.Append" to mapOf(FS_WRITE to listOf(0)),
-        "strand-builtin:Fs.Delete" to mapOf(FS_WRITE to listOf(0)),
-        "strand-builtin:Net.Connect" to mapOf(NET_CONNECT to listOf(0, 1)),
+    val resourceProjections: Map<String, Map<String, List<ResourceSource>>> = linkedMapOf(
+        "strand-builtin:Fs.Read" to mapOf(FS_READ to args(0)),
+        "strand-builtin:Fs.Exists" to mapOf(FS_READ to args(0)),
+        "strand-builtin:Fs.List" to mapOf(FS_READ to args(0)),
+        "strand-builtin:Fs.Write" to mapOf(FS_WRITE to args(0)),
+        "strand-builtin:Fs.Append" to mapOf(FS_WRITE to args(0)),
+        "strand-builtin:Fs.Delete" to mapOf(FS_WRITE to args(0)),
+        "strand-builtin:Net.Connect" to mapOf(NET_CONNECT to args(0, 1)),
+
+        // HTTP client: the component form names host and port; the URL
+        // form's are parsed out of its url argument by the parser the
+        // builtin itself uses.
+        "strand-builtin:Http.Request" to mapOf(NET_CONNECT to args(0, 1)),
+        "strand-builtin:Http.RequestFromUrl" to mapOf(
+            NET_CONNECT to listOf(ResourceSource.UrlHost(1), ResourceSource.UrlPort(1)),
+        ),
+
+        // LLM providers: the provider is fixed by the target, the model is
+        // the request's `model` field.
+        "strand-builtin:Anthropic.Messages.Create" to mapOf(LLM_GENERATE to llm("anthropic")),
+        "strand-builtin:OpenAI.Chat.Completions" to mapOf(LLM_GENERATE to llm("openai")),
+        "strand-builtin:Gemini.GenerateContent" to mapOf(LLM_GENERATE to llm("gemini")),
+        "strand-builtin:Anthropic.Messages.CreateStream" to mapOf(LLM_GENERATE to llm("anthropic")),
+        "strand-builtin:OpenAI.Chat.CompletionsStream" to mapOf(LLM_GENERATE to llm("openai")),
+        "strand-builtin:Gemini.GenerateContentStream" to mapOf(LLM_GENERATE to llm("gemini")),
+        "strand-builtin:Anthropic.Embeddings.Create" to mapOf(LLM_EMBED to llm("anthropic")),
+        "strand-builtin:OpenAI.Embeddings.Create" to mapOf(LLM_EMBED to llm("openai")),
+        "strand-builtin:Gemini.EmbedContent" to mapOf(LLM_EMBED to llm("gemini")),
+
+        // Vector stores: the provider is fixed by the target; the store is
+        // the name in the open config, and for a handle operation the name
+        // the handle was opened on.
+        "strand-builtin:Pinecone.Index.Open" to mapOf(
+            VECTOR_READ to listOf(ResourceSource.Const("pinecone"), ResourceSource.Field(0, "indexName")),
+        ),
+        "strand-builtin:Pinecone.Index.Upsert" to mapOf(VECTOR_WRITE to store("pinecone")),
+        "strand-builtin:Pinecone.Index.Delete" to mapOf(VECTOR_WRITE to store("pinecone")),
+        "strand-builtin:Pinecone.Index.Query" to mapOf(VECTOR_READ to store("pinecone")),
+        "strand-builtin:Pinecone.Index.Fetch" to mapOf(VECTOR_READ to store("pinecone")),
+        "strand-builtin:Chroma.Collection.Open" to mapOf(
+            VECTOR_READ to listOf(ResourceSource.Const("chroma"), ResourceSource.Field(0, "collectionName")),
+        ),
+        "strand-builtin:Chroma.Collection.Add" to mapOf(VECTOR_WRITE to store("chroma")),
+        "strand-builtin:Chroma.Collection.Delete" to mapOf(VECTOR_WRITE to store("chroma")),
+        "strand-builtin:Chroma.Collection.Query" to mapOf(VECTOR_READ to store("chroma")),
+        "strand-builtin:Chroma.Collection.Get" to mapOf(VECTOR_READ to store("chroma")),
     )
 
+    private fun args(vararg indices: Int): List<ResourceSource> = indices.map { ResourceSource.Arg(it) }
+
+    private fun llm(provider: String): List<ResourceSource> =
+        listOf(ResourceSource.Const(provider), ResourceSource.Field(0, "model"))
+
+    private fun store(provider: String): List<ResourceSource> =
+        listOf(ResourceSource.Const(provider), ResourceSource.HandleStore(0))
+
     /** The resource projection of [target], or null when it has none. */
-    fun resourceProjection(target: String): Map<String, List<Int>>? = resourceProjections[target]
+    fun resourceProjection(target: String): Map<String, List<ResourceSource>>? = resourceProjections[target]
 
     /** Namespace exempt from the floor; see the class kdoc. */
     const val EXEMPT_PREFIX: String = "strand-builtin:Test."
@@ -191,4 +247,30 @@ object BuiltinEffectTable {
         val required = requiredCategories(target) ?: return emptySet()
         return required - declaredCategoryNames
     }
+}
+
+/**
+ * Where one refinement parameter of a registry builtin's effect comes from
+ * at dispatch ([BuiltinEffectTable.resourceProjections]). `:core` holds the
+ * description; the backends resolve it against the argument values
+ * (`interpreter/RegistryResources`).
+ */
+sealed class ResourceSource {
+    /** The argument at [index], as given. */
+    data class Arg(val index: Int) : ResourceSource()
+
+    /** A string the target itself fixes (the provider a binding talks to). */
+    data class Const(val value: String) : ResourceSource()
+
+    /** The string field [name] of the product argument at [index]. */
+    data class Field(val index: Int, val name: String) : ResourceSource()
+
+    /** The host of the URL string argument at [index]. */
+    data class UrlHost(val index: Int) : ResourceSource()
+
+    /** The port of the URL string argument at [index], defaulted by scheme. */
+    data class UrlPort(val index: Int) : ResourceSource()
+
+    /** The store name the vector-store handle argument at [index] was opened on. */
+    data class HandleStore(val index: Int) : ResourceSource()
 }

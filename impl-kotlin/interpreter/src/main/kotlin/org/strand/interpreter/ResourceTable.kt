@@ -107,6 +107,14 @@ object ResourceTable {
         return holder.obj
     }
 
+    /**
+     * The object registered at [handle], or null when the handle is closed
+     * or was never opened. Unlike [get] it neither throws nor checks the
+     * kind; [RegistryResources] uses it to read what a handle refers to
+     * before the builtin that will validate it runs.
+     */
+    fun peek(handle: Value.Resource): Any? = table[handle.id]?.takeIf { it.kind == handle.kind }?.obj
+
     /** Remove and return the resource at [handle.id]. Returns null if absent. */
     fun remove(handle: Value.Resource): Any? = table.remove(handle.id)?.obj
 

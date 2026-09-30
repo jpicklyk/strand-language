@@ -1201,26 +1201,13 @@ object Builtins {
                 ?: throw IoFailure("http-request", "expected BytesV body, got ${args[2]::class.simpleName}")
 
             // Parse the URL host-side so the underlying call sees
-            // structured fields. Default port: 80 for http, 443 for
-            // https. The path includes the query string if any.
-            val uri = try {
-                java.net.URI(urlStr)
-            } catch (e: java.net.URISyntaxException) {
-                throw IoFailure("http-request", "$urlStr: URI syntax: ${e.message}")
-            }
-            val scheme = uri.scheme ?: "http"
-            val host = uri.host
-                ?: throw IoFailure("http-request", "$urlStr: missing host")
-            val effectivePort = if (uri.port > 0) uri.port
-                else when (scheme.lowercase()) {
-                    "https" -> 443
-                    "http" -> 80
-                    else -> 80  // The seven-arg form will reject non-http schemes anyway.
-                }
-            val pathAndQuery = buildString {
-                append(if (uri.rawPath.isNullOrEmpty()) "/" else uri.rawPath)
-                if (!uri.rawQuery.isNullOrEmpty()) append("?").append(uri.rawQuery)
-            }
+            // structured fields (NetIo.parseHttpUrl, which the capability
+            // check reads the host and port from as well).
+            val url = NetIo.parseHttpUrl(urlStr)
+            val scheme = url.scheme
+            val host = url.host
+            val effectivePort = url.port
+            val pathAndQuery = url.pathAndQuery
 
             // Dispatch to the seven-arg builtin so the sandbox check
             // and projection-friendly path both run once. We construct
@@ -4548,15 +4535,52 @@ object Builtins {
     @Volatile
     private var testHigherOrderOverlay: Map<String, Entry<FnH>> = emptyMap()
 
-    /** Install a test-only higher-order builtin into the overlay. */
-    fun installTestHigherOrderBuiltin(target: String, effectful: Boolean, determinism: Determinism, fn: FnH) {
+    @Volatile
+    private var testHigherOrderPerforms: Map<String, Set<String>> = emptyMap()
+
+    /**
+     * Install a test-only higher-order builtin into the overlay. [performs]
+     * names the effect categories the builtin performs itself, as opposed
+     * to the rows of the callbacks it runs (see [higherOrderPerforms]);
+     * the `Test.` namespace has no effect floor to read them from.
+     */
+    fun installTestHigherOrderBuiltin(
+        target: String,
+        effectful: Boolean,
+        determinism: Determinism,
+        performs: Set<String> = emptySet(),
+        fn: FnH,
+    ) {
         testHigherOrderOverlay = testHigherOrderOverlay + (target to Entry(fn, effectful, determinism))
+        testHigherOrderPerforms = testHigherOrderPerforms + (target to performs)
     }
 
     /** Remove every overlay entry installed by [installTestBuiltin] or [installTestHigherOrderBuiltin]. */
     fun clearTestBuiltins() {
         testOverlay = emptyMap()
         testHigherOrderOverlay = emptyMap()
+        testHigherOrderPerforms = emptyMap()
+    }
+
+    /**
+     * The effect category names the higher-order builtin [target] performs
+     * itself. A higher-order builtin's declared row mixes two things: the
+     * rows of the callbacks it runs, which it only propagates (each
+     * callback invocation is checked where it happens), and whatever the
+     * builtin does on its own account (`Anthropic.Messages.Create` calls
+     * the provider and also runs tool implementations). The second part is
+     * the target's effect floor: the Q-056 signature oracle's name set when
+     * resolvable, else [org.strand.core.BuiltinEffectTable]. Empty for a
+     * pure combinator such as `List.Map`. A dispatch performs exactly these
+     * categories, so they take the performing-site capability rules.
+     */
+    fun higherOrderPerforms(target: String): Set<String> {
+        testHigherOrderPerforms[target]?.let { return it }
+        if (org.strand.core.BuiltinEffectTable.isExempt(target)) return emptySet()
+        if (target.startsWith("strand-builtin:")) {
+            org.strand.verifier.BuiltinSignatures.effectNamesFor(target)?.let { return it }
+        }
+        return org.strand.core.BuiltinEffectTable.requiredCategories(target) ?: emptySet()
     }
 
     /** Look up a builtin by its target identifier; null if unknown. */

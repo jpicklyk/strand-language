@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.strand.authoring.LayerAGrammar
 import org.strand.core.BuiltinEffectTable
+import org.strand.core.ResourceSource
 import org.strand.interpreter.Builtins
 import org.strand.verifier.BuiltinSignatures
 
@@ -57,7 +58,8 @@ class BuiltinEffectTableOracleConsistencyTest {
                 spec.stringFields.getValue("target") to spec.effectProjections.associate { projection ->
                     val category = LayerAGrammar.reservedNodes.getValue(projection.category)
                     category.stringFields.getValue("categoryName") to projection.sources.map { source ->
-                        (source as LayerAGrammar.ReservedProjectionSource.ArgRef).index
+                        ResourceSource.Arg((source as LayerAGrammar.ReservedProjectionSource.ArgRef).index)
+                            as ResourceSource
                     }
                 }
             }

@@ -12,6 +12,39 @@ import java.net.URI
  */
 object NetIo {
 
+    /** The parts of an `http(s)` URL as `Http.RequestFromUrl` dispatches them. */
+    data class HttpUrlParts(val scheme: String, val host: String, val port: Int, val pathAndQuery: String)
+
+    /**
+     * Parse the URL argument of `Http.RequestFromUrl`. Default port: 80 for
+     * http, 443 for https. The path includes the query string if any.
+     * This is the one parser for that argument: the builtin dispatches on
+     * its result and the capability check ([RegistryResources]) matches
+     * the grant against the same host and port, so the two cannot disagree
+     * about where a URL points.
+     */
+    fun parseHttpUrl(urlStr: String): HttpUrlParts {
+        val uri = try {
+            URI(urlStr)
+        } catch (e: java.net.URISyntaxException) {
+            throw IoFailure("http-request", "$urlStr: URI syntax: ${e.message}")
+        }
+        val scheme = uri.scheme ?: "http"
+        val host = uri.host
+            ?: throw IoFailure("http-request", "$urlStr: missing host")
+        val effectivePort = if (uri.port > 0) uri.port
+            else when (scheme.lowercase()) {
+                "https" -> 443
+                "http" -> 80
+                else -> 80  // The seven-arg form will reject non-http schemes anyway.
+            }
+        val pathAndQuery = buildString {
+            append(if (uri.rawPath.isNullOrEmpty()) "/" else uri.rawPath)
+            if (!uri.rawQuery.isNullOrEmpty()) append("?").append(uri.rawQuery)
+        }
+        return HttpUrlParts(scheme, host, effectivePort, pathAndQuery)
+    }
+
     /**
      * Review H1: build the request URI for `Http.Request` from the
      * policy-approved (pinned) address and a program-supplied path.

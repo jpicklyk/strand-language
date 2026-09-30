@@ -1156,21 +1156,30 @@ class Interpreter(
             } else {
                 emptyMap()
             }
-        // A higher-order builtin (`List.Map`, `List.Fold`, ...) performs no
-        // effect of its own: its declared row is the latent row of the
-        // callbacks it runs, and each callback invocation re-enters here
-        // with its own (projected) instances. It is therefore a propagating
-        // site, not a performing one, so an instance-free parameterized
-        // category does not demand an unrefined grant at the combinator
-        // (main's Q-070 callback refinement check relies on this).
-        val performs = Builtins.lookupHigherOrder(node.target) == null
+        // A first-order builtin performs its whole row. A higher-order one
+        // (`List.Map`, `List.Fold`, the LLM tool loop) declares the latent
+        // row of the callbacks it runs, which it only propagates: each
+        // callback invocation re-enters here with its own (projected)
+        // instances, so an instance-free parameterized category does not
+        // demand an unrefined grant at the combinator (main's Q-070
+        // callback refinement check relies on this). What it performs on
+        // its own account is its effect floor, empty for a pure combinator.
+        val row = foreignEffectRow(node)
+        val performing: Set<NodeId>? = if (Builtins.lookupHigherOrder(node.target) == null) {
+            null
+        } else {
+            val own = Builtins.higherOrderPerforms(node.target)
+            row.filter { categoryNameOf(it) in own }.toSet()
+        }
         // For a builtin with a registry resource projection the refinement
-        // is the argument the builtin is about to act on, not what the
-        // graph declared about it.
+        // is the resource the builtin is about to act on, not what the
+        // graph declared about it. What the call site declared is still a
+        // claim the grant must cover ([checkCapabilities] `claims`).
         val resource = resourceInstances(node, args)
         checkCapabilities(
-            id, foreignEffectRow(node), effectiveInstances + resource, context, limits,
-            performs = performs, registryBound = resource.keys,
+            id, row, effectiveInstances + resource, context, limits,
+            performs = performing == null || performing.isNotEmpty(),
+            registryBound = resource.keys, performingOnly = performing, claims = effectiveInstances,
         )
         try {
             foreignDispatcher?.dispatch(node.target, args)?.let { return it }
@@ -1376,6 +1385,8 @@ class Interpreter(
         limits: EvaluationLimits,
         performs: Boolean = false,
         registryBound: Set<NodeId> = emptySet(),
+        performingOnly: Set<NodeId>? = null,
+        claims: Map<NodeId, List<Value>> = emptyMap(),
     ) {
         // First pass: surface every category that is entirely absent in
         // one error. Mirrors the pre-Q-031 CapabilityViolation shape so
@@ -1413,7 +1424,10 @@ class Interpreter(
         for (category in declared) {
             val requirement = instances[category]
             if (requirement == null) {
-                if (performs) {
+                // [performingOnly] narrows a performing site to the
+                // categories it performs itself (a higher-order builtin's
+                // own effects); the rest of its row propagates.
+                if (performs && (performingOnly == null || category in performingOnly)) {
                     checkUnrefinedGrant(at, category, context, limits)
                     // Q-055: the effect fires here with no refinement, so
                     // the audit log records it with no parameters. Without
@@ -1434,14 +1448,14 @@ class Interpreter(
             // A registry-bound requirement has the registry's arity, which
             // the program's declaration of the category need not share; a
             // pattern with no concrete slot is unrefined at any arity.
-            val matched = grants.any { covers(it, requirement) } ||
-                (category in registryBound && grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } })
+            val unrefined = category in registryBound &&
+                grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } }
             val name = categoryNameOf(category)
-            if (!matched) {
+            fun deny(requested: List<Value>): Nothing {
                 val report = buildDenialReport(
                     at = at,
                     categoryName = name,
-                    requested = requirement,
+                    requested = requested,
                     held = grants,
                     heldCategoryName = name,
                     limits = limits,
@@ -1450,10 +1464,25 @@ class Interpreter(
                 throw InterpretException(InterpretError.RefinementViolation(
                     at = at,
                     category = category,
-                    requirement = requirement,
+                    requirement = requested,
                     available = grants,
                     report = report,
                 ))
+            }
+            if (!unrefined && grants.none { covers(it, requirement) }) deny(requirement)
+            // Registry binding adds a requirement; it removes none. Where
+            // the call site's own EffectDecl names parameters that differ
+            // from the resource the registry bound, the declaration is a
+            // second claim and the grant must cover it as before, so a
+            // program cannot widen what it may do by misdeclaring and a
+            // call that declares more than was granted is still refused.
+            if (category in registryBound && !unrefined) {
+                val claim = claims[category]
+                if (claim != null && claim.isNotEmpty() && claim != requirement &&
+                    grants.none { covers(it, claim) }
+                ) {
+                    deny(claim)
+                }
             }
             // Q-055: the capability check passed for a category the call site
             // concretely exercised (an EffectDecl instance was present). Emit
@@ -1488,18 +1517,18 @@ class Interpreter(
      * The refinement the registry assigns to [node]'s dispatch on [args]:
      * for each category in the node's row that
      * [org.strand.core.BuiltinEffectTable.resourceProjection] names, the
-     * argument values at the projected positions. Empty for a target with
-     * no resource projection. These override the graph's own instances
-     * (binding projections, authored EffectDecls) in the capability check.
+     * values its sources resolve to ([RegistryResources]). Empty for a
+     * target with no resource projection. These override the graph's own
+     * instances (binding projections, authored EffectDecls) in the
+     * capability check.
      */
     private fun resourceInstances(node: Node.ForeignNode, args: List<Value>): Map<NodeId, List<Value>> {
         val projection = org.strand.core.BuiltinEffectTable.resourceProjection(node.target) ?: return emptyMap()
         val out = LinkedHashMap<NodeId, List<Value>>()
         for (category in foreignEffectRow(node)) {
-            val indices = projection[categoryNameOf(category)] ?: continue
-            // A short argument list is the builtin's own contract violation.
-            if (indices.any { it >= args.size }) continue
-            out[category] = indices.map { args[it] }
+            val sources = projection[categoryNameOf(category)] ?: continue
+            // Unresolvable sources are arguments the builtin itself rejects.
+            out[category] = RegistryResources.resolve(sources, args) ?: continue
         }
         return out
     }

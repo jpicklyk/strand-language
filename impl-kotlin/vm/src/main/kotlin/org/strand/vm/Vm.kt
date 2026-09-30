@@ -633,9 +633,11 @@ class Vm(
                         siteInstances(site, instanceParams)
                     }
                     val resource = if (fn is VmForeign) resourceInstances(fn, args.asList()) else emptyMap()
+                    val performing = if (fn is VmForeign) performing(fn) else emptySet()
                     checkCapabilities(
                         NodeId(site.site), effects.map { NodeId(it) }, instances + resource, limits,
-                        performs = fn is VmForeign && performs(fn), registryBound = resource.keys,
+                        performs = performing == null || performing.isNotEmpty(),
+                        registryBound = resource.keys, performingOnly = performing, claims = instances,
                     )
                     invokeCallable(NodeId(site.site), fn, args, frames, current, limits)
                 }
@@ -847,6 +849,8 @@ class Vm(
         limits: EvaluationLimits,
         performs: Boolean = false,
         registryBound: Set<NodeId> = emptySet(),
+        performingOnly: Set<NodeId>? = null,
+        claims: Map<NodeId, List<Value>> = emptyMap(),
     ) {
         if (declared.isEmpty()) return
         val context = currentCaps
@@ -873,7 +877,7 @@ class Vm(
         for (category in declared) {
             val requirement = instances[category]
             if (requirement == null) {
-                if (performs) {
+                if (performs && (performingOnly == null || category in performingOnly)) {
                     checkUnrefinedGrant(at, category, context, limits)
                     // Q-055: an uninstantiated performing dispatch is recorded
                     // with no parameters (the interpreter's record shape).
@@ -891,13 +895,13 @@ class Vm(
             val name = categoryNameOf(category)
             // A registry-bound requirement has the registry's arity; a
             // pattern with no concrete slot is unrefined at any arity.
-            val matched = grants.any { covers(it, requirement) } ||
-                (category in registryBound && grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } })
-            if (!matched) {
+            val unrefined = category in registryBound &&
+                grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } }
+            fun deny(requested: List<Value>): Nothing {
                 val report = denialReport(
                     at = at,
                     categoryName = name,
-                    requested = requirement,
+                    requested = requested,
                     held = grants,
                     heldCategoryName = name,
                     limits = limits,
@@ -906,10 +910,21 @@ class Vm(
                 throw InterpretException(InterpretError.RefinementViolation(
                     at = at,
                     category = category,
-                    requirement = requirement,
+                    requirement = requested,
                     available = grants,
                     report = report,
                 ))
+            }
+            if (!unrefined && grants.none { covers(it, requirement) }) deny(requirement)
+            // The call site's own declaration remains a claim the grant
+            // must cover (the interpreter's rule).
+            if (category in registryBound && !unrefined) {
+                val claim = claims[category]
+                if (claim != null && claim.isNotEmpty() && claim != requirement &&
+                    grants.none { covers(it, claim) }
+                ) {
+                    deny(claim)
+                }
             }
             // Q-055: an Allowed record for each category the site concretely
             // exercised, its refinement values rendered and scrubbed through
@@ -987,9 +1002,11 @@ class Vm(
                 emptyMap()
             }
             val resource = resourceInstances(callable, args)
+            val performing = performing(callable)
             checkCapabilities(
                 at, effectsOf(callable), instances + resource, limits,
-                performs = performs(callable), registryBound = resource.keys,
+                performs = performing == null || performing.isNotEmpty(),
+                registryBound = resource.keys, performingOnly = performing, claims = instances,
             )
         } else {
             checkCapabilities(at, effectsOf(callable), emptyMap(), limits)
@@ -1007,19 +1024,26 @@ class Vm(
         val out = LinkedHashMap<NodeId, List<Value>>()
         for (effect in fn.effects) {
             val category = NodeId(effect)
-            val indices = projection[categoryNameOf(category)] ?: continue
-            if (indices.any { it >= args.size || args[it] !is Value }) continue
-            out[category] = indices.map { args[it] as Value }
+            val sources = projection[categoryNameOf(category)] ?: continue
+            // A VM-only operand (an unboxed callable) is no resource.
+            val values = args.map { it as? Value ?: Value.UnitV }
+            out[category] = org.strand.interpreter.RegistryResources.resolve(sources, values) ?: continue
         }
         return out
     }
 
     /**
-     * A foreign dispatch performs its effects unless the target is a
-     * higher-order builtin, whose row is the latent row of its callbacks (the
-     * interpreter's `dispatchForeign` `performs` flag).
+     * The categories a foreign dispatch performs, as the interpreter's
+     * `dispatchForeign` computes them: null (the whole row) for a
+     * first-order builtin; for a higher-order one only its own effect floor
+     * ([Builtins.higherOrderPerforms]), the rest of its row being the latent
+     * row of the callbacks it runs.
      */
-    private fun performs(fn: VmForeign): Boolean = Builtins.lookupHigherOrder(fn.target) == null
+    private fun performing(fn: VmForeign): Set<NodeId>? {
+        if (Builtins.lookupHigherOrder(fn.target) == null) return null
+        val own = Builtins.higherOrderPerforms(fn.target)
+        return fn.effects.map { NodeId(it) }.filter { categoryNameOf(it) in own }.toSet()
+    }
 
     /**
      * The interpreter's `checkForeignFloor` (defence in depth for review
