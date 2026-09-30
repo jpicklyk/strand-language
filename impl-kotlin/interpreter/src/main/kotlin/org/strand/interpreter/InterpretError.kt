@@ -51,6 +51,25 @@ sealed class InterpretError {
         override val isCatchable: Boolean get() = false
     }
 
+    /**
+     * An active Handler ([handler], intercepting [category]) was about to
+     * stand in for the call at [at], and the verifier never checked that
+     * call against the Handler's signature (the pair is absent from
+     * `VerifyResult.Ok.verifiedInterceptions`). Handlers are dynamically
+     * scoped, so this happens when the call sits in code that reached the
+     * Handler's extent as a value the verifier could not resolve. Letting
+     * the interception proceed would hand the handler arguments, and the
+     * caller a result, of unchecked types; the run stops instead.
+     */
+    data class UnverifiedInterception(
+        override val at: NodeId,
+        val handler: NodeId,
+        val category: NodeId,
+    ) : InterpretError() {
+        // Program defect: the fix is restructuring the Handler, not recovery.
+        override val isCatchable: Boolean get() = false
+    }
+
     /** Arity mismatch at call time. (Unreachable on verified graphs but defensive.) */
     data class ArityMismatch(override val at: NodeId, val expected: Int, val actual: Int) : InterpretError() {
         override val isCatchable: Boolean get() = false

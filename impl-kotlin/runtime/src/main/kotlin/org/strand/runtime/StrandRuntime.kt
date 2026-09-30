@@ -94,7 +94,9 @@ class StrandRuntime(private val policy: HostPolicy) {
         // runtime's policy and thread it into the interpreter as a value. No
         // singleton install — two runtimes evaluating concurrently each read
         // their own context, so there is nothing to clobber.
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verify.nodeTypes)
+        val ctx = org.strand.interpreter.HostContext.fromPolicy(
+            policy, verify.nodeTypes, verify.verifiedInterceptions,
+        )
         val interp = Interpreter(
             program.store,
             program.hashToNodeId,
@@ -206,7 +208,10 @@ class StrandRuntime(private val policy: HostPolicy) {
      *
      * [verifierNodeTypes] is the verify result's `nodeTypes` map (the
      * N-044/N-045 LLM schema-projection path reads it); pass
-     * `verify(program).asOk()?.nodeTypes` or null.
+     * `verify(program).asOk()?.nodeTypes` or null. [verifiedInterceptions]
+     * is the same result's `verifiedInterceptions`; when passed, the
+     * transition refuses a Handler interception the verifier did not check
+     * (null leaves that guard off).
      */
     fun runMachine(
         program: ProgramImage,
@@ -214,8 +219,9 @@ class StrandRuntime(private val policy: HostPolicy) {
         events: List<Value>,
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
+        verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
     ): Trace {
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes)
+        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions)
         val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
         return runtime.runMachine(machine, events, capabilities, policy.limits)
     }
@@ -234,13 +240,14 @@ class StrandRuntime(private val policy: HostPolicy) {
         group: MachineGroup,
         scope: CoroutineScope,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
+        verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
     ): MachineGroupHandle {
         // Q-054 follow-up: the policy flows into the runtime as a HostContext
         // value, bound to every per-actor interpreter and feeder. No singleton
         // install — the group runs asynchronously past this return without
         // depending on a mutable process-global being held in place, so two
         // groups can run concurrently under different policies.
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes)
+        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions)
         val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
         return runtime.runGroup(group, scope, policy.limits)
     }

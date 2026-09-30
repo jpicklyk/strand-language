@@ -166,6 +166,9 @@ class Verifier(
             // UncoveredEffects) so a host reads the harm bound's `closure(g)`
             // instead of re-deriving it. `VerifyResult` is not encoded — hash-neutral.
             nodeClosures = state.nodeClosures.toMap(),
+            // The (call site, Handler) pairs whose signature agreement was
+            // checked; the runtime refuses any other interception.
+            verifiedInterceptions = state.verifiedInterceptions.mapValues { (_, v) -> v.toSet() },
             // Q-070 / Q-071: the parallel latent-effect channel (indirectly-
             // reachable effect surface). Also not encoded — hash-neutral.
             latentClosures = latentClosures,
@@ -504,6 +507,18 @@ class Verifier(
          * its instantiation (review H1).
          */
         val appFunTypes = HashMap<NodeId, TypeExpr.Fun>()
+
+        /**
+         * Application NodeId to the Handler NodeIds whose signature that call
+         * was checked against by [checkHandlerSignatureAgreement]. Handlers
+         * are dynamically scoped, so at runtime a Handler can also reach
+         * calls the lexical walk never sees (inside a callback or tool
+         * implementation that arrives through a binder, or inside another
+         * Handler's handle); the runtime consults this record and refuses an
+         * interception that is not in it. See
+         * [VerifyResult.Ok.verifiedInterceptions].
+         */
+        val verifiedInterceptions = HashMap<NodeId, MutableSet<NodeId>>()
 
         private val inferMemo = HashMap<ContextKey, Inferred>()
         private val typeMemo = HashMap<ContextKey, TypeExpr>()
@@ -2552,17 +2567,17 @@ class Verifier(
                             ?: (nodeTypes[node.function] as? TypeExpr.Fun)
                             ?: return
                         if (intercept !in fnFun.effects) {
-                            // Not intercepted here. A higher-order builtin
-                            // does not carry its callbacks' effects in its
-                            // row, so a callback whose row carries the
-                            // intercept runs un-intercepted at this call and
-                            // is intercepted at the calls inside its body:
-                            // walk the callback's body.
-                            if (calleeIsForeign(node.function)) {
-                                for (argId in node.arguments) {
-                                    val argFun = nodeTypes[argId] as? TypeExpr.Fun ?: continue
-                                    if (intercept in argFun.effects) visitCallback(argId)
-                                }
+                            // Not intercepted here. A callee whose row does
+                            // not carry the intercept cannot call such an
+                            // argument directly, but it can hand it to a
+                            // higher-order builtin (whether it is one or
+                            // merely forwards to one), and then the callback
+                            // runs un-intercepted at that call and is
+                            // intercepted at the calls inside its body: walk
+                            // the callback's body.
+                            for (argId in node.arguments) {
+                                val argFun = nodeTypes[argId] as? TypeExpr.Fun ?: continue
+                                if (intercept in argFun.effects) visitCallback(argId)
                             }
                             return
                         }
@@ -2589,6 +2604,7 @@ class Verifier(
                             ))
                             throw VerifyAbort()
                         }
+                        verifiedInterceptions.getOrPut(id) { HashSet() } += handlerId
                         val scopeCaps = narrowed
                         if (scopeCaps != null) {
                             val missing = expected.effects - scopeCaps
@@ -2686,9 +2702,12 @@ class Verifier(
                     is Node.EffectCategory, is Node.EffectDecl, is Node.Pattern,
                     is Node.RecursiveType, is Node.RecursiveSelf, is Node.RecursiveProjection,
                     is Node.StateMachine, is Node.EventStream, is Node.Transition,
-                    is Node.Schema, is Node.Invariant, is Node.ToolDef,
+                    is Node.Schema, is Node.Invariant,
                     is Node.ResponseSchemaSpec,
                     is Node.ModuleManifest -> Unit
+                    // A tool implementation is invoked like a callback: not
+                    // intercepted as a whole, its body's calls are.
+                    is Node.ToolDef -> visitCallback(node.implementation)
                 }
             }
             visitRef = ::visit

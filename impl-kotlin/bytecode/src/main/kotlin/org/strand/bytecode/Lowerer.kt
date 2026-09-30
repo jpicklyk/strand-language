@@ -373,7 +373,9 @@ class Lowerer(
             is Node.Handler -> {
                 lowerExpr(node.handle, chunk, scope)
                 val interceptConstIdx = chunk.constant(Constant.IntC(category(node.intercept).toLong()))
-                chunk.emit(Opcode.HANDLER_PUSH, interceptConstIdx)
+                // Second operand: the Handler's NodeId, for the VM's
+                // verified-interception guard.
+                chunk.emit(Opcode.HANDLER_PUSH, interceptConstIdx, nodeId.value)
                 lowerExpr(node.body, chunk, scope)
                 chunk.emit(Opcode.HANDLER_POP)
             }

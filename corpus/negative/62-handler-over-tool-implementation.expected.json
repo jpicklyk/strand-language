@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "HandlerSignatureMismatch",
+  "notes": "A Handler for Log.Write with an (Int) -> Int handle encloses a ToolDef whose implementation calls a (String) -> Int Log.Write binding. A tool implementation runs inside the Handler's extent when the tool is invoked there, so its call is intercepted; the signature walk treated ToolDef as a leaf and the handler received a String. Found by the effect-closure soundness fuzzer (T1)."
+}

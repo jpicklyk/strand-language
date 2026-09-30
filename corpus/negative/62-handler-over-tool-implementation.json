@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "root": "handled",
+  "nodes": {
+    "intT":     { "type": "PrimitiveType", "kind": "Int" },
+    "strT":     { "type": "PrimitiveType", "kind": "String" },
+    "logFx":    { "type": "EffectCategory", "categoryName": "Log.Write" },
+    "logT":     { "type": "FunctionType", "parameters": ["strT"], "result": "intT", "effects": ["logFx"] },
+    "log":      { "type": "ForeignNode", "target": "strand-builtin:Test.EffectfulNoOp", "foreignType": "logT", "effects": ["logFx"] },
+    "noteSchema": { "type": "Schema", "schemaName": "Note", "valueType": "strT", "invariants": [] },
+    "msg":      { "type": "ParameterDecl", "name": "msg", "paramType": "strT" },
+    "msgRef":   { "type": "VarRef", "binder": "msg" },
+    "implBody": { "type": "Application", "function": "log", "arguments": ["msgRef"] },
+    "impl":     { "type": "Lambda", "parameters": ["msg"], "body": "implBody", "effects": ["logFx"] },
+    "tool":     { "type": "ToolDef", "name": "note", "description": "Record a note.", "parameterSchema": "noteSchema", "implementation": "impl" },
+    "zero":     { "type": "IntLit", "value": 0 },
+    "n":        { "type": "ParameterDecl", "name": "n", "paramType": "intT" },
+    "mock":     { "type": "Lambda", "parameters": ["n"], "body": "zero" },
+    "body":     { "type": "Let", "name": "_tool", "value": "tool", "body": "zero" },
+    "handled":  { "type": "Handler", "intercept": "logFx", "handle": "mock", "body": "body" }
+  }
+}

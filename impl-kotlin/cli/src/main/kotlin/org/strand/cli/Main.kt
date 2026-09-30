@@ -803,7 +803,9 @@ private fun runMachine(args: Array<String>) {
             val image = programImageOf(store, root, hashToNodeId, resolveCb)
             val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
             try {
-                val trace = runtime.runMachine(image, root, events, caps, result.nodeTypes)
+                val trace = runtime.runMachine(
+                    image, root, events, caps, result.nodeTypes, result.verifiedInterceptions,
+                )
                 printTrace(trace)
                 // Q-064: a denial-caused halt is a denial-caused termination —
                 // the trace above is the human rendering; emit the one
@@ -955,7 +957,9 @@ private fun runGroup(args: Array<String>) {
     try {
         runtime.withGroupInstalled(verifyResult.nodeTypes) {
             runBlocking {
-                val handle = runtime.runGroup(image, group, this, verifyResult.nodeTypes)
+                val handle = runtime.runGroup(
+                    image, group, this, verifyResult.nodeTypes, verifyResult.verifiedInterceptions,
+                )
 
                 // Send routed events on their designated input streams, then
                 // close all host-feedable external inputs so the actors halt

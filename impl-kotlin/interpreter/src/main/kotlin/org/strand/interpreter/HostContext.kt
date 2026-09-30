@@ -97,6 +97,16 @@ data class HostContext(
      * multi-tenant host's per-tenant sink collects only that tenant's records.
      */
     val auditSink: AuditSink = NoOpAuditSink,
+
+    /**
+     * The verifier's `verifiedInterceptions` record for the executing
+     * program: Application NodeId to the Handler NodeIds that call was
+     * signature-checked against. When present, a backend refuses any Handler
+     * interception absent from it ([InterpretError.UnverifiedInterception]).
+     * Null (a backend constructed without a verify result) leaves the guard
+     * off, as a null [verifierNodeTypes] degrades the schema projections.
+     */
+    val verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
 ) {
     companion object {
         /**
@@ -108,6 +118,7 @@ data class HostContext(
         fun fromPolicy(
             policy: HostPolicy,
             verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
+            verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
         ): HostContext {
             // Allocate the per-context scrubber first, then wrap the policy's
             // credential provider so every credential it resolves registers
@@ -132,6 +143,7 @@ data class HostContext(
                 scrubber = scrubber,
                 builtinLimits = BuiltinLimits.from(policy.limits),
                 auditSink = policy.auditSink,
+                verifiedInterceptions = verifiedInterceptions,
             )
         }
 

@@ -428,8 +428,9 @@ class Vm(
                 }
                 Opcode.HANDLER_PUSH -> {
                     val interceptC = current.constant() as Constant.IntC
+                    val handlerNode = current.operand()
                     val handlerValue = current.stack.removeLast()
-                    handlers += VmActiveHandler(interceptC.value.toInt(), handlerValue)
+                    handlers += VmActiveHandler(interceptC.value.toInt(), handlerValue, handlerNode)
                 }
                 Opcode.HANDLER_POP -> {
                     handlers.removeLast()
@@ -598,6 +599,15 @@ class Vm(
                         // surrounding context with no EffectDecls reaching
                         // it — the interpreter's applyValue rule (review H2),
                         // including a foreign handler's performing check.
+                        // The interpreter's verified-interception guard.
+                        val verified = hostContext.verifiedInterceptions
+                        if (verified != null && NodeId(intercept.node) !in verified[NodeId(site.site)].orEmpty()) {
+                            throw InterpretException(InterpretError.UnverifiedInterception(
+                                at = NodeId(site.site),
+                                handler = NodeId(intercept.node),
+                                category = NodeId(intercept.intercept),
+                            ))
+                        }
                         val handler = unbox(intercept.handlerValue)
                         checkAppliedCallable(NodeId(site.site), handler, args.asList(), limits)
                         invokeCallable(NodeId(site.site), handler, args, frames, current, limits)
@@ -1288,7 +1298,7 @@ class Vm(
  * `Interpreter.ActiveHandler`: an `intercept` EffectCategory NodeId
  * value plus the handler's runtime callable value (typically VmClosure).
  */
-internal data class VmActiveHandler(val intercept: Int, val handlerValue: Any)
+internal data class VmActiveHandler(val intercept: Int, val handlerValue: Any, val node: Int)
 
 /**
  * The `NodeId(-1)` sentinel the interpreter's `applyCallable` uses for the

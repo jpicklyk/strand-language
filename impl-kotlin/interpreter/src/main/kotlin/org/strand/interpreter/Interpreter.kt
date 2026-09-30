@@ -275,6 +275,8 @@ class Interpreter(
     internal data class ActiveHandler(
         val intercept: NodeId,
         val handler: Value,
+        /** The Handler node, for the verified-interception guard in [applyCall]. */
+        val node: NodeId,
     )
 
     /**
@@ -469,7 +471,7 @@ class Interpreter(
                     // be handled). The result is captured in the ActiveHandler
                     // and re-used at every intercepted call site.
                     val handlerValue = eval(node.handle, env, context, handlers, counters, limits)
-                    val newHandlers = handlers + ActiveHandler(node.intercept, handlerValue)
+                    val newHandlers = handlers + ActiveHandler(node.intercept, handlerValue, id)
                     eval(node.body, env, context, newHandlers, counters, limits)
                 }
 
@@ -879,6 +881,17 @@ class Interpreter(
                 val activeHandler = handlers.findLast { it.intercept in fnEffects }
                 if (activeHandler != null) {
                     val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
+                    // The verifier checked this Handler's signature against
+                    // the calls it could see. Dynamic scope reaches further
+                    // (callbacks and tool implementations bound outside the
+                    // Handler, other Handlers' handles); an interception it
+                    // did not check would pass the handler unchecked types.
+                    val verified = hostContext.verifiedInterceptions
+                    if (verified != null && activeHandler.node !in verified[id].orEmpty()) {
+                        throw InterpretException(InterpretError.UnverifiedInterception(
+                            at = id, handler = activeHandler.node, category = activeHandler.intercept,
+                        ))
+                    }
                     return applyValue(
                         id = id,
                         callable = activeHandler.handler,

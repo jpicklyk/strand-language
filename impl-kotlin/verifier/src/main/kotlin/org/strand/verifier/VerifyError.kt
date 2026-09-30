@@ -1372,6 +1372,20 @@ sealed class VerifyResult {
         val warnings: List<VerifyWarning> = emptyList(),
         val nodeClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
         val latentClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
+        /**
+         * Application NodeId to the Handler NodeIds the verifier checked that
+         * call's signature against (`HandlerSignatureMismatch`). A Handler is
+         * dynamically scoped: besides the calls lexically inside its body it
+         * intercepts calls made by code that reaches its dynamic extent as a
+         * value (a callback or tool implementation bound outside the Handler,
+         * another Handler's handle), which the verifier's walk cannot always
+         * resolve. A host passes this record to the runtime, which refuses an
+         * interception absent from it with
+         * `InterpretError.UnverifiedInterception` rather than hand the
+         * handler arguments of a type it was not checked for. Hash-neutral
+         * like the other verify-result channels.
+         */
+        val verifiedInterceptions: Map<NodeId, Set<NodeId>> = emptyMap(),
         val schemaObligations: Map<NodeId, List<TypeExpr.SchemaType>> =
             nodeTypes.mapNotNull { (id, t) -> (t as? TypeExpr.SchemaType)?.let { id to listOf(it) } }.toMap(),
     ) : VerifyResult() {
