@@ -81,6 +81,24 @@ class Vm(
     // ProductV, and resumes at the recorded err-label pc.
     private val attemptStack: ArrayDeque<AttemptMarker> = ArrayDeque()
 
+    // Q-040 per-evaluation budget. Fields rather than dispatch-loop locals
+    // because a higher-order builtin runs each callback in a nested dispatch
+    // loop ([applyNested]) that must spend the same budget: [outerDepth] is
+    // the frame count of the loops a nested run is suspended under, so the
+    // stack-depth cap sees the whole call chain. [resetBudget] runs at each
+    // public entry point.
+    private var steps = 0L
+    private var allocated = 0L
+    private var startNanos = 0L
+    private var outerDepth = 0
+
+    private fun resetBudget() {
+        steps = 0L
+        allocated = 0L
+        startNanos = System.nanoTime()
+        outerDepth = 0
+    }
+
     /**
      * Execute the bytecode and return the top-of-stack value at HALT.
      * The HALT instruction's top-of-stack is required to be a [Value]
@@ -142,6 +160,7 @@ class Vm(
         capStack.clear()
         handlers.clear()
         attemptStack.clear()
+        resetBudget()
         val frame = Frame(chunk = table.root, captures = emptyArray())
         val frames = ArrayDeque<Frame>()
         frames.addLast(frame)
@@ -200,6 +219,7 @@ class Vm(
         // consulted here. Snapshot and restore around the run.
         val savedAttempts = ArrayDeque(attemptStack)
         attemptStack.clear()
+        resetBudget()
         val frames = ArrayDeque<Frame>()
         try {
             checkAppliedCallable(RUNTIME_BOUNDARY, closure, args, limits)
@@ -218,27 +238,17 @@ class Vm(
                     frames.addLast(frame)
                 }
                 is VmForeign -> {
-                    // Dispatch directly via Builtins; no frame setup.
-                    val builtin = Builtins.lookup(closure.target)
-                        ?: error("applyClosure: no Builtins entry for foreign target '${closure.target}'")
+                    // Dispatch directly via Builtins; no frame setup. There
+                    // is no dispatch loop around this call, so the failures
+                    // the loop would translate are translated here.
                     return try {
-                        builtin.invoke(hostContext, args)
-                    } catch (e: IllegalArgumentException) {
-                        throw InterpretException(InterpretError.BuiltinContractViolation(
-                            at = null,
-                            target = closure.target,
-                            detail = e.message ?: "builtin contract violation",
-                        ))
-                    } catch (e: ClassCastException) {
-                        // Q-066: graph-supplied foreignType is unchecked
-                        // against the builtin's real argument contract; a
-                        // type-confused argument list is a contract
-                        // violation, not an implementation crash.
-                        throw InterpretException(InterpretError.BuiltinContractViolation(
-                            at = null,
-                            target = closure.target,
-                            detail = e.message ?: "builtin argument type confusion",
-                        ))
+                        dispatchForeign(null, closure, args, depth = 0, limits = limits)
+                    } catch (e: VmResourceExhaustion) {
+                        throw exhaustion(e)
+                    } catch (io: IoFailure) {
+                        throw InterpretException(translateVmIoFailure(io, limits))
+                    } catch (sv: SandboxViolation) {
+                        throw InterpretException(translateVmSandboxViolation(sv, limits))
                     }
                 }
                 else -> error("applyClosure: $closure is not callable (got ${closure::class.simpleName})")
@@ -267,13 +277,16 @@ class Vm(
         try {
             runLoop(frames, limits)
         } catch (e: VmResourceExhaustion) {
-            throw InterpretException(InterpretError.ResourceExhaustion(
-                at = e.atNode,
-                kind = e.kind,
-                current = e.current,
-                limit = e.limit,
-            ))
+            throw exhaustion(e)
         }
+
+    private fun exhaustion(e: VmResourceExhaustion): InterpretException =
+        InterpretException(InterpretError.ResourceExhaustion(
+            at = e.atNode,
+            kind = e.kind,
+            current = e.current,
+            limit = e.limit,
+        ))
 
     /**
      * The dispatch loop, extracted so [run], [evaluate], and [applyClosure]
@@ -282,13 +295,11 @@ class Vm(
      * value at termination (may be Value or VmClosure or other).
      */
     private fun runLoop(frames: ArrayDeque<Frame>, limits: EvaluationLimits): Any {
-        // Q-040 per-evaluation counters: steps + allocations only. Stack
-        // depth is read from frames.size at each step (no separate
-        // counter needed); wall clock samples System.nanoTime() every
-        // [EvaluationLimits.wallClockSampleEvery] steps from this anchor.
-        var steps = 0L
-        var allocated = 0L
-        val startNanos = System.nanoTime()
+        // Q-040 per-evaluation counters ([steps], [allocated], [startNanos])
+        // are fields shared with nested callback loops. Stack depth is
+        // [outerDepth] plus frames.size at each step; wall clock samples
+        // System.nanoTime() every [EvaluationLimits.wallClockSampleEvery]
+        // steps from the anchor.
         // Allocation guard. Called from every Value-construction site
         // (PUSH_*, MAKE_FOREIGN, PRODUCT_NEW, SUM_NEW, EQ, SUM_CASE_IS,
         // SUM_PAYLOAD, MAKE_CLOSURE, MAKE_FIXPOINT). Increment-then-
@@ -316,11 +327,12 @@ class Vm(
                     limit = limits.maxSteps,
                 )
             }
-            if (frames.size > limits.maxStackDepth) {
+            val depth = outerDepth + frames.size
+            if (depth > limits.maxStackDepth) {
                 throw VmResourceExhaustion(
                     kind = ExhaustionKind.StackDepth,
                     atNode = null,
-                    current = frames.size.toLong(),
+                    current = depth.toLong(),
                     limit = limits.maxStackDepth.toLong(),
                 )
             }
@@ -570,7 +582,9 @@ class Vm(
                         is VmClosure -> fn.effects
                         is VmForeign -> fn.effects
                         is VmFixpoint -> fn.effects
-                        else -> error("CALL: callee is not callable (got ${fn::class.simpleName})")
+                        else -> throw InterpretException(InterpretError.NotCallable(
+                            at = NodeId(site.site), gotKind = fn::class.simpleName ?: "Value",
+                        ))
                     }
                     // Layer 3 — active handler check: innermost handler
                     // whose intercept matches any of the callee's effects
@@ -586,7 +600,7 @@ class Vm(
                         // including a foreign handler's performing check.
                         val handler = unbox(intercept.handlerValue)
                         checkAppliedCallable(NodeId(site.site), handler, args.asList(), limits)
-                        invokeCallable(handler, args, frames, current)
+                        invokeCallable(NodeId(site.site), handler, args, frames, current, limits)
                         continue
                     }
                     // Capability check (review H2): the interpreter's
@@ -612,7 +626,7 @@ class Vm(
                         NodeId(site.site), effects.map { NodeId(it) }, instances, limits,
                         performs = fn is VmForeign && performs(fn),
                     )
-                    invokeCallable(fn, args, frames, current)
+                    invokeCallable(NodeId(site.site), fn, args, frames, current, limits)
                 }
 
                 Opcode.RET -> {
@@ -1129,10 +1143,12 @@ class Vm(
      * opcode after the handler-and-cap checks pass.
      */
     private fun invokeCallable(
+        at: NodeId,
         fn: Any,
         args: Array<Any>,
         frames: ArrayDeque<Frame>,
         current: Frame,
+        limits: EvaluationLimits,
     ) {
         when (fn) {
             is VmClosure -> {
@@ -1143,37 +1159,8 @@ class Vm(
                 }
                 frames.addLast(nextFrame)
             }
-            is VmForeign -> {
-                val builtin = Builtins.lookup(fn.target)
-                    ?: error("CALL: no Builtins entry for foreign target '${fn.target}'")
-                val valueArgs = args.map { arg ->
-                    arg as? Value
-                        ?: error("CALL_FOREIGN: arg is ${arg::class.simpleName}, not a Value")
-                }
-                val result = try {
-                    builtin.invoke(hostContext, valueArgs)
-                } catch (e: IllegalArgumentException) {
-                    // Builtin contract violation (e.g. division by zero from
-                    // Int.Div / Int.Mod / Math.Mod). Translated to a structured,
-                    // uncatchable InterpretError. `at = null` because VM opcodes
-                    // do not carry NodeIds in slice 1 (matching Q-040 precedent
-                    // for ResourceExhaustion.at in the VM path).
-                    throw InterpretException(InterpretError.BuiltinContractViolation(
-                        at = null,
-                        target = fn.target,
-                        detail = e.message ?: "builtin contract violation",
-                    ))
-                } catch (e: ClassCastException) {
-                    // Q-066: type-confused builtin arguments (see the
-                    // interpreter's parallel catch) surface structured.
-                    throw InterpretException(InterpretError.BuiltinContractViolation(
-                        at = null,
-                        target = fn.target,
-                        detail = e.message ?: "builtin argument type confusion",
-                    ))
-                }
-                current.stack.add(result)
-            }
+            is VmForeign ->
+                current.stack.add(dispatchForeign(at, fn, args.asList(), depth = frames.size, limits = limits))
             is VmFixpoint -> {
                 val sub = table[fn.chunkIndex]
                 val nextFrame = Frame(chunk = sub, captures = fn.captures)
@@ -1184,6 +1171,114 @@ class Vm(
                 frames.addLast(nextFrame)
             }
             else -> error("invokeCallable: $fn is not callable (got ${fn::class.simpleName})")
+        }
+    }
+
+    /**
+     * Run the builtin [fn] binds on [args]: the dispatch half of the
+     * interpreter's `dispatchForeign`, after the capability check. A
+     * higher-order builtin (`List.Map`, `List.Fold`, ...) receives an
+     * [Builtins.ApplyFn] that runs each callback through [applyNested]
+     * under the capability context and handler stack of this call site, so
+     * a callback is checked exactly as the interpreter's `applyValue` checks
+     * it. Callable arguments cross the builtin boundary boxed ([box]).
+     *
+     * [at] is the dispatching call site (null at the [applyClosure]
+     * boundary) and [depth] the frame count of the loop this call suspends.
+     * An unregistered target is the interpreter's typed
+     * [InterpretError.UnknownForeignTarget]; an `IllegalArgumentException`
+     * or `ClassCastException` out of the builtin is a contract violation
+     * (a `require` guard such as division by zero, or a type-confused
+     * argument list under a graph-supplied foreignType, Q-066), reported
+     * with `at = null` as VM builtin failures are.
+     */
+    private fun dispatchForeign(
+        at: NodeId?,
+        fn: VmForeign,
+        args: List<Any>,
+        depth: Int,
+        limits: EvaluationLimits,
+    ): Value {
+        val site = at ?: RUNTIME_BOUNDARY
+        val valueArgs = args.map(::box)
+        return try {
+            val higherOrder = Builtins.lookupHigherOrder(fn.target)
+            if (higherOrder != null) {
+                val apply = Builtins.ApplyFn { callable, callbackArgs ->
+                    applyNested(site, unbox(callable), callbackArgs, depth, limits)
+                }
+                higherOrder.invoke(hostContext, valueArgs, apply)
+            } else {
+                val builtin = Builtins.lookup(fn.target)
+                    ?: throw InterpretException(InterpretError.UnknownForeignTarget(at = site, target = fn.target))
+                builtin.invoke(hostContext, valueArgs)
+            }
+        } catch (e: IllegalArgumentException) {
+            throw InterpretException(InterpretError.BuiltinContractViolation(
+                at = null,
+                target = fn.target,
+                detail = e.message ?: "builtin contract violation",
+            ))
+        } catch (e: ClassCastException) {
+            throw InterpretException(InterpretError.BuiltinContractViolation(
+                at = null,
+                target = fn.target,
+                detail = e.message ?: "builtin argument type confusion",
+            ))
+        }
+    }
+
+    /**
+     * Apply [callable] to [args] on behalf of a higher-order builtin: the
+     * interpreter's `applyValueToArgs`. The callable's own effects are
+     * checked first ([checkAppliedCallable]: a closure or fixpoint
+     * category-only, a foreign callable as a performing site with its
+     * projected instances synthesized from [args]); a closure or fixpoint
+     * body then runs in a nested dispatch loop that shares this Vm's
+     * capability context, handler stack and budget. Attempt markers are
+     * isolated for the nested run, as in [applyClosure], because they index
+     * a specific frame deque; an uncaught catchable failure propagates to
+     * the enclosing loop, whose own markers then apply.
+     */
+    private fun applyNested(
+        at: NodeId,
+        callable: Any,
+        args: List<Value>,
+        depth: Int,
+        limits: EvaluationLimits,
+    ): Value {
+        checkAppliedCallable(at, callable, args, limits)
+        val frame = when (callable) {
+            is VmForeign -> return dispatchForeign(at, callable, args, depth, limits)
+            is VmClosure -> Frame(chunk = table[callable.chunkIndex], captures = callable.captures).also { f ->
+                for ((i, arg) in args.withIndex()) f.locals[i] = arg
+            }
+            is VmFixpoint -> Frame(chunk = table[callable.chunkIndex], captures = callable.captures).also { f ->
+                f.locals[0] = callable
+                for ((i, arg) in args.withIndex()) f.locals[i + 1] = arg
+            }
+            else -> throw InterpretException(
+                InterpretError.NotCallable(at = at, gotKind = callable::class.simpleName ?: "Value")
+            )
+        }
+        val frames = ArrayDeque<Frame>()
+        frames.addLast(frame)
+        val savedAttempts = ArrayDeque(attemptStack)
+        val savedCaps = currentCaps
+        val savedCapDepth = capStack.size
+        val savedHandlerDepth = handlers.size
+        val savedOuterDepth = outerDepth
+        attemptStack.clear()
+        outerDepth += depth
+        try {
+            return box(runLoop(frames, limits))
+        } finally {
+            outerDepth = savedOuterDepth
+            attemptStack.clear()
+            attemptStack.addAll(savedAttempts)
+            while (capStack.size > savedCapDepth) capStack.removeLast()
+            currentCaps = savedCaps
+            while (handlers.size > savedHandlerDepth) handlers.removeLast()
         }
     }
 }
