@@ -17,6 +17,7 @@ import org.strand.interpreter.HostContext
 import org.strand.interpreter.InterpretError
 import org.strand.interpreter.InterpretException
 import org.strand.interpreter.Value
+import org.strand.runtime.GuardedMachineOutcome
 import org.strand.runtime.GuardedOutcome
 import org.strand.runtime.HaltReason
 import org.strand.runtime.ProgramImage
@@ -94,11 +95,12 @@ sealed class CaseOutcome {
  * be laundered into an effect hole), and **S6** (no value violating a
  * schema's invariant reaches a parameter typed by that schema).
  *
- * A StateMachine-rooted case is run through `runMachine`; its bound is the
- * machine's declared effect row, since the closure surface gates only the
- * plain `run` path. S6 is checked on the interpreter under `run` only:
- * neither the VM nor a machine transition enforces runtime schema
- * obligations (both deferred under Q-047).
+ * A StateMachine-rooted case is run through `runMachine`. Its bound is
+ * `ProgramAnalysis.machineClosure` (the declared effect row and the latent
+ * reach of the transition and the initial state), and S3 is checked
+ * against `runMachineGuarded`. S6 is checked on every path: the
+ * interpreter, the VM lowered with the verify result's obligations, and
+ * machine transitions.
  */
 class SoundnessHarness(private val vmAudit: Boolean = true) {
 
@@ -175,27 +177,26 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         }
         if (!schemaOk) return CaseOutcome.Rejected("schema", "SchemaInvariantViolation")
 
-        val analysis = ProgramAnalysis(finalized.store, verify, finalized.root)
-        val total = analysis.totalClosure()
+        val analysis = ProgramAnalysis(finalized.store, verify, finalized.root, finalized.hashToNodeId)
+        // The bound of a run: the total closure of an expression, and for a
+        // StateMachine root (whose own closure is empty, since evaluating
+        // the node performs nothing) the machine-shaped query.
+        val total = when (case.mode) {
+            Mode.Expression -> analysis.totalClosure()
+            Mode.Machine -> analysis.machineClosure(finalized.root).total
+        }
         val catIds = Cat.entries.mapNotNull { c -> ingest.nameMap[c.nodeId]?.let { c to it } }.toMap()
         fun names(ids: Collection<NodeId>): Set<String> =
             ids.mapNotNullTo(LinkedHashSet()) { (finalized.store.getOrNull(it) as? Node.EffectCategory)?.categoryName }
 
-        val bound = when (case.mode) {
-            Mode.Expression -> names(total)
-            Mode.Machine -> {
-                val machine = finalized.store.get(finalized.root) as Node.StateMachine
-                names(machine.effects) + names(analysis.latentEffectClosure())
-            }
-        }
-        val subject = Subject(case, image, verify, runtime, catIds, bound, total)
+        val subject = Subject(case, image, verify, runtime, catIds, names(total), total)
         val allCategories = finalized.store.entries()
             .filter { (_, n) -> n is Node.EffectCategory }
             .mapTo(LinkedHashSet()) { (id, _) -> id }
         val grants = ArrayList<Pair<String, CapabilitySet>>()
         grants += "full" to CapabilitySet.ofCategories(allCategories)
         grants += "empty" to CapabilitySet.EMPTY
-        if (case.mode == Mode.Expression) grants += "exact-closure" to CapabilitySet.ofCategories(total)
+        grants += "exact-closure" to CapabilitySet.ofCategories(total)
         for (g in case.grants) grants += g.toString() to resolve(g, catIds)
 
         return when (case.mode) {
@@ -360,30 +361,79 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         var full: Run? = null
         for ((label, grant) in grants) {
             FuzzLog.reset()
-            val out = try {
-                val trace = s.runtime.runMachine(
-                    s.image, s.image.root, events, grant, s.verify.nodeTypes, s.verify.verifiedInterceptions,
-                )
-                val reason = trace.final.reason
-                Out.Halt(
-                    summary = "${reason::class.simpleName}:${trace.final.finalState}",
-                    denial = reason is HaltReason.CapabilityDenial,
-                    exhausted = reason is HaltReason.ResourceExhaustion,
-                )
-            } catch (e: InterpretException) {
-                Out.Err(e.error)
-            } catch (t: Throwable) {
-                Out.Raw(t)
-            }
+            val out = machineOut { haltOf(s.runtime.runMachine(s.image, s.image.root, events, grant, s.verify)) }
             val run = Run(out, events(s))
             if (full == null) full = run
             performed += run.performed.size
             if (isDenial(run.out)) denials++
-            // Runtime schema obligations are not enforced inside machine
-            // transitions (Q-047's deferred scope), so S6 is not checked here.
-            checkRun(s, "machine", label, grant, run, full, auditOn = true, schemaEnforced = false, violations)
+            checkRun(s, "machine", label, grant, run, full, auditOn = true, schemaEnforced = true, violations)
+            checkMachineGuard(s, label, grant, events, run, violations)
         }
         return CaseOutcome.Checked(violations, vmSupported = false, performed, denials)
+    }
+
+    private fun haltOf(trace: org.strand.runtime.Trace): Out {
+        val reason = trace.final.reason
+        return Out.Halt(
+            summary = "${reason::class.simpleName}:${trace.final.finalState}",
+            denial = reason is HaltReason.CapabilityDenial,
+            exhausted = reason is HaltReason.ResourceExhaustion,
+        )
+    }
+
+    private inline fun machineOut(drive: () -> Out): Out = try {
+        drive()
+    } catch (e: InterpretException) {
+        Out.Err(e.error)
+    } catch (t: Throwable) {
+        Out.Raw(t)
+    }
+
+    /**
+     * S3 on the machine path: `runMachineGuarded` refuses, before the
+     * initial state is evaluated and before any audit record, exactly when
+     * the machine's bound is not within the budget's categories; otherwise
+     * it behaves as `runMachine`.
+     */
+    private fun checkMachineGuard(
+        s: Subject,
+        label: String,
+        grant: CapabilitySet,
+        machineEvents: List<Value>,
+        plain: Run,
+        violations: MutableList<Violation>,
+    ) {
+        FuzzLog.reset()
+        var refused: GuardedMachineOutcome.Refused? = null
+        val out = machineOut {
+            when (val g = s.runtime.runMachineGuarded(s.image, s.image.root, machineEvents, grant)) {
+                is GuardedMachineOutcome.Refused -> { refused = g; Out.StaticSchema }
+                is GuardedMachineOutcome.Ran -> haltOf(g.trace)
+                is GuardedMachineOutcome.SchemaViolation -> Out.StaticSchema
+                is GuardedMachineOutcome.VerifyFailed ->
+                    Out.Raw(IllegalStateException("verified program failed re-verification"))
+            }
+        }
+        val guarded = Run(out, events(s))
+        val exceeding = s.total - grant.grants.keys
+        fun fail(kind: String, detail: String) {
+            violations += Violation("S3", "machine-guard", kind, label, detail)
+        }
+        val r = refused
+        when {
+            exceeding.isNotEmpty() && r == null ->
+                fail("ran-over-budget", "machine bound exceeds the budget by $exceeding but runMachineGuarded drove it")
+            exceeding.isNotEmpty() && guarded.events.isNotEmpty() ->
+                fail("effect-before-refusal", "refused run left events: ${guarded.events}")
+            exceeding.isNotEmpty() && r!!.report.exceeding.keys != exceeding ->
+                fail("refusal-report", "report names ${r.report.exceeding.keys}, expected $exceeding")
+            exceeding.isEmpty() && r != null ->
+                fail("refused-within-budget", "machine bound ${s.total} is within the budget but runMachineGuarded refused")
+            exceeding.isEmpty() && !isExhaustion(plain.out) && !isExhaustion(guarded.out) &&
+                (!sameOutcome(plain.out, guarded.out) || trace(plain) != trace(guarded) ||
+                    writes(plain) != writes(guarded)) ->
+                fail("guarded-run-diverged", "runMachine: ${describe(plain.out)}; runMachineGuarded: ${describe(guarded.out)}")
+        }
     }
 
     // ------------------------------------------------------------------
