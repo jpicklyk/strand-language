@@ -599,7 +599,10 @@ class Vm(
                     // unrefined grant. Denials raise the shared, uncatchable
                     // CapabilityViolation / RefinementViolation, so the
                     // per-opcode InterpretException catch declines to unwind
-                    // them to any attempt marker.
+                    // them to any attempt marker. A foreign callee's
+                    // effect floor is re-checked first, as the interpreter's
+                    // dispatchForeign does.
+                    if (fn is VmForeign) checkForeignFloor(NodeId(site.site), fn)
                     val instances = if (fn is VmForeign && fn.projections.isNotEmpty()) {
                         synthesizeProjectedInstances(fn, args.asList())
                     } else {
@@ -933,6 +936,7 @@ class Vm(
      */
     private fun checkAppliedCallable(at: NodeId, callable: Any, args: List<Any>, limits: EvaluationLimits) {
         if (callable is VmForeign) {
+            checkForeignFloor(at, callable)
             val instances = if (callable.projections.isNotEmpty()) {
                 synthesizeProjectedInstances(callable, args)
             } else {
@@ -950,6 +954,41 @@ class Vm(
      * interpreter's `dispatchForeign` `performs` flag).
      */
     private fun performs(fn: VmForeign): Boolean = Builtins.lookupHigherOrder(fn.target) == null
+
+    /**
+     * The interpreter's `checkForeignFloor` (defence in depth for review
+     * finding 1): before dispatching a registry target with an effect floor,
+     * confirm the callee's declared row covers it. The verifier's Q-056
+     * `BuiltinEffectMismatch` rule rejects such graphs at admission; this
+     * re-check holds for tables lowered from unverified stores.
+     */
+    private fun checkForeignFloor(at: NodeId, fn: VmForeign) {
+        val required = foreignEffectFloor(fn.target) ?: return
+        if (required.isEmpty()) return
+        val declaredNames = fn.effects.map { categoryNameOf(NodeId(it)) }.toSet()
+        val missing = required - declaredNames
+        if (missing.isNotEmpty()) {
+            throw InterpretException(InterpretError.BuiltinContractViolation(
+                at = at,
+                target = fn.target,
+                detail = "ForeignNode under-declares the target's effects; missing ${missing.sorted()}",
+            ))
+        }
+    }
+
+    /**
+     * The effect categories a registry target really exercises — the
+     * interpreter's `foreignEffectFloor`: the Q-056 signature oracle's name
+     * set when resolvable and the target is known to it, else the core
+     * [org.strand.core.BuiltinEffectTable] floor (null for exempt targets).
+     */
+    private fun foreignEffectFloor(target: String): Set<String>? {
+        if (org.strand.core.BuiltinEffectTable.isExempt(target)) return null
+        if (target.startsWith("strand-builtin:")) {
+            org.strand.verifier.BuiltinSignatures.effectNamesFor(target)?.let { return it }
+        }
+        return org.strand.core.BuiltinEffectTable.requiredCategories(target)
+    }
 
     /**
      * Review M5: VM callables ([VmClosure], [VmFixpoint], [VmForeign]) are not

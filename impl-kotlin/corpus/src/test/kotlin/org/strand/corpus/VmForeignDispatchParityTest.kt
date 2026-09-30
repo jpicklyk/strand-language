@@ -318,6 +318,44 @@ class VmForeignDispatchParityTest {
         assertValueParity(p, CapabilitySet.EMPTY, Value.IntV(7))
     }
 
+    // ----- builtin effect floor (defence in depth for unverified stores) -----
+
+    @Test
+    fun `under-declared effect floor on an unverified store - both raise the same BuiltinContractViolation`() {
+        // Time.Now with an empty row: the verifier's BuiltinEffectMismatch
+        // rejects it, so the store is taken unverified. Before the fix the VM
+        // dispatched the builtin under an empty grant.
+        val ingest = JsonIngest.parse("""{
+          "version": 1, "root": "app",
+          "nodes": {
+            "intT": { "type": "PrimitiveType", "kind": "Int" },
+            "nowT": { "type": "FunctionType", "parameters": [], "result": "intT", "effects": [] },
+            "now":  { "type": "ForeignNode", "target": "strand-builtin:Time.Now",
+                      "foreignType": "nowT", "effects": [] },
+            "app":  { "type": "Application", "function": "now", "arguments": [] }
+          }
+        }""")
+        val f = Hasher(ingest.rawStore).finalize(ingest.root)
+        val p = Program(f.store, f.root, f.hashToNodeId, ingest.nameMap)
+        val i = assertThrows<InterpretException> { interp(p, CapabilitySet.EMPTY) }.error
+        val v = assertThrows<InterpretException> { vm(p, CapabilitySet.EMPTY) }.error
+        assertTrue(i is InterpretError.BuiltinContractViolation) { "interpreter: $i" }
+        assertEquals(i, v)
+        assertEquals(p.id("app"), (v as InterpretError.BuiltinContractViolation).at)
+
+        // The same floor at the applyClosure boundary.
+        val interpreter = Interpreter(p.store, p.hashToNodeId, hostContext = host())
+        val vmInst = Vm(Lowerer(p.store, p.hashToNodeId).lower(p.id("now")), host())
+        val bi = assertThrows<InterpretException> {
+            interpreter.applyCallable(interpreter.eval(p.id("now"), CapabilitySet.EMPTY), emptyList(), CapabilitySet.EMPTY)
+        }.error
+        val bv = assertThrows<InterpretException> {
+            vmInst.applyClosure(vmInst.evaluate(CapabilitySet.EMPTY), emptyList(), CapabilitySet.EMPTY)
+        }.error
+        assertTrue(bi is InterpretError.BuiltinContractViolation) { "interpreter: $bi" }
+        assertEquals(bi, bv)
+    }
+
     // ----- (iii) Q-055 audit-record parity -----
 
     /**
