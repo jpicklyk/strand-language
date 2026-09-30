@@ -104,25 +104,26 @@ class Interpreter(
     private val resolveTarget: ((Hash) -> NodeId?)? = null,
     /**
      * Q-047 (Layer 7 step 2): runtime schema obligations. Maps each
-     * value-flow-site NodeId the verifier re-recorded with a
-     * [org.strand.verifier.TypeExpr.SchemaType] to that SchemaType. After
-     * the interpreter reduces such a NodeId to a [Value], it evaluates the
-     * schema's pure-expression invariants against the value and raises
-     * [InterpretError.SchemaInvariantViolation] on a `false` verdict —
-     * enforcing at runtime the obligations the verify-time
-     * [org.strand.schema.SchemaChecker] could only defer for dynamic
-     * values.
+     * NodeId the verifier recorded a schema obligation on to every
+     * [org.strand.verifier.TypeExpr.SchemaType] it must satisfy (Q-076: a
+     * shared node reaching several schema positions carries one per
+     * schema). After the interpreter reduces such a NodeId to a [Value],
+     * it evaluates each schema's pure-expression invariants against the
+     * value and raises [InterpretError.SchemaInvariantViolation] on a
+     * `false` verdict — enforcing at runtime the obligations the
+     * verify-time [org.strand.schema.SchemaChecker] could only defer for
+     * dynamic values.
      *
      * Default empty: a caller that passes no obligations (the runtime
      * module's per-actor interpreters, the SchemaChecker's own internal
      * interpreter, every pre-Q-047 test) enforces nothing — behaviour is
-     * unchanged. The CLI `run` path builds the map from
-     * `VerifyResult.Ok.nodeTypes` and passes it in. Invariant bodies are
-     * evaluated with obligation-checking suppressed (see [inInvariant]) so
-     * a predicate's internal structure is never mistaken for the value
-     * under test.
+     * unchanged. `StrandRuntime.run` (the CLI `run` path) passes
+     * `VerifyResult.Ok.schemaObligations`. Invariant bodies are evaluated
+     * with obligation-checking suppressed (see [inInvariant]) so a
+     * predicate's internal structure is never mistaken for the value under
+     * test.
      */
-    private val schemaObligations: Map<NodeId, org.strand.verifier.TypeExpr.SchemaType> = emptyMap(),
+    private val schemaObligations: Map<NodeId, List<org.strand.verifier.TypeExpr.SchemaType>> = emptyMap(),
     /**
      * Q-054 follow-up: the host policy this interpreter evaluates under,
      * projected to a [HostContext]. Every builtin invocation receives this
@@ -568,14 +569,15 @@ class Interpreter(
     }
 
     /**
-     * Q-047: enforce any schema obligation recorded for [id] against the
+     * Q-047: enforce every schema obligation recorded for [id] against the
      * value [v] the interpreter just produced for it. For each invariant
-     * the schema declares, evaluate the invariant's pure-expression body
+     * each schema declares, evaluate the invariant's pure-expression body
      * on [v]; a `false` verdict raises [InterpretError.SchemaInvariantViolation]
-     * blaming [id]. A non-Bool verdict is a defensive internal error (the
-     * verifier's `SchemaInvariantBodyTypeMismatch` rule guarantees the body
-     * is `(valueType) -> Bool`). Invariants are checked in declaration
-     * order; the first failure wins.
+     * blaming [id] and that schema. A non-Bool verdict is a defensive
+     * internal error (the verifier's `SchemaInvariantBodyTypeMismatch` rule
+     * guarantees the body is `(valueType) -> Bool`). Schemas are checked in
+     * the verifier's recorded order and invariants in declaration order;
+     * the first failure wins.
      */
     private fun checkSchemaObligations(
         id: NodeId,
@@ -584,8 +586,8 @@ class Interpreter(
         limits: EvaluationLimits,
     ) {
         if (schemaObligations.isEmpty() || inInvariant) return
-        val obligation = schemaObligations[id] ?: return
-        for (invariantId in obligation.invariants) {
+        val obligations = schemaObligations[id] ?: return
+        for (obligation in obligations) for (invariantId in obligation.invariants) {
             val invariantNode = store.getOrNull(invariantId) as? Node.Invariant ?: continue
             val verdict = evaluateInvariantBody(invariantNode.body, v, counters, limits)
             if (verdict !is Value.BoolV) {

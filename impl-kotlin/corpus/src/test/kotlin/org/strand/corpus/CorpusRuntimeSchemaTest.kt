@@ -43,7 +43,7 @@ class CorpusRuntimeSchemaTest {
         val root: NodeId,
         val store: org.strand.core.NodeStore,
         val hashToNodeId: Map<org.strand.core.Hash, NodeId>,
-        val obligations: Map<NodeId, TypeExpr.SchemaType>,
+        val obligations: Map<NodeId, List<TypeExpr.SchemaType>>,
     )
 
     private fun load(resource: String): Loaded {
@@ -55,12 +55,9 @@ class CorpusRuntimeSchemaTest {
         val verify = Verifier(finalized.store, finalized.hashToNodeId).verify(finalized.root)
         assertTrue(verify is VerifyResult.Ok, "verifier failed for $resource: $verify")
         verify as VerifyResult.Ok
-        // Mirror the CLI run path: build runtime schema obligations from the
-        // verifier's recorded SchemaType entries.
-        val obligations = verify.nodeTypes.mapNotNull { (nid, t) ->
-            (t as? TypeExpr.SchemaType)?.let { nid to it }
-        }.toMap()
-        return Loaded(finalized.root, finalized.store, finalized.hashToNodeId, obligations)
+        // Mirror the CLI run path: install the verifier's recorded schema
+        // obligations (every schema per node, Q-076).
+        return Loaded(finalized.root, finalized.store, finalized.hashToNodeId, verify.schemaObligations)
     }
 
     @Test

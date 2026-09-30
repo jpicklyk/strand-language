@@ -264,11 +264,11 @@ class DenialReportTest {
           }
         }""")
         val obligations = mapOf(
-            l.root to TypeExpr.SchemaType(
+            l.root to listOf(TypeExpr.SchemaType(
                 schemaId = l.names.getValue("sch"),
                 valueType = TypeExpr.Prim(Primitive.String),
                 invariants = listOf(l.names.getValue("inv")),
-            )
+            ))
         )
         val interp = Interpreter(l.store, l.hashToNodeId, schemaObligations = obligations)
         val ex = assertThrows(InterpretException::class.java) {

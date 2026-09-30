@@ -16,8 +16,9 @@ import org.strand.verifier.VerifyResult
 /**
  * Layer 7 step 1 invariant-evaluation phase.
  *
- * Runs after the verifier's type-checking pass succeeds. For every node
- * the verifier recorded with a [TypeExpr.SchemaType] type, the
+ * Runs after the verifier's type-checking pass succeeds. For every
+ * (node, schema) pair in [VerifyResult.Ok.schemaObligations] — a node
+ * shared by several schema positions contributes one pair per schema — the
  * SchemaChecker attempts to evaluate the value statically (per the
  * recursive "statically known" definition in § 5 of the proposal):
  *
@@ -105,59 +106,78 @@ class SchemaChecker(
         val violations = mutableListOf<VerifyError.SchemaInvariantViolation>()
         val deferred = mutableListOf<VerifyError.SchemaInvariantDeferred>()
         val failures = mutableListOf<InvariantEvaluationFailure>()
-        for ((nodeId, type) in verifyResult.nodeTypes) {
-            if (type !is TypeExpr.SchemaType) continue
+        // Q-076: a node shared by several schema positions carries one
+        // obligation per schema; each is checked (or deferred) on its own.
+        for ((nodeId, obligations) in verifyResult.schemaObligations) {
             val staticValue = tryEvaluateStatically(nodeId)
-            if (staticValue == null) {
-                deferred += VerifyError.SchemaInvariantDeferred(
-                    at = nodeId,
-                    schema = type.schemaId,
-                    reason = "value not statically known"
-                )
-                continue
-            }
-            for (invariantId in type.invariants) {
-                val invariantNode = store.getOrNull(invariantId) as? Node.Invariant
-                    ?: error(
-                        "Schema ${type.schemaId} lists invariant $invariantId, but the " +
-                            "store does not contain a Node.Invariant at that NodeId. The " +
-                            "verifier should have rejected this graph."
-                    )
-                // Review H3: an invariant body that fails to evaluate
-                // (resource exhaustion, a capability or sandbox denial, a
-                // builtin contract violation) is a structured failure that
-                // also rejects the value — never a raw throw out of check().
-                val verdict = try {
-                    evaluateInvariant(invariantNode.body, staticValue)
-                } catch (e: InterpretException) {
-                    failures += InvariantEvaluationFailure(
-                        at = nodeId, schema = type.schemaId, invariant = invariantId, error = e.error,
-                    )
-                    violations += VerifyError.SchemaInvariantViolation(
-                        at = nodeId,
-                        schema = type.schemaId,
-                        invariant = invariantId,
-                        valueDescription = "$staticValue (invariant evaluation failed: ${e.error::class.simpleName})",
-                    )
-                    continue
-                }
-                if (verdict !is Value.BoolV) {
-                    error(
-                        "Invariant $invariantId's body evaluated to a non-Bool value " +
-                            "($verdict); the verifier's body-type check should have rejected this."
-                    )
-                }
-                if (!verdict.v) {
-                    violations += VerifyError.SchemaInvariantViolation(
-                        at = nodeId,
-                        schema = type.schemaId,
-                        invariant = invariantId,
-                        valueDescription = staticValue.toString()
-                    )
-                }
+            for (type in obligations) {
+                checkObligation(nodeId, type, staticValue, violations, deferred, failures)
             }
         }
         return SchemaCheckResult(violations, deferred, failures)
+    }
+
+    /**
+     * Check one obligation — schema [type] on [nodeId] — against the node's
+     * [staticValue]: defer it when the value is not statically known,
+     * otherwise evaluate each of the schema's invariants on the value.
+     */
+    private fun checkObligation(
+        nodeId: NodeId,
+        type: TypeExpr.SchemaType,
+        staticValue: Value?,
+        violations: MutableList<VerifyError.SchemaInvariantViolation>,
+        deferred: MutableList<VerifyError.SchemaInvariantDeferred>,
+        failures: MutableList<InvariantEvaluationFailure>,
+    ) {
+        if (staticValue == null) {
+            deferred += VerifyError.SchemaInvariantDeferred(
+                at = nodeId,
+                schema = type.schemaId,
+                reason = "value not statically known"
+            )
+            return
+        }
+        for (invariantId in type.invariants) {
+            val invariantNode = store.getOrNull(invariantId) as? Node.Invariant
+                ?: error(
+                    "Schema ${type.schemaId} lists invariant $invariantId, but the " +
+                        "store does not contain a Node.Invariant at that NodeId. The " +
+                        "verifier should have rejected this graph."
+                )
+            // Review H3: an invariant body that fails to evaluate
+            // (resource exhaustion, a capability or sandbox denial, a
+            // builtin contract violation) is a structured failure that
+            // also rejects the value — never a raw throw out of check().
+            val verdict = try {
+                evaluateInvariant(invariantNode.body, staticValue)
+            } catch (e: InterpretException) {
+                failures += InvariantEvaluationFailure(
+                    at = nodeId, schema = type.schemaId, invariant = invariantId, error = e.error,
+                )
+                violations += VerifyError.SchemaInvariantViolation(
+                    at = nodeId,
+                    schema = type.schemaId,
+                    invariant = invariantId,
+                    valueDescription = "$staticValue (invariant evaluation failed: ${e.error::class.simpleName})",
+                )
+                continue
+            }
+            if (verdict !is Value.BoolV) {
+                error(
+                    "Invariant $invariantId's body evaluated to a non-Bool value " +
+                        "($verdict); the verifier's body-type check should have rejected this."
+                )
+            }
+            if (!verdict.v) {
+                violations += VerifyError.SchemaInvariantViolation(
+                    at = nodeId,
+                    schema = type.schemaId,
+                    invariant = invariantId,
+                    valueDescription = staticValue.toString()
+                )
+            }
+        }
     }
 
     /**
