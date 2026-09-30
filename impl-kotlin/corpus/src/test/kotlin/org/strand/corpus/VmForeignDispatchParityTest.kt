@@ -468,9 +468,16 @@ class VmForeignDispatchParityTest {
     }
 
     @Test
-    fun `instance-free performing call under a wildcard grant - neither backend emits a record`() {
+    fun `instance-free performing call under a wildcard grant - one Allowed record with no parameters`() {
+        // The effect fires at this dispatch, so the audit log records it even
+        // though the site supplied no refinement (audit completeness).
         val p = directUninstantiated()
-        assertEquals(emptyList<AuditRecord>(), assertAuditParity(p, CapabilitySet.ofCategories(setOf(p.id("fsWriteFx")))))
+        val records = assertAuditParity(p, CapabilitySet.ofCategories(setOf(p.id("fsWriteFx"))))
+        val record = records.single()
+        assertEquals(AuditOutcome.Allowed, record.outcome)
+        assertEquals("Filesystem.Write", record.effectCategory)
+        assertEquals(emptyList<String>(), record.refinementParameters)
+        assertEquals(p.id("app"), record.callSiteNodeId)
     }
 
     @Test

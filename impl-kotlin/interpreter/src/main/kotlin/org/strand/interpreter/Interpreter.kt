@@ -1386,7 +1386,21 @@ class Interpreter(
         for (category in declared) {
             val requirement = instances[category]
             if (requirement == null) {
-                if (performs) checkUnrefinedGrant(at, category, context, limits)
+                if (performs) {
+                    checkUnrefinedGrant(at, category, context, limits)
+                    // Q-055: the effect fires here with no refinement, so
+                    // the audit log records it with no parameters. Without
+                    // this an uninstantiated dispatch (every call of a
+                    // parameterless category written without an EffectDecl)
+                    // would run unrecorded.
+                    emitAudit(AuditRecord(
+                        callSiteNodeId = at.takeIf { it.value != -1 },
+                        effectCategory = categoryNameOf(category),
+                        refinementParameters = emptyList(),
+                        outcome = AuditOutcome.Allowed,
+                        phase = if (inInvariant) DenialPhase.Invariant else DenialPhase.Expression,
+                    ))
+                }
                 continue
             }
             val grants = context.grants[category]!! // non-null: first pass filtered missing

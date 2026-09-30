@@ -847,7 +847,18 @@ class Vm(
         for (category in declared) {
             val requirement = instances[category]
             if (requirement == null) {
-                if (performs) checkUnrefinedGrant(at, category, context, limits)
+                if (performs) {
+                    checkUnrefinedGrant(at, category, context, limits)
+                    // Q-055: an uninstantiated performing dispatch is recorded
+                    // with no parameters (the interpreter's record shape).
+                    emitAudit(AuditRecord(
+                        callSiteNodeId = at.takeIf { it != RUNTIME_BOUNDARY },
+                        effectCategory = categoryNameOf(category),
+                        refinementParameters = emptyList(),
+                        outcome = AuditOutcome.Allowed,
+                        phase = DenialPhase.Expression,
+                    ))
+                }
                 continue
             }
             val grants = context.grants.getValue(category)

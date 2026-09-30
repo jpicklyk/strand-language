@@ -29,9 +29,13 @@ import org.strand.core.NodeId
  *    as [DenialReport] scrubs its `requested` list. An empty list means the
  *    call site supplied no refinement parameters.
  *  - [outcome] — [AuditOutcome.Allowed] when the capability check passed for a
- *    category the call site concretely exercised (an EffectDecl instance was
- *    present), or [AuditOutcome.Denied] carrying the reconciling
- *    [DenialReport].
+ *    category the call site instantiated (an EffectDecl instance or a Q-039
+ *    projection was present) or performed (a foreign dispatch of a category
+ *    with no instance, recorded with empty [refinementParameters]), or
+ *    [AuditOutcome.Denied] carrying the reconciling [DenialReport]. Every
+ *    effect a builtin performs therefore has an Allowed record at its
+ *    dispatch; a Lambda call that only propagates an uninstantiated
+ *    category has none.
  *  - [instanceId] / [eventIndex] / [phase] — the state-machine instance, the
  *    zero-based event index, and the lifecycle phase, mirroring the Q-064
  *    [DenialReport] fields; null / [DenialPhase.Expression] outside a
