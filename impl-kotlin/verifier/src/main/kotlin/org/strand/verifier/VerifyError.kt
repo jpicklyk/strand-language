@@ -308,6 +308,28 @@ sealed class VerifyError {
     ) : VerifyError()
 
     /**
+     * An EffectDecl's parameter expression has a non-empty effect closure.
+     *
+     * The parameters of an `Application.effectInstances` entry are evaluated
+     * at the call site to produce the refinement the capability check
+     * matches, but they are not part of what the call is declared to do: the
+     * Application's effect closure is the callee's row plus the closures of
+     * the function and argument expressions. A parameter expression that
+     * itself performs an effect would run outside that closure, so a program
+     * whose surfaced closure is `{Filesystem.Read}` could perform a network
+     * call while computing the path it declares. The rule makes a refinement
+     * parameter a pure description of the resource: a literal, a binder
+     * reference, or any other expression whose closure is empty.
+     *
+     * [effects] is the offending parameter's closure.
+     */
+    data class EffectDeclParameterNotPure(
+        override val at: NodeId,
+        val parameterIndex: Int,
+        val effects: Set<NodeId>,
+    ) : VerifyError()
+
+    /**
      * The set of EffectCategory NodeIds covered by an Application's
      * `effectInstances` (one EffectDecl per category) is not equal to the set
      * of EffectCategory NodeIds declared in the callee's `FunctionType.effects`.

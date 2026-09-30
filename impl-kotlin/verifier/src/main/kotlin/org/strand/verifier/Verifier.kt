@@ -1365,8 +1365,40 @@ class Verifier(
                     ))
                     throw VerifyAbort()
                 }
+                // The parameter is evaluated at the call site but sits
+                // outside the Application's closure (callee row, function and
+                // argument closures), so it must perform nothing itself.
+                val parameterClosure = closureOf(node.parameters[i]) + latentReachOf(node.parameters[i])
+                if (parameterClosure.isNotEmpty()) {
+                    report(VerifyError.EffectDeclParameterNotPure(
+                        at = id, parameterIndex = i, effects = parameterClosure
+                    ))
+                    throw VerifyAbort()
+                }
             }
             return node.effectType
+        }
+
+        /**
+         * The latent effect surface recorded anywhere in the subgraph of
+         * [id]: rows of ToolDef implementations and of effectful values in
+         * argument position. An expression with an empty closure can still
+         * perform these through a higher-order builtin's callback.
+         */
+        private fun latentReachOf(id: NodeId): Set<NodeId> {
+            val out = LinkedHashSet<NodeId>()
+            val seen = HashSet<NodeId>()
+            val stack = ArrayDeque<NodeId>()
+            stack.addLast(id)
+            while (stack.isNotEmpty()) {
+                val current = stack.removeLast()
+                if (!seen.add(current)) continue
+                latentClosures[current]?.let { out += it }
+                val n = store.getOrNull(current) ?: continue
+                if (n is Node.NodeRef) resolveRefTarget(n.target)?.let { stack.addLast(it) }
+                for (child in n.childNodeIds()) stack.addLast(child)
+            }
+            return out
         }
 
         private fun inferLet(

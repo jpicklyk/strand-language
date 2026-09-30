@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "root": "write",
+  "nodes": {
+    "intT":      { "type": "PrimitiveType", "kind": "Int" },
+    "strT":      { "type": "PrimitiveType", "kind": "String" },
+    "writeFx":   { "type": "EffectCategory", "categoryName": "Filesystem.Write", "parameters": ["strT"] },
+    "netFx":     { "type": "EffectCategory", "categoryName": "Network.Connect" },
+    "writeT":    { "type": "FunctionType", "parameters": ["strT"], "result": "intT", "effects": ["writeFx"] },
+    "writeFn":   { "type": "ForeignNode", "target": "strand-builtin:Test.EffectfulNoOp", "foreignType": "writeT", "effects": ["writeFx"] },
+    "path":      { "type": "StringLit", "value": "/tmp/out" },
+    "fetchPath": { "type": "Lambda", "parameters": [], "body": "path", "effects": ["netFx"] },
+    "fetched":   { "type": "Application", "function": "fetchPath", "arguments": [] },
+    "decl":      { "type": "EffectDecl", "effectType": "writeFx", "parameters": ["fetched"] },
+    "write":     { "type": "Application", "function": "writeFn", "arguments": ["path"], "effectInstances": ["decl"] }
+  }
+}

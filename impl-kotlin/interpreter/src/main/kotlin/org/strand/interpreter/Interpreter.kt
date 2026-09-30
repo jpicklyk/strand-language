@@ -1089,10 +1089,17 @@ class Interpreter(
         // unmigrated bindings, tracked under `security-index.md` until
         // every parameterized-effect ForeignNode declares projections.
         val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
+        // The authored instances are evaluated whether or not the callee is
+        // projected, so the expressions a call site evaluates do not depend
+        // on which callable reaches it (the bytecode VM lowers them ahead of
+        // the CALL). They are effect-free by the verifier's
+        // EffectDeclParameterNotPure rule; a projected callee then discards
+        // them in favour of the values synthesized from its arguments.
+        val authored = evalEffectInstances(env, context, handlers, app, counters, limits)
         val instances = if (fn.node.effectProjections.isNotEmpty()) {
             synthesizeProjectedInstances(env, context, handlers, fn.node, args, counters, limits)
         } else {
-            evalEffectInstances(env, context, handlers, app, counters, limits)
+            authored
         }
         return dispatchForeign(id, fn.node, args, instances, context, handlers, counters, limits)
     }

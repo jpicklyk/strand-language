@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "EffectDeclParameterNotPure",
+  "notes": "An EffectDecl whose refinement parameter is a call declaring Network.Connect. The runtime evaluates instance parameters at the call site, but an Application's closure is the callee's row plus its function and argument closures, so the program surfaced {Filesystem.Write} while performing the network effect under any grant that held both. Found by the effect-closure soundness fuzzer (S1)."
+}
