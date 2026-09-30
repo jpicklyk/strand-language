@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.strand.core.JsonIngest
@@ -199,5 +200,62 @@ class SupervisionTest {
         // Terminate the initial supervisor too so the test scope exits.
         ctx.terminate(initialId)
         handle.await()
+    }
+
+    @Test
+    fun `a Spawn the dispatcher cannot honour is the call's contract violation`() = runTest {
+        // The machine hash is a runtime value, so each way it can be wrong
+        // must surface as the IllegalArgumentException the interpreter
+        // reports as a structured BuiltinContractViolation, never a raw
+        // IllegalStateException out of the actor.
+        val ingest = JsonIngest.parse(RuntimeMetricsTestSeed.COUNTER_JSON)
+        val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
+        val machineId = finalized.root
+        val machineHash = finalized.nodeIdToHash.getValue(machineId)
+        val verify = Verifier(finalized.store, finalized.hashToNodeId).verify(machineId) as VerifyResult.Ok
+
+        fun contextOf(handle: MachineGroupHandle): RuntimeContext {
+            val ctxField = handle.javaClass.getDeclaredField("context")
+            ctxField.isAccessible = true
+            return ctxField.get(handle) as RuntimeContext
+        }
+        fun group() = MachineGroup(
+            store = finalized.store,
+            hashToNodeId = finalized.hashToNodeId,
+            machines = listOf(machineId),
+            nodeIdToHash = finalized.nodeIdToHash,
+        )
+        fun spawn(ctx: RuntimeContext, arg: Value) =
+            ctx.foreignDispatcher.dispatch("strand-runtime:StateMachine.Spawn", listOf(arg))
+
+        val handle = StateMachineRuntime(finalized.store, finalized.hashToNodeId).runGroup(group(), this)
+        val ctx = contextOf(handle)
+        // Not Bytes; no node with that hash; a node that is not a StateMachine.
+        assertThrows(IllegalArgumentException::class.java) { spawn(ctx, Value.IntV(1)) }
+        assertThrows(IllegalArgumentException::class.java) { spawn(ctx, Value.BytesV(ByteArray(34) { 7 })) }
+        val notAMachine = finalized.nodeIdToHash.entries
+            .first { (id, _) -> finalized.store.get(id) !is org.strand.core.Node.StateMachine }.value
+        assertThrows(IllegalArgumentException::class.java) { spawn(ctx, Value.BytesV(notAMachine.bytes)) }
+        assertEquals(1, handle.allInstances.size) { "no refused spawn may add an instance" }
+        for (id in handle.instances.keys) ctx.terminate(id)
+        handle.await()
+
+        // With the verify result's node types in the host context, a
+        // StateMachine verification did not reach is refused as well; the
+        // verified one spawns.
+        val reached = org.strand.interpreter.HostContext.processDefault()
+            .copy(verifierNodeTypes = verify.nodeTypes - machineId)
+        val strict = StateMachineRuntime(finalized.store, finalized.hashToNodeId, hostContext = reached)
+            .runGroup(group(), this)
+        assertThrows(IllegalArgumentException::class.java) { spawn(contextOf(strict), Value.BytesV(machineHash.bytes)) }
+        for (id in strict.instances.keys) contextOf(strict).terminate(id)
+        strict.await()
+
+        val verified = org.strand.interpreter.HostContext.processDefault().copy(verifierNodeTypes = verify.nodeTypes)
+        val ok = StateMachineRuntime(finalized.store, finalized.hashToNodeId, hostContext = verified)
+            .runGroup(group(), this)
+        assertTrue(spawn(contextOf(ok), Value.BytesV(machineHash.bytes)) is Value.StringV)
+        for (id in ok.allInstances.keys) contextOf(ok).terminate(id)
+        ok.await()
     }
 }

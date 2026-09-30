@@ -21,6 +21,7 @@ import org.strand.core.IngestError
 import org.strand.core.JsonIngest
 import org.strand.core.Node
 import org.strand.core.NodeId
+import org.strand.core.NodeStore
 import org.strand.hashing.CachingResolver
 import org.strand.hashing.ChainedResolver
 import org.strand.hashing.FederatedProgram
@@ -512,6 +513,18 @@ internal class CliUsageException(message: String) : RuntimeException(message)
 internal fun usageError(message: String): Nothing = throw CliUsageException(message)
 
 /**
+ * The StateMachines of [store], split into those [verify] reached and those
+ * it did not. The canonical store keeps every authored node, including ones
+ * the program root does not reach; verification is rooted, so such a node
+ * has never been checked and the `group` subcommand refuses to drive it.
+ */
+internal fun partitionGroupMachines(store: NodeStore, verify: VerifyResult.Ok): Pair<List<NodeId>, List<NodeId>> =
+    store.entries()
+        .filter { it.second is Node.StateMachine }
+        .map { it.first }
+        .partition { it in verify.nodeClosures }
+
+/**
  * Run [dispatch] and convert user mistakes into a message plus exit code instead of a JVM
  * stack trace (review CLI finding): a [CliUsageException] (malformed flag) -> stderr message,
  * exit 2; a missing or unreadable file -> message, exit 1; any other unexpected throwable ->
@@ -914,10 +927,19 @@ private fun runGroup(args: Array<String>) {
     // Collect every StateMachine NodeId from the canonical store. The
     // group includes ALL reachable StateMachines, regardless of whether
     // they appear at the root or are buried inside a Let chain (the
-    // multi-machine corpus 48 pattern).
-    val machineIds: List<NodeId> = store.entries()
-        .filter { it.second is Node.StateMachine }
-        .map { it.first }
+    // multi-machine corpus 48 pattern). The store also holds authored nodes
+    // the root does not reach, which verification never visited; a
+    // StateMachine among them is refused rather than run unverified.
+    val (machineIds, unverifiedMachines) = partitionGroupMachines(store, verifyResult)
+    if (unverifiedMachines.isNotEmpty()) {
+        val names = ingestNameMap.entries.associate { (name, id) -> id to name }
+        System.err.println(
+            "group: " + unverifiedMachines.joinToString(", ") { names[it]?.let { n -> "'$n'" } ?: it.toString() } +
+                " not reachable from the program root, so not verified; a group runs verified machines only " +
+                "(bind each machine in a Let chain under the root)"
+        )
+        exitProcess(1)
+    }
     if (machineIds.isEmpty()) {
         System.err.println("group: no StateMachine nodes found in $programPath")
         exitProcess(1)

@@ -229,7 +229,14 @@ internal class RuntimeContext(
      *
      * Spawn: arg `Bytes` (the machine's content hash); resolved to a
      * StateMachine NodeId via [hashToNodeId]; allocates a new instance;
-     * returns the new [InstanceId] as a [Value.StringV].
+     * returns the new [InstanceId] as a [Value.StringV]. The hash is a
+     * runtime value a transition computes or receives, so every way it can
+     * be wrong is the call's contract violation (an
+     * `IllegalArgumentException`, which the interpreter reports as a
+     * structured `BuiltinContractViolation` at the call site): not Bytes,
+     * no node with that hash, a node that is not a StateMachine, or, when
+     * the host context carries the verify result's node types, a
+     * StateMachine the verification did not reach.
      *
      * Terminate: arg `String` (the InstanceId); cancels the named actor;
      * returns [Value.UnitV].
@@ -241,10 +248,19 @@ internal class RuntimeContext(
                     "strand-runtime:StateMachine.Spawn expects 1 arg (machine hash: Bytes), got ${args.size}"
                 }
                 val hashBytes = (args[0] as? Value.BytesV)?.v
-                    ?: error("Spawn arg must be BytesV (machine hash), got ${args[0]::class.simpleName}")
+                    ?: throw IllegalArgumentException(
+                        "Spawn arg must be BytesV (machine hash), got ${args[0]::class.simpleName}"
+                    )
                 val hash = Hash(hashBytes)
                 val machineId = hashToNodeId[hash]
-                    ?: error("Spawn: no machine in store matches hash $hash")
+                    ?: throw IllegalArgumentException("Spawn: no machine in store matches hash $hash")
+                require(store.getOrNull(machineId) is Node.StateMachine) {
+                    "Spawn: hash $hash names a ${store.getOrNull(machineId)?.javaClass?.simpleName}, not a StateMachine"
+                }
+                val reached = hostContext.verifierNodeTypes
+                require(reached == null || machineId in reached) {
+                    "Spawn: the StateMachine with hash $hash was not reached by verification"
+                }
                 val newInstanceId = spawn(machineId)
                 Value.StringV(newInstanceId.value)
             }
