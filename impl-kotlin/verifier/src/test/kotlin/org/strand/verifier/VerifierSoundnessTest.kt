@@ -142,6 +142,93 @@ class VerifierSoundnessTest {
         assertTrue(recorded is TypeExpr.SchemaType) { "schema obligation lost: $recorded" }
     }
 
+    // ---- Q-076: two schema obligations on one shared node --------------------
+
+    /** PositiveInt (n > 0) and SmallInt (n < 10) over Int, plus a shared literal `v`. */
+    private val twoSchemas = """
+        "intT":      { "type": "PrimitiveType", "kind": "Int" },
+        "boolT":     { "type": "PrimitiveType", "kind": "Bool" },
+        "cmpT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "boolT" },
+        "gt":        { "type": "ForeignNode", "target": "strand-builtin:Int.Gt", "foreignType": "cmpT" },
+        "lt":        { "type": "ForeignNode", "target": "strand-builtin:Int.Lt", "foreignType": "cmpT" },
+        "zero":      { "type": "IntLit", "value": 0 },
+        "one":       { "type": "IntLit", "value": 1 },
+        "ten":       { "type": "IntLit", "value": 10 },
+        "pX":        { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+        "pXRef":     { "type": "VarRef", "binder": "pX" },
+        "posBody":   { "type": "Application", "function": "gt", "arguments": ["pXRef", "zero"] },
+        "posPred":   { "type": "Lambda", "parameters": ["pX"], "body": "posBody" },
+        "posInv":    { "type": "Invariant", "invariantName": "positive", "targetSchema": "posInt", "body": "posPred" },
+        "posInt":    { "type": "Schema", "schemaName": "PositiveInt", "valueType": "intT", "invariants": ["posInv"] },
+        "sX":        { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+        "sXRef":     { "type": "VarRef", "binder": "sX" },
+        "smallBody": { "type": "Application", "function": "lt", "arguments": ["sXRef", "ten"] },
+        "smallPred": { "type": "Lambda", "parameters": ["sX"], "body": "smallBody" },
+        "smallInv":  { "type": "Invariant", "invariantName": "small", "targetSchema": "smallInt", "body": "smallPred" },
+        "smallInt":  { "type": "Schema", "schemaName": "SmallInt", "valueType": "intT", "invariants": ["smallInv"] },
+        "v":         { "type": "IntLit", "value": 42 },"""
+
+    private fun obligationSchemas(v: Verified, node: String): List<NodeId> {
+        val ok = v.result as? VerifyResult.Ok ?: error("expected Ok, got ${v.result}")
+        return ok.schemaObligations[v.names.getValue(node)].orEmpty().map { it.schemaId }
+    }
+
+    @Test
+    fun `a shared argument keeps both schema obligations in either order (Q-076)`() {
+        // `v` flows into a PositiveInt parameter and a SmallInt parameter.
+        // nodeTypes holds one type per node, so the obligation recorded last
+        // used to replace the first. The trailing reuse of the first parent is
+        // a memo hit that does not re-run its argument loop, so under the old
+        // record it could not restore the overwritten obligation either.
+        for ((first, second) in listOf("posApp" to "smallApp", "smallApp" to "posApp")) {
+            val v = verifyNamed("""{
+              "version": 1, "root": "root",
+              "nodes": { $twoSchemas
+                "pIn":       { "type": "ParameterDecl", "name": "p", "paramType": "posInt" },
+                "posSink":   { "type": "Lambda", "parameters": ["pIn"], "body": "one" },
+                "sIn":       { "type": "ParameterDecl", "name": "s", "paramType": "smallInt" },
+                "smallSink": { "type": "Lambda", "parameters": ["sIn"], "body": "one" },
+                "posApp":    { "type": "Application", "function": "posSink", "arguments": ["v"] },
+                "smallApp":  { "type": "Application", "function": "smallSink", "arguments": ["v"] },
+                "addT":      { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+                "add":       { "type": "ForeignNode", "target": "strand-builtin:Int.Add", "foreignType": "addT" },
+                "both":      { "type": "Application", "function": "add", "arguments": ["$first", "$second"] },
+                "root":      { "type": "Application", "function": "add", "arguments": ["both", "$first"] }
+              }
+            }""")
+            val schemas = obligationSchemas(v, "v")
+            assertEquals(2, schemas.size) { "$first first: $schemas" }
+            assertEquals(setOf(v.names.getValue("posInt"), v.names.getValue("smallInt")), schemas.toSet())
+        }
+    }
+
+    @Test
+    fun `a node shared by a Schema field and a Schema payload keeps both obligations (Q-076)`() {
+        // The ProductFieldValue and SumValue value-flow sites: `v` fills a
+        // PositiveInt record field and the SmallInt payload of a sum case in
+        // the same record, in either field order.
+        for (fields in listOf("\"fvP\", \"fvS\"", "\"fvS\", \"fvP\"")) {
+            val v = verifyNamed("""{
+              "version": 1, "root": "rec",
+              "nodes": { $twoSchemas
+                "smallCase": { "type": "SumTypeCase", "name": "Small", "caseType": "smallInt" },
+                "tagT":      { "type": "SumType", "cases": ["smallCase"] },
+                "fP":        { "type": "ProductTypeField", "name": "p", "fieldType": "posInt" },
+                "fS":        { "type": "ProductTypeField", "name": "s", "fieldType": "tagT" },
+                "recT":      { "type": "ProductType", "fields": ["fP", "fS"] },
+                "tag":       { "type": "SumValue", "ofType": "tagT", "caseName": "Small", "payload": "v" },
+                "fvP":       { "type": "ProductFieldValue", "fieldName": "p", "value": "v" },
+                "fvS":       { "type": "ProductFieldValue", "fieldName": "s", "value": "tag" },
+                "rec":       { "type": "ProductValue", "ofType": "recT", "fields": [$fields] }
+              }
+            }""")
+            val schemas = obligationSchemas(v, "v")
+            assertEquals(setOf(v.names.getValue("posInt"), v.names.getValue("smallInt")), schemas.toSet()) {
+                "fields [$fields]: $schemas"
+            }
+        }
+    }
+
     // ---- A6: duplicate field and case names ---------------------------------
 
     @Test
