@@ -881,6 +881,14 @@ class Interpreter(
                 val activeHandler = handlers.findLast { it.intercept in fnEffects }
                 if (activeHandler != null) {
                     val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
+                    // An Application evaluates its effect-instance parameters
+                    // whether or not the call is then intercepted (as the VM
+                    // does: they are operands of its CALL). They are
+                    // effect-free, but they can fail, exhaust the budget, or
+                    // carry a schema obligation, so skipping them here would
+                    // make the two backends disagree. The values are unused:
+                    // the handler stands in for the capability check.
+                    evalEffectInstances(env, context, handlers, app, counters, limits)
                     // The verifier checked this Handler's signature against
                     // the calls it could see. Dynamic scope reaches further
                     // (callbacks and tool implementations bound outside the

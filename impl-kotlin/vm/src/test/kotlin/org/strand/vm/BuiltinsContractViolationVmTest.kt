@@ -20,9 +20,9 @@ import org.strand.interpreter.Interpreter
  *     from builtins and rethrows as `InterpretException(BuiltinContractViolation)`.
  *  2. The `unwindToAttempt` filter (isCatchable == false) passes it through — the
  *     ATTEMPT_PUSH/POP machinery does NOT swallow the error.
- *  3. Interpreter == VM parity: same variant, same target, same detail substring
- *     (NodeId presence may differ — interpreter carries the call-site NodeId,
- *     VM has `at = null` because slice-1 opcodes carry no source ids).
+ *  3. Interpreter == VM parity: same variant, same call site, same target, same
+ *     detail (the VM's CALL carries the Application's NodeId since the
+ *     2026-09-29 wave, so the slice-1 `at = null` is gone).
  */
 class BuiltinsContractViolationVmTest {
 
@@ -70,8 +70,8 @@ class BuiltinsContractViolationVmTest {
         assertTrue(cv.detail.contains("division by zero", ignoreCase = true)) {
             "expected detail to mention 'division by zero', got: ${cv.detail}"
         }
-        // VM slice-1 carries no NodeIds — at is null
-        assertTrue(cv.at == null) { "expected null at in VM path (no opcode source mapping yet)" }
+        // The CALL carries its Application's NodeId, so the error names the call site.
+        assertEquals(finalized.root, cv.at) { "expected the VM to blame the dividing Application" }
         assertFalse(cv.isCatchable)
     }
 
@@ -92,10 +92,9 @@ class BuiltinsContractViolationVmTest {
     }
 
     @Test
-    fun `Int_Div by zero — interpreter and VM agree on variant and target (parity)`() {
-        // Both backends raise BuiltinContractViolation with the same target and
-        // a detail containing "division by zero". The NodeId presence differs:
-        // interpreter carries the call-site NodeId; VM has at = null.
+    fun `Int_Div by zero — interpreter and VM agree on variant, site and target (parity)`() {
+        // Both backends raise BuiltinContractViolation at the same call site,
+        // with the same target and a detail containing "division by zero".
         val ingest = JsonIngest.parse(intDivByZeroJson)
         val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
 
@@ -118,8 +117,7 @@ class BuiltinsContractViolationVmTest {
             "interpreter detail must mention 'division by zero': ${interpErr.detail}")
         assertEquals(interpErr.detail, vmErr.detail,
             "interpreter and VM detail strings must be identical (same require message)")
-        // at differs by design: interpreter is non-null, VM is null
         assertTrue(interpErr.at != null, "interpreter path must carry a call-site NodeId")
-        assertTrue(vmErr.at == null, "VM path must have at = null (no source mapping in slice 1)")
+        assertEquals(interpErr.at, vmErr.at, "interpreter and VM must blame the same call site")
     }
 }

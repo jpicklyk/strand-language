@@ -1311,8 +1311,8 @@ class Vm(
      * [InterpretError.UnknownForeignTarget]; an `IllegalArgumentException`
      * or `ClassCastException` out of the builtin is a contract violation
      * (a `require` guard such as division by zero, or a type-confused
-     * argument list under a graph-supplied foreignType, Q-066), reported
-     * with `at = null` as VM builtin failures are.
+     * argument list under a graph-supplied foreignType, Q-066), reported at
+     * the dispatching call site as the interpreter reports it.
      */
     private fun dispatchForeign(
         at: NodeId?,
@@ -1337,13 +1337,13 @@ class Vm(
             }
         } catch (e: IllegalArgumentException) {
             throw InterpretException(InterpretError.BuiltinContractViolation(
-                at = null,
+                at = site,
                 target = fn.target,
                 detail = e.message ?: "builtin contract violation",
             ))
         } catch (e: ClassCastException) {
             throw InterpretException(InterpretError.BuiltinContractViolation(
-                at = null,
+                at = site,
                 target = fn.target,
                 detail = e.message ?: "builtin argument type confusion",
             ))
