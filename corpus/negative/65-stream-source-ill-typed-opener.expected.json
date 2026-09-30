@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "ParameterTypeMismatch",
+  "notes": "A source-bound EventStream whose opener is Net.Connect(host, port) with a Bool where the port Int belongs. The source edge was checked for shape only (a registered opener whose instances name its effect): the opener Application was never inferred, so its arguments were untyped and its closure unrecorded, yet the runtime evaluates it when the group starts. The opener is now verified like any other evaluated expression. Reported while building the machine-shaped closure query (Q-073)."
+}

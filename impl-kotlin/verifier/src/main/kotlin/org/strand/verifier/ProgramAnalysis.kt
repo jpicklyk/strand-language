@@ -241,12 +241,12 @@ class ProgramAnalysis(
      * group start, before any actor runs), the categories evaluating the
      * opener Application can reach, plus the transport category the
      * runtime's feeder performs on every read (`Network.Receive`). The
-     * verifier checks an opener's shape (a registered opener builtin whose
-     * `effectInstances` name its semantic effect) but does not infer the
-     * opener subgraph, so it records no closure for it; the bound is
-     * therefore structural: every EffectCategory node reachable from the
-     * opener (its callee's declared effects, its EffectDecls, and whatever
-     * its unverified arguments reference). The runtime checks
+     * verifier infers the opener Application (a registered opener builtin
+     * whose `effectInstances` name its semantic effect), so its effect
+     * closure is recorded; the bound is that closure together with every
+     * EffectCategory node structurally reachable from the opener, which
+     * costs nothing and does not depend on the closure being recorded. The
+     * runtime checks
      * the transport category by name (`MachineGroupValidationError.ExternalStreamSourceEffectUncovered`);
      * the bound resolves the name to every EffectCategory node in the store
      * carrying it, and records the name in

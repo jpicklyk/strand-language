@@ -98,9 +98,9 @@ class MachineClosureAnalysisTest {
     }
 
     /**
-     * The verifier checks an opener's callee and `effectInstances` but does
-     * not infer its arguments, so it records no closure for them; an
-     * effectful argument is still inside the source bound, structurally.
+     * The verifier infers a source opener like any other expression the
+     * runtime evaluates, so an effectful argument is in the opener's
+     * recorded closure and from there in the source bound.
      */
     @Test
     fun `an effect in a source opener's argument is in the source bound`() {
@@ -114,7 +114,7 @@ class MachineClosureAnalysisTest {
                 "portLit":  { "type": "Application", "function": "write", "arguments": ["hostLit"], "effectInstances": ["pDecl"] },""",
             ),
         )
-        assertTrue(p.id("writeFx") !in p.verify.nodeClosures.values.flatten(), "the verifier recorded no closure for the argument")
+        assertTrue(p.id("writeFx") in p.verify.nodeClosures[p.id("openApp")].orEmpty(), "the opener's recorded closure")
         val source = p.analysis.groupClosure(listOf(p.id("m"))).sources.single()
         assertTrue(p.id("writeFx") in source.direct) { "${source.direct}" }
         assertTrue(p.id("netConnectCat") in source.direct)

@@ -3398,6 +3398,15 @@ class Verifier(
                 ))
                 throw VerifyAbort()
             }
+            // The runtime evaluates the opener when the group starts, so it
+            // is verified like any other expression it evaluates: arguments
+            // against the callee's signature, instances against its row,
+            // and its effect closure recorded for the reasoning surface
+            // (ProgramAnalysis.groupClosure reads it). The shape checks
+            // above looked only at the callee and the instance names. A
+            // source edge hangs off a type-level node, so the opener is
+            // inferred with no binder in scope and must be closed.
+            infer(sourceId, emptyMap(), emptySet())
         }
 
         /**
