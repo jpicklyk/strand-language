@@ -173,6 +173,13 @@ data class ChunkTable(
      * category the way the interpreter's do (the VM holds no NodeStore).
      */
     val categoryNames: Map<Int, String> = emptyMap(),
+    /**
+     * EffectCategory id → the category's declared parameter count, for every
+     * referenced id that is an EffectCategory. The VM's unrefined-grant rule
+     * (the interpreter's `checkUnrefinedGrant`) applies only to parameterized
+     * categories; an id absent here is treated as parameterless.
+     */
+    val categoryParamCounts: Map<Int, Int> = emptyMap(),
 ) {
     val root: Chunk get() = chunks[0]
     operator fun get(index: Int): Chunk = chunks[index]

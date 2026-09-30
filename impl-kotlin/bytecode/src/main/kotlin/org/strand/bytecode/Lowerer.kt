@@ -60,6 +60,7 @@ class Lowerer(
 ) {
     private val chunks = mutableListOf<MutableChunk>()
     private val categoryNames = LinkedHashMap<Int, String>()
+    private val categoryParamCounts = LinkedHashMap<Int, Int>()
 
     /**
      * Sub-chunk index per sub-chunk name (`lambda(#N)`, `fixpoint(#N)`,
@@ -79,23 +80,27 @@ class Lowerer(
     fun lower(rootId: NodeId): ChunkTable {
         chunks.clear()
         categoryNames.clear()
+        categoryParamCounts.clear()
         subChunkByName.clear()
         // Reserve the root chunk's slot so sub-chunks get index ≥ 1.
         val root = MutableChunk(name = "root($rootId)")
         chunks += root
         lowerExpr(rootId, root, scope = LocalScope())
         root.emit(Opcode.HALT)
-        return ChunkTable(chunks.map { it.toChunk() }, categoryNames.toMap())
+        return ChunkTable(chunks.map { it.toChunk() }, categoryNames.toMap(), categoryParamCounts.toMap())
     }
 
     /**
-     * Record [id]'s EffectCategory name for VM denial reports and return its
+     * Record [id]'s EffectCategory name for VM denial reports, and its
+     * parameter count for the VM's unrefined-grant rule, and return its
      * integer id (review H2). Falls back to the `#N` rendering the
      * interpreter uses for a non-category id.
      */
     private fun category(id: NodeId): Int {
-        categoryNames.getOrPut(id.value) {
-            (store.getOrNull(id) as? Node.EffectCategory)?.categoryName ?: id.toString()
+        if (id.value !in categoryNames) {
+            val node = store.getOrNull(id) as? Node.EffectCategory
+            categoryNames[id.value] = node?.categoryName ?: id.toString()
+            if (node != null) categoryParamCounts[id.value] = node.parameters.size
         }
         return id.value
     }

@@ -8,6 +8,7 @@ import org.strand.core.EvaluationLimits
 import org.strand.core.ExhaustionKind
 import org.strand.core.NodeId
 import org.strand.interpreter.Builtins
+import org.strand.interpreter.CapabilityArgument
 import org.strand.interpreter.CapabilityPattern
 import org.strand.interpreter.CapabilitySet
 import org.strand.interpreter.covers
@@ -170,9 +171,10 @@ class Vm(
     /**
      * Review H2: applyClosure under a refinement-bearing [capabilities] set.
      * Mirrors the interpreter's `applyCallable`: the callable's own declared
-     * effects are checked category-only against [capabilities] before the
-     * body runs (there is no call-site EffectDecl at this boundary), and the
-     * refinement checks fire at the effectful call sites inside the body.
+     * effects are checked against [capabilities] before the body runs (there
+     * is no call-site EffectDecl at this boundary — see
+     * [checkAppliedCallable]), and the refinement checks fire at the
+     * effectful call sites inside the body.
      */
     fun applyClosure(
         closure: Any,
@@ -198,7 +200,7 @@ class Vm(
         attemptStack.clear()
         val frames = ArrayDeque<Frame>()
         try {
-            checkCapabilities(RUNTIME_BOUNDARY, effectsOf(closure), emptyMap(), limits)
+            checkAppliedCallable(RUNTIME_BOUNDARY, closure, args, limits)
             when (closure) {
                 is VmClosure -> {
                     val sub = table[closure.chunkIndex]
@@ -577,28 +579,34 @@ class Vm(
                         // Replace the callee with the handler's stored
                         // value; we already have `args` ready. The
                         // handler's OWN declared effects fire in the
-                        // surrounding context, checked category-only (no
-                        // EffectDecls reach the handler) — the interpreter's
-                        // applyValue rule (review H2).
-                        checkCapabilities(NodeId(site.site), effectsOf(intercept.handlerValue), emptyMap(), limits)
-                        invokeCallable(intercept.handlerValue, args, frames, current)
+                        // surrounding context with no EffectDecls reaching
+                        // it — the interpreter's applyValue rule (review H2),
+                        // including a foreign handler's performing check.
+                        val handler = unbox(intercept.handlerValue)
+                        checkAppliedCallable(NodeId(site.site), handler, args.asList(), limits)
+                        invokeCallable(handler, args, frames, current)
                         continue
                     }
                     // Capability check (review H2): the interpreter's
                     // two-pass rule — every declared category present, then
                     // each category the site instantiates (EffectDecls, or
                     // the callee's Q-039 projections synthesized from the
-                    // evaluated arguments) covered by a granted pattern.
-                    // Denials raise the shared, uncatchable
+                    // evaluated arguments) covered by a granted pattern; a
+                    // foreign callee is a performing site, so an
+                    // instance-free parameterized category needs an
+                    // unrefined grant. Denials raise the shared, uncatchable
                     // CapabilityViolation / RefinementViolation, so the
                     // per-opcode InterpretException catch declines to unwind
                     // them to any attempt marker.
                     val instances = if (fn is VmForeign && fn.projections.isNotEmpty()) {
-                        synthesizeProjectedInstances(fn, args)
+                        synthesizeProjectedInstances(fn, args.asList())
                     } else {
                         siteInstances(site, instanceParams)
                     }
-                    checkCapabilities(NodeId(site.site), effects.map { NodeId(it) }, instances, limits)
+                    checkCapabilities(
+                        NodeId(site.site), effects.map { NodeId(it) }, instances, limits,
+                        performs = fn is VmForeign && performs(fn),
+                    )
                     invokeCallable(fn, args, frames, current)
                 }
 
@@ -765,7 +773,7 @@ class Vm(
      * projections — an ArgRef source is the exact argument value the builtin
      * receives (interpreter `synthesizeProjectedInstances`).
      */
-    private fun synthesizeProjectedInstances(fn: VmForeign, args: Array<Any>): Map<NodeId, List<Value>> {
+    private fun synthesizeProjectedInstances(fn: VmForeign, args: List<Any>): Map<NodeId, List<Value>> {
         val out = LinkedHashMap<NodeId, List<Value>>(fn.projections.size)
         for (projection in fn.projections) {
             out[NodeId(projection.category)] = projection.sources.map { src ->
@@ -796,15 +804,18 @@ class Vm(
      * the site instantiated (present in [instances]) must be covered by a
      * granted pattern, else [InterpretError.RefinementViolation]. Categories
      * declared but not instantiated at this site propagate (confused-deputy
-     * semantics). Reports are built exactly as the interpreter builds them,
-     * with category names from [ChunkTable.categoryNames] and the call-site
-     * NodeId carried by the lowered [Constant.CallSiteC].
+     * semantics) — except at a [performs] site (a foreign dispatch), where an
+     * instance-free parameterized category needs an unrefined grant
+     * ([checkUnrefinedGrant]). Reports are built exactly as the interpreter
+     * builds them, with category names from [ChunkTable.categoryNames] and the
+     * call-site NodeId carried by the lowered [Constant.CallSiteC].
      */
     private fun checkCapabilities(
         at: NodeId,
         declared: List<NodeId>,
         instances: Map<NodeId, List<Value>>,
         limits: EvaluationLimits,
+        performs: Boolean = false,
     ) {
         if (declared.isEmpty()) return
         val context = currentCaps
@@ -826,7 +837,11 @@ class Vm(
             ))
         }
         for (category in declared) {
-            val requirement = instances[category] ?: continue
+            val requirement = instances[category]
+            if (requirement == null) {
+                if (performs) checkUnrefinedGrant(at, category, context, limits)
+                continue
+            }
             val grants = context.grants.getValue(category)
             if (grants.none { covers(it, requirement) }) {
                 val name = categoryNameOf(category)
@@ -847,6 +862,76 @@ class Vm(
             }
         }
     }
+
+    /**
+     * The interpreter's `checkUnrefinedGrant`: a performing call exercises
+     * [category] with no instance. When the category is parameterized
+     * ([ChunkTable.categoryParamCounts]) the grant must hold an unrefined
+     * pattern (non-empty arguments, all wildcards), else a
+     * [InterpretError.RefinementViolation] whose report renders the request
+     * as `*` per parameter.
+     */
+    private fun checkUnrefinedGrant(
+        at: NodeId,
+        category: NodeId,
+        context: CapabilitySet,
+        limits: EvaluationLimits,
+    ) {
+        val paramCount = table.categoryParamCounts[category.value] ?: return
+        if (paramCount == 0) return
+        val grants = context.grants[category] ?: return // absent categories already raised
+        val unrefined = grants.any { pattern ->
+            pattern.arguments.isNotEmpty() && pattern.arguments.all { it is CapabilityArgument.Wildcard }
+        }
+        if (unrefined) return
+        val name = categoryNameOf(category)
+        val baseReport = denialReport(
+            at = at,
+            categoryName = name,
+            requested = emptyList(),
+            held = grants,
+            heldCategoryName = name,
+            limits = limits,
+        )
+        val report = baseReport.copy(
+            requested = baseReport.requested?.let { List(paramCount) { "*" } },
+        )
+        throw InterpretException(InterpretError.RefinementViolation(
+            at = at,
+            category = category,
+            requirement = emptyList(),
+            available = grants,
+            report = report,
+        ))
+    }
+
+    /**
+     * The capability check for [callable] applied to pre-evaluated [args]
+     * with no call-site EffectDecls: a handler standing in for an intercepted
+     * call, or the [applyClosure] runtime boundary (the interpreter's
+     * `applyValue`). A [VmForeign] is a performing site whose projected
+     * instances are synthesized from [args] (`dispatchForeign` with null
+     * instances); a closure or fixpoint is checked instance-free.
+     */
+    private fun checkAppliedCallable(at: NodeId, callable: Any, args: List<Any>, limits: EvaluationLimits) {
+        if (callable is VmForeign) {
+            val instances = if (callable.projections.isNotEmpty()) {
+                synthesizeProjectedInstances(callable, args)
+            } else {
+                emptyMap()
+            }
+            checkCapabilities(at, effectsOf(callable), instances, limits, performs = performs(callable))
+        } else {
+            checkCapabilities(at, effectsOf(callable), emptyMap(), limits)
+        }
+    }
+
+    /**
+     * A foreign dispatch performs its effects unless the target is a
+     * higher-order builtin, whose row is the latent row of its callbacks (the
+     * interpreter's `dispatchForeign` `performs` flag).
+     */
+    private fun performs(fn: VmForeign): Boolean = Builtins.lookupHigherOrder(fn.target) == null
 
     /**
      * Review M5: VM callables ([VmClosure], [VmFixpoint], [VmForeign]) are not
