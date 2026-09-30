@@ -129,6 +129,18 @@ class MachineGroupHandle internal constructor(
         }.toMap()
 
     /**
+     * Q-047 (machine path): every instance (initial or dynamically spawned)
+     * that halted with [HaltReason.SchemaViolation] — a transition produced a
+     * value violating a schema invariant while the rest of the group kept
+     * running. Always empty when the group was started without the verify
+     * result's schema obligations.
+     */
+    fun schemaViolations(): Map<InstanceId, HaltReason.SchemaViolation> =
+        allInstances.mapNotNull { (id, handle) ->
+            (handle.haltReason as? HaltReason.SchemaViolation)?.let { id to it }
+        }.toMap()
+
+    /**
      * Spawn a new [MachineInstance] for the supplied StateMachine
      * [machineId] (Layer 6 step 3 slice 3.2 supervision — host-driven API).
      * Returns the new InstanceId. The spawned actor begins running
@@ -259,6 +271,13 @@ class MachineInstanceHandle internal constructor(
 ) {
     val instanceId: InstanceId get() = instance.instanceId
     val machineId: NodeId get() = instance.node.transitionFn  // for diagnostics; not the StateMachine id itself
+
+    /**
+     * The StateMachine NodeId this instance runs (unlike [machineId], which is
+     * its transition function); null only for instances built outside the
+     * runtime's spawn path.
+     */
+    val machineNodeId: NodeId? get() = instance.machineNodeId
     val currentState: Value get() = instance.currentState
     val halted: Boolean get() = instance.halted
 
@@ -273,8 +292,9 @@ class MachineInstanceHandle internal constructor(
 
     /**
      * Why this instance halted ([HaltReason.EventsExhausted],
-     * [HaltReason.ResourceExhaustion], [HaltReason.CapabilityDenial] or
-     * [HaltReason.InstanceFailure]); null while it is still running or when
+     * [HaltReason.ResourceExhaustion], [HaltReason.CapabilityDenial],
+     * [HaltReason.SchemaViolation] or [HaltReason.InstanceFailure]); null
+     * while it is still running or when
      * it was cancelled.
      */
     val haltReason: HaltReason? get() = instance.haltReason

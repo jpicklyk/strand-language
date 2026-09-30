@@ -803,9 +803,10 @@ private fun runMachine(args: Array<String>) {
             val image = programImageOf(store, root, hashToNodeId, resolveCb)
             val caps = if (grantAll) grantAllCapabilities(schemaProgram) else CapabilitySet.EMPTY
             try {
-                val trace = runtime.runMachine(
-                    image, root, events, caps, result.nodeTypes, result.verifiedInterceptions,
-                )
+                // Q-047: the verify-result form also binds the runtime schema
+                // obligations, so a transition or initialState producing a
+                // value that violates a schema invariant is stopped.
+                val trace = runtime.runMachine(image, root, events, caps, result)
                 printTrace(trace)
                 // Q-064: a denial-caused halt is a denial-caused termination —
                 // the trace above is the human rendering; emit the one
@@ -813,6 +814,13 @@ private fun runMachine(args: Array<String>) {
                 val haltReason = trace.final.reason
                 if (haltReason is org.strand.runtime.HaltReason.CapabilityDenial) {
                     DenialLine.emitReport(haltReason.report, annotator)
+                    exitProcess(1)
+                }
+                if (haltReason is org.strand.runtime.HaltReason.SchemaViolation) {
+                    System.err.println(
+                        "machine evaluation halted on schema violation at event ${haltReason.atEventIndex}: " +
+                            annotator.annotate(haltReason.error.toString())
+                    )
                     exitProcess(1)
                 }
             } catch (e: InterpretException) {
@@ -957,9 +965,9 @@ private fun runGroup(args: Array<String>) {
     try {
         runtime.withGroupInstalled(verifyResult.nodeTypes) {
             runBlocking {
-                val handle = runtime.runGroup(
-                    image, group, this, verifyResult.nodeTypes, verifyResult.verifiedInterceptions,
-                )
+                // Q-047: the verify-result form also binds the runtime schema
+                // obligations to every actor the group spawns.
+                val handle = runtime.runGroup(image, group, this, verifyResult)
 
                 // Send routed events on their designated input streams, then
                 // close all host-feedable external inputs so the actors halt
@@ -1014,6 +1022,18 @@ private fun runGroup(args: Array<String>) {
                         "group evaluation halted on capability denial: " +
                             "category ${report.category}, instance ${report.instanceId}, " +
                             "event ${report.eventIndex}"
+                    )
+                    exitProcess(1)
+                }
+                // Q-047: an actor halted on a runtime schema violation (its
+                // siblings ran on). Report the first, in deterministic
+                // instance-id order, and exit non-zero.
+                val schemaHalts = handle.schemaViolations().entries.sortedBy { it.key.value }
+                if (schemaHalts.isNotEmpty()) {
+                    val (instanceId, halt) = schemaHalts.first()
+                    System.err.println(
+                        "group evaluation halted on schema violation: instance ${instanceId.value}, " +
+                            "event ${halt.atEventIndex}: ${annotator.annotate(halt.error.toString())}"
                     )
                     exitProcess(1)
                 }

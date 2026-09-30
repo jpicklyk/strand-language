@@ -102,6 +102,13 @@ internal class RuntimeContext(
      */
     val hostContext: org.strand.interpreter.HostContext =
         org.strand.interpreter.HostContext.processDefault(),
+    /**
+     * Q-047 (machine path): the runtime schema obligations every per-actor
+     * [Interpreter] this context spawns, and every dispatcher it builds
+     * through [DispatcherWiring], enforces. Default empty: nothing is
+     * enforced.
+     */
+    val schemaObligations: Map<NodeId, List<org.strand.verifier.TypeExpr.SchemaType>> = emptyMap(),
 ) {
     private val instancesMap = ConcurrentHashMap<InstanceId, MachineInstance>()
     private val actorJobsMap = ConcurrentHashMap<InstanceId, Job>()
@@ -130,7 +137,14 @@ internal class RuntimeContext(
         // Each actor gets its own Interpreter so the foreign dispatcher is
         // bound to THIS group's runtime context (Spawn from inside the
         // transition spawns into this group, not some other one).
-        val perActorInterpreter = Interpreter(store, hashToNodeId, foreignDispatcher, resolveTarget, hostContext = hostContext)
+        val perActorInterpreter = Interpreter(
+            store,
+            hashToNodeId,
+            foreignDispatcher,
+            resolveTarget,
+            schemaObligations = schemaObligations,
+            hostContext = hostContext,
+        )
         // Q-040: build under the group's limits so eval-time caps apply
         // from instance construction through every per-event call.
         val transitionFnValue = perActorInterpreter.eval(node.transitionFn, capabilities, limits)
@@ -164,7 +178,7 @@ internal class RuntimeContext(
 
         val dispatcher = dispatcherFactory?.build(
             node, machineId, capabilities,
-            DispatcherWiring(hostContext, foreignDispatcher, resolveTarget, limits),
+            DispatcherWiring(hostContext, foreignDispatcher, resolveTarget, limits, schemaObligations),
         )
         val instance = MachineInstance(
             instanceId = instanceId,

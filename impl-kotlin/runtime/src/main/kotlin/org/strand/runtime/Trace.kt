@@ -86,6 +86,28 @@ sealed class HaltReason {
     ) : HaltReason()
 
     /**
+     * Q-047 (machine path): a per-event transition invocation produced a
+     * value violating the invariant of a Schema it flowed into — the runtime
+     * half of a schema obligation the verify-time SchemaChecker could only
+     * defer. Raised only when the runtime was given the verify result's
+     * schema obligations (`StrandRuntime`'s `VerifyResult.Ok` overloads, or
+     * [StateMachineRuntime]'s `schemaObligations`). [error] is the
+     * structured violation (node, schema, invariant, offending value);
+     * [atEventIndex] is the zero-based index of the event whose transition
+     * raised it. The same shape on the sync fold and the async actor: the
+     * failing event produces no [TraceStep.Step], and on the async path the
+     * halt stops THIS instance only, its siblings keep running.
+     *
+     * A violation raised while an instance is built (its `initialState`)
+     * is not a halt: it propagates as an
+     * [org.strand.interpreter.InterpretException], as a denial there does.
+     */
+    data class SchemaViolation(
+        val error: org.strand.interpreter.InterpretError.SchemaInvariantViolation,
+        val atEventIndex: Int,
+    ) : HaltReason()
+
+    /**
      * Review M6: an async actor's transition (or its output dispatch) failed
      * with an error that is neither a denial nor an exhaustion — an
      * unexpected JVM throwable or a non-denial [org.strand.interpreter.InterpretError].

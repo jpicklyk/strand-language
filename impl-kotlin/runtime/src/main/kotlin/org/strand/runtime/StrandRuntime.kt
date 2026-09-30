@@ -164,9 +164,10 @@ class StrandRuntime(private val policy: HostPolicy) {
      * run boundary. Refinement-level (parameter) pre-execution proof is
      * deferred to Q-068; runtime enforcement covers it for now.
      *
-     * Only the plain [run] entry point is guarded. Guarding
-     * [runMachine] / [runGroup] is deferred — see
-     * `proposals/self-gating-execution.md`'s implementation note.
+     * This gates the plain [run] entry point. The machine-path gates are
+     * [runMachineGuarded] and [runGroupGuarded], which bound by
+     * [ProgramAnalysis.machineClosure] / [ProgramAnalysis.groupClosure]
+     * instead of `totalClosure(root)`.
      */
     fun runGuarded(program: ProgramImage, budget: CapabilitySet): GuardedOutcome {
         val verify = verify(program)
@@ -201,6 +202,126 @@ class StrandRuntime(private val policy: HostPolicy) {
     }
 
     /**
+     * Q-073, machine path: the self-gating primitive for one StateMachine.
+     * Verify [program]; bound what driving [machine] can perform with
+     * [ProgramAnalysis.machineClosure] (the declared effects row, which
+     * covers the transition, `initialState` and the implicit
+     * `StateMachine.Receive` / `.Send`, plus the latent channel reachable
+     * from the transition and the initial state); and when that bound is not
+     * within [budget]'s categories, return [GuardedMachineOutcome.Refused]
+     * before anything is evaluated: no `initialState`, no transition, no
+     * audit record. The [RefusalReport] names each exceeding category with
+     * its channel ([EffectChannel.DIRECT] for the declared row,
+     * [EffectChannel.LATENT] for the latent reach).
+     *
+     * Otherwise run the verify-time schema pass (a static violation is
+     * [GuardedMachineOutcome.SchemaViolation], nothing evaluated) and drive
+     * the machine through the [VerifyResult.Ok] form of [runMachine] with
+     * [budget] as its [CapabilitySet]: the schema obligations and the
+     * verified-interception record are enforced, and runtime capability and
+     * refinement checks stay the backstop for the parameter-level bounds this
+     * category-level gate does not prove. A violation or denial in
+     * `initialState` propagates as an
+     * [org.strand.interpreter.InterpretException], as from [runMachine].
+     *
+     * [machine] must be a StateMachine the verification of [program] reaches
+     * (it is typically `program.root`); anything else throws
+     * [IllegalArgumentException].
+     */
+    fun runMachineGuarded(
+        program: ProgramImage,
+        machine: NodeId,
+        events: List<Value>,
+        budget: CapabilitySet,
+    ): GuardedMachineOutcome {
+        val verify = verify(program)
+        if (verify is VerifyResult.Failed) return GuardedMachineOutcome.VerifyFailed(verify.errors)
+        verify as VerifyResult.Ok
+
+        val bound = analysisOf(program, verify).machineClosure(machine)
+        refusalOf(bound.direct, bound.latent, budget)?.let { return GuardedMachineOutcome.Refused(it) }
+
+        val schema = checkSchema(program, verify)
+        if (schema.hasViolations) return GuardedMachineOutcome.SchemaViolation(verify, schema)
+        return GuardedMachineOutcome.Ran(verify, schema, runMachine(program, machine, events, budget, verify))
+    }
+
+    /**
+     * Q-073, group path: the self-gating primitive for a [MachineGroup].
+     * Verify [program]; bound what running [group] can perform with
+     * [ProgramAnalysis.groupClosure] over its machines (every machine's
+     * [ProgramAnalysis.machineClosure], widened to every StateMachine in the
+     * store when one can spawn, plus each `source`-bound external stream's
+     * opener effects and the `Network.Receive` its feeder performs); and when
+     * that bound is not within [budget]'s categories, return
+     * [GuardedGroupOutcome.Refused] before anything is evaluated or opened:
+     * no `initialState`, no source opener, no actor. Source effects are
+     * reported on the [EffectChannel.DIRECT] channel; a transport category
+     * the store has no node for is named in
+     * [RefusalReport.unresolvedCategoryNames].
+     *
+     * Otherwise run the verify-time schema pass and start the group through
+     * the [VerifyResult.Ok] form of [runGroup], with [budget] replacing the
+     * group's own `capabilities` (the budget is the grant), returning
+     * [GuardedGroupOutcome.Started] with the handle. Group-start failures
+     * propagate as from [runGroup].
+     *
+     * Every machine in [group] must be one the verification of [program]
+     * reaches; anything else throws [IllegalArgumentException].
+     */
+    fun runGroupGuarded(
+        program: ProgramImage,
+        group: MachineGroup,
+        budget: CapabilitySet,
+        scope: CoroutineScope,
+    ): GuardedGroupOutcome {
+        val verify = verify(program)
+        if (verify is VerifyResult.Failed) return GuardedGroupOutcome.VerifyFailed(verify.errors)
+        verify as VerifyResult.Ok
+
+        val bound = analysisOf(program, verify).groupClosure(group.machines)
+        refusalOf(bound.direct, bound.latent, budget, bound.unresolvedCategoryNames)
+            ?.let { return GuardedGroupOutcome.Refused(it) }
+
+        val schema = checkSchema(program, verify)
+        if (schema.hasViolations) return GuardedGroupOutcome.SchemaViolation(verify, schema)
+        val handle = runGroup(program, group.copy(capabilities = budget), scope, verify)
+        return GuardedGroupOutcome.Started(verify, schema, handle)
+    }
+
+    private fun analysisOf(program: ProgramImage, verify: VerifyResult.Ok): ProgramAnalysis =
+        ProgramAnalysis(program.store, verify, program.root, program.hashToNodeId)
+
+    /**
+     * The refusal for a bound split into [direct] and [latent] channels
+     * against [budget], or null when the bound is within it. [unresolved]
+     * names categories required by name that no grant can cover.
+     */
+    private fun refusalOf(
+        direct: Set<NodeId>,
+        latent: Set<NodeId>,
+        budget: CapabilitySet,
+        unresolved: Set<String> = emptySet(),
+    ): RefusalReport? {
+        val total = direct + latent
+        val granted = budget.grants.keys
+        val exceeding = total - granted
+        if (exceeding.isEmpty() && unresolved.isEmpty()) return null
+        return RefusalReport(
+            exceeding = exceeding.associateWith { category ->
+                when {
+                    category in direct && category in latent -> EffectChannel.BOTH
+                    category in direct -> EffectChannel.DIRECT
+                    else -> EffectChannel.LATENT
+                }
+            },
+            requested = total,
+            granted = granted,
+            unresolvedCategoryNames = unresolved,
+        )
+    }
+
+    /**
      * Drive a single verified [machine] over [events] under this runtime's
      * policy. The caller has already verified (or calls [verify]); this method
      * installs the policy and runs the synchronous fold, returning the
@@ -211,7 +332,8 @@ class StrandRuntime(private val policy: HostPolicy) {
      * `verify(program).asOk()?.nodeTypes` or null. [verifiedInterceptions]
      * is the same result's `verifiedInterceptions`; when passed, the
      * transition refuses a Handler interception the verifier did not check
-     * (null leaves that guard off).
+     * (null leaves that guard off). This form enforces no runtime schema
+     * obligations; the [VerifyResult.Ok] overload does.
      */
     fun runMachine(
         program: ProgramImage,
@@ -220,11 +342,37 @@ class StrandRuntime(private val policy: HostPolicy) {
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
         verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
-    ): Trace {
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions)
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
-        return runtime.runMachine(machine, events, capabilities, policy.limits)
-    }
+    ): Trace = machineRuntime(program, verifierNodeTypes, verifiedInterceptions)
+        .runMachine(machine, events, capabilities, policy.limits)
+
+    /**
+     * Q-047 (machine path): drive [machine] with everything the machine path
+     * reads from the verify result taken from [verified] — its `nodeTypes`
+     * (the LLM schema-projection path), its `verifiedInterceptions` (the
+     * Handler-interception guard), and its `schemaObligations`. The last is
+     * what the loose-parameter form cannot supply: every interpreter the run
+     * constructs checks each obligation when it reduces the obligated node to
+     * a value, inside `initialState` and inside every transition, as [run]
+     * does for a plain expression.
+     *
+     * A violation inside a transition halts the fold with
+     * [HaltReason.SchemaViolation] on the trace's halt record (the steps
+     * before it are kept, as for [HaltReason.CapabilityDenial]); a violation
+     * in `initialState` fires before any event and propagates as an
+     * [org.strand.interpreter.InterpretException] carrying
+     * [org.strand.interpreter.InterpretError.SchemaInvariantViolation], as a
+     * denial there does. [verified] must be the result of verifying
+     * [program] (typically [verify] or [verifyAndCheckSchema]); the
+     * verify-time schema pass stays the caller's to run first, as with the
+     * other form.
+     */
+    fun runMachine(
+        program: ProgramImage,
+        machine: NodeId,
+        events: List<Value>,
+        capabilities: CapabilitySet,
+        verified: VerifyResult.Ok,
+    ): Trace = machineRuntime(program, verified).runMachine(machine, events, capabilities, policy.limits)
 
     /**
      * Spawn a [MachineGroup] under this runtime's policy and return the
@@ -234,6 +382,8 @@ class StrandRuntime(private val policy: HostPolicy) {
      * which evaluate asynchronously after this returns, on `Dispatchers.IO` —
      * read the group's tenant policy with no shared mutable singleton on the
      * path. Two groups can therefore run concurrently under different policies.
+     * This form enforces no runtime schema obligations; the [VerifyResult.Ok]
+     * overload does.
      */
     fun runGroup(
         program: ProgramImage,
@@ -241,16 +391,37 @@ class StrandRuntime(private val policy: HostPolicy) {
         scope: CoroutineScope,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
         verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
-    ): MachineGroupHandle {
+    ): MachineGroupHandle =
         // Q-054 follow-up: the policy flows into the runtime as a HostContext
         // value, bound to every per-actor interpreter and feeder. No singleton
         // install — the group runs asynchronously past this return without
         // depending on a mutable process-global being held in place, so two
         // groups can run concurrently under different policies.
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions)
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
-        return runtime.runGroup(group, scope, policy.limits)
-    }
+        machineRuntime(program, verifierNodeTypes, verifiedInterceptions).runGroup(group, scope, policy.limits)
+
+    /**
+     * Q-047 (machine path): spawn [group] with `nodeTypes`,
+     * `verifiedInterceptions` and `schemaObligations` all taken from
+     * [verified] (see the [runMachine] overload of the same shape). Every
+     * per-actor interpreter, every dynamically spawned actor, the source-
+     * opener interpreter, and any interpreter a
+     * [MachineGroup.dispatcherFactory] builds from its [DispatcherWiring]
+     * enforce the obligations.
+     *
+     * A violation inside an actor's transition halts THAT instance with
+     * [HaltReason.SchemaViolation] (read it from
+     * [MachineGroupHandle.schemaViolations] or the instance's `haltReason`);
+     * its siblings keep running, as for any other instance halt. A violation
+     * while an initial instance is built (its `initialState`) propagates from
+     * this call as an [org.strand.interpreter.InterpretException], as a
+     * group-start denial does.
+     */
+    fun runGroup(
+        program: ProgramImage,
+        group: MachineGroup,
+        scope: CoroutineScope,
+        verified: VerifyResult.Ok,
+    ): MachineGroupHandle = machineRuntime(program, verified).runGroup(group, scope, policy.limits)
 
     /**
      * Retained for CLI source compatibility: the `group` subcommand wraps its
@@ -301,6 +472,21 @@ class StrandRuntime(private val policy: HostPolicy) {
     }
 
     /**
+     * Q-047 (machine path): [serveGroup] with `nodeTypes`,
+     * `verifiedInterceptions` and `schemaObligations` taken from [verified],
+     * through the [runGroup] overload of the same shape.
+     */
+    fun serveGroup(
+        program: ProgramImage,
+        group: MachineGroup,
+        scope: CoroutineScope,
+        verified: VerifyResult.Ok,
+        inputStreamIds: Map<String, NodeId> = emptyMap(),
+        outputStreamIds: Map<String, NodeId> = emptyMap(),
+    ): GroupService =
+        GroupService(runGroup(program, group, scope, verified), inputStreamIds, outputStreamIds)
+
+    /**
      * Q-059: resume a [machine] from a [snapshot] over [additionalEvents] under
      * this runtime's policy. The synchronous-fold analogue of [runMachine] that
      * starts from a checkpointed state instead of the machine's declared
@@ -325,11 +511,51 @@ class StrandRuntime(private val policy: HostPolicy) {
         nodeIdToHash: Map<NodeId, Hash>,
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
-    ): Trace {
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes)
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
-        return runtime.resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
-    }
+    ): Trace = machineRuntime(program, verifierNodeTypes, verifiedInterceptions = null)
+        .resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
+
+    /**
+     * Q-047 (machine path): [resume] with `nodeTypes`,
+     * `verifiedInterceptions` and `schemaObligations` taken from [verified].
+     * A post-snapshot transition producing a value that violates a schema
+     * invariant halts the returned trace with [HaltReason.SchemaViolation].
+     * The snapshot state itself is not re-checked: it is a value the
+     * machine produced earlier, not a node reduction.
+     */
+    fun resume(
+        program: ProgramImage,
+        machine: NodeId,
+        snapshot: Snapshot,
+        additionalEvents: List<Value>,
+        nodeIdToHash: Map<NodeId, Hash>,
+        capabilities: CapabilitySet,
+        verified: VerifyResult.Ok,
+    ): Trace = machineRuntime(program, verified)
+        .resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
+
+    /**
+     * The [StateMachineRuntime] every machine-path entry point drives: the
+     * runtime's policy projected to a per-invocation
+     * [org.strand.interpreter.HostContext] (with [verifierNodeTypes] /
+     * [verifiedInterceptions]) and the runtime [schemaObligations] bound to
+     * every interpreter it constructs.
+     */
+    private fun machineRuntime(
+        program: ProgramImage,
+        verifierNodeTypes: Map<NodeId, TypeExpr>?,
+        verifiedInterceptions: Map<NodeId, Set<NodeId>>?,
+        schemaObligations: Map<NodeId, List<TypeExpr.SchemaType>> = emptyMap(),
+    ): StateMachineRuntime = StateMachineRuntime(
+        program.store,
+        program.hashToNodeId,
+        program.resolveTarget,
+        org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions),
+        schemaObligations,
+    )
+
+    /** [machineRuntime] with all three verify-result inputs taken from [verified]. */
+    private fun machineRuntime(program: ProgramImage, verified: VerifyResult.Ok): StateMachineRuntime =
+        machineRuntime(program, verified.nodeTypes, verified.verifiedInterceptions, verified.schemaObligations)
 
     /**
      * Q-059: serialize [snapshot] to [path] via [SnapshotCodec] so a
@@ -544,6 +770,12 @@ sealed class GuardedOutcome {
  * point of gating on `totalClosure` rather than hand-rolling a check over
  * only the directly-performed closure — a naive gate that checks only the
  * direct channel would miss a latent-only over-budget category entirely.
+ *
+ * For the machine-path gates the direct channel is a machine's declared
+ * effects row and, for a group, the effects the runtime performs itself to
+ * open and drain `source`-bound streams; the latent channel is the latent
+ * reach of the machines' transitions and initial states
+ * ([org.strand.verifier.MachineClosure], [org.strand.verifier.GroupClosure]).
  */
 enum class EffectChannel { DIRECT, LATENT, BOTH }
 
@@ -561,12 +793,68 @@ enum class EffectChannel { DIRECT, LATENT, BOTH }
  * carried in full (not just the exceeding subset) so a caller can compute
  * `requested - granted` itself, diff two refusals, or render a complete
  * picture without a second call back into [org.strand.verifier.ProgramAnalysis].
+ *
+ * [unresolvedCategoryNames] (group gate only) names categories the runtime
+ * requires by name for which the program holds no EffectCategory node, so no
+ * budget over it can grant them: a `source`-bound stream's `Network.Receive`
+ * transport effect in a program that declares no such category. Empty for
+ * every other refusal.
  */
 data class RefusalReport(
     val exceeding: Map<NodeId, EffectChannel>,
     val requested: Set<NodeId>,
     val granted: Set<NodeId>,
+    val unresolvedCategoryNames: Set<String> = emptySet(),
 )
+
+/**
+ * Outcome of [StrandRuntime.runMachineGuarded] (Q-073, machine path). Flat
+ * rather than wrapping an inner outcome as [GuardedOutcome.Ran] wraps
+ * [RunOutcome]: [StrandRuntime.runMachine] returns a bare [Trace] and has no
+ * outcome type of its own to wrap.
+ */
+sealed class GuardedMachineOutcome {
+    /** The machine's bound was within the budget; it was driven over the events. */
+    data class Ran(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+        val trace: Trace,
+    ) : GuardedMachineOutcome()
+
+    /** The machine's bound exceeded the budget; nothing was evaluated. */
+    data class Refused(val report: RefusalReport) : GuardedMachineOutcome()
+
+    /** Within budget, but a statically-evaluable value violated its Schema; nothing was evaluated. */
+    data class SchemaViolation(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+    ) : GuardedMachineOutcome()
+
+    /** Verification failed; neither the gate nor the machine was evaluated. */
+    data class VerifyFailed(val errors: List<org.strand.verifier.VerifyError>) : GuardedMachineOutcome()
+}
+
+/** Outcome of [StrandRuntime.runGroupGuarded] (Q-073, group path). */
+sealed class GuardedGroupOutcome {
+    /** The group's bound was within the budget; it was started under the budget and runs on [handle]. */
+    data class Started(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+        val handle: MachineGroupHandle,
+    ) : GuardedGroupOutcome()
+
+    /** The group's bound exceeded the budget; nothing was evaluated and no source was opened. */
+    data class Refused(val report: RefusalReport) : GuardedGroupOutcome()
+
+    /** Within budget, but a statically-evaluable value violated its Schema; nothing was evaluated. */
+    data class SchemaViolation(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+    ) : GuardedGroupOutcome()
+
+    /** Verification failed; neither the gate nor the group was evaluated. */
+    data class VerifyFailed(val errors: List<org.strand.verifier.VerifyError>) : GuardedGroupOutcome()
+}
 
 /** Convenience: the Ok form of a [VerifyResult], or null. */
 fun VerifyResult.asOk(): VerifyResult.Ok? = this as? VerifyResult.Ok

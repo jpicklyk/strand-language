@@ -32,11 +32,14 @@ import org.strand.interpreter.Value
  *     examining the `outputs` field type.
  *  6. Send each emitted payload to the corresponding output channel.
  *  7. When all input channels close, halt and close output channels.
- *  8. A throwable that is neither a denial nor an exhaustion halts THIS
- *     instance with [HaltReason.InstanceFailure] (review M6): the actor is
- *     its own supervision boundary, so one failing actor never cancels its
- *     siblings or the caller's scope. Cancellation still propagates.
- *  9. On an abnormal halt (denial, exhaustion) signal the output buses, then
+ *  8. A throwable that is neither a denial, an exhaustion, nor a runtime
+ *     schema-obligation violation ([HaltReason.SchemaViolation], Q-047)
+ *     halts THIS instance with [HaltReason.InstanceFailure] (review M6): the
+ *     actor is its own supervision boundary, so one failing actor never
+ *     cancels its siblings or the caller's scope. Cancellation still
+ *     propagates.
+ *  9. On an abnormal halt (denial, exhaustion, schema violation, failure)
+ *     signal the output buses, then
  *     keep draining and discarding the inputs until their producers close
  *     them, so an upstream producer never blocks on a halted consumer
  *     (review H1). Discards are counted in
@@ -122,6 +125,14 @@ internal class MachineActor(
                         val report = denial.atTransition(instance.instanceId, eventIndex)
                         instance.denialHalt = report
                         instance.haltReason = HaltReason.CapabilityDenial(report)
+                        instance.halted = true
+                        break
+                    }
+                    // Q-047: a runtime schema-obligation violation halts
+                    // THIS actor with the structured error, the shape the
+                    // sync fold records for the same event.
+                    if (err is InterpretError.SchemaInvariantViolation) {
+                        instance.haltReason = HaltReason.SchemaViolation(err, eventIndex)
                         instance.halted = true
                         break
                     }
