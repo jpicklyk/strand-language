@@ -55,13 +55,17 @@ interface TransitionDispatcher {
  * transition exactly as the default actor path does — the tenant
  * [hostContext], the group's in-band [foreignDispatcher]
  * (`StateMachine.Spawn` / `.Terminate`), the cross-store [resolveTarget]
- * callback, and the group's [limits].
+ * callback, and the group's [limits]. Q-047: [schemaObligations] are the
+ * runtime schema obligations the group enforces (empty when the caller
+ * supplied none); a dispatcher must enforce them to behave like the
+ * default path.
  */
 data class DispatcherWiring(
     val hostContext: HostContext,
     val foreignDispatcher: ForeignDispatcher?,
     val resolveTarget: ((Hash) -> NodeId?)?,
     val limits: EvaluationLimits,
+    val schemaObligations: Map<NodeId, List<org.strand.verifier.TypeExpr.SchemaType>> = emptyMap(),
 )
 
 /**
@@ -136,8 +140,8 @@ class InterpreterTransitionDispatcher(
  *
  * Review M2: every [build] constructs a FRESH interpreter for the instance.
  * Through the wiring-carrying [build] that interpreter is bound to the
- * group's tenant host context, in-band foreign dispatcher and cross-store
- * resolver, and the transition function is evaluated under the group's
+ * group's tenant host context, in-band foreign dispatcher, cross-store
+ * resolver and runtime schema obligations, and the transition function is evaluated under the group's
  * limits — so a dispatcher-backed actor behaves exactly like a default one.
  */
 class InterpreterDispatcherFactory(
@@ -166,6 +170,7 @@ class InterpreterDispatcherFactory(
             hashToNodeId,
             wiring.foreignDispatcher,
             wiring.resolveTarget,
+            schemaObligations = wiring.schemaObligations,
             hostContext = wiring.hostContext,
         )
         val closure = interpreter.eval(machineNode.transitionFn, capabilities, wiring.limits)

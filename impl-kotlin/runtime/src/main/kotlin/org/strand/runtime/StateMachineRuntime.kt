@@ -88,8 +88,32 @@ class StateMachineRuntime(
      */
     private val hostContext: org.strand.interpreter.HostContext =
         org.strand.interpreter.HostContext.processDefault(),
+    /**
+     * Q-047 (machine path): the verify result's runtime schema obligations
+     * ([org.strand.verifier.VerifyResult.Ok.schemaObligations]). Bound to
+     * every interpreter this runtime constructs: the sync-fold
+     * [interpreter], each per-actor interpreter the async `runGroup` path
+     * spawns (initial and dynamically spawned), the source-opener
+     * interpreter, and the interpreter a [TransitionDispatcherFactory]
+     * builds from [DispatcherWiring]. A value violating a schema's
+     * invariant is therefore stopped when it reaches a schema-typed
+     * position inside a transition or an `initialState`, as
+     * `StrandRuntime.run` stops it in a plain expression. A violation inside
+     * a per-event transition halts the instance with
+     * [HaltReason.SchemaViolation]; one raised while an instance is built
+     * (its `initialState`) propagates as an [InterpretException], as a
+     * denial there does. Default empty: nothing is enforced, the behaviour
+     * of every caller that passes nothing.
+     */
+    private val schemaObligations: Map<NodeId, List<org.strand.verifier.TypeExpr.SchemaType>> = emptyMap(),
     private val interpreter: Interpreter =
-        Interpreter(store, hashToNodeId, resolveTarget = resolveTarget, hostContext = hostContext),
+        Interpreter(
+            store,
+            hashToNodeId,
+            resolveTarget = resolveTarget,
+            schemaObligations = schemaObligations,
+            hostContext = hostContext,
+        ),
 ) {
 
     /**
@@ -158,6 +182,12 @@ class StateMachineRuntime(
                     abnormalHalt = HaltReason.CapabilityDenial(
                         denial.atTransition(instance.instanceId, eventIndex)
                     )
+                    break
+                }
+                // Q-047: a runtime schema-obligation violation halts the
+                // fold the same way, carrying the structured error.
+                if (err is InterpretError.SchemaInvariantViolation) {
+                    abnormalHalt = HaltReason.SchemaViolation(err, eventIndex)
                     break
                 }
                 throw e
@@ -363,6 +393,7 @@ class StateMachineRuntime(
             limits = limits,
             resolveTarget = resolveTarget,
             hostContext = hostContext,
+            schemaObligations = schemaObligations,
         )
 
         // Pass 2: spawn one initial actor per declared machine. Each
@@ -419,7 +450,13 @@ class StateMachineRuntime(
         val feederJobs: List<Job> = if (sourceBound.isEmpty()) {
             emptyList()
         } else {
-            val openInterpreter = Interpreter(group.store, group.hashToNodeId, resolveTarget = resolveTarget, hostContext = hostContext)
+            val openInterpreter = Interpreter(
+                group.store,
+                group.hashToNodeId,
+                resolveTarget = resolveTarget,
+                schemaObligations = schemaObligations,
+                hostContext = hostContext,
+            )
             sourceBound.map { (streamId, sourceId) ->
                 // Q-064: opener denials are group-startup denials too.
                 val handleValue = attachingGroupStartPhase {
@@ -587,6 +624,11 @@ class StateMachineRuntime(
                     abnormalHalt = HaltReason.CapabilityDenial(
                         denial.atTransition(instance.instanceId, eventIndex)
                     )
+                    break
+                }
+                // Q-047: schema-obligation halt — same translation as runMachine.
+                if (err is InterpretError.SchemaInvariantViolation) {
+                    abnormalHalt = HaltReason.SchemaViolation(err, eventIndex)
                     break
                 }
                 throw e

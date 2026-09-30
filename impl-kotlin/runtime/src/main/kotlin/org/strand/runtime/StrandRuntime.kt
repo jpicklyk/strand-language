@@ -211,7 +211,8 @@ class StrandRuntime(private val policy: HostPolicy) {
      * `verify(program).asOk()?.nodeTypes` or null. [verifiedInterceptions]
      * is the same result's `verifiedInterceptions`; when passed, the
      * transition refuses a Handler interception the verifier did not check
-     * (null leaves that guard off).
+     * (null leaves that guard off). This form enforces no runtime schema
+     * obligations; the [VerifyResult.Ok] overload does.
      */
     fun runMachine(
         program: ProgramImage,
@@ -220,11 +221,37 @@ class StrandRuntime(private val policy: HostPolicy) {
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
         verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
-    ): Trace {
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions)
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
-        return runtime.runMachine(machine, events, capabilities, policy.limits)
-    }
+    ): Trace = machineRuntime(program, verifierNodeTypes, verifiedInterceptions)
+        .runMachine(machine, events, capabilities, policy.limits)
+
+    /**
+     * Q-047 (machine path): drive [machine] with everything the machine path
+     * reads from the verify result taken from [verified] — its `nodeTypes`
+     * (the LLM schema-projection path), its `verifiedInterceptions` (the
+     * Handler-interception guard), and its `schemaObligations`. The last is
+     * what the loose-parameter form cannot supply: every interpreter the run
+     * constructs checks each obligation when it reduces the obligated node to
+     * a value, inside `initialState` and inside every transition, as [run]
+     * does for a plain expression.
+     *
+     * A violation inside a transition halts the fold with
+     * [HaltReason.SchemaViolation] on the trace's halt record (the steps
+     * before it are kept, as for [HaltReason.CapabilityDenial]); a violation
+     * in `initialState` fires before any event and propagates as an
+     * [org.strand.interpreter.InterpretException] carrying
+     * [org.strand.interpreter.InterpretError.SchemaInvariantViolation], as a
+     * denial there does. [verified] must be the result of verifying
+     * [program] (typically [verify] or [verifyAndCheckSchema]); the
+     * verify-time schema pass stays the caller's to run first, as with the
+     * other form.
+     */
+    fun runMachine(
+        program: ProgramImage,
+        machine: NodeId,
+        events: List<Value>,
+        capabilities: CapabilitySet,
+        verified: VerifyResult.Ok,
+    ): Trace = machineRuntime(program, verified).runMachine(machine, events, capabilities, policy.limits)
 
     /**
      * Spawn a [MachineGroup] under this runtime's policy and return the
@@ -234,6 +261,8 @@ class StrandRuntime(private val policy: HostPolicy) {
      * which evaluate asynchronously after this returns, on `Dispatchers.IO` —
      * read the group's tenant policy with no shared mutable singleton on the
      * path. Two groups can therefore run concurrently under different policies.
+     * This form enforces no runtime schema obligations; the [VerifyResult.Ok]
+     * overload does.
      */
     fun runGroup(
         program: ProgramImage,
@@ -241,16 +270,37 @@ class StrandRuntime(private val policy: HostPolicy) {
         scope: CoroutineScope,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
         verifiedInterceptions: Map<NodeId, Set<NodeId>>? = null,
-    ): MachineGroupHandle {
+    ): MachineGroupHandle =
         // Q-054 follow-up: the policy flows into the runtime as a HostContext
         // value, bound to every per-actor interpreter and feeder. No singleton
         // install — the group runs asynchronously past this return without
         // depending on a mutable process-global being held in place, so two
         // groups can run concurrently under different policies.
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions)
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
-        return runtime.runGroup(group, scope, policy.limits)
-    }
+        machineRuntime(program, verifierNodeTypes, verifiedInterceptions).runGroup(group, scope, policy.limits)
+
+    /**
+     * Q-047 (machine path): spawn [group] with `nodeTypes`,
+     * `verifiedInterceptions` and `schemaObligations` all taken from
+     * [verified] (see the [runMachine] overload of the same shape). Every
+     * per-actor interpreter, every dynamically spawned actor, the source-
+     * opener interpreter, and any interpreter a
+     * [MachineGroup.dispatcherFactory] builds from its [DispatcherWiring]
+     * enforce the obligations.
+     *
+     * A violation inside an actor's transition halts THAT instance with
+     * [HaltReason.SchemaViolation] (read it from
+     * [MachineGroupHandle.schemaViolations] or the instance's `haltReason`);
+     * its siblings keep running, as for any other instance halt. A violation
+     * while an initial instance is built (its `initialState`) propagates from
+     * this call as an [org.strand.interpreter.InterpretException], as a
+     * group-start denial does.
+     */
+    fun runGroup(
+        program: ProgramImage,
+        group: MachineGroup,
+        scope: CoroutineScope,
+        verified: VerifyResult.Ok,
+    ): MachineGroupHandle = machineRuntime(program, verified).runGroup(group, scope, policy.limits)
 
     /**
      * Retained for CLI source compatibility: the `group` subcommand wraps its
@@ -301,6 +351,21 @@ class StrandRuntime(private val policy: HostPolicy) {
     }
 
     /**
+     * Q-047 (machine path): [serveGroup] with `nodeTypes`,
+     * `verifiedInterceptions` and `schemaObligations` taken from [verified],
+     * through the [runGroup] overload of the same shape.
+     */
+    fun serveGroup(
+        program: ProgramImage,
+        group: MachineGroup,
+        scope: CoroutineScope,
+        verified: VerifyResult.Ok,
+        inputStreamIds: Map<String, NodeId> = emptyMap(),
+        outputStreamIds: Map<String, NodeId> = emptyMap(),
+    ): GroupService =
+        GroupService(runGroup(program, group, scope, verified), inputStreamIds, outputStreamIds)
+
+    /**
      * Q-059: resume a [machine] from a [snapshot] over [additionalEvents] under
      * this runtime's policy. The synchronous-fold analogue of [runMachine] that
      * starts from a checkpointed state instead of the machine's declared
@@ -325,11 +390,51 @@ class StrandRuntime(private val policy: HostPolicy) {
         nodeIdToHash: Map<NodeId, Hash>,
         capabilities: CapabilitySet = CapabilitySet.EMPTY,
         verifierNodeTypes: Map<NodeId, TypeExpr>? = null,
-    ): Trace {
-        val ctx = org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes)
-        val runtime = StateMachineRuntime(program.store, program.hashToNodeId, program.resolveTarget, ctx)
-        return runtime.resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
-    }
+    ): Trace = machineRuntime(program, verifierNodeTypes, verifiedInterceptions = null)
+        .resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
+
+    /**
+     * Q-047 (machine path): [resume] with `nodeTypes`,
+     * `verifiedInterceptions` and `schemaObligations` taken from [verified].
+     * A post-snapshot transition producing a value that violates a schema
+     * invariant halts the returned trace with [HaltReason.SchemaViolation].
+     * The snapshot state itself is not re-checked: it is a value the
+     * machine produced earlier, not a node reduction.
+     */
+    fun resume(
+        program: ProgramImage,
+        machine: NodeId,
+        snapshot: Snapshot,
+        additionalEvents: List<Value>,
+        nodeIdToHash: Map<NodeId, Hash>,
+        capabilities: CapabilitySet,
+        verified: VerifyResult.Ok,
+    ): Trace = machineRuntime(program, verified)
+        .resume(machine, snapshot, additionalEvents, nodeIdToHash, capabilities, policy.limits)
+
+    /**
+     * The [StateMachineRuntime] every machine-path entry point drives: the
+     * runtime's policy projected to a per-invocation
+     * [org.strand.interpreter.HostContext] (with [verifierNodeTypes] /
+     * [verifiedInterceptions]) and the runtime [schemaObligations] bound to
+     * every interpreter it constructs.
+     */
+    private fun machineRuntime(
+        program: ProgramImage,
+        verifierNodeTypes: Map<NodeId, TypeExpr>?,
+        verifiedInterceptions: Map<NodeId, Set<NodeId>>?,
+        schemaObligations: Map<NodeId, List<TypeExpr.SchemaType>> = emptyMap(),
+    ): StateMachineRuntime = StateMachineRuntime(
+        program.store,
+        program.hashToNodeId,
+        program.resolveTarget,
+        org.strand.interpreter.HostContext.fromPolicy(policy, verifierNodeTypes, verifiedInterceptions),
+        schemaObligations,
+    )
+
+    /** [machineRuntime] with all three verify-result inputs taken from [verified]. */
+    private fun machineRuntime(program: ProgramImage, verified: VerifyResult.Ok): StateMachineRuntime =
+        machineRuntime(program, verified.nodeTypes, verified.verifiedInterceptions, verified.schemaObligations)
 
     /**
      * Q-059: serialize [snapshot] to [path] via [SnapshotCodec] so a
