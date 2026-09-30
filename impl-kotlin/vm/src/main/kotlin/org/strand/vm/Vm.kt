@@ -7,6 +7,8 @@ import org.strand.bytecode.Opcode
 import org.strand.core.EvaluationLimits
 import org.strand.core.ExhaustionKind
 import org.strand.core.NodeId
+import org.strand.interpreter.AuditOutcome
+import org.strand.interpreter.AuditRecord
 import org.strand.interpreter.Builtins
 import org.strand.interpreter.CapabilityArgument
 import org.strand.interpreter.CapabilityPattern
@@ -823,17 +825,20 @@ class Vm(
         if (missing.isNotEmpty()) {
             val missingInOrder = declared.filter { it in missing }.distinct()
             val requestedValues = missingInOrder.flatMap { instances[it].orEmpty() }
+            val report = denialReport(
+                at = at,
+                categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
+                requested = requestedValues,
+                held = emptyList(),
+                heldCategoryName = "",
+                limits = limits,
+            )
+            // Q-055: the denied audit record reuses the Q-064 report.
+            emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
             throw InterpretException(InterpretError.CapabilityViolation(
                 at = at,
                 missing = missing,
-                report = denialReport(
-                    at = at,
-                    categoryName = missingInOrder.joinToString(", ") { categoryNameOf(it) },
-                    requested = requestedValues,
-                    held = emptyList(),
-                    heldCategoryName = "",
-                    limits = limits,
-                ),
+                report = report,
             ))
         }
         for (category in declared) {
@@ -843,23 +848,35 @@ class Vm(
                 continue
             }
             val grants = context.grants.getValue(category)
+            val name = categoryNameOf(category)
             if (grants.none { covers(it, requirement) }) {
-                val name = categoryNameOf(category)
+                val report = denialReport(
+                    at = at,
+                    categoryName = name,
+                    requested = requirement,
+                    held = grants,
+                    heldCategoryName = name,
+                    limits = limits,
+                )
+                emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
                 throw InterpretException(InterpretError.RefinementViolation(
                     at = at,
                     category = category,
                     requirement = requirement,
                     available = grants,
-                    report = denialReport(
-                        at = at,
-                        categoryName = name,
-                        requested = requirement,
-                        held = grants,
-                        heldCategoryName = name,
-                        limits = limits,
-                    ),
+                    report = report,
                 ))
             }
+            // Q-055: an Allowed record for each category the site concretely
+            // exercised, its refinement values rendered and scrubbed through
+            // the per-context scrubber (the interpreter's record shape).
+            emitAudit(AuditRecord(
+                callSiteNodeId = at.takeIf { it != RUNTIME_BOUNDARY },
+                effectCategory = name,
+                refinementParameters = requirement.map { renderAuditParameter(it) },
+                outcome = AuditOutcome.Allowed,
+                phase = DenialPhase.Expression,
+            ))
         }
     }
 
@@ -896,6 +913,7 @@ class Vm(
         val report = baseReport.copy(
             requested = baseReport.requested?.let { List(paramCount) { "*" } },
         )
+        emitAudit(auditRecordFor(report, AuditOutcome.Denied(report)))
         throw InterpretException(InterpretError.RefinementViolation(
             at = at,
             category = category,
@@ -967,6 +985,43 @@ class Vm(
     fun callable(value: Value): Any = unbox(value)
 
     private fun categoryNameOf(id: NodeId): String = table.categoryNames[id.value] ?: id.toString()
+
+    /**
+     * Q-055: emit [record] to this VM's per-context audit sink
+     * ([HostContext.auditSink]; the default no-op sink discards it).
+     */
+    private fun emitAudit(record: AuditRecord) {
+        hostContext.auditSink.record(record)
+    }
+
+    /** Q-055: the denied [AuditRecord] built from the reused Q-064 [DenialReport]. */
+    private fun auditRecordFor(report: DenialReport, outcome: AuditOutcome): AuditRecord =
+        AuditRecord(
+            callSiteNodeId = report.node,
+            effectCategory = report.category,
+            refinementParameters = report.requested ?: emptyList(),
+            outcome = outcome,
+            instanceId = report.instanceId,
+            eventIndex = report.eventIndex,
+            phase = report.phase,
+        )
+
+    /**
+     * Q-055: one refinement parameter rendered for an allowed audit record and
+     * scrubbed through the per-context scrubber — the interpreter's
+     * `renderAuditParameter`.
+     */
+    private fun renderAuditParameter(v: Value): String = hostContext.scrubber.scrub(
+        when (v) {
+            is Value.StringV -> v.v
+            is Value.IntV -> v.v.toString()
+            is Value.FloatV -> v.v.toString()
+            is Value.BoolV -> v.v.toString()
+            Value.UnitV -> "()"
+            is Value.BytesV -> "bytes[${v.v.size}]"
+            else -> v.toString()
+        }
+    )
 
     private fun denialReport(
         at: NodeId,

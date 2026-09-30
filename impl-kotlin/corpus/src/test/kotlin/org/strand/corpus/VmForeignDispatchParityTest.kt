@@ -13,9 +13,13 @@ import org.strand.core.JsonIngest
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
 import org.strand.hashing.Hasher
+import org.strand.interpreter.AuditOutcome
+import org.strand.interpreter.AuditRecord
 import org.strand.interpreter.CapabilityArgument
 import org.strand.interpreter.CapabilityPattern
 import org.strand.interpreter.CapabilitySet
+import org.strand.interpreter.CollectingAuditSink
+import org.strand.interpreter.DenialPhase
 import org.strand.interpreter.HostContext
 import org.strand.interpreter.InterpretError
 import org.strand.interpreter.InterpretException
@@ -271,5 +275,150 @@ class VmForeignDispatchParityTest {
           }
         }""")
         assertValueParity(p, refined(p.id("fsWriteFx"), "/tmp/a"), Value.IntV(0))
+    }
+
+    // ----- (iii) Q-055 audit-record parity -----
+
+    /**
+     * Run [p] on both backends under [caps], each with its own collecting
+     * audit sink, assert the outcomes agree (equal value, or equal error), and
+     * assert the two record sequences are equal. Returns the records.
+     */
+    private fun assertAuditParity(p: Program, caps: CapabilitySet): List<AuditRecord> {
+        val iSink = CollectingAuditSink()
+        val vSink = CollectingAuditSink()
+        val iOut = runCatching {
+            Interpreter(p.store, p.hashToNodeId, hostContext = host().copy(auditSink = iSink)).eval(p.root, caps)
+        }
+        val vOut = runCatching {
+            Vm(Lowerer(p.store, p.hashToNodeId).lower(p.root), host().copy(auditSink = vSink)).run(caps)
+        }
+        for (out in listOf(iOut, vOut)) {
+            out.exceptionOrNull()?.let { e -> assertTrue(e is InterpretException) { "unexpected failure: $e" } }
+        }
+        assertEquals(iOut.getOrNull(), vOut.getOrNull(), "value parity")
+        assertEquals(
+            (iOut.exceptionOrNull() as? InterpretException)?.error,
+            (vOut.exceptionOrNull() as? InterpretException)?.error,
+            "error parity",
+        )
+        assertEquals(iSink.records, vSink.records, "audit record sequences must be equal")
+        return vSink.records
+    }
+
+    /** `write("/tmp/a") [Filesystem.Write{"/tmp/a"}]` then `write("/tmp/b") [Filesystem.Write{"/tmp/b"}]`. */
+    private fun twoInstantiatedWrites() = load("""{
+      "version": 1, "root": "seq",
+      "nodes": { $common,
+        "pathB":  { "type": "StringLit", "value": "/tmp/b" },
+        "declA":  { "type": "EffectDecl", "effectType": "fsWriteFx", "parameters": ["pathLit"] },
+        "declB":  { "type": "EffectDecl", "effectType": "fsWriteFx", "parameters": ["pathB"] },
+        "appA":   { "type": "Application", "function": "write", "arguments": ["pathLit"],
+                    "effectInstances": ["declA"] },
+        "appB":   { "type": "Application", "function": "write", "arguments": ["pathB"],
+                    "effectInstances": ["declB"] },
+        "seq":    { "type": "Let", "name": "_first", "value": "appA", "body": "appB" }
+      }
+    }""")
+
+    private fun grantPaths(category: NodeId, vararg paths: String) = CapabilitySet(mapOf(
+        category to paths.map { CapabilityPattern(listOf(CapabilityArgument.Concrete(Value.StringV(it)))) },
+    ))
+
+    @Test
+    fun `allowed instantiated calls - equal Allowed record sequences`() {
+        val p = twoInstantiatedWrites()
+        val records = assertAuditParity(p, grantPaths(p.id("fsWriteFx"), "/tmp/a", "/tmp/b"))
+        assertEquals(2, records.size)
+        assertTrue(records.all { it.outcome == AuditOutcome.Allowed })
+        assertEquals(listOf(p.id("appA"), p.id("appB")), records.map { it.callSiteNodeId })
+        assertEquals(listOf(listOf("/tmp/a"), listOf("/tmp/b")), records.map { it.refinementParameters })
+        assertEquals("Filesystem.Write", records[0].effectCategory)
+        assertEquals(DenialPhase.Expression, records[0].phase)
+    }
+
+    @Test
+    fun `allowed then refinement-denied - equal Allowed, Denied sequence`() {
+        val p = twoInstantiatedWrites()
+        val records = assertAuditParity(p, grantPaths(p.id("fsWriteFx"), "/tmp/a"))
+        assertEquals(AuditOutcome.Allowed, records[0].outcome)
+        val denied = records[1].outcome as AuditOutcome.Denied
+        assertEquals(p.id("appB"), records[1].callSiteNodeId)
+        assertEquals(listOf("/tmp/b"), records[1].refinementParameters)
+        assertEquals(listOf("Filesystem.Write{/tmp/a}"), denied.report.held)
+    }
+
+    @Test
+    fun `missing-category denial - equal single Denied record`() {
+        val p = twoInstantiatedWrites()
+        val record = assertAuditParity(p, CapabilitySet.EMPTY).single()
+        val denied = record.outcome as AuditOutcome.Denied
+        assertEquals("Filesystem.Write", record.effectCategory)
+        assertEquals(listOf("/tmp/a"), record.refinementParameters)
+        assertEquals(emptyList<String>(), denied.report.held)
+    }
+
+    @Test
+    fun `refinement denial through a propagating Lambda - equal single Denied record at the inner site`() {
+        val p = load("""{
+          "version": 1, "root": "outerApp",
+          "nodes": { $common,
+            "outerP":    { "type": "ParameterDecl", "name": "p", "paramType": "strT" },
+            "pRef":      { "type": "VarRef", "binder": "outerP" },
+            "writeDecl": { "type": "EffectDecl", "effectType": "fsWriteFx", "parameters": ["pRef"] },
+            "innerApp":  { "type": "Application", "function": "write",
+                           "arguments": ["pRef"], "effectInstances": ["writeDecl"] },
+            "outerLam":  { "type": "Lambda", "parameters": ["outerP"], "body": "innerApp",
+                           "effects": ["fsWriteFx"] },
+            "outerApp":  { "type": "Application", "function": "outerLam", "arguments": ["pathLit"] }
+          }
+        }""")
+        val record = assertAuditParity(p, refined(p.id("fsWriteFx"), "/etc/passwd")).single()
+        assertTrue(record.outcome is AuditOutcome.Denied)
+        assertEquals(p.id("innerApp"), record.callSiteNodeId)
+        assertEquals(listOf("/tmp/a"), record.refinementParameters)
+    }
+
+    @Test
+    fun `unrefined-grant denial - equal Denied record with the wildcard request`() {
+        val p = directUninstantiated()
+        val record = assertAuditParity(p, refined(p.id("fsWriteFx"), "/tmp/a")).single()
+        assertTrue(record.outcome is AuditOutcome.Denied)
+        assertEquals(listOf("*"), record.refinementParameters)
+        assertEquals(p.id("app"), record.callSiteNodeId)
+    }
+
+    @Test
+    fun `instance-free performing call under a wildcard grant - neither backend emits a record`() {
+        val p = directUninstantiated()
+        assertEquals(emptyList<AuditRecord>(), assertAuditParity(p, CapabilitySet.ofCategories(setOf(p.id("fsWriteFx")))))
+    }
+
+    @Test
+    fun `applyClosure boundary - the Allowed record carries a null call site on both backends`() {
+        val p = load("""{
+          "version": 1, "root": "pwrite",
+          "nodes": { $common,
+            "pwrite": { "type": "ForeignNode", "target": "strand-builtin:Test.EffectfulNoOp",
+                        "foreignType": "writeT", "effects": ["fsWriteFx"],
+                        "effectProjections": [
+                          { "category": "fsWriteFx", "sources": [ { "kind": "ArgRef", "index": 0 } ] }
+                        ] }
+          }
+        }""")
+        val caps = refined(p.id("fsWriteFx"), "/tmp/a")
+        val args = listOf(Value.StringV("/tmp/a"))
+        val iSink = CollectingAuditSink()
+        val vSink = CollectingAuditSink()
+        val interpreter = Interpreter(p.store, p.hashToNodeId, hostContext = host().copy(auditSink = iSink))
+        interpreter.applyCallable(interpreter.eval(p.root, CapabilitySet.EMPTY), args, caps)
+        val vm = Vm(Lowerer(p.store, p.hashToNodeId).lower(p.root), host().copy(auditSink = vSink))
+        vm.applyClosure(vm.evaluate(CapabilitySet.EMPTY), args, caps)
+
+        assertEquals(iSink.records, vSink.records)
+        val record = vSink.records.single()
+        assertEquals(AuditOutcome.Allowed, record.outcome)
+        assertNull(record.callSiteNodeId)
+        assertEquals(listOf("/tmp/a"), record.refinementParameters)
     }
 }
