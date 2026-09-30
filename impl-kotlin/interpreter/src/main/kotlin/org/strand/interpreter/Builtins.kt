@@ -4538,9 +4538,25 @@ object Builtins {
         testOverlay = testOverlay + (target to Entry(fn, effectful, determinism))
     }
 
-    /** Remove every overlay entry installed by [installTestBuiltin]. */
+    /**
+     * The higher-order half of the test overlay: extra [FnH] entries visible
+     * to [lookupHigherOrder] and [determinismOf]. A test installs one to
+     * drive a callable it cannot otherwise reach without a provider
+     * transport, such as a ToolDef implementation. Same lifecycle as
+     * [installTestBuiltin].
+     */
+    @Volatile
+    private var testHigherOrderOverlay: Map<String, Entry<FnH>> = emptyMap()
+
+    /** Install a test-only higher-order builtin into the overlay. */
+    fun installTestHigherOrderBuiltin(target: String, effectful: Boolean, determinism: Determinism, fn: FnH) {
+        testHigherOrderOverlay = testHigherOrderOverlay + (target to Entry(fn, effectful, determinism))
+    }
+
+    /** Remove every overlay entry installed by [installTestBuiltin] or [installTestHigherOrderBuiltin]. */
     fun clearTestBuiltins() {
         testOverlay = emptyMap()
+        testHigherOrderOverlay = emptyMap()
     }
 
     /** Look up a builtin by its target identifier; null if unknown. */
@@ -4548,7 +4564,8 @@ object Builtins {
         testOverlay[target]?.fn ?: registry[target]?.fn
 
     /** Look up a higher-order builtin by target identifier; null if unknown. */
-    fun lookupHigherOrder(target: String): FnH? = higherOrderRegistry[target]?.fn
+    fun lookupHigherOrder(target: String): FnH? =
+        testHigherOrderOverlay[target]?.fn ?: higherOrderRegistry[target]?.fn
 
     /** Snapshot of all registered target identifiers across both registries. */
     fun registeredTargets(): Set<String> = registry.keys + higherOrderRegistry.keys
@@ -4560,6 +4577,7 @@ object Builtins {
      */
     fun determinismOf(target: String): Determinism? =
         testOverlay[target]?.determinism
+            ?: testHigherOrderOverlay[target]?.determinism
             ?: registry[target]?.determinism
             ?: higherOrderRegistry[target]?.determinism
 
