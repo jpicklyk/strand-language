@@ -1017,11 +1017,14 @@ class Interpreter(
                 at = id, expected = userArity, actual = app.arguments.size
             ))
         }
-        // Capability check uses the body Lambda's declared effects (which
-        // by verifier construction equal the recursionType's effects).
+        // Arguments first, then the call site's effect instances and the
+        // capability check: the order the class doc states and the foreign
+        // path and the bytecode VM use. The check uses the body Lambda's
+        // declared effects (which by verifier construction equal the
+        // recursionType's effects).
+        val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
         val instances = evalEffectInstances(env, context, handlers, app, counters, limits)
         checkCapabilities(id, fn.bodyLambda.effects, instances, context, limits)
-        val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
         // Build the call env: capture-time env + (self → this FixpointFn) +
         // (each remaining parameter → corresponding argument).
         var callEnv = fn.env + (fn.bodyLambda.parameters[0] to fn)
@@ -1046,9 +1049,12 @@ class Interpreter(
                 at = id, expected = fn.lambda.parameters.size, actual = app.arguments.size
             ))
         }
+        // Arguments first, then effect instances and the capability check
+        // (see applyFixpoint): a denied call has still evaluated its
+        // arguments, on every call path and on both backends.
+        val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
         val instances = evalEffectInstances(env, context, handlers, app, counters, limits)
         checkCapabilities(id, fn.lambda.effects, instances, context, limits)
-        val args = app.arguments.map { eval(it, env, context, handlers, counters, limits) }
         var callEnv = fn.env
         for ((paramId, value) in fn.lambda.parameters.zip(args)) {
             callEnv = callEnv + (paramId to value)
