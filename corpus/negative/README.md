@@ -5,7 +5,8 @@ Curated near-miss programs for the adversarial verification battery (Q-066,
 Where the positive corpus witnesses what the pipeline admits, this directory
 witnesses what it rejects — and that every rejection is a structured error, not
 a raw exception. Entries are hand-written near-misses plus any trigger the
-mutation fuzzer (`CorpusMutationFuzzTest`) discovers, preserved here as
+mutation fuzzer (`CorpusMutationFuzzTest`) or the effect-closure soundness
+property test (`EffectClosureSoundnessFuzzTest`) discovers, preserved here as
 permanent regressions.
 
 ## Convention
@@ -82,3 +83,24 @@ stream, so gaps in the numbering are deliberate.
 | 56-unknown-hash-prefix | ingest / `Malformed` | A cross-store NodeRef whose `targetHash` carries an unassigned multihash prefix. The prefix lookup used to escape as a raw `IllegalStateException`. |
 | 57-duplicate-product-field | ingest / `Malformed` | `ProductType{x: Int, x: String}` with a matching `ProductValue`, read through `ProductFieldGet` into `Int.Add`. The verifier checked the value against one duplicate and typed the read against the other, so a verified program handed a String to `Int.Add`. Duplicate field and case names are now rejected at ingest and, for programmatically built stores, by the verifier. |
 | 58-eventstream-zero-buffersize | ingest / `Malformed` | An `EventStream` declaring `bufferSize` 0. The canonical encoding uses 0 as the unset sentinel, so an explicit 0 hashed identically to an absent field while the verifier rejected it; ingest now rejects `bufferSize <= 0`. |
+
+## Entries added by the soundness property test
+
+The effect-closure soundness property test (`EffectClosureSoundnessFuzzTest`,
+described in [`evaluation/containment-results.md`](../../evaluation/containment-results.md)
+§ Soundness) generates well-typed programs and checks what they perform
+against what the verifier surfaced and the grant allowed. Where the fix for a
+failure it reported is a rejection reachable from dag-json, the minimized
+program is preserved here; failures whose fix changes an admitted program's
+closure or a backend's behaviour are preserved as cases in
+`SoundnessRegressionTest` instead. Entries 63 and 64 were found by inspecting
+the verifier for the pattern entry 59 exposed.
+
+| Entry | Stage / family | What it demonstrates |
+|-------|----------------|----------------------|
+| 59-effectful-effectdecl-parameter | verify / `EffectDeclParameterNotPure` | An EffectDecl whose refinement parameter is a call declaring `Network.Connect`. Instance parameters are evaluated at the call site but lie outside the Application's closure, so the program surfaced `{Filesystem.Write}` and performed the network effect. A refinement parameter must be effect-free. |
+| 60-schema-parameter-callback | verify / `ParameterTypeMismatch` | A binding whose parameter is typed `NonEmptyText` passed where a `(String) -> Int` callback is expected, then called with the empty string. The function-arrow rule compared parameters with the symmetric `Schema<T>`/`T` relaxation, so an unchecked value reached the schema-typed parameter with no node to carry the obligation. |
+| 61-schema-to-schema-argument | verify / `ParameterTypeMismatch` | A `PositiveInt`-typed binder passed to a `SmallInt` parameter. Equirecursive comparison stripped the schema wrapper from both sides, making two schemas over one value type interchangeable. |
+| 62-handler-over-tool-implementation | verify / `HandlerSignatureMismatch` | A Handler with an `(Int) -> Int` handle enclosing a ToolDef whose implementation calls a `(String) -> Int` binding of the intercepted category. The signature walk treated ToolDef as a leaf, so the handler received a String when the tool ran inside the Handler. |
+| 63-effectful-pattern-literal | verify / `CategoryMismatch` | A literal pattern whose literal edge is a `Time.Now` call. A pattern's literal is evaluated at each match attempt and a Match's closure covers only its scrutinee and case bodies; the literal must be a literal node. |
+| 64-effectful-projection-literal | verify / `ProjectionLiteralNotConstant` | A Q-039 `LiteralNode` projection source that is a ProductValue with a call at a leaf. The target is evaluated at every dispatch and was checked for literal shape at the outermost node only; it must be a literal tower throughout. |

@@ -2,7 +2,7 @@
 
 **Document:** `design/effects-and-capabilities.md`
 **Status:** Wave 3 draft
-**Last revised:** 2026-06-11 (§ Effect handlers › Boundaries gains the Handler-versus-Attempt distinction: Handler (N-043) replaces dispatch before the intercepted call runs; Attempt (N-047, Q-048) observes outcomes of real operations, reifying catchable failures as `Err` values, with `closureOf(attempt) = closureOf(body)` because failures are not effects. Full Attempt semantics in `proposals/implemented/error-recovery.md`.) 2026-05-26 (§ Diagnostic and host-environment effects added — E-032 Log.Write, E-033 OS.Read, E-034 System.Exit — to support the Log.* / OS.* / System.Exit builtin slice added in `stdlib expansion round 3`. No parameters; all three are simple guard categories.) 2026-05-23 (§ Effect handlers expanded with N-043 Handler node shape, closure algebra, runtime dispatch — per Q-030 resolution in `proposals/implemented/effect-handlers.md`)
+**Last revised:** 2026-09-30 (§ Effect closure semantics states which evaluated expressions a closure does not count and must therefore be effect-free; § Capability mechanism states the registry-bound refinement of I/O builtins and the unrefined-grant rule; § Effect handlers › Closure algebra excludes the row of a nested foreign handle from the subtraction, and › Runtime dispatch restricts interception to call sites the verifier checked, [Q-077](../open-questions.md#Q-077).) 2026-06-11 (§ Effect handlers › Boundaries gains the Handler-versus-Attempt distinction: Handler (N-043) replaces dispatch before the intercepted call runs; Attempt (N-047, Q-048) observes outcomes of real operations, reifying catchable failures as `Err` values, with `closureOf(attempt) = closureOf(body)` because failures are not effects. Full Attempt semantics in `proposals/implemented/error-recovery.md`.) 2026-05-26 (§ Diagnostic and host-environment effects added — E-032 Log.Write, E-033 OS.Read, E-034 System.Exit — to support the Log.* / OS.* / System.Exit builtin slice added in `stdlib expansion round 3`. No parameters; all three are simple guard categories.) 2026-05-23 (§ Effect handlers expanded with N-043 Handler node shape, closure algebra, runtime dispatch — per Q-030 resolution in `proposals/implemented/effect-handlers.md`)
 
 ## Summary
 
@@ -132,6 +132,10 @@ The *effect closure* of a node N is the set of effect categories that an evaluat
 
 The closure is computed by graph traversal. The verifier maintains the closure for the graph's roots and recomputes incrementally when nodes are added.
 
+Three positions hold expressions that the runtime evaluates but that no closure counts: the parameters of an EffectDecl attached to an Application (evaluated at the call site to produce the refinement the capability check matches), the literal of a literal Pattern (evaluated at each match attempt), and the literal source of an effect projection (evaluated at each dispatch). An expression in any of them is required to be effect-free. An EffectDecl parameter has an empty closure and no latent reach through a callback or tool implementation; a pattern's literal is a literal node; a projection's literal source is a literal, or a ProductValue or SumValue whose every leaf is one. Every other expression the runtime evaluates contributes its closure to the node that evaluates it, which includes the implementation expression of a ToolDef: the ToolDef's closure is that expression's, and the row of the callable it produces is latent.
+
+The closure reported for a graph has two channels. The direct channel is the closure defined above. The latent channel holds the rows of callables that are invoked without an Application the verifier walks: the callback arguments of higher-order builtins and the implementations of ToolDefs. The bound on what a graph can perform is the union of the two; the direct channel alone is not a bound.
+
 Effect categories support a refinement order: `Network.Connect{host: "api.example.com", port: 443}` is *more specific* than `Network.Connect{host: *, port: 443}`, which is more specific than `Network.Connect{host: *, port: *}`. The refinement order forms a lattice for each category. Capability matching is by refinement: a capability covers a required effect if and only if the capability's specification is at-least-as-general as the requirement.
 
 ## Capability mechanism {#capabilities}
@@ -145,6 +149,8 @@ The default flow of capabilities is *implicit*: capabilities are ambient within 
 The flow becomes *restricted* at *CapabilityScope* nodes. A `CapabilityScope` is a graph operation that evaluates its body expression in a new capability context, derived from the surrounding context by *narrowing*: the new context holds a subset of the surrounding context's capabilities, specified by the CapabilityScope's parameters. Narrowing cannot add capabilities, only remove. This is the mechanism by which a graph designates that a sub-computation should run with less authority than the surrounding code.
 
 Capabilities are *un-forgeable*: there is no graph operation that constructs a capability for an effect the surrounding context does not already hold. New capabilities enter the system only at runtime boundaries, never within the language. This corresponds to the standard object-capability discipline.
+
+The refinement a capability is matched against is determined as follows. At a call of a Lambda or Fixpoint the requirement propagates: a category the call site instantiates with an EffectDecl is matched against the evaluated parameters, and an uninstantiated one requires only that the category be held. At a dispatch of a ForeignNode the effect is performed, and the refinement is the first of these that applies. For a registry builtin whose resource is one of its arguments (the path of the filesystem family, the host and port of a connection), the refinement is the argument values at the positions the registry records, whatever the binding's projections, the call site's EffectDecls, or the program's declaration of the category's parameters say; all three are graph-supplied, and none of them may move or remove the value a host's grant is matched against. Otherwise the refinement is the binding's effect projection applied to the arguments, and failing that the call site's EffectDecl. A category with no refinement at a performing dispatch is covered only by an unrefined capability: one whose specification pins no parameter.
 
 ## Delegation semantics {#delegation}
 
@@ -198,11 +204,15 @@ The closure of a Handler is the only node-category closure rule that *removes* a
 closureOf(handler) = (closureOf(body) - {intercept}) ∪ closureOf(handle) ∪ <effects declared by the handle function>
 ```
 
+The subtraction applies to effects that reach the runtime's interception point, which is an Application. The handle of a nested Handler is invoked in place of an intercepted call rather than through an Application: when it is a Lambda or Fixpoint its body's own calls are intercepted in the usual way, but when it is a ForeignNode its row fires at the invocation itself and no enclosing Handler intercepts it. A Handler therefore does not subtract `intercept` when its body can invoke a nested handle that carries `intercept` and does not resolve statically to a Lambda or Fixpoint.
+
 The intercepted effect is consumed inside the Handler and no longer flows to the surrounding context. The handler's own static closure (typically empty — a handle expression is normally a Lambda or VarRef that exercises no effects at construction time) and the handler function's declared effects do flow to the surrounding context: a handler that writes to a sink requires the surrounding context to grant the sink's effect category. This is the property that distinguishes Handler from CapabilityScope (N-036): CapabilityScope narrows the runtime context but does not change the closure; Handler changes the closure.
 
 ### Runtime dispatch
 
 Evaluation enters a Handler by computing the handle value once, in the surrounding handler stack. The body is then evaluated with a new handler frame appended to the stack. At every Application within the body, the runtime checks the handler stack: if any active handler intercepts an effect declared by the called function, the innermost such handler's value is invoked with the call's evaluated arguments in place of the original dispatch, and the capability check for the intercepted category is skipped at that site. The handler's own declared effects are still checked against the surrounding capability context when the handler runs. The innermost-wins rule lets nested Handlers shadow outer ones over the same category.
+
+The handler stack is dynamically scoped, while signature agreement is checked over the Handler's body as written. Code that reaches the body's extent as a value (a callback or a tool implementation bound outside the Handler and passed in through a binder, or the handle of another Handler) makes calls the check cannot always see. The verifier records each pair of call site and Handler whose agreement it checked, following tool implementations and the callbacks passed at any call where it can resolve them, and the runtime performs an interception only for a recorded pair; any other interception stops the evaluation with a structured error rather than hand the handler arguments of an unchecked type. Whether handler scope should instead be lexical, or signature agreement carried in types so that the stop is unreachable, is [Q-077](../open-questions.md#Q-077).
 
 ### Boundaries
 
@@ -246,7 +256,7 @@ At runtime, each node's effect declarations are confirmed at evaluation time. Th
 - [`encryption-model.md`](encryption-model.md) — encryption capabilities
 - [`security-model.md`](security-model.md) — threat model
 - [`state-machines.md`](state-machines.md) — StateMachine effect categories
-- [`open-questions.md`](../open-questions.md) — Q-003, Q-004, Q-005, Q-007 resolved here
+- [`open-questions.md`](../open-questions.md) — Q-003, Q-004, Q-005, Q-007 resolved here; Q-077 (Handler signature agreement under dynamic scope) open
 
 **Incoming references:**
 - [`decisions/ADR-004-effects-as-edges.md`](../decisions/ADR-004-effects-as-edges.md)
@@ -259,3 +269,5 @@ At runtime, each node's effect declarations are confirmed at evaluation time. Th
 - [`rendering-and-views.md`](rendering-and-views.md) — output emission as existing effect categories
 - [`proposals/implemented/effect-handlers.md`](../proposals/implemented/effect-handlers.md) — full algebra and implementation notes for the no-continuation Handler form
 - [`proposals/implemented/error-recovery.md`](../proposals/implemented/error-recovery.md) — Attempt (N-047) and the catchable-failure taxonomy; the failure-observation counterpart to Handler
+- [`evaluation/containment-results.md`](../evaluation/containment-results.md) — the harm bound built on effect closure and capability matching; § Soundness property-tests both
+- [`security-index.md`](../security-index.md) — capability mediation in the security cross-cut
