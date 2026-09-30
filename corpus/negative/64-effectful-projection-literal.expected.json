@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "ProjectionLiteralNotConstant",
+  "notes": "A Q-039 LiteralNode projection source that is a ProductValue whose field is a call declaring Network.Connect. The runtime evaluates a projection's literal target at every dispatch; only the outermost node was checked for literal shape, so an expression at a leaf ran outside any closure. The target must now be a literal tower all the way down. Found by inspection while closing entry 59."
+}

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "root": "call",
+  "nodes": {
+    "intT":     { "type": "PrimitiveType", "kind": "Int" },
+    "strT":     { "type": "PrimitiveType", "kind": "String" },
+    "pathF":    { "type": "ProductTypeField", "name": "path", "fieldType": "strT" },
+    "targetT":  { "type": "ProductType", "fields": ["pathF"] },
+    "writeFx":  { "type": "EffectCategory", "categoryName": "Filesystem.Write", "parameters": ["targetT"] },
+    "netFx":    { "type": "EffectCategory", "categoryName": "Network.Connect" },
+    "path":     { "type": "StringLit", "value": "/tmp/out" },
+    "fetchPath": { "type": "Lambda", "parameters": [], "body": "path", "effects": ["netFx"] },
+    "fetched":  { "type": "Application", "function": "fetchPath", "arguments": [] },
+    "pathFV":   { "type": "ProductFieldValue", "fieldName": "path", "value": "fetched" },
+    "pinned":   { "type": "ProductValue", "ofType": "targetT", "fields": ["pathFV"] },
+    "writeT":   { "type": "FunctionType", "parameters": ["strT"], "result": "intT" },
+    "writeFn":  { "type": "ForeignNode", "target": "strand-builtin:Test.EffectfulNoOp", "foreignType": "writeT", "effects": ["writeFx"],
+                  "effectProjections": [ { "category": "writeFx", "sources": [ { "kind": "LiteralNode", "target": "pinned" } ] } ] },
+    "call":     { "type": "Application", "function": "writeFn", "arguments": ["path"] }
+  }
+}

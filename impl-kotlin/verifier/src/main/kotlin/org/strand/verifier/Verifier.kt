@@ -1678,6 +1678,20 @@ class Verifier(
 
             when (pattern) {
                 is Node.Pattern.LiteralPattern -> {
+                    // The interpreter evaluates the literal at every match
+                    // attempt, outside the Match's closure (scrutinee and
+                    // case bodies). It must be a literal node, which
+                    // evaluates without effects, not an arbitrary expression
+                    // of the right type.
+                    val literalNode = store.getOrNull(pattern.literal)
+                    if (!isPrimitiveLiteral(literalNode)) {
+                        report(VerifyError.CategoryMismatch(
+                            at = at, field = "Pattern.literal",
+                            expectedCategory = "Literal",
+                            actualCategory = categoryName(literalNode),
+                        ))
+                        throw VerifyAbort()
+                    }
                     val literalType = infer(pattern.literal, scope, typeParams)
                     if (literalType != patternType) {
                         report(VerifyError.PatternTypeMismatch(
@@ -2823,11 +2837,13 @@ class Verifier(
                 throw VerifyAbort()
             }
 
-            // Constructing a ToolDef declaration exercises no effects.
-            // The implementation's effects fire only at tool-dispatch
-            // sites during the provider's loop; the surrounding
-            // capability context covers them there.
-            recordClosure(id, emptySet())
+            // Evaluating a ToolDef evaluates its implementation expression
+            // to a callable, so whatever that expression performs on the way
+            // (nothing for a Lambda or ForeignNode, but a projection out of
+            // a record built with effectful fields is an ordinary
+            // expression) is the ToolDef's closure. The callable's own row
+            // fires only at tool-dispatch sites during the provider's loop.
+            recordClosure(id, closureOf(node.implementation))
             // Q-070: the implementation's effect surface — the FunctionType
             // effect row (a Lambda's declared effects, or a ForeignNode's
             // declared effects folded into its returned Fun) — is reachable
@@ -3539,7 +3555,7 @@ class Verifier(
                                     ))
                                     throw VerifyAbort()
                                 }
-                            if (!isLiteralLikeNode(targetNode)) {
+                            if (!isLiteralTower(source.target)) {
                                 report(VerifyError.ProjectionLiteralNotConstant(
                                     at = at, categoryIndex = i, sourceIndex = j,
                                     target = source.target,
@@ -3800,20 +3816,35 @@ class Verifier(
          * Recognize the set of node categories the V1 [ProjectionSource.LiteralNode]
          * vocabulary admits. Per proposal § 4.1: primitive literals
          * (IntLit/FloatLit/StringLit/BoolLit/UnitLit/BytesLit) and
-         * ProductValue/SumValue towers over literals. The recursive case
-         * is checked lazily — at admission we only confirm the outermost
-         * shape is a value-producing literal-like node; per-field
-         * structural literal-ness is verified through type compatibility
-         * in [validateProjections] and confirmed at runtime by the
-         * evaluator (literal-like nodes evaluate without side effects
-         * under any context).
+         * ProductValue/SumValue towers over literals. This predicate
+         * inspects the outermost node only; [isLiteralTower] is the
+         * recursive check a projection source must pass, since the runtime
+         * evaluates the target at every dispatch and a tower with an
+         * expression at a leaf would run it outside any closure.
          */
         private fun isLiteralLikeNode(node: Node?): Boolean = when (node) {
-            is Node.IntLit, is Node.FloatLit, is Node.StringLit,
-            is Node.BoolLit, Node.UnitLit, is Node.BytesLit -> true
             is Node.ProductValue -> true
             is Node.SumValue -> true
+            else -> isPrimitiveLiteral(node)
+        }
+
+        private fun isPrimitiveLiteral(node: Node?): Boolean = when (node) {
+            is Node.IntLit, is Node.FloatLit, is Node.StringLit,
+            is Node.BoolLit, Node.UnitLit, is Node.BytesLit -> true
             else -> false
+        }
+
+        /** True when [id] is a primitive literal or a ProductValue/SumValue whose every leaf is one. */
+        private fun isLiteralTower(id: NodeId, depth: Int = 0): Boolean {
+            if (depth > 256) return false
+            return when (val n = store.getOrNull(id)) {
+                is Node.ProductValue -> n.fields.all { fieldId ->
+                    val field = store.getOrNull(fieldId) as? Node.ProductFieldValue
+                    field != null && isLiteralTower(field.value, depth + 1)
+                }
+                is Node.SumValue -> n.payload?.let { isLiteralTower(it, depth + 1) } ?: true
+                else -> isPrimitiveLiteral(n)
+            }
         }
 
         private fun validateEffectCategoryEdges(

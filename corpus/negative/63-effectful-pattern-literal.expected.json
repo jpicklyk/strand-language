@@ -1,0 +1,5 @@
+{
+  "stage": "verify",
+  "family": "CategoryMismatch",
+  "notes": "A literal pattern whose literal edge is a Time.Now call. The interpreter evaluates a pattern's literal at each match attempt, and a Match's closure covers only its scrutinee and case bodies, so the program surfaced an empty closure and read the clock. A literal pattern's literal must be a literal node. Found by inspection while closing entry 59, then reached by the fuzzer's under-declared variant."
+}

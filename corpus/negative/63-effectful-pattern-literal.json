@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "root": "m",
+  "nodes": {
+    "intT":    { "type": "PrimitiveType", "kind": "Int" },
+    "timeFx":  { "type": "EffectCategory", "categoryName": "Time.Now" },
+    "nowT":    { "type": "FunctionType", "parameters": [], "result": "intT", "effects": ["timeFx"] },
+    "now":     { "type": "ForeignNode", "target": "strand-builtin:Time.Now", "foreignType": "nowT", "effects": ["timeFx"] },
+    "callNow": { "type": "Application", "function": "now", "arguments": [] },
+    "scrut":   { "type": "IntLit", "value": 0 },
+    "one":     { "type": "IntLit", "value": 1 },
+    "two":     { "type": "IntLit", "value": 2 },
+    "patNow":  { "type": "Pattern", "kind": "literal", "patternType": "intT", "literal": "callNow" },
+    "caseNow": { "type": "MatchCase", "pattern": "patNow", "body": "one" },
+    "patAny":  { "type": "Pattern", "kind": "wildcard", "patternType": "intT" },
+    "caseAny": { "type": "MatchCase", "pattern": "patAny", "body": "two" },
+    "m":       { "type": "Match", "scrutinee": "scrut", "cases": ["caseNow", "caseAny"] }
+  }
+}
