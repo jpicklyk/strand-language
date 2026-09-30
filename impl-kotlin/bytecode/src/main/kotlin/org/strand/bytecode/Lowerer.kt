@@ -60,6 +60,7 @@ class Lowerer(
 ) {
     private val chunks = mutableListOf<MutableChunk>()
     private val categoryNames = LinkedHashMap<Int, String>()
+    private val categoryParamCounts = LinkedHashMap<Int, Int>()
 
     /**
      * Sub-chunk index per sub-chunk name (`lambda(#N)`, `fixpoint(#N)`,
@@ -79,25 +80,42 @@ class Lowerer(
     fun lower(rootId: NodeId): ChunkTable {
         chunks.clear()
         categoryNames.clear()
+        categoryParamCounts.clear()
         subChunkByName.clear()
         // Reserve the root chunk's slot so sub-chunks get index ≥ 1.
         val root = MutableChunk(name = "root($rootId)")
         chunks += root
         lowerExpr(rootId, root, scope = LocalScope())
         root.emit(Opcode.HALT)
-        return ChunkTable(chunks.map { it.toChunk() }, categoryNames.toMap())
+        return ChunkTable(chunks.map { it.toChunk() }, categoryNames.toMap(), categoryParamCounts.toMap())
     }
 
     /**
-     * Record [id]'s EffectCategory name for VM denial reports and return its
+     * Record [id]'s EffectCategory name for VM denial reports, and its
+     * parameter count for the VM's unrefined-grant rule, and return its
      * integer id (review H2). Falls back to the `#N` rendering the
      * interpreter uses for a non-category id.
      */
     private fun category(id: NodeId): Int {
-        categoryNames.getOrPut(id.value) {
-            (store.getOrNull(id) as? Node.EffectCategory)?.categoryName ?: id.toString()
+        if (id.value !in categoryNames) {
+            val node = store.getOrNull(id) as? Node.EffectCategory
+            categoryNames[id.value] = node?.categoryName ?: id.toString()
+            if (node != null) categoryParamCounts[id.value] = node.parameters.size
         }
         return id.value
+    }
+
+    /**
+     * The effect row of a [Node.ForeignNode]: its `foreignType` FunctionType's
+     * effects unioned with its own `effects`, in the interpreter's
+     * `foreignEffectRow` order. This is the row the verifier types the node
+     * with, so an effect declared only on the FunctionType is still seen by
+     * the VM's handler interception and capability check.
+     */
+    private fun foreignEffectRow(node: Node.ForeignNode): List<NodeId> {
+        val typeEffects = (store.getOrNull(node.foreignType) as? Node.FunctionType)?.effects.orEmpty()
+        if (typeEffects.isEmpty()) return node.effects
+        return (typeEffects + node.effects).distinct()
     }
 
     private fun effectsConstant(ids: List<NodeId>): Constant.EffectsC =
@@ -230,10 +248,11 @@ class Lowerer(
             // target string + effects list in the constant pool. The VM's
             // CALL site uses the effects list for handler-intercept and
             // capability-coverage checks (Layer 3), then dispatches via
-            // the Builtins registry.
+            // the Builtins registry. The effects list is the ForeignNode's
+            // full row ([foreignEffectRow]), not `effects` alone.
             is Node.ForeignNode -> {
                 val targetIdx = chunk.constant(Constant.ForeignTargetC(node.target))
-                val effectsIdx = chunk.constant(effectsConstant(node.effects))
+                val effectsIdx = chunk.constant(effectsConstant(foreignEffectRow(node)))
                 val projectionsIdx = chunk.constant(Constant.ProjectionsC(node.effectProjections.map { p ->
                     Constant.ProjectionC(
                         category = category(p.category),
