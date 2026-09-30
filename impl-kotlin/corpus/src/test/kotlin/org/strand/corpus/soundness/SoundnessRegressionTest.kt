@@ -368,6 +368,31 @@ class SoundnessRegressionTest {
     }
 
     /**
+     * A1 and S2. A higher-order builtin was treated as a propagating site
+     * for its whole row, on the ground that its row is its callbacks'. One
+     * that performs an effect itself (a provider binding calls out and also
+     * runs tool implementations) therefore ran that effect unrecorded when
+     * the call carried no EffectDecl, and a refined grant covered it. Its
+     * own effects are now performed at its dispatch, on both backends.
+     */
+    @Test
+    fun `a higher-order builtin's own effect is audited and needs an unrefined grant`() {
+        val outcome = assertSound(
+            program("call", """
+                "x": { "type": "ParameterDecl", "name": "x", "paramType": "intT" },
+                "cb": { "type": "Lambda", "parameters": ["x"], "body": "i0", "effects": [] },
+                "hopT": { "type": "FunctionType", "parameters": ["intT", "iiT"], "result": "intT", "effects": ["catP"] },
+                "hop": { "type": "ForeignNode", "target": "strand-builtin:Test.Fuzz.HoP", "foreignType": "hopT", "effects": ["catP"] },
+                "call": { "type": "Application", "function": "hop", "arguments": ["i0", "cb"] }
+            """),
+            grants = listOf(refined(Cat.P, Slot.IntC(0)), refined(Cat.P, Slot.Wild)),
+        )
+        assertTrue(outcome.vmSupported)
+        assertTrue(outcome.performed > 0)
+        assertTrue(outcome.denials > 0) { "the refined grant must deny the uninstantiated dispatch" }
+    }
+
+    /**
      * S5. The VM had no dispatch for higher-order builtins: `List.Map`
      * raised a raw `IllegalStateException`, so an effectful callback could
      * not be checked on the VM at all.

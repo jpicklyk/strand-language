@@ -114,6 +114,23 @@ enum class RealBuiltin(val target: String, override val row: List<Cat>, override
         if (cat == Cat.W) listOf(args[0]) else emptyList()
 }
 
+/**
+ * A higher-order stand-in with an effect of its own: `(x, callback)` performs
+ * `Fuzz.P` on `x` and then returns `callback(x)`. Its declared row is its
+ * own effect, alone or together with the row of the callback it propagates,
+ * which is the shape of a provider binding that calls out and also runs
+ * tool implementations. The binding is never projected, so the refinement
+ * of its own effect is whatever the call site declares.
+ */
+object HoStandIn : EffectSource {
+    const val TARGET = "strand-builtin:Test.Fuzz.HoP"
+    override val label: String get() = "HoP"
+    override val row: List<Cat> = listOf(Cat.P)
+    override val resourceKnown: Boolean get() = false
+    override fun trueParams(cat: Cat, args: List<Value>): List<Value> =
+        if (cat == Cat.P) listOf(args[0]) else emptyList()
+}
+
 /** One entry of the per-run ground-truth timeline. */
 sealed class Event {
     /**
@@ -260,6 +277,18 @@ object FuzzHost {
             val tool = args.getOrNull(0) as? Value.ToolDefV
                 ?: confused(CALL_TOOL, "expected (ToolDef, Int), got ${describe(args)}")
             apply.apply(tool.implementation, listOf(args[1]))
+        }
+        // The registry's floor is where a higher-order builtin's own
+        // effects are read from; the test namespace has none, so the
+        // overlay entry states them.
+        Builtins.installTestHigherOrderBuiltin(
+            HoStandIn.TARGET, effectful = true, Builtins.Determinism.Stateful,
+            performs = HoStandIn.row.map { it.categoryName }.toSet(),
+        ) { _, args, apply ->
+            val x = args.getOrNull(0) as? Value.IntV
+            if (x == null || args.size != 2) confused(HoStandIn.TARGET, "expected (Int, callback), got ${describe(args)}")
+            FuzzLog.add(Event.Performed(HoStandIn, listOf(x), FuzzLog.scopes()))
+            apply.apply(args[1], listOf(x))
         }
         workspace = Files.createTempDirectory("strand-soundness-fuzz")
     }

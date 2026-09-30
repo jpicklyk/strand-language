@@ -55,14 +55,15 @@ class EffectClosureSoundnessFuzzTest {
         /**
          * Shapes the 2026-09-29 review found defects in, plus the two registry
          * builtins whose effects the host observes directly (the clock and
-         * the workspace); each must occur in an admitted program.
+         * the workspace) and a higher-order builtin with an effect of its
+         * own; each must occur in an admitted program.
          */
         val REQUIRED_FEATURES = listOf(
             "shared-node", "handler", "handler-nested", "foreign-type-row", "polymorphic",
             "scope", "scope-in-handler", "list-map", "list-fold", "tooldef",
             "noderef-term", "noderef-type", "projection", "effect-instance",
             "schema-position", "machine", "machine-effectful-initial-state",
-            "time-now", "fs-write",
+            "time-now", "fs-write", "higher-order-own-effect",
         )
 
         private val seed: Long = System.getProperty("strand.soundness.seed")?.toLongOrNull() ?: SEED

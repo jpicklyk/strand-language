@@ -678,7 +678,8 @@ class ProgramGen(private val ch: Choices) {
             16 -> curried(d)
             17 -> unwrapSchemaVar(d) ?: leafInt(c)
             18 -> timeNowCall(d) ?: leafInt(c)
-            else -> fsWriteCall(d) ?: leafInt(c)
+            19 -> fsWriteCall(d) ?: leafInt(c)
+            else -> higherOrderOwn(d) ?: leafInt(c)
         }
     }
 
@@ -1126,6 +1127,39 @@ class ProgramGen(private val ch: Choices) {
         return E(app(foldFn, listOf(list.id, init.id, cb.id)), Ty.IntT, fx, lat + (cb.ty as Ty.Fn).effects, free)
     }
 
+    /**
+     * A call of [HoStandIn]: a higher-order builtin that performs `Fuzz.P`
+     * itself and runs an effectful callback. The ForeignNode declares the
+     * builtin's own effect, and half the time the callback's row as well,
+     * so one dispatch has both a performed and a propagated part.
+     */
+    private fun higherOrderOwn(c: Ctx): E? {
+        // The dispatch is an Application whose callee carries the row, so a
+        // Handler over any of it would intercept a callee of a signature it
+        // was not checked for; keep to categories no enclosing Handler takes.
+        val free = rowFor(null, c)
+        if (Cat.P !in free) return null
+        features += "higher-order-own-effect"
+        val r = row(c.allowed)
+        val arg = leafInt(c)
+        val cb = genFn(listOf(Ty.IntT), Ty.IntT, r, c, callback = true)
+        val cbT = Ty.Fn(listOf(Ty.IntT), Ty.IntT, r)
+        val nodeRow: Set<Cat> = if (ch.bool()) setOf(Cat.P) else setOf(Cat.P) + r.filter { it in free }
+        val fnT = Ty.Fn(listOf(Ty.IntT, cbT), Ty.IntT, nodeRow)
+        val fn = once("hop:${r.sorted()}:${nodeRow.sorted()}") {
+            node(
+                fresh("hop"), "ForeignNode",
+                "target" to HoStandIn.TARGET, "foreignType" to tyId(fnT), "effects" to cats(nodeRow),
+            )
+        }
+        val inst = instances(nodeRow, c, null, listOf(arg))
+        val (fx, lat, freeVars) = union(arg, cb)
+        return E(
+            app(fn, listOf(arg.id, cb.id), inst.ids), Ty.IntT,
+            fx + nodeRow + inst.fx, lat + (cb.ty as Ty.Fn).effects + inst.lat, freeVars + inst.free,
+        )
+    }
+
     private fun toolDef(r: Set<Cat>, c: Ctx): E {
         features += "tooldef"
         val schema = once("toolSchema") {
@@ -1325,7 +1359,7 @@ class ProgramGen(private val ch: Choices) {
         private val SCHEMA_PROBES = listOf(1, 5, 8)
 
         /** genInt alternatives, leaf first: see the `when` in [genIntAt]. */
-        private val INT_WEIGHTS = intArrayOf(5, 2, 8, 3, 3, 4, 2, 4, 3, 2, 2, 2, 2, 1, 2, 3, 1, 2, 2, 3)
+        private val INT_WEIGHTS = intArrayOf(5, 2, 8, 3, 3, 4, 2, 4, 3, 2, 2, 2, 2, 1, 2, 3, 1, 2, 2, 3, 2)
 
         private val NON_REFERENCE_KEYS = setOf(
             "type", "kind", "name", "fieldName", "caseName", "categoryName",
