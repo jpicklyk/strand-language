@@ -92,6 +92,14 @@ class Vm(
     private var startNanos = 0L
     private var outerDepth = 0
 
+    /**
+     * Q-047: set while an invariant body is being evaluated for
+     * `CHECK_SCHEMA`, so obligation sites inside the predicate do not fire
+     * (the interpreter's `inInvariant` guard), and so a denial inside the
+     * predicate reports [DenialPhase.Invariant].
+     */
+    private var inInvariant = false
+
     private fun resetBudget() {
         steps = 0L
         allocated = 0L
@@ -222,7 +230,13 @@ class Vm(
         resetBudget()
         val frames = ArrayDeque<Frame>()
         try {
-            checkAppliedCallable(RUNTIME_BOUNDARY, closure, args, limits)
+            try {
+                checkAppliedCallable(RUNTIME_BOUNDARY, closure, args, depth = 0, limits = limits)
+            } catch (e: VmResourceExhaustion) {
+                // A projected literal's schema check runs a predicate here,
+                // outside any dispatch loop.
+                throw exhaustion(e)
+            }
             when (closure) {
                 is VmClosure -> {
                     val sub = table[closure.chunkIndex]
@@ -415,6 +429,23 @@ class Vm(
                     current.stack.add(VmForeign(targetC.target, effectsC.effectIds, projectionsC.projections))
                 }
 
+                Opcode.MAKE_TOOLDEF -> {
+                    // N-044: the interpreter's Value.ToolDefV, its
+                    // implementation the evaluated VM callable, boxed so a
+                    // builtin handing it back through Builtins.ApplyFn
+                    // reaches applyNested with the callable itself.
+                    val c = current.constant() as Constant.ToolDefC
+                    val implementation = box(current.stack.removeLast())
+                    bumpAllocation()
+                    current.stack.add(Value.ToolDefV(
+                        self = NodeId(c.self),
+                        name = c.name,
+                        description = c.description,
+                        parameterSchemaId = NodeId(c.parameterSchema),
+                        implementation = implementation,
+                    ))
+                }
+
                 Opcode.CAP_PUSH -> {
                     val effectsC = current.constant() as Constant.EffectsC
                     capStack.addLast(currentCaps)
@@ -519,6 +550,16 @@ class Vm(
                     throw InterpretException(InterpretError.NoMatchingCase(at = NodeId(current.operand())))
                 }
 
+                Opcode.CHECK_SCHEMA -> {
+                    // Q-047: the value the node just produced stays on the
+                    // stack; a failing invariant raises the catchable
+                    // SchemaInvariantViolation, which the per-opcode catch
+                    // below unwinds to an enclosing Attempt as the
+                    // interpreter's does.
+                    val check = current.constant() as Constant.SchemaCheckC
+                    checkSchema(check, current.stack.last(), frames.size, limits)
+                }
+
                 Opcode.JUMP -> {
                     val offset = current.operand()
                     current.pc += offset
@@ -609,7 +650,7 @@ class Vm(
                             ))
                         }
                         val handler = unbox(intercept.handlerValue)
-                        checkAppliedCallable(NodeId(site.site), handler, args.asList(), limits)
+                        checkAppliedCallable(NodeId(site.site), handler, args.asList(), frames.size, limits)
                         invokeCallable(NodeId(site.site), handler, args, frames, current, limits)
                         continue
                     }
@@ -628,7 +669,7 @@ class Vm(
                     // dispatchForeign does.
                     if (fn is VmForeign) checkForeignFloor(NodeId(site.site), fn)
                     val instances = if (fn is VmForeign && fn.projections.isNotEmpty()) {
-                        synthesizeProjectedInstances(fn, args.asList())
+                        synthesizeProjectedInstances(fn, args.asList(), frames.size, limits)
                     } else {
                         siteInstances(site, instanceParams)
                     }
@@ -803,15 +844,25 @@ class Vm(
     /**
      * Q-039: the capability-check parameters synthesized from [fn]'s
      * projections — an ArgRef source is the exact argument value the builtin
-     * receives (interpreter `synthesizeProjectedInstances`).
+     * receives (interpreter `synthesizeProjectedInstances`). The interpreter
+     * evaluates a literal source's node here, so a literal carrying schema
+     * obligations is checked here too (Q-047); [depth] is the frame count of
+     * the dispatch loop this call suspends.
      */
-    private fun synthesizeProjectedInstances(fn: VmForeign, args: List<Any>): Map<NodeId, List<Value>> {
+    private fun synthesizeProjectedInstances(
+        fn: VmForeign,
+        args: List<Any>,
+        depth: Int,
+        limits: EvaluationLimits,
+    ): Map<NodeId, List<Value>> {
         val out = LinkedHashMap<NodeId, List<Value>>(fn.projections.size)
         for (projection in fn.projections) {
             out[NodeId(projection.category)] = projection.sources.map { src ->
                 when (src) {
                     is Constant.ProjectionSourceC.ArgRef -> args[src.index] as Value
-                    is Constant.ProjectionSourceC.Literal -> constantValue(src.value)
+                    is Constant.ProjectionSourceC.Literal -> constantValue(src.value).also { v ->
+                        src.check?.let { checkSchema(it, v, depth, limits) }
+                    }
                 }
             }
         }
@@ -886,7 +937,7 @@ class Vm(
                         effectCategory = categoryNameOf(category),
                         refinementParameters = emptyList(),
                         outcome = AuditOutcome.Allowed,
-                        phase = DenialPhase.Expression,
+                        phase = currentPhase(),
                     ))
                 }
                 continue
@@ -934,7 +985,7 @@ class Vm(
                 effectCategory = name,
                 refinementParameters = requirement.map { renderAuditParameter(it) },
                 outcome = AuditOutcome.Allowed,
-                phase = DenialPhase.Expression,
+                phase = currentPhase(),
             ))
         }
     }
@@ -993,11 +1044,17 @@ class Vm(
      * instances are synthesized from [args] (`dispatchForeign` with null
      * instances); a closure or fixpoint is checked instance-free.
      */
-    private fun checkAppliedCallable(at: NodeId, callable: Any, args: List<Any>, limits: EvaluationLimits) {
+    private fun checkAppliedCallable(
+        at: NodeId,
+        callable: Any,
+        args: List<Any>,
+        depth: Int,
+        limits: EvaluationLimits,
+    ) {
         if (callable is VmForeign) {
             checkForeignFloor(at, callable)
             val instances = if (callable.projections.isNotEmpty()) {
-                synthesizeProjectedInstances(callable, args)
+                synthesizeProjectedInstances(callable, args, depth, limits)
             } else {
                 emptyMap()
             }
@@ -1168,7 +1225,7 @@ class Vm(
             node = at.takeIf { it != RUNTIME_BOUNDARY },
             instanceId = null,
             eventIndex = null,
-            phase = DenialPhase.Expression,
+            phase = currentPhase(),
         )
     }
 
@@ -1308,11 +1365,11 @@ class Vm(
     private fun applyNested(
         at: NodeId,
         callable: Any,
-        args: List<Value>,
+        args: List<Any>,
         depth: Int,
         limits: EvaluationLimits,
     ): Value {
-        checkAppliedCallable(at, callable, args, limits)
+        checkAppliedCallable(at, callable, args, depth, limits)
         val frame = when (callable) {
             is VmForeign -> return dispatchForeign(at, callable, args, depth, limits)
             is VmClosure -> Frame(chunk = table[callable.chunkIndex], captures = callable.captures).also { f ->
@@ -1326,6 +1383,18 @@ class Vm(
                 InterpretError.NotCallable(at = at, gotKind = callable::class.simpleName ?: "Value")
             )
         }
+        return box(runNested(frame, depth, limits))
+    }
+
+    /**
+     * Run [frame] to its RET in a nested dispatch loop suspended under a loop
+     * of [depth] frames, sharing this Vm's capability context, handler stack
+     * and budget, and return the raw result. Attempt markers are isolated for
+     * the nested run because they index a specific frame deque; the
+     * capability and handler stacks are restored afterwards whether the run
+     * returns or throws.
+     */
+    private fun runNested(frame: Frame, depth: Int, limits: EvaluationLimits): Any {
         val frames = ArrayDeque<Frame>()
         frames.addLast(frame)
         val savedAttempts = ArrayDeque(attemptStack)
@@ -1336,7 +1405,7 @@ class Vm(
         attemptStack.clear()
         outerDepth += depth
         try {
-            return box(runLoop(frames, limits))
+            return runLoop(frames, limits)
         } finally {
             outerDepth = savedOuterDepth
             attemptStack.clear()
@@ -1346,6 +1415,72 @@ class Vm(
             while (handlers.size > savedHandlerDepth) handlers.removeLast()
         }
     }
+
+    /**
+     * Q-047: the interpreter's `checkSchemaObligations` for one node. Each
+     * invariant of [check], in order, is evaluated on [value] (the value the
+     * node produced); the first `false` verdict raises
+     * [InterpretError.SchemaInvariantViolation] at the node. A no-op while an
+     * invariant is already being evaluated. [depth] is the frame count of the
+     * dispatch loop the evaluation suspends.
+     */
+    private fun checkSchema(check: Constant.SchemaCheckC, value: Any, depth: Int, limits: EvaluationLimits) {
+        if (inInvariant) return
+        for (c in check.checks) {
+            val verdict = evaluateInvariant(c.chunkIndex, value, depth, limits)
+            if (verdict !is Value.BoolV) {
+                error(
+                    "Invariant #${c.invariant}'s body evaluated to a non-Bool value " +
+                        "($verdict); the verifier's SchemaInvariantBodyTypeMismatch rule should have rejected this."
+                )
+            }
+            if (!verdict.v) {
+                throw InterpretException(InterpretError.SchemaInvariantViolation(
+                    at = NodeId(check.site),
+                    schema = NodeId(c.schema),
+                    invariant = NodeId(c.invariant),
+                    valueDescription = describeChecked(value),
+                ))
+            }
+        }
+    }
+
+    /**
+     * Q-047: the interpreter's `evaluateInvariantBody`. The invariant's body
+     * sub-chunk runs to its predicate callable, which is then applied to
+     * [value] as the interpreter's `applyCallable` applies it at the runtime
+     * boundary. Both run in nested dispatch loops under an empty capability
+     * context and an empty handler stack, with obligation checking suppressed,
+     * spending the run's budget; the surrounding context is restored after.
+     */
+    private fun evaluateInvariant(chunkIndex: Int, value: Any, depth: Int, limits: EvaluationLimits): Any {
+        val savedCaps = currentCaps
+        val savedHandlers = handlers.toList()
+        val savedFlag = inInvariant
+        currentCaps = CapabilitySet.EMPTY
+        handlers.clear()
+        inInvariant = true
+        try {
+            val predicate = runNested(Frame(chunk = table[chunkIndex], captures = emptyArray()), depth, limits)
+            return applyNested(RUNTIME_BOUNDARY, unbox(predicate), listOf(value), depth, limits)
+        } finally {
+            inInvariant = savedFlag
+            handlers.clear()
+            handlers.addAll(savedHandlers)
+            currentCaps = savedCaps
+        }
+    }
+
+    /**
+     * A violation's `valueDescription`: the value's `toString`, as the
+     * interpreter renders it. A VM callable has no [Value] form, so it (and a
+     * callable boxed inside a record) renders as the VM's own representation,
+     * not the interpreter's `Value.Closure` text.
+     */
+    private fun describeChecked(value: Any): String =
+        if (value is Value) value.toString() else "<${value::class.simpleName}>"
+
+    private fun currentPhase(): DenialPhase = if (inInvariant) DenialPhase.Invariant else DenialPhase.Expression
 }
 
 /**

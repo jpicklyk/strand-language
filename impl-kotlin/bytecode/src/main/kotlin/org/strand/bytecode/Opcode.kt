@@ -45,6 +45,10 @@ enum class Opcode(val code: Byte) {
     MAKE_FIXPOINT(0x41),
     MAKE_FOREIGN(0x42),
 
+    // N-044 ToolDef: one operand, a ToolDefC constant index. Pops the
+    // evaluated implementation and pushes a Value.ToolDefV carrying it.
+    MAKE_TOOLDEF(0x43),
+
     // Composite values
     PRODUCT_NEW(0x50),
     PRODUCT_GET(0x51),
@@ -79,6 +83,12 @@ enum class Opcode(val code: Byte) {
     SUM_CASE_IS(0x81.toByte()),
     SUM_PAYLOAD(0x82.toByte()),
     THROW_NO_MATCH(0x83.toByte()),
+
+    // Q-047 runtime schema obligations: one operand, a SchemaCheckC constant
+    // index. Evaluates each listed invariant against the value on top of the
+    // stack (left in place) and raises SchemaInvariantViolation on `false`.
+    // Emitted only when the Lowerer is given obligations.
+    CHECK_SCHEMA(0x84.toByte()),
 
     // Halt
     HALT(0x7f);
