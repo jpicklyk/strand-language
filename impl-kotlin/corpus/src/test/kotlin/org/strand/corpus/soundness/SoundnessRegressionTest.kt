@@ -118,12 +118,17 @@ class SoundnessRegressionTest {
 
     private val harness = SoundnessHarness()
 
-    private fun case(json: String, rootTy: Ty, grants: List<GrantSpec>) =
-        GenCase(json, Mode.Expression, rootTy, emptyMap(), grants, emptySet(), 0)
+    private fun case(json: String, rootTy: Ty, grants: List<GrantSpec>, features: Set<String> = emptySet()) =
+        GenCase(json, Mode.Expression, rootTy, emptyMap(), grants, features, 0)
 
     /** Every property holds for [json] under the standard grants plus [grants]. */
-    private fun assertSound(json: String, rootTy: Ty = Ty.IntT, grants: List<GrantSpec> = emptyList()): CaseOutcome.Checked {
-        val outcome = harness.check(case(json, rootTy, grants))
+    private fun assertSound(
+        json: String,
+        rootTy: Ty = Ty.IntT,
+        grants: List<GrantSpec> = emptyList(),
+        features: Set<String> = emptySet(),
+    ): CaseOutcome.Checked {
+        val outcome = harness.check(case(json, rootTy, grants, features))
         assertTrue(outcome is CaseOutcome.Checked) { "expected the program to be admitted, got $outcome" }
         outcome as CaseOutcome.Checked
         assertTrue(outcome.violations.isEmpty()) { "violations: ${outcome.violations.joinToString("\n")}" }
@@ -312,6 +317,53 @@ class SoundnessRegressionTest {
                 "call": { "type": "Application", "function": "stdP", "arguments": ["i0"] }
             """),
             grants = listOf(refined(Cat.P, Slot.IntC(0)), refined(Cat.P, Slot.Wild)),
+        )
+    }
+
+    /**
+     * S2, with a real file. The program declares `Filesystem.Write` with no
+     * parameter and binds `Fs.Write` without a projection. A host grant
+     * refined to path `b` was keyed to a category with nothing to match, the
+     * uninstantiated dispatch of a parameterless category was always
+     * covered, and the file `a` was written. The refinement for a registry
+     * I/O builtin is now the argument it acts on
+     * (`BuiltinEffectTable.resourceProjections`).
+     */
+    @Test
+    fun `a parameterless category declaration does not defeat a path-refined grant`() {
+        val outcome = assertSound(
+            program("write", """
+                "catW": { "type": "EffectCategory", "categoryName": "Filesystem.Write" },
+                "writeT": { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT" },
+                "fsWrite": { "type": "ForeignNode", "target": "strand-builtin:Fs.Write", "foreignType": "writeT", "effects": ["catW"] },
+                "payload": { "type": "BytesLit", "value": "00" },
+                "write": { "type": "Application", "function": "fsWrite", "arguments": ["sA", "payload"] }
+            """),
+            grants = listOf(refined(Cat.W, Slot.StrC("b")), refined(Cat.W, Slot.StrC("a"))),
+            features = setOf("fs-write"),
+        )
+        assertTrue(outcome.performed > 0) { "the write must run under the grants that cover it" }
+    }
+
+    /**
+     * S2, with a real file. The same bypass with the category declared
+     * properly: an unprojected binding took its refinement from the call
+     * site's EffectDecl, which declared path `b` while the argument was `a`.
+     */
+    @Test
+    fun `an authored instance does not redirect the path a write is checked against`() {
+        assertSound(
+            program("write", """
+                "catW": { "type": "EffectCategory", "categoryName": "Filesystem.Write", "parameters": ["strT"] },
+                "writeT": { "type": "FunctionType", "parameters": ["strT", "bytesT"], "result": "intT" },
+                "fsWrite": { "type": "ForeignNode", "target": "strand-builtin:Fs.Write", "foreignType": "writeT", "effects": ["catW"] },
+                "payload": { "type": "BytesLit", "value": "00" },
+                "declared": { "type": "StringLit", "value": "b" },
+                "decl": { "type": "EffectDecl", "effectType": "catW", "parameters": ["declared"] },
+                "write": { "type": "Application", "function": "fsWrite", "arguments": ["sA", "payload"], "effectInstances": ["decl"] }
+            """),
+            grants = listOf(refined(Cat.W, Slot.StrC("b")), refined(Cat.W, Slot.StrC("a"))),
+            features = setOf("fs-write"),
         )
     }
 

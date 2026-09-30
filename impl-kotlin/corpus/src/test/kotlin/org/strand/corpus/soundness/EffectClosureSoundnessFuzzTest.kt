@@ -22,7 +22,7 @@ import java.nio.file.Path
  *
  * ```
  * ./gradlew :corpus:test --tests "*EffectClosureSoundnessFuzzTest" \
- *     -Dstrand.soundness.iterations=20000 [-Dstrand.soundness.seed=N]
+ *     -Dstrand.soundness.iterations=150000 [-Dstrand.soundness.seed=N]
  * ```
  *
  * `-Dstrand.soundness.only=I` replays the single iteration `I`, and
@@ -46,18 +46,23 @@ class EffectClosureSoundnessFuzzTest {
     companion object {
         /** Fixed CI seed. Change only with a reason recorded in the commit. */
         const val SEED = 20260930L
-        const val DEFAULT_ITERATIONS = 1500
+        const val DEFAULT_ITERATIONS = 10_000
         const val MIN_ADMISSION_PERCENT = 40
-        private const val SHRINK_BUDGET = 1200
+        private const val SHRINK_BUDGET = 4000
         private const val DEFAULT_MAX_REPORTED = 12
         private const val STACK_BYTES = 64L * 1024L * 1024L
 
-        /** Shapes the 2026-09-29 review found defects in; each must occur in an admitted program. */
+        /**
+         * Shapes the 2026-09-29 review found defects in, plus the two registry
+         * builtins whose effects the host observes directly (the clock and
+         * the workspace); each must occur in an admitted program.
+         */
         val REQUIRED_FEATURES = listOf(
             "shared-node", "handler", "handler-nested", "foreign-type-row", "polymorphic",
             "scope", "scope-in-handler", "list-map", "list-fold", "tooldef",
             "noderef-term", "noderef-type", "projection", "effect-instance",
             "schema-position", "machine", "machine-effectful-initial-state",
+            "time-now", "fs-write",
         )
 
         private val seed: Long = System.getProperty("strand.soundness.seed")?.toLongOrNull() ?: SEED
@@ -79,7 +84,7 @@ class EffectClosureSoundnessFuzzTest {
         fun caseSeed(seed: Long, iteration: Int): Long = seed * 1_000_003L + iteration
     }
 
-    private class Found(val iteration: Int, val trace: IntArray, val violation: Violation, var count: Int = 1)
+    private class Found(val iteration: Int, val probe: Shrinker.Probe, val violation: Violation, var count: Int = 1)
 
     @Test
     fun `admitted programs satisfy the soundness properties under every grant`() {
@@ -109,7 +114,11 @@ class EffectClosureSoundnessFuzzTest {
                     for (f in case.features) featureCounts.merge(f, 1, Int::plus)
                     for (v in outcome.violations) {
                         val prior = found[v.key]
-                        if (prior == null) found[v.key] = Found(i, choices.trace, v) else prior.count++
+                        if (prior == null) {
+                            found[v.key] = Found(i, Shrinker.Probe(choices.trace, choices.spans.toList()), v)
+                        } else {
+                            prior.count++
+                        }
                     }
                 }
             }
@@ -160,17 +169,17 @@ class EffectClosureSoundnessFuzzTest {
         val key = f.violation.key
         var shrunkCase: GenCase? = null
         var shrunkViolation: Violation = f.violation
-        val minimal = Shrinker.shrink(f.trace, SHRINK_BUDGET) { candidate ->
+        val minimal = Shrinker.shrink(f.probe, SHRINK_BUDGET) { candidate ->
             val choices = Choices.replay(candidate)
             val case = ProgramGen(choices).generate()
             val hit = (harness.check(case) as? CaseOutcome.Checked)?.violations?.firstOrNull { it.key == key }
             if (hit == null) null else {
                 shrunkCase = case
                 shrunkViolation = hit
-                choices.trace
+                Shrinker.Probe(choices.trace, choices.spans.toList())
             }
         }
-        val case = shrunkCase ?: ProgramGen(Choices.replay(f.trace)).generate()
+        val case = shrunkCase ?: ProgramGen(Choices.replay(f.probe.trace)).generate()
         return buildString {
             appendLine("---- $key")
             appendLine("  seed      = $seed, iteration = ${f.iteration}")
@@ -178,7 +187,7 @@ class EffectClosureSoundnessFuzzTest {
             appendLine("  property  = ${shrunkViolation.property} on ${shrunkViolation.backend}: ${shrunkViolation.kind}")
             appendLine("  grant     = ${shrunkViolation.grant}")
             appendLine("  detail    = ${shrunkViolation.detail}")
-            appendLine("  shrunk    = ${f.trace.size} draws -> ${minimal.size} draws, ${case.nodeCount} nodes, root type ${case.rootTy}")
+            appendLine("  shrunk    = ${f.probe.trace.size} draws -> ${minimal.size} draws, ${case.nodeCount} nodes, root type ${case.rootTy}")
             appendLine("  program (dag-json):")
             append(case.json)
         }

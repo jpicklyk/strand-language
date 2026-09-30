@@ -138,9 +138,22 @@ class ProgramGen(private val ch: Choices) {
     // Entry point
     // ------------------------------------------------------------------
 
+    /**
+     * This case's weights for the [genInt] alternatives. Each non-leaf
+     * alternative is switched off for the whole program about one time in
+     * four, so programs concentrate on different subsets of constructs
+     * rather than all resembling the average.
+     */
+    private var intWeights: IntArray = INT_WEIGHTS
+
+    /** Whether this program declares `Filesystem.Write` with its path parameter. */
+    private var writeHasPath = true
+
     fun generate(): GenCase {
         val machine = ch.oneIn(8)
         val fuel = 3 + ch.int(3)
+        writeHasPath = !ch.oneIn(4)
+        intWeights = IntArray(INT_WEIGHTS.size) { i -> if (i > 0 && ch.oneIn(4)) 0 else INT_WEIGHTS[i] }
         val rootTy: Ty
         val root: String
         if (machine) {
@@ -280,8 +293,16 @@ class ProgramGen(private val ch: Choices) {
         once("prim:$kind") { node(kind.lowercase() + "T", "PrimitiveType", "kind" to kind) }
 
     private fun cat(c: Cat): String = once("cat:$c") {
-        node(c.nodeId, "EffectCategory", "categoryName" to c.categoryName, "parameters" to c.params.map { tyId(it) })
+        node(c.nodeId, "EffectCategory", "categoryName" to c.categoryName, "parameters" to declared(c).map { tyId(it) })
     }
+
+    /**
+     * The parameter shape this program declares for [c]. EffectCategory
+     * nodes are per-program declarations, so a program is free to declare
+     * the registry's `Filesystem.Write` without its path parameter; the
+     * host's policy for the category is still over paths.
+     */
+    private fun declared(c: Cat): List<Ty> = if (c == Cat.W && !writeHasPath) emptyList() else c.params
 
     private fun cats(cs: Collection<Cat>): List<String> = cs.sorted().map { cat(it) }
 
@@ -373,12 +394,103 @@ class ProgramGen(private val ch: Choices) {
     private fun sigTy(sig: Sig, effects: Set<Cat>): Ty.Fn = when (sig) {
         Sig.II -> Ty.Fn(listOf(Ty.IntT), Ty.IntT, effects)
         Sig.SS -> Ty.Fn(listOf(Ty.StrT), Ty.StrT, effects)
+        Sig.NI -> Ty.Fn(emptyList(), Ty.IntT, effects)
     }
 
     private fun sigOf(fn: Ty.Fn): Sig? = when {
         fn.params == listOf(Ty.IntT) && fn.result == Ty.IntT -> Sig.II
         fn.params == listOf(Ty.StrT) && fn.result == Ty.StrT -> Sig.SS
+        fn.params.isEmpty() && fn.result == Ty.IntT -> Sig.NI
         else -> null
+    }
+
+    /**
+     * The registry's `Time.Now`, bound with its row on the node, on the
+     * FunctionType, or on both (the declared row must equal the registry's).
+     */
+    private fun timeNow(): E {
+        val variant = ch.int(3)
+        val id = once("now:$variant") {
+            val onType = if (variant == 0) emptySet() else setOf(Cat.T)
+            val onNode = if (variant == 1) emptyList() else listOf(cat(Cat.T))
+            node(
+                fresh("now"), "ForeignNode",
+                "target" to RealBuiltin.TIME_NOW.target,
+                "foreignType" to tyId(sigTy(Sig.NI, onType)),
+                "effects" to onNode,
+            )
+        }
+        return leaf(id, sigTy(Sig.NI, setOf(Cat.T)))
+    }
+
+    /**
+     * The registry's `Fs.Write`, bound with the canonical projection of its
+     * path argument or without one. Returns the node and whether it is
+     * projected.
+     */
+    private fun fsWrite(): Pair<String, Boolean> {
+        val projected = ch.bool()
+        val id = once("fsWrite:$projected") {
+            val fnT = node(
+                fresh("writeT"), "FunctionType",
+                "parameters" to listOf(prim("String"), prim("Bytes")), "result" to prim("Int"),
+            )
+            val sources = if (writeHasPath) {
+                listOf(JsonObject(mapOf("kind" to JsonPrimitive("ArgRef"), "index" to JsonPrimitive(0))))
+            } else {
+                emptyList()
+            }
+            val projections = if (!projected) null else listOf(
+                JsonObject(mapOf("category" to JsonPrimitive(cat(Cat.W)), "sources" to JsonArray(sources)))
+            )
+            node(
+                fresh("write"), "ForeignNode",
+                "target" to RealBuiltin.FS_WRITE.target,
+                "foreignType" to fnT,
+                "effects" to listOf(cat(Cat.W)),
+                "effectProjections" to projections,
+            )
+        }
+        return id to projected
+    }
+
+    /** `Time.Now()`: an Int, performing the registry's clock read. */
+    private fun timeNowCall(c: Ctx): E? {
+        if (Cat.T !in c.allowed || !handledOk(setOf(Cat.T), Sig.NI, c)) return null
+        features += "time-now"
+        val now = timeNow()
+        val inst = instances(listOf(Cat.T), c, null, emptyList())
+        return E(app(now.id, emptyList(), inst.ids), Ty.IntT, setOf(Cat.T), emptySet(), emptySet())
+    }
+
+    /**
+     * `Fs.Write(path, bytes)`: an Int, writing a real file in the throwaway
+     * workspace. The instance, when present, restates the path argument for
+     * a projected binding and is any pure String otherwise, so for an
+     * unprojected binding the declared path and the written path can differ.
+     */
+    private fun fsWriteCall(c: Ctx): E? {
+        if (Cat.W !in c.allowed || Cat.W in c.handled) return null
+        features += "fs-write"
+        val (write, projected) = fsWrite()
+        val path = if (ch.bool()) leafStr(c) else genStr(c)
+        val bytes = once("bytes") { node("payload", "BytesLit", "value" to "00") }
+        var declIds = emptyList<String>()
+        var declFree = emptySet<String>()
+        if (ch.chance(2, 5) && (!projected || path.fx.isEmpty())) {
+            features += "effect-instance"
+            val params: List<E> = when {
+                !writeHasPath -> emptyList()
+                projected -> listOf(path)
+                else -> listOf(leafStr(c.copy(allowed = emptySet())))
+            }
+            declFree = params.flatMapTo(LinkedHashSet()) { it.free }
+            declIds = listOf(node(fresh("decl"), "EffectDecl", "effectType" to cat(Cat.W), "parameters" to params.map { it.id }))
+        }
+        return E(
+            app(write, listOf(path.id, bytes), declIds), Ty.IntT,
+            path.fx + Cat.W, path.lat, path.free + declFree,
+        )
     }
 
     /**
@@ -424,7 +536,7 @@ class ProgramGen(private val ch: Choices) {
     private fun projectionSources(c: Cat): List<JsonElement> {
         val argRef = JsonObject(mapOf("kind" to JsonPrimitive("ArgRef"), "index" to JsonPrimitive(0)))
         return when (c) {
-            Cat.A, Cat.B -> emptyList()
+            Cat.A, Cat.B, Cat.T, Cat.W -> emptyList() // T and W are never in a stand-in's row
             Cat.P -> listOf(argRef)
             Cat.R -> listOf(
                 JsonObject(mapOf(
@@ -515,18 +627,20 @@ class ProgramGen(private val ch: Choices) {
     // ------------------------------------------------------------------
 
     private fun gen(ty: Ty, c: Ctx): E = remember(
-        when (ty) {
-            Ty.IntT -> genInt(c)
-            Ty.StrT -> genStr(c)
-            Ty.BoolT -> genBool(c)
-            Ty.OptInt -> genOpt(c)
-            Ty.ListInt -> genList(c)
-            Ty.Tool -> toolDef(row(c.allowed), c)
-            is Ty.Fn -> genFn(ty.params, ty.result, ty.effects, c)
-            is Ty.Rec -> genRec(ty.effects, c)
-            // A plain Int flows into a Schema<Int> position; the verifier
-            // records the obligation on the argument node.
-            is Ty.SchemaInt -> genInt(c)
+        ch.span {
+            when (ty) {
+                Ty.IntT -> genInt(c)
+                Ty.StrT -> genStr(c)
+                Ty.BoolT -> genBool(c)
+                Ty.OptInt -> genOpt(c)
+                Ty.ListInt -> genList(c)
+                Ty.Tool -> toolDef(row(c.allowed), c)
+                is Ty.Fn -> genFn(ty.params, ty.result, ty.effects, c)
+                is Ty.Rec -> genRec(ty.effects, c)
+                // A plain Int flows into a Schema<Int> position; the verifier
+                // records the obligation on the argument node.
+                is Ty.SchemaInt -> genInt(c)
+            }
         }
     )
 
@@ -539,10 +653,12 @@ class ProgramGen(private val ch: Choices) {
         }
     }
 
-    private fun genInt(c: Ctx): E {
+    private fun genInt(c: Ctx): E = ch.span { genIntAt(c) }
+
+    private fun genIntAt(c: Ctx): E {
         if (c.fuel <= 0) return leafInt(c)
         val d = c.copy(fuel = c.fuel - 1)
-        return when (ch.weighted(INT_WEIGHTS)) {
+        return when (ch.weighted(intWeights)) {
             0 -> leafInt(c)
             1 -> arith(d)
             2 -> standInCall(Sig.II, d) ?: leafInt(c)
@@ -560,7 +676,9 @@ class ProgramGen(private val ch: Choices) {
             14 -> poly(Ty.IntT, d)
             15 -> consume(d)
             16 -> curried(d)
-            else -> unwrapSchemaVar(d) ?: leafInt(c)
+            17 -> unwrapSchemaVar(d) ?: leafInt(c)
+            18 -> timeNowCall(d) ?: leafInt(c)
+            else -> fsWriteCall(d) ?: leafInt(c)
         }
     }
 
@@ -711,7 +829,7 @@ class ProgramGen(private val ch: Choices) {
         val free = LinkedHashSet<String>()
         for (cat in effects.sorted()) {
             val params: List<E> = when {
-                cat.params.isEmpty() -> emptyList()
+                declared(cat).isEmpty() -> emptyList()
                 proj != null && cat == Cat.P -> listOf(args[0])
                 proj != null && cat == Cat.R -> listOf(strLit(StandIn.R_RESOURCE), args[0])
                 else -> {
@@ -719,7 +837,7 @@ class ProgramGen(private val ch: Choices) {
                     // (EffectDeclParameterNotPure); an effectful one is an
                     // under-declaration the verifier is expected to reject.
                     val pure = if (cheat()) small else small.copy(allowed = emptySet())
-                    cat.params.map { p -> if (p == Ty.IntT) genInt(pure) else leafStr(pure) }
+                    declared(cat).map { p -> if (p == Ty.IntT) genInt(pure) else leafStr(pure) }
                 }
             }
             for (p in params) { fx += p.fx; lat += p.lat; free += p.free }
@@ -792,6 +910,8 @@ class ProgramGen(private val ch: Choices) {
     private fun genFn(params: List<Ty>, result: Ty, maxFx: Set<Cat>, c: Ctx, callback: Boolean = false): E {
         val sig = sigOf(Ty.Fn(params, result, emptySet()))
         val within = maxFx intersect c.allowed
+        // The clock itself is the simplest `() -> Int` callable carrying Time.Now.
+        if (sig == Sig.NI && Cat.T in within && ch.oneIn(3)) return timeNow()
         fun fits(t: Ty): Boolean =
             t is Ty.Fn && t.params == params && t.result == result && within.containsAll(t.effects)
         val fuelLeft = c.fuel > 0
@@ -934,8 +1054,14 @@ class ProgramGen(private val ch: Choices) {
 
     private fun handler(ty: Ty, c: Ctx): E {
         features += "handler"
-        val intercept = ch.pick(Cat.entries)
-        val sig = if (ch.oneIn(6)) Sig.SS else Sig.II
+        // Filesystem.Write is never intercepted here: its calls take (path,
+        // bytes), a signature no other generated callable shares.
+        val intercept = ch.pick(Cat.entries - Cat.W)
+        val sig = when {
+            intercept == Cat.T -> Sig.NI
+            ch.oneIn(6) -> Sig.SS
+            else -> Sig.II
+        }
         // A handle whose own row contains the intercept re-enters itself at
         // its first such call and runs out of stack; keep that rare.
         val handleMax = if (ch.oneIn(8)) c.allowed else c.allowed - intercept
@@ -1198,8 +1324,8 @@ class ProgramGen(private val ch: Choices) {
         val STRINGS = listOf("a", "b", StandIn.R_RESOURCE)
         private val SCHEMA_PROBES = listOf(1, 5, 8)
 
-        /** genInt alternatives, leaf first: see the `when` in [genInt]. */
-        private val INT_WEIGHTS = intArrayOf(5, 2, 8, 3, 3, 4, 2, 4, 3, 2, 2, 2, 2, 1, 2, 3, 1, 2)
+        /** genInt alternatives, leaf first: see the `when` in [genIntAt]. */
+        private val INT_WEIGHTS = intArrayOf(5, 2, 8, 3, 3, 4, 2, 4, 3, 2, 2, 2, 2, 1, 2, 3, 1, 2, 2, 3)
 
         private val NON_REFERENCE_KEYS = setOf(
             "type", "kind", "name", "fieldName", "caseName", "categoryName",

@@ -58,8 +58,12 @@ sealed class CaseOutcome {
 /**
  * Runs one generated case through the pipeline and checks the soundness
  * properties against two independent records of what happened: the
- * stand-ins' own ground-truth log ([FuzzLog]) and the Q-055 effect-audit log
- * the backend under test emits.
+ * ground-truth log ([FuzzLog]) and the Q-055 effect-audit log the backend
+ * under test emits. The ground truth is written by the stand-in builtins
+ * themselves and, for the two registry builtins the generator uses, by the
+ * host: `Time.Now` is seen through the policy's clock and `Fs.Write` as the
+ * files left in the throwaway workspace. Neither depends on the verifier,
+ * the capability check, or the audit path.
  *
  * For an admitted program P and every grant G (full, empty, exact closure,
  * and the generated category-only and refined grants):
@@ -109,6 +113,12 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
     private class Run(val out: Out, val events: List<Event>) {
         val performed: List<Event.Performed> = events.filterIsInstance<Event.Performed>()
         val audits: List<AuditRecord> = events.filterIsInstance<Event.Audit>().map { it.record }
+    }
+
+    /** The run's events, after sweeping the workspace for files it wrote. */
+    private fun events(s: Subject): List<Event> {
+        if ("fs-write" in s.case.features) FuzzHost.collectWrites()
+        return FuzzLog.events
     }
 
     /** Everything about an admitted program the checks need. */
@@ -248,7 +258,7 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         } catch (t: Throwable) {
             Out.Raw(t)
         }
-        return Run(out, FuzzLog.events)
+        return Run(out, events(s))
     }
 
     private fun runVm(s: Subject, table: ChunkTable, grant: CapabilitySet): Run {
@@ -263,7 +273,7 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         } catch (t: Throwable) {
             Out.Raw(t)
         }
-        return Run(out, FuzzLog.events)
+        return Run(out, events(s))
     }
 
     /** S3: the guard refuses exactly when the closure exceeds the budget, before any effect. */
@@ -291,7 +301,7 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         } catch (t: Throwable) {
             Out.Raw(t)
         }
-        val guarded = Run(out ?: Out.StaticSchema, FuzzLog.events)
+        val guarded = Run(out ?: Out.StaticSchema, events(s))
         val exceeding = s.total - grant.grants.keys
         fun fail(kind: String, detail: String) {
             violations += Violation("S3", "guard", kind, label, detail)
@@ -307,7 +317,8 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
             exceeding.isEmpty() && r != null ->
                 fail("refused-within-budget", "total closure ${s.total} is within the budget but runGuarded refused")
             exceeding.isEmpty() && !isExhaustion(interp.out) && !isExhaustion(guarded.out) &&
-                (!sameOutcome(interp.out, guarded.out) || trace(interp) != trace(guarded)) ->
+                (!sameOutcome(interp.out, guarded.out) || trace(interp) != trace(guarded) ||
+                    writes(interp) != writes(guarded)) ->
                 fail("guarded-run-diverged", "run: ${describe(interp.out)}; runGuarded: ${describe(guarded.out)}")
         }
     }
@@ -329,8 +340,9 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
                     "outcome:${shortKind(interp.out)}-vs-${shortKind(vm.out)}",
                     "interpreter: ${describe(interp.out)}; vm: ${describe(vm.out)}",
                 )
-            trace(interp) != trace(vm) ->
-                fail("performed-trace", "interpreter performed ${trace(interp)}; vm performed ${trace(vm)}")
+            trace(interp) != trace(vm) || writes(interp) != writes(vm) ->
+                fail("performed-trace",
+                    "interpreter performed ${trace(interp)} ${writes(interp)}; vm performed ${trace(vm)} ${writes(vm)}")
             vmAudit && interp.audits != vm.audits ->
                 fail("audit-trace", "interpreter audit: ${interp.audits}; vm audit: ${vm.audits}")
         }
@@ -366,7 +378,7 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
             } catch (t: Throwable) {
                 Out.Raw(t)
             }
-            val run = Run(out, FuzzLog.events)
+            val run = Run(out, events(s))
             if (full == null) full = run
             performed += run.performed.size
             if (isDenial(run.out)) denials++
@@ -430,8 +442,8 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
                                 "Allowed audit record for ${e.record.effectCategory}; bound is ${s.bound}")
                         }
                 }
-                is Event.Performed -> if (denied) {
-                    fail("S2", "performed-after-denial", "${e.standIn} ran after a Denied audit record")
+                is Event.Performed -> if (denied && e.ordered) {
+                    fail("S2", "performed-after-denial", "${e.source.label} ran after a Denied audit record")
                 }
                 else -> Unit
             }
@@ -442,61 +454,74 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
 
         for ((index, e) in run.events.withIndex()) {
             if (e !is Event.Performed) continue
-            // The Allowed records for this dispatch sit immediately before it.
+            val who = e.source.label
+            // The Allowed records for an ordered dispatch sit immediately
+            // before it; an effect observed after the run is matched against
+            // any Allowed record for its category.
             val allowed = LinkedHashMap<String, List<String>>()
-            var site: NodeId? = null
-            var j = index - 1
-            while (j >= 0) {
-                val record = (run.events[j] as? Event.Audit)?.record ?: break
-                if (record.outcome !is AuditOutcome.Allowed) break
-                if (j == index - 1) site = record.callSiteNodeId else if (record.callSiteNodeId != site) break
-                allowed.putIfAbsent(record.effectCategory, record.refinementParameters)
-                j--
+            if (e.ordered) {
+                var site: NodeId? = null
+                var j = index - 1
+                while (j >= 0) {
+                    val record = (run.events[j] as? Event.Audit)?.record ?: break
+                    if (record.outcome !is AuditOutcome.Allowed) break
+                    if (j == index - 1) site = record.callSiteNodeId else if (record.callSiteNodeId != site) break
+                    allowed.putIfAbsent(record.effectCategory, record.refinementParameters)
+                    j--
+                }
+            } else {
+                for (record in run.audits) {
+                    if (record.outcome is AuditOutcome.Allowed) {
+                        allowed.putIfAbsent(record.effectCategory, record.refinementParameters)
+                    }
+                }
             }
-            for (cat in e.standIn.row) {
+            for (cat in e.source.row) {
                 // S1 on the ground truth.
                 if (cat.categoryName !in s.bound) {
                     fail("S1", "performed-outside-closure:${cat.categoryName}",
-                        "${e.standIn} performed ${cat.categoryName}; bound is ${s.bound}")
+                        "$who performed ${cat.categoryName}; bound is ${s.bound}")
                 }
                 // S2: category presence, dynamic scopes, refinement.
                 val patterns = s.catIds[cat]?.let { grant.grants[it] }
                 if (patterns == null) {
-                    fail("S2", "performed-outside-grant:${cat.categoryName}", "${e.standIn} performed ${cat.categoryName} under $label")
+                    fail("S2", "performed-outside-grant:${cat.categoryName}", "$who performed ${cat.categoryName} under $label")
                     continue
                 }
                 for (tag in e.scopes) {
                     val caps = s.case.scopeCaps[tag] ?: continue
                     if (cat !in caps) {
                         fail("S2", "performed-outside-scope:${cat.categoryName}",
-                            "${e.standIn} performed ${cat.categoryName} inside a CapabilityScope retaining $caps")
+                            "$who performed ${cat.categoryName} inside a CapabilityScope retaining $caps")
                     }
                 }
                 val record = allowed[cat.categoryName]
                 if (auditOn && record == null) {
                     fail("A1", "performed-without-audit-record:${cat.categoryName}",
-                        "${e.standIn} performed ${cat.categoryName} with no Allowed audit record at its dispatch")
+                        "$who performed ${cat.categoryName} with no Allowed audit record at its dispatch")
                 }
                 if (cat.params.isEmpty()) continue
-                if (e.standIn.projected) {
-                    val truth = e.standIn.trueParams(cat, e.args).map(::render)
+                if (e.source.resourceKnown) {
+                    // The grant is the host's policy over the resource the
+                    // builtin actually touched, whatever the program declared.
+                    val truth = e.source.trueParams(cat, e.args).map(::render)
                     if (patterns.none { covers(it, truth) }) {
                         fail("S2", "refinement-not-covered:${cat.categoryName}",
-                            "${e.standIn} acted on $truth; grant holds ${patterns.map(::renderPattern)}")
+                            "$who acted on $truth; grant holds ${patterns.map(::renderPattern)}")
                     }
-                    if (record != null && record != truth) {
+                    if (e.ordered && record != null && record != truth) {
                         fail("S2", "audited-parameters-drift:${cat.categoryName}",
-                            "${e.standIn} acted on $truth but the audit record says $record")
+                            "$who acted on $truth but the audit record says $record")
                     }
                 } else if (record != null) {
                     if (record.isEmpty()) {
                         if (patterns.none(::unrefined)) {
                             fail("S2", "unrefined-grant-required:${cat.categoryName}",
-                                "${e.standIn} ran uninstantiated under ${patterns.map(::renderPattern)}")
+                                "$who ran uninstantiated under ${patterns.map(::renderPattern)}")
                         }
                     } else if (patterns.none { covers(it, record) }) {
                         fail("S2", "refinement-not-covered:${cat.categoryName}",
-                            "${e.standIn} ran with audited $record; grant holds ${patterns.map(::renderPattern)}")
+                            "$who ran with audited $record; grant holds ${patterns.map(::renderPattern)}")
                     }
                 }
             }
@@ -506,9 +531,12 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         if (run !== reference && !isUnstable(run.out) && !isUnstable(reference.out)) {
             val mine = trace(run)
             val theirs = trace(reference)
-            if (mine.size > theirs.size || theirs.subList(0, mine.size) != mine) {
-                fail("S2", "trace-not-a-prefix", "under $label: $mine; under the full grant: $theirs")
-            } else if (!isDenial(run.out) && (!sameOutcome(run.out, reference.out) || mine != theirs)) {
+            if (mine.size > theirs.size || theirs.subList(0, mine.size) != mine ||
+                !writes(reference).containsAll(writes(run))) {
+                fail("S2", "trace-not-a-prefix",
+                    "under $label: $mine ${writes(run)}; under the full grant: $theirs ${writes(reference)}")
+            } else if (!isDenial(run.out) &&
+                (!sameOutcome(run.out, reference.out) || mine != theirs || writes(run) != writes(reference))) {
                 fail("S2", "diverged-without-denial",
                     "under $label: ${describe(run.out)} after $mine; under the full grant: ${describe(reference.out)} after $theirs")
             }
@@ -519,7 +547,13 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
     // Helpers
     // ------------------------------------------------------------------
 
-    private fun trace(run: Run): List<Pair<StandIn, List<Value>>> = run.performed.map { it.standIn to it.args }
+    /** The effects performed in order (stand-ins, clock reads). */
+    private fun trace(run: Run): List<Pair<String, List<Value>>> =
+        run.performed.filter { it.ordered }.map { it.source.label to it.args }
+
+    /** The files the run left behind, observed after it ended. */
+    private fun writes(run: Run): Set<List<Value>> =
+        run.performed.filter { !it.ordered }.mapTo(LinkedHashSet()) { it.args }
 
     private fun isDenial(out: Out): Boolean = when (out) {
         is Out.Err -> out.error is InterpretError.CapabilityViolation || out.error is InterpretError.RefinementViolation
@@ -607,13 +641,14 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
     }
 
     /**
-     * Pattern coverage, restated independently of `CapabilitySet.covers`:
-     * the arity-free unrefined pattern covers anything; otherwise arities
-     * agree and each slot is a wildcard or equals the requested value.
+     * Pattern coverage as a host means it, restated independently of
+     * `CapabilitySet.covers`: a pattern with no concrete slot covers
+     * anything; otherwise arities agree and each slot is a wildcard or
+     * equals the requested value.
      */
     private fun covers(p: CapabilityPattern, requested: List<String>): Boolean {
         val slots = p.arguments
-        if (slots.size == 1 && slots[0] is CapabilityArgument.Wildcard) return true
+        if (slots.all { it is CapabilityArgument.Wildcard }) return true
         if (slots.size != requested.size) return false
         return slots.indices.all { i ->
             when (val slot = slots[i]) {

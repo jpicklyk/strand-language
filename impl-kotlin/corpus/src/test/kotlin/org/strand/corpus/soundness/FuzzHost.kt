@@ -21,14 +21,41 @@ enum class Cat(val categoryName: String, val params: List<Ty>) {
     A("Fuzz.A", emptyList()),
     B("Fuzz.B", emptyList()),
     P("Fuzz.P", listOf(Ty.IntT)),
-    R("Fuzz.R", listOf(Ty.StrT, Ty.IntT));
+    R("Fuzz.R", listOf(Ty.StrT, Ty.IntT)),
+
+    /** The registry's `Time.Now`, observed through the host clock. */
+    T("Time.Now", emptyList()),
+
+    /**
+     * The registry's `Filesystem.Write`, observed as files in the throwaway
+     * workspace. [params] is the shape a host's policy has (one path); a
+     * generated program may declare the category with or without it.
+     */
+    W("Filesystem.Write", listOf(Ty.StrT));
 
     /** Author id of the category's node in every generated document. */
     val nodeId: String get() = "cat$name"
 }
 
-/** Signature family of an effectful callable. */
-enum class Sig { II, SS }
+/** Signature family of an effectful callable: `(Int) -> Int`, `(String) -> String`, `() -> Int`. */
+enum class Sig { II, SS, NI }
+
+/** Something whose running is a performed effect the ground-truth log records. */
+interface EffectSource {
+    val label: String
+
+    /** The categories performed each time this runs. */
+    val row: List<Cat>
+
+    /**
+     * Whether the resource the effect acts on is known from the arguments
+     * the builtin received ([trueParams]), independently of what the call
+     * site declared.
+     */
+    val resourceKnown: Boolean
+
+    fun trueParams(cat: Cat, args: List<Value>): List<Value>
+}
 
 /**
  * Effectful stand-in builtins, installed under the `strand-builtin:Test.`
@@ -43,7 +70,7 @@ enum class Sig { II, SS }
  * the effect acts on; [trueParams] is that resource, read off the arguments
  * the builtin actually received.
  */
-enum class StandIn(val sig: Sig, val row: List<Cat>, val projected: Boolean) {
+enum class StandIn(val sig: Sig, override val row: List<Cat>, val projected: Boolean) : EffectSource {
     FA(Sig.II, listOf(Cat.A), false),
     FB(Sig.II, listOf(Cat.B), false),
     FAB(Sig.II, listOf(Cat.A, Cat.B), false),
@@ -55,12 +82,14 @@ enum class StandIn(val sig: Sig, val row: List<Cat>, val projected: Boolean) {
     SA(Sig.SS, listOf(Cat.A), false);
 
     val target: String get() = "strand-builtin:Test.Fuzz.$name"
+    override val label: String get() = name
+    override val resourceKnown: Boolean get() = projected
 
     /** The refinement parameters the performed effect truly has for [cat]. */
-    fun trueParams(cat: Cat, args: List<Value>): List<Value> = when (cat) {
-        Cat.A, Cat.B -> emptyList()
+    override fun trueParams(cat: Cat, args: List<Value>): List<Value> = when (cat) {
         Cat.P -> listOf(args[0])
         Cat.R -> listOf(Value.StringV(R_RESOURCE), args[0])
+        else -> emptyList()
     }
 
     companion object {
@@ -69,10 +98,35 @@ enum class StandIn(val sig: Sig, val row: List<Cat>, val projected: Boolean) {
     }
 }
 
+/**
+ * Registry builtins generated programs bind for real. Their effects are
+ * observed through host hooks rather than a stand-in body: `Time.Now`
+ * through the policy's clock, `Fs.Write` as the files a run leaves in the
+ * workspace. For a write the resource is the path the builtin received,
+ * whatever the binding or the call site declared.
+ */
+enum class RealBuiltin(val target: String, override val row: List<Cat>, override val resourceKnown: Boolean) : EffectSource {
+    TIME_NOW("strand-builtin:Time.Now", listOf(Cat.T), false),
+    FS_WRITE("strand-builtin:Fs.Write", listOf(Cat.W), true);
+
+    override val label: String get() = name
+    override fun trueParams(cat: Cat, args: List<Value>): List<Value> =
+        if (cat == Cat.W) listOf(args[0]) else emptyList()
+}
+
 /** One entry of the per-run ground-truth timeline. */
 sealed class Event {
-    /** A stand-in's body ran: the effects in `standIn.row` were performed. */
-    data class Performed(val standIn: StandIn, val args: List<Value>, val scopes: List<Int>) : Event()
+    /**
+     * [source] ran: the effects in its row were performed. [ordered] is
+     * false for an effect observed after the run (a file in the workspace),
+     * whose position in the timeline and enclosing scopes are unknown.
+     */
+    data class Performed(
+        val source: EffectSource,
+        val args: List<Value>,
+        val scopes: List<Int>,
+        val ordered: Boolean = true,
+    ) : Event()
 
     /** The backend under test emitted a Q-055 audit record. */
     data class Audit(val record: AuditRecord) : Event()
@@ -118,7 +172,8 @@ object Schemas {
 /**
  * Installs the stand-ins and builds the host policy generated programs run
  * under. Nothing here touches the network, a process, or the wall clock;
- * the sandbox is rooted at a throwaway directory that no stand-in writes.
+ * the sandbox is rooted at a throwaway directory, the only place the one
+ * real I/O builtin generated programs bind (`Fs.Write`) can reach.
  */
 object FuzzHost {
     const val ENTER = "strand-builtin:Test.Fuzz.Enter"
@@ -136,6 +191,30 @@ object FuzzHost {
 
     private var workspace: Path? = null
 
+    /** The policy clock: a fixed time, and a ground-truth record of every read. */
+    private object Clock : Builtins.Clock {
+        override fun nowMillis(): Long {
+            FuzzLog.add(Event.Performed(RealBuiltin.TIME_NOW, emptyList(), FuzzLog.scopes()))
+            return Builtins.FIXED_REPLAY_TIMESTAMP
+        }
+
+        override fun sleep(millis: Long) = Unit
+    }
+
+    /**
+     * Record every file the run left in the workspace as a performed
+     * `Filesystem.Write` on that path, then remove it. Called after a run
+     * of a program that binds `Fs.Write`.
+     */
+    fun collectWrites() {
+        val root = workspace ?: return
+        val names = Files.list(root).use { s -> s.map { it.fileName.toString() }.sorted().toList() }
+        for (name in names) {
+            FuzzLog.add(Event.Performed(RealBuiltin.FS_WRITE, listOf(Value.StringV(name)), emptyList(), ordered = false))
+            Files.deleteIfExists(root.resolve(name))
+        }
+    }
+
     fun install() {
         for (s in StandIn.entries) {
             Builtins.installTestBuiltin(s.target, effectful = true, Builtins.Determinism.Stateful) { _, args ->
@@ -151,6 +230,7 @@ object FuzzHost {
                         FuzzLog.add(Event.Performed(s, args, FuzzLog.scopes()))
                         Value.StringV(x.v.take(3) + "x")
                     }
+                    Sig.NI -> error("no stand-in has the () -> Int signature")
                 }
             }
         }
@@ -204,7 +284,7 @@ object FuzzHost {
                 followSymlinks = false,
             ),
         ),
-        clock = Builtins.FixedClock(Builtins.FIXED_REPLAY_TIMESTAMP),
+        clock = Clock,
         random = java.util.Random(0L),
         credentialProvider = StaticCredentialProvider(emptyMap()),
         exitHandler = Builtins.TestExitHandler(),

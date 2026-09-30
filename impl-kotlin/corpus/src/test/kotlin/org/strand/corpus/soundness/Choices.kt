@@ -18,6 +18,10 @@ import kotlin.random.Random
  * entry outside the requested bound is reduced modulo the bound, so any
  * integer array is a valid trace. [trace] returns the draws as actually
  * taken (normalized), which is the form the shrinker compares.
+ *
+ * The generator also reports [spans]: the half-open draw ranges each
+ * sub-expression consumed. They let the shrinker replace one whole
+ * sub-expression by the simplest one without disturbing the draws after it.
  */
 class Choices private constructor(
     private val rng: Random?,
@@ -26,8 +30,28 @@ class Choices private constructor(
 ) {
     private val recorded = ArrayList<Int>()
 
+    private val marked = ArrayList<IntArray>()
+
     /** The normalized draws taken so far. */
     val trace: IntArray get() = recorded.toIntArray()
+
+    /** Number of draws taken so far. */
+    val position: Int get() = recorded.size
+
+    /** Draw ranges `[start, end)` recorded by [span], in completion order. */
+    val spans: List<IntArray> get() = marked
+
+    /** Run [block] and record the range of draws it took. */
+    inline fun <T> span(block: () -> T): T {
+        val start = position
+        val result = block()
+        markSpan(start)
+        return result
+    }
+
+    fun markSpan(start: Int) {
+        if (recorded.size - start >= 2) marked += intArrayOf(start, recorded.size)
+    }
 
     /** A draw in `[0, bound)`. Past [maxDraws] every draw is `0`. */
     fun int(bound: Int): Int {

@@ -6,33 +6,62 @@ package org.strand.corpus.soundness
  * The generator is a pure function of the trace and maps the draw `0` to the
  * simplest alternative, so a shorter or lexicographically smaller trace is a
  * smaller program, and every candidate trace still denotes a well-typed
- * program. Three passes repeat until none makes progress or the attempt
- * budget runs out: delete a span of draws, zero a span, lower single draws.
+ * program. Four passes repeat until none makes progress or the attempt
+ * budget runs out: collapse a sub-expression, delete a run of draws, zero a
+ * run, lower single draws.
+ *
+ * The first pass does most of the work. The generator reports the draw
+ * range each sub-expression consumed; replacing a range by a few zeros
+ * replaces that sub-expression by a leaf while every later draw keeps its
+ * meaning, which blind deletion cannot do.
  *
  * [probe] runs the generator and the properties on a candidate and returns
- * the *normalized* trace (the draws the generator actually took) when the
- * candidate still fails with the failure being minimized, or null otherwise.
- * A candidate is kept only when its normalized trace is strictly smaller
- * than the best so far, so the loop terminates.
+ * the *normalized* result (the draws the generator actually took, and its
+ * sub-expression ranges) when the candidate still fails with the failure
+ * being minimized, or null otherwise. A candidate is kept only when its
+ * normalized trace is strictly smaller than the best so far, so the loop
+ * terminates.
  */
 object Shrinker {
 
-    fun shrink(initial: IntArray, budget: Int, probe: (IntArray) -> IntArray?): IntArray {
-        var best = initial
+    /** A failing candidate as the generator actually consumed it. */
+    class Probe(val trace: IntArray, val spans: List<IntArray>)
+
+    fun shrink(initial: Probe, budget: Int, probe: (IntArray) -> Probe?): IntArray {
+        var best = initial.trace
+        var spans = initial.spans
         var attempts = 0
 
         fun attempt(candidate: IntArray): Boolean {
             if (attempts >= budget) return false
             attempts++
             val normalized = probe(candidate) ?: return false
-            if (!smaller(normalized, best)) return false
-            best = normalized
+            if (!smaller(normalized.trace, best)) return false
+            best = normalized.trace
+            spans = normalized.spans
             return true
         }
 
         var progress = true
         while (progress && attempts < budget) {
             progress = false
+
+            // Collapse sub-expressions, largest first. A leaf takes a few
+            // draws depending on its type, so try each small zero run.
+            var collapsed = true
+            while (collapsed && attempts < budget) {
+                collapsed = false
+                for (span in spans.sortedByDescending { it[1] - it[0] }) {
+                    val (start, end) = span
+                    if (end > best.size || end - start < 2) continue
+                    for (zeros in 1..minOf(4, end - start - 1)) {
+                        val candidate = best.copyOfRange(0, start) + IntArray(zeros) + best.copyOfRange(end, best.size)
+                        if (attempt(candidate)) { collapsed = true; break }
+                    }
+                    if (collapsed || attempts >= budget) break
+                }
+                if (collapsed) progress = true
+            }
 
             // Delete spans, largest first, scanning from the end so earlier
             // (structure-defining) draws are disturbed last.
