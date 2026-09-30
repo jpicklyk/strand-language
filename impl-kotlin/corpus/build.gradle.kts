@@ -65,4 +65,12 @@ tasks.test {
     System.getProperty("strand.fuzzIterations")?.let {
         systemProperty("strand.fuzzIterations", it)
     }
+    // Forward the effect-closure soundness fuzzer's knobs
+    // (EffectClosureSoundnessFuzzTest): iteration count, seed, and the
+    // single-iteration replay selector. Unset means the fixed CI campaign.
+    for (name in listOf("iterations", "seed", "only", "vmAudit", "maxReported")) {
+        System.getProperty("strand.soundness.$name")?.let {
+            systemProperty("strand.soundness.$name", it)
+        }
+    }
 }
