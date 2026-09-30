@@ -2398,7 +2398,19 @@ class Verifier(
             // an effect would have its effects silently absorbed and the
             // surrounding context would not need to cover them — exactly
             // the inverse of the desired semantics.
-            val newClosure = (bodyClosure - node.intercept) +
+            //
+            // The subtraction is sound only for effects that reach the
+            // runtime's interception point, which is an Application. A nested
+            // Handler's handle is invoked in place of an intercepted call,
+            // not through an Application: when that handle is a Lambda its
+            // body's own calls are intercepted as usual, but when it is a
+            // ForeignNode (or cannot be resolved statically) its row fires
+            // at the invocation itself and no enclosing Handler sees it. If
+            // the body contains such a handle carrying `intercept`, the
+            // category stays in this Handler's closure.
+            val intercepted = if (handlerRowEscapes(node.body, node.intercept)) bodyClosure
+            else bodyClosure - node.intercept
+            val newClosure = intercepted +
                 closureOf(node.handle) +
                 handleFun.effects
             recordClosure(id, newClosure)
@@ -2406,6 +2418,64 @@ class Verifier(
             // The Handler's value type is the body's type — installing a
             // handler does not change what value the body produces.
             return bodyType
+        }
+
+        /**
+         * True when evaluating [bodyId] can invoke a Handler's handle whose
+         * row carries [category] and whose effects fire outside any
+         * Application: a nested Handler whose `handle` does not resolve
+         * statically to a Lambda or Fixpoint. The walk follows every
+         * expression edge but stops at Lambda and Fixpoint boundaries (a
+         * call through one is an Application, which an enclosing Handler
+         * intercepts whole), with one exception: the body of a Lambda that
+         * is itself a nested Handler's handle runs inline at the intercepted
+         * call and is walked.
+         */
+        private fun handlerRowEscapes(bodyId: NodeId, category: NodeId): Boolean {
+            val seen = HashSet<NodeId>()
+            val stack = ArrayDeque<NodeId>()
+            stack.addLast(bodyId)
+            while (stack.isNotEmpty()) {
+                val id = stack.removeLast()
+                if (!seen.add(id)) continue
+                when (val n = store.getOrNull(id) ?: continue) {
+                    is Node.Lambda, is Node.Fixpoint -> Unit
+                    is Node.NodeRef -> resolveRefTarget(n.target)?.let { stack.addLast(it) }
+                    is Node.Handler -> {
+                        val row = (nodeTypes[n.handle] as? TypeExpr.Fun)?.effects
+                        if (row == null || category in row) {
+                            val inline = staticHandleBody(n.handle) ?: return true
+                            stack.addLast(inline)
+                        }
+                        stack.addLast(n.handle)
+                        stack.addLast(n.body)
+                    }
+                    else -> for (child in n.childNodeIds()) stack.addLast(child)
+                }
+            }
+            return false
+        }
+
+        /**
+         * The body a Handler's [handleId] expression runs when invoked, when
+         * the expression resolves statically (through Let-bound names, Let
+         * bodies, NodeRefs and TypeAbstractions) to a Lambda or a Fixpoint;
+         * null for a ForeignNode or anything bound at runtime.
+         */
+        private fun staticHandleBody(handleId: NodeId): NodeId? {
+            var current = handleId
+            repeat(64) {
+                when (val n = store.getOrNull(current) ?: return null) {
+                    is Node.Lambda -> return n.body
+                    is Node.Fixpoint -> return (store.getOrNull(n.body) as? Node.Lambda)?.body
+                    is Node.NodeRef -> current = resolveRefTarget(n.target) ?: return null
+                    is Node.VarRef -> current = (store.getOrNull(n.binder) as? Node.Let)?.value ?: return null
+                    is Node.Let -> current = n.body
+                    is Node.TypeAbstraction -> current = n.body
+                    else -> return null
+                }
+            }
+            return null
         }
 
         /**
