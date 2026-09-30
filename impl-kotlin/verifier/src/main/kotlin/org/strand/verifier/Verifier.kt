@@ -169,6 +169,9 @@ class Verifier(
             // Q-070 / Q-071: the parallel latent-effect channel (indirectly-
             // reachable effect surface). Also not encoded — hash-neutral.
             latentClosures = latentClosures,
+            // Q-076: every schema obligation per node, not the single type
+            // `nodeTypes` keeps. Also not encoded — hash-neutral.
+            schemaObligations = state.schemaObligations.mapValues { (_, v) -> v.toList() },
         )
     }
 
@@ -353,15 +356,34 @@ class Verifier(
         private val literalEqualityCache = mutableMapOf<Pair<NodeId, NodeId>, Boolean>()
 
         /**
-         * Record [t] as the type of [id]. A SchemaType obligation recorded by a
-         * value-flow site (an Application argument, ProductFieldValue or
-         * SumValue payload flowing into a `Schema<T>` position) is sticky:
-         * a later record of the plain `T` for the same node (a re-inference
-         * through another parent that uses the node at a plain position)
-         * does not erase it (review H2). Two distinct schema obligations on
-         * one shared node still resolve last-write-wins.
+         * Q-076: every schema obligation per node, in first-recorded order —
+         * see [VerifyResult.Ok.schemaObligations]. Only ever appended to, so
+         * an obligation recorded by a parent survives any later re-inference
+         * of the node, including a memo hit on the parent that skips its
+         * value-flow loop.
+         */
+        val schemaObligations = LinkedHashMap<NodeId, MutableList<TypeExpr.SchemaType>>()
+
+        /**
+         * Record [t] as the type of [id]. A SchemaType is also appended to
+         * [schemaObligations] (deduplicated by schema identity), so every
+         * schema a shared node must satisfy is kept, whatever order its
+         * parents are verified in.
+         *
+         * In [nodeTypes], a SchemaType obligation recorded by a value-flow
+         * site (an Application argument, ProductFieldValue or SumValue
+         * payload flowing into a `Schema<T>` position) is sticky: a later
+         * record of the plain `T` for the same node (a re-inference through
+         * another parent that uses the node at a plain position) does not
+         * erase it (review H2). [nodeTypes] holds one type per node, so two
+         * distinct schemas on one shared node resolve last-write-wins there;
+         * [schemaObligations] is the record the obligation consumers read.
          */
         fun record(id: NodeId, t: TypeExpr) {
+            if (t is TypeExpr.SchemaType) {
+                val obligations = schemaObligations.getOrPut(id) { mutableListOf() }
+                if (obligations.none { it.schemaId == t.schemaId && it == t }) obligations += t
+            }
             val prev = nodeTypes[id]
             if (prev is TypeExpr.SchemaType && t !is TypeExpr.SchemaType && prev.valueType == t) return
             nodeTypes[id] = t
@@ -522,8 +544,7 @@ class Verifier(
          *
          *  - A value of type T can flow into a position of type
          *    `SchemaType(_, T, ...)`. The schema's invariants are deferred
-         *    to the SchemaChecker pass (which iterates [nodeTypes] looking
-         *    for SchemaType entries) — see [recordSchemaCheck].
+         *    to the SchemaChecker pass (which iterates [schemaObligations]).
          *  - A value of type `SchemaType(_, T, ...)` can flow into a
          *    position of type T. The verifier already knows the schema-
          *    typed value satisfies T structurally.
@@ -1168,12 +1189,11 @@ class Verifier(
                 }
                 // Layer 7: when a plain-T value flows into a SchemaType
                 // position, re-record the argument's NodeId as the
-                // SchemaType so the SchemaChecker pass (which walks
-                // nodeTypes for SchemaType entries) picks it up. We
-                // intentionally OVERWRITE the prior `record(argId, T)` from
-                // `infer` — the SchemaChecker needs the SchemaType
-                // identity, and downstream consumers that want the plain
-                // valueType can read SchemaType.valueType.
+                // SchemaType so the obligation lands in schemaObligations
+                // (read by the SchemaChecker and the runtime). In nodeTypes
+                // this intentionally OVERWRITES the prior `record(argId, T)`
+                // from `infer`; consumers that want the plain valueType can
+                // read SchemaType.valueType.
                 if (expected is TypeExpr.SchemaType && actual !is TypeExpr.SchemaType) {
                     record(node.arguments[i], expected)
                 }
@@ -3952,8 +3972,9 @@ class Verifier(
          * The resulting [TypeExpr.SchemaType] carries the schema NodeId and
          * the list of invariant NodeIds; the SchemaChecker (in the
          * `:schema` module) reads it to drive verify-time invariant
-         * evaluation. Cached in `nodeTypes` so the SchemaChecker can find
-         * every schema-typed position by walking the verifier's map.
+         * evaluation. Every node recorded with it lands in
+         * `schemaObligations`, where the SchemaChecker finds each
+         * schema-typed position.
          */
         private fun resolveSchema(
             schemaId: NodeId,

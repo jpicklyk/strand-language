@@ -1329,6 +1329,19 @@ sealed class VerifyResult {
      * Handler closure-subtraction semantics of `closure(g)` (directly performed)
      * undisturbed. Like [nodeClosures], this lives on the verify result only —
      * [VerifyResult] is not encoded, so it is hash-neutral.
+     *
+     * [schemaObligations] (Q-076) is the source of truth for Layer 7 schema
+     * obligations: every node that must satisfy a Schema's invariants, mapped
+     * to every distinct [TypeExpr.SchemaType] it must satisfy, in the order
+     * the verifier first recorded them. A node gains an obligation when a
+     * plain-`T` value flows into a `Schema<T>` position (Application argument,
+     * ProductFieldValue, SumValue payload) and when its own recorded type is a
+     * SchemaType. One shared node reaching two schema positions carries both
+     * obligations; [nodeTypes] holds a single type per node and keeps only
+     * one of them, so the SchemaChecker and the runtime read this map rather
+     * than scanning [nodeTypes]. The default derives the map from [nodeTypes]
+     * for a hand-built result; the verifier always passes the full record.
+     * Hash-neutral like the other verify-result channels.
      */
     data class Ok(
         val rootType: TypeExpr,
@@ -1337,6 +1350,8 @@ sealed class VerifyResult {
         val warnings: List<VerifyWarning> = emptyList(),
         val nodeClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
         val latentClosures: Map<NodeId, Set<NodeId>> = emptyMap(),
+        val schemaObligations: Map<NodeId, List<TypeExpr.SchemaType>> =
+            nodeTypes.mapNotNull { (id, t) -> (t as? TypeExpr.SchemaType)?.let { id to listOf(it) } }.toMap(),
     ) : VerifyResult() {
         /**
          * Q-067: the effect closure of the program [root] — the set of

@@ -87,9 +87,9 @@ class StrandRuntime(private val policy: HostPolicy) {
         val schema = checkSchema(program, verify)
         if (schema.hasViolations) return RunOutcome.SchemaViolation(verify, schema)
 
-        val schemaObligations: Map<NodeId, TypeExpr.SchemaType> = verify.nodeTypes
-            .mapNotNull { (nid, t) -> (t as? TypeExpr.SchemaType)?.let { nid to it } }
-            .toMap()
+        // Q-076: every obligation on every node — a shared node reaching
+        // several schema positions is checked against each schema.
+        val schemaObligations = verify.schemaObligations
         // Q-054 follow-up: derive a per-invocation HostContext from this
         // runtime's policy and thread it into the interpreter as a value. No
         // singleton install — two runtimes evaluating concurrently each read
