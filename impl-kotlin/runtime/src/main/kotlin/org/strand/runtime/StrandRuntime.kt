@@ -164,9 +164,10 @@ class StrandRuntime(private val policy: HostPolicy) {
      * run boundary. Refinement-level (parameter) pre-execution proof is
      * deferred to Q-068; runtime enforcement covers it for now.
      *
-     * Only the plain [run] entry point is guarded. Guarding
-     * [runMachine] / [runGroup] is deferred — see
-     * `proposals/self-gating-execution.md`'s implementation note.
+     * This gates the plain [run] entry point. The machine-path gates are
+     * [runMachineGuarded] and [runGroupGuarded], which bound by
+     * [ProgramAnalysis.machineClosure] / [ProgramAnalysis.groupClosure]
+     * instead of `totalClosure(root)`.
      */
     fun runGuarded(program: ProgramImage, budget: CapabilitySet): GuardedOutcome {
         val verify = verify(program)
@@ -198,6 +199,126 @@ class StrandRuntime(private val policy: HostPolicy) {
         }
 
         return GuardedOutcome.Ran(run(program, budget))
+    }
+
+    /**
+     * Q-073, machine path: the self-gating primitive for one StateMachine.
+     * Verify [program]; bound what driving [machine] can perform with
+     * [ProgramAnalysis.machineClosure] (the declared effects row, which
+     * covers the transition, `initialState` and the implicit
+     * `StateMachine.Receive` / `.Send`, plus the latent channel reachable
+     * from the transition and the initial state); and when that bound is not
+     * within [budget]'s categories, return [GuardedMachineOutcome.Refused]
+     * before anything is evaluated: no `initialState`, no transition, no
+     * audit record. The [RefusalReport] names each exceeding category with
+     * its channel ([EffectChannel.DIRECT] for the declared row,
+     * [EffectChannel.LATENT] for the latent reach).
+     *
+     * Otherwise run the verify-time schema pass (a static violation is
+     * [GuardedMachineOutcome.SchemaViolation], nothing evaluated) and drive
+     * the machine through the [VerifyResult.Ok] form of [runMachine] with
+     * [budget] as its [CapabilitySet]: the schema obligations and the
+     * verified-interception record are enforced, and runtime capability and
+     * refinement checks stay the backstop for the parameter-level bounds this
+     * category-level gate does not prove. A violation or denial in
+     * `initialState` propagates as an
+     * [org.strand.interpreter.InterpretException], as from [runMachine].
+     *
+     * [machine] must be a StateMachine the verification of [program] reaches
+     * (it is typically `program.root`); anything else throws
+     * [IllegalArgumentException].
+     */
+    fun runMachineGuarded(
+        program: ProgramImage,
+        machine: NodeId,
+        events: List<Value>,
+        budget: CapabilitySet,
+    ): GuardedMachineOutcome {
+        val verify = verify(program)
+        if (verify is VerifyResult.Failed) return GuardedMachineOutcome.VerifyFailed(verify.errors)
+        verify as VerifyResult.Ok
+
+        val bound = analysisOf(program, verify).machineClosure(machine)
+        refusalOf(bound.direct, bound.latent, budget)?.let { return GuardedMachineOutcome.Refused(it) }
+
+        val schema = checkSchema(program, verify)
+        if (schema.hasViolations) return GuardedMachineOutcome.SchemaViolation(verify, schema)
+        return GuardedMachineOutcome.Ran(verify, schema, runMachine(program, machine, events, budget, verify))
+    }
+
+    /**
+     * Q-073, group path: the self-gating primitive for a [MachineGroup].
+     * Verify [program]; bound what running [group] can perform with
+     * [ProgramAnalysis.groupClosure] over its machines (every machine's
+     * [ProgramAnalysis.machineClosure], widened to every StateMachine in the
+     * store when one can spawn, plus each `source`-bound external stream's
+     * opener effects and the `Network.Receive` its feeder performs); and when
+     * that bound is not within [budget]'s categories, return
+     * [GuardedGroupOutcome.Refused] before anything is evaluated or opened:
+     * no `initialState`, no source opener, no actor. Source effects are
+     * reported on the [EffectChannel.DIRECT] channel; a transport category
+     * the store has no node for is named in
+     * [RefusalReport.unresolvedCategoryNames].
+     *
+     * Otherwise run the verify-time schema pass and start the group through
+     * the [VerifyResult.Ok] form of [runGroup], with [budget] replacing the
+     * group's own `capabilities` (the budget is the grant), returning
+     * [GuardedGroupOutcome.Started] with the handle. Group-start failures
+     * propagate as from [runGroup].
+     *
+     * Every machine in [group] must be one the verification of [program]
+     * reaches; anything else throws [IllegalArgumentException].
+     */
+    fun runGroupGuarded(
+        program: ProgramImage,
+        group: MachineGroup,
+        budget: CapabilitySet,
+        scope: CoroutineScope,
+    ): GuardedGroupOutcome {
+        val verify = verify(program)
+        if (verify is VerifyResult.Failed) return GuardedGroupOutcome.VerifyFailed(verify.errors)
+        verify as VerifyResult.Ok
+
+        val bound = analysisOf(program, verify).groupClosure(group.machines)
+        refusalOf(bound.direct, bound.latent, budget, bound.unresolvedCategoryNames)
+            ?.let { return GuardedGroupOutcome.Refused(it) }
+
+        val schema = checkSchema(program, verify)
+        if (schema.hasViolations) return GuardedGroupOutcome.SchemaViolation(verify, schema)
+        val handle = runGroup(program, group.copy(capabilities = budget), scope, verify)
+        return GuardedGroupOutcome.Started(verify, schema, handle)
+    }
+
+    private fun analysisOf(program: ProgramImage, verify: VerifyResult.Ok): ProgramAnalysis =
+        ProgramAnalysis(program.store, verify, program.root, program.hashToNodeId)
+
+    /**
+     * The refusal for a bound split into [direct] and [latent] channels
+     * against [budget], or null when the bound is within it. [unresolved]
+     * names categories required by name that no grant can cover.
+     */
+    private fun refusalOf(
+        direct: Set<NodeId>,
+        latent: Set<NodeId>,
+        budget: CapabilitySet,
+        unresolved: Set<String> = emptySet(),
+    ): RefusalReport? {
+        val total = direct + latent
+        val granted = budget.grants.keys
+        val exceeding = total - granted
+        if (exceeding.isEmpty() && unresolved.isEmpty()) return null
+        return RefusalReport(
+            exceeding = exceeding.associateWith { category ->
+                when {
+                    category in direct && category in latent -> EffectChannel.BOTH
+                    category in direct -> EffectChannel.DIRECT
+                    else -> EffectChannel.LATENT
+                }
+            },
+            requested = total,
+            granted = granted,
+            unresolvedCategoryNames = unresolved,
+        )
     }
 
     /**
@@ -649,6 +770,12 @@ sealed class GuardedOutcome {
  * point of gating on `totalClosure` rather than hand-rolling a check over
  * only the directly-performed closure — a naive gate that checks only the
  * direct channel would miss a latent-only over-budget category entirely.
+ *
+ * For the machine-path gates the direct channel is a machine's declared
+ * effects row and, for a group, the effects the runtime performs itself to
+ * open and drain `source`-bound streams; the latent channel is the latent
+ * reach of the machines' transitions and initial states
+ * ([org.strand.verifier.MachineClosure], [org.strand.verifier.GroupClosure]).
  */
 enum class EffectChannel { DIRECT, LATENT, BOTH }
 
@@ -666,12 +793,68 @@ enum class EffectChannel { DIRECT, LATENT, BOTH }
  * carried in full (not just the exceeding subset) so a caller can compute
  * `requested - granted` itself, diff two refusals, or render a complete
  * picture without a second call back into [org.strand.verifier.ProgramAnalysis].
+ *
+ * [unresolvedCategoryNames] (group gate only) names categories the runtime
+ * requires by name for which the program holds no EffectCategory node, so no
+ * budget over it can grant them: a `source`-bound stream's `Network.Receive`
+ * transport effect in a program that declares no such category. Empty for
+ * every other refusal.
  */
 data class RefusalReport(
     val exceeding: Map<NodeId, EffectChannel>,
     val requested: Set<NodeId>,
     val granted: Set<NodeId>,
+    val unresolvedCategoryNames: Set<String> = emptySet(),
 )
+
+/**
+ * Outcome of [StrandRuntime.runMachineGuarded] (Q-073, machine path). Flat
+ * rather than wrapping an inner outcome as [GuardedOutcome.Ran] wraps
+ * [RunOutcome]: [StrandRuntime.runMachine] returns a bare [Trace] and has no
+ * outcome type of its own to wrap.
+ */
+sealed class GuardedMachineOutcome {
+    /** The machine's bound was within the budget; it was driven over the events. */
+    data class Ran(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+        val trace: Trace,
+    ) : GuardedMachineOutcome()
+
+    /** The machine's bound exceeded the budget; nothing was evaluated. */
+    data class Refused(val report: RefusalReport) : GuardedMachineOutcome()
+
+    /** Within budget, but a statically-evaluable value violated its Schema; nothing was evaluated. */
+    data class SchemaViolation(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+    ) : GuardedMachineOutcome()
+
+    /** Verification failed; neither the gate nor the machine was evaluated. */
+    data class VerifyFailed(val errors: List<org.strand.verifier.VerifyError>) : GuardedMachineOutcome()
+}
+
+/** Outcome of [StrandRuntime.runGroupGuarded] (Q-073, group path). */
+sealed class GuardedGroupOutcome {
+    /** The group's bound was within the budget; it was started under the budget and runs on [handle]. */
+    data class Started(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+        val handle: MachineGroupHandle,
+    ) : GuardedGroupOutcome()
+
+    /** The group's bound exceeded the budget; nothing was evaluated and no source was opened. */
+    data class Refused(val report: RefusalReport) : GuardedGroupOutcome()
+
+    /** Within budget, but a statically-evaluable value violated its Schema; nothing was evaluated. */
+    data class SchemaViolation(
+        val verify: VerifyResult.Ok,
+        val schema: SchemaCheckResult,
+    ) : GuardedGroupOutcome()
+
+    /** Verification failed; neither the gate nor the group was evaluated. */
+    data class VerifyFailed(val errors: List<org.strand.verifier.VerifyError>) : GuardedGroupOutcome()
+}
 
 /** Convenience: the Ok form of a [VerifyResult], or null. */
 fun VerifyResult.asOk(): VerifyResult.Ok? = this as? VerifyResult.Ok
