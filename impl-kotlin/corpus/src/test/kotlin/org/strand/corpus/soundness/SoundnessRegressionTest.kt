@@ -393,6 +393,38 @@ class SoundnessRegressionTest {
     }
 
     /**
+     * S4. At a call a Handler intercepts, the interpreter skipped the call's
+     * effect-instance parameters while the VM, which takes them as operands
+     * of the call, evaluated them. They are effect-free but not total: here
+     * the parameter divides by zero, so the interpreter returned the mock's
+     * value and the VM stopped on a contract violation. Both now evaluate
+     * them. Found by reading the VM's schema-obligation lowering, where an
+     * obligation inside such a parameter would have fired on one backend.
+     */
+    @Test
+    fun `an intercepted call evaluates its effect-instance parameters on both backends`() {
+        val json = program("handled", """
+            "divT": { "type": "FunctionType", "parameters": ["intT", "intT"], "result": "intT" },
+            "div": { "type": "ForeignNode", "target": "strand-builtin:Int.Div", "foreignType": "divT" },
+            "boom": { "type": "Application", "function": "div", "arguments": ["i1", "i0"] },
+            "decl": { "type": "EffectDecl", "effectType": "catP", "parameters": ["boom"] },
+            "call": { "type": "Application", "function": "stdP", "arguments": ["i1"], "effectInstances": ["decl"] },
+            "y": { "type": "ParameterDecl", "name": "y", "paramType": "intT" },
+            "mock": { "type": "Lambda", "parameters": ["y"], "body": "i8" },
+            "handled": { "type": "Handler", "intercept": "catP", "handle": "mock", "body": "call" }
+        """)
+        val outcome = assertSound(json)
+        assertTrue(outcome.vmSupported)
+        val ingest = JsonIngest.parse(json)
+        val finalized = Hasher(ingest.rawStore).finalize(ingest.root)
+        val image = ProgramImage(finalized.store, finalized.root, finalized.hashToNodeId)
+        val ex = org.junit.jupiter.api.assertThrows<InterpretException> {
+            StrandRuntime(FuzzHost.policy()).run(image)
+        }
+        assertTrue(ex.error is InterpretError.BuiltinContractViolation) { "got ${ex.error}" }
+    }
+
+    /**
      * S5. The VM had no dispatch for higher-order builtins: `List.Map`
      * raised a raw `IllegalStateException`, so an effectful callback could
      * not be checked on the VM at all.

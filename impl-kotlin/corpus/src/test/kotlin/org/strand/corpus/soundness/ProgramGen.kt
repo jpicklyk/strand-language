@@ -385,6 +385,7 @@ class ProgramGen(private val ch: Choices) {
 
     private fun add(): String = pure("Int.Add", listOf(Ty.IntT, Ty.IntT), Ty.IntT)
     private fun sub(): String = pure("Int.Sub", listOf(Ty.IntT, Ty.IntT), Ty.IntT)
+    private fun div(): String = pure("Int.Div", listOf(Ty.IntT, Ty.IntT), Ty.IntT)
 
     /** A test-namespace ForeignNode with no effect row (markers, schema consumers, combinators). */
     private fun plainForeign(key: String, target: String, fnT: Ty.Fn): String = once("plain:$key") {
@@ -802,11 +803,23 @@ class ProgramGen(private val ch: Choices) {
         )
     }
 
+    /**
+     * `l + r`, `l - r`, or now and then `l / r`. Division is the one pure
+     * operation here that can fail (its divisor is an arbitrary leaf, zero
+     * included), so a generated program can stop on a structured error at
+     * any position an expression is evaluated in, and the backends must
+     * agree on whether and where.
+     */
     private fun arith(c: Ctx): E {
         val l = genInt(c)
         val r = leafInt(c)
         val (fx, lat, free) = union(l, r)
-        return E(app(if (ch.bool()) add() else sub(), listOf(l.id, r.id)), Ty.IntT, fx, lat, free)
+        val op = when (ch.weighted(intArrayOf(4, 4, 1))) {
+            0 -> add()
+            1 -> sub()
+            else -> { features += "partial-operation"; div() }
+        }
+        return E(app(op, listOf(l.id, r.id)), Ty.IntT, fx, lat, free)
     }
 
     /**

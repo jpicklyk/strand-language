@@ -214,7 +214,8 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         violations: MutableList<Violation>,
     ): CaseOutcome {
         val table: ChunkTable? = try {
-            Lowerer(s.image.store, s.image.hashToNodeId).lower(s.image.root)
+            Lowerer(s.image.store, s.image.hashToNodeId, schemaObligations = s.verify.schemaObligations)
+                .lower(s.image.root)
         } catch (_: LoweringNotImplemented) {
             null // the VM declines the program before running any of it
         } catch (t: Throwable) {
@@ -238,7 +239,7 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
             if (table != null) {
                 val vm = runVm(s, table, grant)
                 if (vmFull == null) vmFull = vm
-                checkRun(s, "vm", label, grant, vm, vmFull, auditOn = vmAudit, schemaEnforced = false, violations)
+                checkRun(s, "vm", label, grant, vm, vmFull, auditOn = vmAudit, schemaEnforced = true, violations)
                 checkParity(label, interp, vm, violations)
             }
         }
@@ -327,10 +328,6 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
     private fun checkParity(label: String, interp: Run, vm: Run, violations: MutableList<Violation>) {
         if (interp.out is Out.Raw || vm.out is Out.Raw) return // already reported under S5
         if (isExhaustion(interp.out) || isExhaustion(vm.out)) return // budgets count different units
-        // The VM does not enforce runtime schema obligations (the interpreter
-        // is the only backend StrandRuntime.run drives), so a run the
-        // interpreter stops on an invariant is not comparable.
-        if ((interp.out as? Out.Err)?.error is InterpretError.SchemaInvariantViolation) return
         fun fail(kind: String, detail: String) {
             violations += Violation("S4", "vm", kind, label, detail)
         }
@@ -580,6 +577,10 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
     private fun sameError(a: InterpretError, b: InterpretError): Boolean = when {
         a is InterpretError.CapabilityViolation && b is InterpretError.CapabilityViolation -> a.missing == b.missing
         a is InterpretError.RefinementViolation && b is InterpretError.RefinementViolation -> a.category == b.category
+        a is InterpretError.SchemaInvariantViolation && b is InterpretError.SchemaInvariantViolation ->
+            a.at == b.at && a.schema == b.schema && a.invariant == b.invariant
+        a is InterpretError.BuiltinContractViolation && b is InterpretError.BuiltinContractViolation ->
+            a.at == b.at && a.target == b.target
         else -> a::class == b::class
     }
 
