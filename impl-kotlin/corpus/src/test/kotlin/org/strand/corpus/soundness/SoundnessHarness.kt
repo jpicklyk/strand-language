@@ -22,6 +22,7 @@ import org.strand.runtime.HaltReason
 import org.strand.runtime.ProgramImage
 import org.strand.runtime.RunOutcome
 import org.strand.runtime.StrandRuntime
+import org.strand.runtime.VerifyOutcome
 import org.strand.verifier.ProgramAnalysis
 import org.strand.verifier.VerifyResult
 import org.strand.vm.Vm
@@ -91,7 +92,9 @@ sealed class CaseOutcome {
  *
  * A StateMachine-rooted case is run through `runMachine`; its bound is the
  * machine's declared effect row, since the closure surface gates only the
- * plain `run` path.
+ * plain `run` path. S6 is checked on the interpreter under `run` only:
+ * neither the VM nor a machine transition enforces runtime schema
+ * obligations (both deferred under Q-047).
  */
 class SoundnessHarness(private val vmAudit: Boolean = true) {
 
@@ -152,6 +155,15 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
             return CaseOutcome.Rejected("verify", verify.errors.first()::class.simpleName ?: "VerifyError")
         }
         verify as VerifyResult.Ok
+        // The verify-time schema pass is part of admission on every path
+        // (`run` performs it itself; a host driving `runMachine` calls
+        // `verifyAndCheckSchema` first, as the CLI does).
+        val schemaOk = try {
+            (runtime.verifyAndCheckSchema(image) as? VerifyOutcome.Ok)?.schema?.hasViolations == false
+        } catch (t: Throwable) {
+            return raw("schema", t)
+        }
+        if (!schemaOk) return CaseOutcome.Rejected("schema", "SchemaInvariantViolation")
 
         val analysis = ProgramAnalysis(finalized.store, verify, finalized.root)
         val total = analysis.totalClosure()
@@ -242,7 +254,9 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
     private fun runVm(s: Subject, table: ChunkTable, grant: CapabilitySet): Run {
         FuzzLog.reset()
         val out = try {
-            val context = HostContext.fromPolicy(FuzzHost.policy(), s.verify.nodeTypes)
+            val context = HostContext.fromPolicy(
+                FuzzHost.policy(), s.verify.nodeTypes, s.verify.verifiedInterceptions,
+            )
             Out.Val(Vm(table, context).run(grant, FuzzHost.limits))
         } catch (e: InterpretException) {
             Out.Err(e.error)
@@ -338,7 +352,9 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
         for ((label, grant) in grants) {
             FuzzLog.reset()
             val out = try {
-                val trace = s.runtime.runMachine(s.image, s.image.root, events, grant, s.verify.nodeTypes)
+                val trace = s.runtime.runMachine(
+                    s.image, s.image.root, events, grant, s.verify.nodeTypes, s.verify.verifiedInterceptions,
+                )
                 val reason = trace.final.reason
                 Out.Halt(
                     summary = "${reason::class.simpleName}:${trace.final.finalState}",
@@ -354,7 +370,9 @@ class SoundnessHarness(private val vmAudit: Boolean = true) {
             if (full == null) full = run
             performed += run.performed.size
             if (isDenial(run.out)) denials++
-            checkRun(s, "machine", label, grant, run, full, auditOn = true, schemaEnforced = true, violations)
+            // Runtime schema obligations are not enforced inside machine
+            // transitions (Q-047's deferred scope), so S6 is not checked here.
+            checkRun(s, "machine", label, grant, run, full, auditOn = true, schemaEnforced = false, violations)
         }
         return CaseOutcome.Checked(violations, vmSupported = false, performed, denials)
     }

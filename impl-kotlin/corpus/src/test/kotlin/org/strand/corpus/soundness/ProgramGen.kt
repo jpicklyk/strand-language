@@ -698,7 +698,11 @@ class ProgramGen(private val ch: Choices) {
      * the runtime evaluates at the call site.
      */
     private fun instances(effects: Collection<Cat>, c: Ctx, proj: StandIn?, args: List<E>): Inst {
-        if (effects.isEmpty() || !ch.chance(2, 5)) return Inst(emptyList(), emptySet(), emptySet(), emptySet())
+        val none = Inst(emptyList(), emptySet(), emptySet(), emptySet())
+        if (effects.isEmpty() || !ch.chance(2, 5)) return none
+        // A projected binding's instance restates the argument node itself,
+        // so an effectful argument would make the parameter effectful.
+        if (proj != null && args.any { it.fx.isNotEmpty() } && !cheat()) return none
         features += "effect-instance"
         val small = c.copy(fuel = minOf(c.fuel, 1))
         val ids = ArrayList<String>()
@@ -710,7 +714,13 @@ class ProgramGen(private val ch: Choices) {
                 cat.params.isEmpty() -> emptyList()
                 proj != null && cat == Cat.P -> listOf(args[0])
                 proj != null && cat == Cat.R -> listOf(strLit(StandIn.R_RESOURCE), args[0])
-                else -> cat.params.map { p -> if (p == Ty.IntT) genInt(small) else leafStr(small) }
+                else -> {
+                    // A refinement parameter must be effect-free
+                    // (EffectDeclParameterNotPure); an effectful one is an
+                    // under-declaration the verifier is expected to reject.
+                    val pure = if (cheat()) small else small.copy(allowed = emptySet())
+                    cat.params.map { p -> if (p == Ty.IntT) genInt(pure) else leafStr(pure) }
+                }
             }
             for (p in params) { fx += p.fx; lat += p.lat; free += p.free }
             ids += node(fresh("decl"), "EffectDecl", "effectType" to cat(cat), "parameters" to params.map { it.id })
@@ -879,7 +889,10 @@ class ProgramGen(private val ch: Choices) {
                 scrutinee = genInt(c)
                 val intT = tyId(Ty.IntT)
                 for (n in listOf(ch.int(10), ch.int(10)).distinct()) {
-                    val pat = node(fresh("pat"), "Pattern", "kind" to "literal", "patternType" to intT, "literal" to intLit(n).id)
+                    // A pattern literal is a literal node; an expression
+                    // there would run at each match attempt.
+                    val literal = if (cheat()) genInt(c.copy(vars = emptyList(), fuel = 1)).id else intLit(n).id
+                    val pat = node(fresh("pat"), "Pattern", "kind" to "literal", "patternType" to intT, "literal" to literal)
                     case(pat, gen(ty, c))
                 }
                 if (ch.bool()) {
@@ -1086,7 +1099,14 @@ class ProgramGen(private val ch: Choices) {
     private fun consume(c: Ctx): E {
         features += "schema-position"
         val k = ch.int(Schemas.COUNT)
-        val arg = if (ch.bool()) leafInt(c) else genInt(c)
+        // Literal nodes are shared by value, so drawing from three probe
+        // values (one violating each schema, one satisfying both) makes one
+        // node reach both schema positions often.
+        val arg = when (ch.int(3)) {
+            0 -> intLit(ch.pick(SCHEMA_PROBES))
+            1 -> leafInt(c)
+            else -> genInt(c)
+        }
         val fnT = Ty.Fn(listOf(Ty.SchemaInt(k)), Ty.IntT, emptySet())
         return E(app(plainForeign("consume:$k", FuzzHost.consume(k), fnT), listOf(arg.id)), Ty.IntT, arg.fx, arg.lat, arg.free)
     }
@@ -1100,7 +1120,10 @@ class ProgramGen(private val ch: Choices) {
         return if (ch.bool()) {
             E(app(add(), listOf(ref.id, intLit(0).id)), Ty.IntT, emptySet(), emptySet(), ref.free)
         } else {
-            val k = (v.ty as Ty.SchemaInt).k
+            // The binder's own schema; a different one is a mismatch the
+            // verifier is expected to reject.
+            val own = (v.ty as Ty.SchemaInt).k
+            val k = if (cheat()) (own + 1) % Schemas.COUNT else own
             val fnT = Ty.Fn(listOf(Ty.SchemaInt(k)), Ty.IntT, emptySet())
             E(app(plainForeign("consume:$k", FuzzHost.consume(k), fnT), listOf(ref.id)), Ty.IntT, emptySet(), emptySet(), ref.free)
         }
@@ -1173,6 +1196,7 @@ class ProgramGen(private val ch: Choices) {
         private val ALL: Set<Cat> = Cat.entries.toSet()
         private val SENTINEL = PatternSpec(sentinel = true, slots = emptyList())
         val STRINGS = listOf("a", "b", StandIn.R_RESOURCE)
+        private val SCHEMA_PROBES = listOf(1, 5, 8)
 
         /** genInt alternatives, leaf first: see the `when` in [genInt]. */
         private val INT_WEIGHTS = intArrayOf(5, 2, 8, 3, 3, 4, 2, 4, 3, 2, 2, 2, 2, 1, 2, 3, 1, 2)
