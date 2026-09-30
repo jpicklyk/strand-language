@@ -1,7 +1,7 @@
 # Runtime schema enforcement (Layer 7 step 2)
 
 **Document:** `proposals/implemented/runtime-schema-enforcement.md`
-**Status:** Implemented (foundational slice landed 2026-06-03; § 8 deferred items remain)
+**Status:** Implemented (foundational slice landed 2026-06-03; of the § 8 deferred items, bytecode-VM enforcement and value-flow enforcement on the state-machine path landed 2026-09-30, see the dated note under [Q-047](../../open-questions.md#Q-047); the others remain)
 **Date:** 2026-06-03 (drafted and foundational slice implemented)
 **Concerns:** [`decisions/ADR-009-structured-outputs.md`](../../decisions/ADR-009-structured-outputs.md), [`design/rendering-and-views.md`](../../design/rendering-and-views.md) § schema-mechanism / § trust-model / § blessed-libraries, [`proposals/implemented/schema-and-invariant.md`](schema-and-invariant.md) (Layer 7 step 1), Q-035 (deferred scope), Q-026 (blessed libraries), Q-006 (foreign-binding trust), Q-040 (`EvaluationLimits`), Q-044 (containment framing)
 **Scope:** small (foundational slice — runtime pure-expression invariant enforcement in the interpreter); medium-large if ForeignNode-backed checkers or the HTML5/SVG/PDF blessed-library set are taken up in the same pass

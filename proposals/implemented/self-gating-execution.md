@@ -1,7 +1,7 @@
 # Self-gating execution
 
 **Document:** `proposals/implemented/self-gating-execution.md`
-**Status:** Implemented 2026-07-04 (commit `e066909` on `reason-first`) for the plain `run` path; `runMachine`/`runGroup` gating and the `strand run --budget` CLI mode are deferred
+**Status:** Implemented 2026-07-04 (commit `e066909` on `reason-first`) for the plain `run` path and 2026-09-30 for the machine and group paths (`runMachineGuarded`, `runGroupGuarded` over `ProgramAnalysis.machineClosure` / `groupClosure`; see the dated note under [Q-073](../../open-questions.md#Q-073)); the `strand run --budget` CLI mode is deferred
 **Question:** [Q-073](../../open-questions.md#Q-073) (registers)
 **Related:** [ADR-010](../../decisions/ADR-010-reasoning-surface.md), [`reasoning-api.md`](reasoning-api.md) (Q-072), [Q-044](../../open-questions.md#Q-044), [Q-054](../../open-questions.md#Q-054), N-036 CapabilityScope, [Q-068](../../open-questions.md#Q-068), [Q-064](../../open-questions.md#Q-064)
 **Drafted:** 2026-07-04

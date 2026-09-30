@@ -94,7 +94,8 @@ failure it reported is a rejection reachable from dag-json, the minimized
 program is preserved here; failures whose fix changes an admitted program's
 closure or a backend's behaviour are preserved as cases in
 `SoundnessRegressionTest` instead. Entries 63 and 64 were found by inspecting
-the verifier for the pattern entry 59 exposed.
+the verifier for the pattern entry 59 exposed, and entry 65 while building
+the machine-shaped closure query the test's machine mode is bounded by.
 
 | Entry | Stage / family | What it demonstrates |
 |-------|----------------|----------------------|
@@ -104,3 +105,4 @@ the verifier for the pattern entry 59 exposed.
 | 62-handler-over-tool-implementation | verify / `HandlerSignatureMismatch` | A Handler with an `(Int) -> Int` handle enclosing a ToolDef whose implementation calls a `(String) -> Int` binding of the intercepted category. The signature walk treated ToolDef as a leaf, so the handler received a String when the tool ran inside the Handler. |
 | 63-effectful-pattern-literal | verify / `CategoryMismatch` | A literal pattern whose literal edge is a `Time.Now` call. A pattern's literal is evaluated at each match attempt and a Match's closure covers only its scrutinee and case bodies; the literal must be a literal node. |
 | 64-effectful-projection-literal | verify / `ProjectionLiteralNotConstant` | A Q-039 `LiteralNode` projection source that is a ProductValue with a call at a leaf. The target is evaluated at every dispatch and was checked for literal shape at the outermost node only; it must be a literal tower throughout. |
+| 65-stream-source-ill-typed-opener | verify / `ParameterTypeMismatch` | A source-bound EventStream whose opener is `Net.Connect(host, port)` with a Bool where the port belongs. The source edge was checked for shape only and the opener Application never inferred, so its arguments were untyped and its closure unrecorded, yet the runtime evaluates it when the group starts. The opener is verified like any other evaluated expression. |
