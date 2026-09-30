@@ -261,7 +261,116 @@ class ForeignEffectTrustTest {
         val err = ex.error as? InterpretError.RefinementViolation
             ?: error("expected RefinementViolation, got ${ex.error}")
         assertEquals(readFx, err.category)
-        assertEquals(listOf("*"), err.report.requested)
+        // Fs.Read has a registry resource projection (BuiltinEffectTable):
+        // the requirement is the path the builtin would read, although the
+        // binding carries no projection and the call no instance.
+        assertEquals(listOf("strand-a4-missing.txt"), err.report.requested)
+    }
+
+    @Test
+    fun `an unprojected read is matched against the path it reads`() {
+        val l = load(unprojectedFsReadJson)
+        val readFx = l.names.getValue("readFx")
+        val exact = CapabilitySet(mapOf(readFx to listOf(
+            CapabilityPattern(listOf(CapabilityArgument.Concrete(Value.StringV("strand-a4-missing.txt")))),
+        )))
+        // A grant for exactly that path covers the call; the read then fails
+        // on the missing file (or the sandbox), which is not a denial.
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, exact)
+        }
+        assertTrue(ex.error !is InterpretError.RefinementViolation && ex.error !is InterpretError.CapabilityViolation) {
+            "a grant for the path read must admit the call; got ${ex.error}"
+        }
+    }
+
+    @Test
+    fun `an authored instance cannot redirect a registry builtin's capability check`() {
+        // The EffectDecl declares the allowed path; the argument is another.
+        // Without a binding projection the check used to take the declared
+        // value (the confused-deputy gap for unprojected bindings).
+        val l = load("""{
+            "version": 1, "root": "app",
+            "nodes": {
+              "strT":   { "type": "PrimitiveType", "kind": "String" },
+              "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+              "readFx": { "type": "EffectCategory", "categoryName": "Filesystem.Read", "parameters": ["strT"] },
+              "readT":  { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT" },
+              "fsRead": { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "readT",
+                          "effects": ["readFx"] },
+              "declared": { "type": "StringLit", "value": "/tmp/allowed.txt" },
+              "actual": { "type": "StringLit", "value": "strand-a4-other.txt" },
+              "decl":   { "type": "EffectDecl", "effectType": "readFx", "parameters": ["declared"] },
+              "app":    { "type": "Application", "function": "fsRead", "arguments": ["actual"],
+                          "effectInstances": ["decl"] }
+            }
+          }""")
+        assertTrue(verify(l) is VerifyResult.Ok) { "the verifier admits the unprojected binding: ${verify(l)}" }
+        val readFx = l.names.getValue("readFx")
+        val refined = CapabilitySet(mapOf(readFx to listOf(
+            CapabilityPattern(listOf(CapabilityArgument.Concrete(Value.StringV("/tmp/allowed.txt")))),
+        )))
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, refined)
+        }
+        val err = ex.error as? InterpretError.RefinementViolation
+            ?: error("expected RefinementViolation, got ${ex.error}")
+        assertEquals(listOf("strand-a4-other.txt"), err.report.requested)
+    }
+
+    @Test
+    fun `a refined grant does not cover a category the program declares without parameters`() {
+        // Declaring Filesystem.Read with no parameter must not turn a
+        // path-refined grant into a grant for every path.
+        val l = load("""{
+            "version": 1, "root": "app",
+            "nodes": {
+              "strT":   { "type": "PrimitiveType", "kind": "String" },
+              "bytesT": { "type": "PrimitiveType", "kind": "Bytes" },
+              "readFx": { "type": "EffectCategory", "categoryName": "Filesystem.Read" },
+              "readT":  { "type": "FunctionType", "parameters": ["strT"], "result": "bytesT" },
+              "fsRead": { "type": "ForeignNode", "target": "strand-builtin:Fs.Read", "foreignType": "readT",
+                          "effects": ["readFx"] },
+              "path":   { "type": "StringLit", "value": "strand-a4-other.txt" },
+              "app":    { "type": "Application", "function": "fsRead", "arguments": ["path"] }
+            }
+          }""")
+        assertTrue(verify(l) is VerifyResult.Ok) { "the verifier admits the parameterless declaration: ${verify(l)}" }
+        val readFx = l.names.getValue("readFx")
+        val refined = CapabilitySet(mapOf(readFx to listOf(
+            CapabilityPattern(listOf(CapabilityArgument.Concrete(Value.StringV("/tmp/allowed.txt")))),
+        )))
+        val ex = assertThrows<InterpretException> {
+            Interpreter(l.store, l.hashToNodeId).eval(l.root, refined)
+        }
+        val err = ex.error as? InterpretError.RefinementViolation
+            ?: error("expected RefinementViolation, got ${ex.error}")
+        assertEquals(listOf("strand-a4-other.txt"), err.report.requested)
+
+        // The same declaration bound to a builtin with no registry
+        // projection: nothing can be matched, so the refined grant denies.
+        val stub = load("""{
+            "version": 1, "root": "app",
+            "nodes": {
+              "strT":   { "type": "PrimitiveType", "kind": "String" },
+              "intT":   { "type": "PrimitiveType", "kind": "Int" },
+              "logFx":  { "type": "EffectCategory", "categoryName": "Log.Write" },
+              "noopT":  { "type": "FunctionType", "parameters": ["strT"], "result": "intT" },
+              "noop":   { "type": "ForeignNode", "target": "strand-builtin:Test.EffectfulNoOp", "foreignType": "noopT",
+                          "effects": ["logFx"] },
+              "msg":    { "type": "StringLit", "value": "m" },
+              "app":    { "type": "Application", "function": "noop", "arguments": ["msg"] }
+            }
+          }""")
+        val logFx = stub.names.getValue("logFx")
+        val pinned = CapabilitySet(mapOf(logFx to listOf(
+            CapabilityPattern(listOf(CapabilityArgument.Concrete(Value.StringV("audit")))),
+        )))
+        val stubEx = assertThrows<InterpretException> {
+            Interpreter(stub.store, stub.hashToNodeId).eval(stub.root, pinned)
+        }
+        assertTrue(stubEx.error is InterpretError.RefinementViolation) { "got ${stubEx.error}" }
+        assertEquals(Value.IntV(0), Interpreter(stub.store, stub.hashToNodeId).eval(stub.root, setOf(logFx)))
     }
 
     @Test

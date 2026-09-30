@@ -1164,7 +1164,14 @@ class Interpreter(
         // category does not demand an unrefined grant at the combinator
         // (main's Q-070 callback refinement check relies on this).
         val performs = Builtins.lookupHigherOrder(node.target) == null
-        checkCapabilities(id, foreignEffectRow(node), effectiveInstances, context, limits, performs = performs)
+        // For a builtin with a registry resource projection the refinement
+        // is the argument the builtin is about to act on, not what the
+        // graph declared about it.
+        val resource = resourceInstances(node, args)
+        checkCapabilities(
+            id, foreignEffectRow(node), effectiveInstances + resource, context, limits,
+            performs = performs, registryBound = resource.keys,
+        )
         try {
             foreignDispatcher?.dispatch(node.target, args)?.let { return it }
             // Higher-order lookup wins over standard lookup; the registries
@@ -1368,6 +1375,7 @@ class Interpreter(
         context: CapabilitySet,
         limits: EvaluationLimits,
         performs: Boolean = false,
+        registryBound: Set<NodeId> = emptySet(),
     ) {
         // First pass: surface every category that is entirely absent in
         // one error. Mirrors the pre-Q-031 CapabilityViolation shape so
@@ -1423,7 +1431,11 @@ class Interpreter(
                 continue
             }
             val grants = context.grants[category]!! // non-null: first pass filtered missing
-            val matched = grants.any { covers(it, requirement) }
+            // A registry-bound requirement has the registry's arity, which
+            // the program's declaration of the category need not share; a
+            // pattern with no concrete slot is unrefined at any arity.
+            val matched = grants.any { covers(it, requirement) } ||
+                (category in registryBound && grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } })
             val name = categoryNameOf(category)
             if (!matched) {
                 val report = buildDenialReport(
@@ -1470,6 +1482,26 @@ class Interpreter(
         val typeEffects = (store.getOrNull(node.foreignType) as? Node.FunctionType)?.effects.orEmpty()
         if (typeEffects.isEmpty()) return node.effects
         return (typeEffects + node.effects).distinct()
+    }
+
+    /**
+     * The refinement the registry assigns to [node]'s dispatch on [args]:
+     * for each category in the node's row that
+     * [org.strand.core.BuiltinEffectTable.resourceProjection] names, the
+     * argument values at the projected positions. Empty for a target with
+     * no resource projection. These override the graph's own instances
+     * (binding projections, authored EffectDecls) in the capability check.
+     */
+    private fun resourceInstances(node: Node.ForeignNode, args: List<Value>): Map<NodeId, List<Value>> {
+        val projection = org.strand.core.BuiltinEffectTable.resourceProjection(node.target) ?: return emptyMap()
+        val out = LinkedHashMap<NodeId, List<Value>>()
+        for (category in foreignEffectRow(node)) {
+            val indices = projection[categoryNameOf(category)] ?: continue
+            // A short argument list is the builtin's own contract violation.
+            if (indices.any { it >= args.size }) continue
+            out[category] = indices.map { args[it] }
+        }
+        return out
     }
 
     /**
@@ -1525,10 +1557,16 @@ class Interpreter(
         limits: EvaluationLimits,
     ) {
         val categoryNode = store.getOrNull(category) as? Node.EffectCategory ?: return
-        if (categoryNode.parameters.isEmpty()) return
         val grants = context.grants[category] ?: return // absent categories already raised
-        val unrefined = grants.any { pattern ->
-            pattern.arguments.isNotEmpty() && pattern.arguments.all { it is CapabilityArgument.Wildcard }
+        // A parameterless category has nothing a concrete slot could be
+        // matched against, so a grant made only of refined patterns (a host
+        // policy over a resource the program's declaration does not expose)
+        // does not cover it either.
+        val parameterized = categoryNode.parameters.isNotEmpty()
+        val unrefined = if (parameterized) {
+            grants.any { p -> p.arguments.isNotEmpty() && p.arguments.all { it is CapabilityArgument.Wildcard } }
+        } else {
+            grants.isEmpty() || grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } }
         }
         if (unrefined) return
         val name = categoryNameOf(category)

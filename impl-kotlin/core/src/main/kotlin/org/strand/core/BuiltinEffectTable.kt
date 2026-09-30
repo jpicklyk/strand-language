@@ -139,6 +139,37 @@ object BuiltinEffectTable {
         "strand-runtime:StateMachine.Terminate" to setOf("StateMachine.Terminate"),
     )
 
+    /**
+     * The resource each I/O builtin acts on, as argument positions: target
+     * to category name to the indices of the arguments that are that
+     * category's refinement parameters (`Fs.Write(path, bytes)` writes
+     * `path`; `Net.Connect(host, port)` dials `host:port`).
+     *
+     * This is the registry's side of Q-039. A ForeignNode's
+     * `effectProjections`, an Application's EffectDecl parameters, and even
+     * the parameter list of the program's EffectCategory declaration are
+     * all graph-supplied, so a binding that omits the projection could
+     * declare one path and write another, and a program that declares
+     * `Filesystem.Write` with no parameter left a host's path-refined grant
+     * nothing to be matched against. At dispatch both backends therefore
+     * take the refinement for these categories from the argument values at
+     * these positions, whatever the graph declared. The rows restate the
+     * prelude's projections (`authoring/LayerAGrammar.kt`) and add
+     * `Fs.List`, whose directory argument the prelude leaves unprojected.
+     */
+    val resourceProjections: Map<String, Map<String, List<Int>>> = linkedMapOf(
+        "strand-builtin:Fs.Read" to mapOf(FS_READ to listOf(0)),
+        "strand-builtin:Fs.Exists" to mapOf(FS_READ to listOf(0)),
+        "strand-builtin:Fs.List" to mapOf(FS_READ to listOf(0)),
+        "strand-builtin:Fs.Write" to mapOf(FS_WRITE to listOf(0)),
+        "strand-builtin:Fs.Append" to mapOf(FS_WRITE to listOf(0)),
+        "strand-builtin:Fs.Delete" to mapOf(FS_WRITE to listOf(0)),
+        "strand-builtin:Net.Connect" to mapOf(NET_CONNECT to listOf(0, 1)),
+    )
+
+    /** The resource projection of [target], or null when it has none. */
+    fun resourceProjection(target: String): Map<String, List<Int>>? = resourceProjections[target]
+
     /** Namespace exempt from the floor; see the class kdoc. */
     const val EXEMPT_PREFIX: String = "strand-builtin:Test."
 

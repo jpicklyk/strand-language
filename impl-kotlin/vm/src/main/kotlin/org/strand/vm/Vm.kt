@@ -632,9 +632,10 @@ class Vm(
                     } else {
                         siteInstances(site, instanceParams)
                     }
+                    val resource = if (fn is VmForeign) resourceInstances(fn, args.asList()) else emptyMap()
                     checkCapabilities(
-                        NodeId(site.site), effects.map { NodeId(it) }, instances, limits,
-                        performs = fn is VmForeign && performs(fn),
+                        NodeId(site.site), effects.map { NodeId(it) }, instances + resource, limits,
+                        performs = fn is VmForeign && performs(fn), registryBound = resource.keys,
                     )
                     invokeCallable(NodeId(site.site), fn, args, frames, current, limits)
                 }
@@ -845,6 +846,7 @@ class Vm(
         instances: Map<NodeId, List<Value>>,
         limits: EvaluationLimits,
         performs: Boolean = false,
+        registryBound: Set<NodeId> = emptySet(),
     ) {
         if (declared.isEmpty()) return
         val context = currentCaps
@@ -887,7 +889,11 @@ class Vm(
             }
             val grants = context.grants.getValue(category)
             val name = categoryNameOf(category)
-            if (grants.none { covers(it, requirement) }) {
+            // A registry-bound requirement has the registry's arity; a
+            // pattern with no concrete slot is unrefined at any arity.
+            val matched = grants.any { covers(it, requirement) } ||
+                (category in registryBound && grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } })
+            if (!matched) {
                 val report = denialReport(
                     at = at,
                     categoryName = name,
@@ -933,10 +939,13 @@ class Vm(
         limits: EvaluationLimits,
     ) {
         val paramCount = table.categoryParamCounts[category.value] ?: return
-        if (paramCount == 0) return
         val grants = context.grants[category] ?: return // absent categories already raised
-        val unrefined = grants.any { pattern ->
-            pattern.arguments.isNotEmpty() && pattern.arguments.all { it is CapabilityArgument.Wildcard }
+        // A parameterless category is not covered by a grant made only of
+        // refined patterns either (the interpreter's rule).
+        val unrefined = if (paramCount > 0) {
+            grants.any { p -> p.arguments.isNotEmpty() && p.arguments.all { it is CapabilityArgument.Wildcard } }
+        } else {
+            grants.isEmpty() || grants.any { p -> p.arguments.all { it is CapabilityArgument.Wildcard } }
         }
         if (unrefined) return
         val name = categoryNameOf(category)
@@ -977,10 +986,32 @@ class Vm(
             } else {
                 emptyMap()
             }
-            checkCapabilities(at, effectsOf(callable), instances, limits, performs = performs(callable))
+            val resource = resourceInstances(callable, args)
+            checkCapabilities(
+                at, effectsOf(callable), instances + resource, limits,
+                performs = performs(callable), registryBound = resource.keys,
+            )
         } else {
             checkCapabilities(at, effectsOf(callable), emptyMap(), limits)
         }
+    }
+
+    /**
+     * The interpreter's `resourceInstances`: the refinement the registry
+     * assigns to this dispatch, from
+     * [org.strand.core.BuiltinEffectTable.resourceProjection] and the
+     * argument values, overriding the graph's own instances.
+     */
+    private fun resourceInstances(fn: VmForeign, args: List<Any>): Map<NodeId, List<Value>> {
+        val projection = org.strand.core.BuiltinEffectTable.resourceProjection(fn.target) ?: return emptyMap()
+        val out = LinkedHashMap<NodeId, List<Value>>()
+        for (effect in fn.effects) {
+            val category = NodeId(effect)
+            val indices = projection[categoryNameOf(category)] ?: continue
+            if (indices.any { it >= args.size || args[it] !is Value }) continue
+            out[category] = indices.map { args[it] as Value }
+        }
+        return out
     }
 
     /**

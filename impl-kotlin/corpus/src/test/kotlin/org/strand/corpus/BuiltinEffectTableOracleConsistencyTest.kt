@@ -1,7 +1,9 @@
 package org.strand.corpus
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.strand.authoring.LayerAGrammar
 import org.strand.core.BuiltinEffectTable
 import org.strand.interpreter.Builtins
 import org.strand.verifier.BuiltinSignatures
@@ -40,6 +42,36 @@ class BuiltinEffectTableOracleConsistencyTest {
                 if (oracle != null && !oracle.containsAll(floor)) "$target: table $floor not within oracle $oracle" else null
             }
         assertTrue(disagreements.isEmpty()) { "table/oracle disagreements:\n" + disagreements.joinToString("\n") }
+    }
+
+    /**
+     * The table's resource projections (what the runtime binds a registry
+     * builtin's refinement to at dispatch) restate the prelude's Q-039
+     * projections, and name only categories in the target's own floor.
+     */
+    @Test
+    fun `the table's resource projections agree with the prelude's`() {
+        val prelude = LayerAGrammar.reservedNodes.values
+            .filter { it.jsonType == "ForeignNode" && it.effectProjections.isNotEmpty() }
+            .associate { spec ->
+                spec.stringFields.getValue("target") to spec.effectProjections.associate { projection ->
+                    val category = LayerAGrammar.reservedNodes.getValue(projection.category)
+                    category.stringFields.getValue("categoryName") to projection.sources.map { source ->
+                        (source as LayerAGrammar.ReservedProjectionSource.ArgRef).index
+                    }
+                }
+            }
+        assertTrue(prelude.isNotEmpty()) { "the prelude declares no projected builtin" }
+        for ((target, projection) in prelude) {
+            assertEquals(projection, BuiltinEffectTable.resourceProjection(target)) { "projection of $target" }
+        }
+        for ((target, projection) in BuiltinEffectTable.resourceProjections) {
+            val floor = BuiltinEffectTable.requiredCategories(target)
+            assertTrue(floor != null && floor.containsAll(projection.keys)) {
+                "$target projects ${projection.keys}, outside its floor $floor"
+            }
+            assertTrue(target in Builtins.registeredTargets()) { "$target is not a registered builtin" }
+        }
     }
 
     @Test
