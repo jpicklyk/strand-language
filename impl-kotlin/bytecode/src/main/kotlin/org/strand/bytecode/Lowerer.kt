@@ -105,6 +105,19 @@ class Lowerer(
         return id.value
     }
 
+    /**
+     * The effect row of a [Node.ForeignNode]: its `foreignType` FunctionType's
+     * effects unioned with its own `effects`, in the interpreter's
+     * `foreignEffectRow` order. This is the row the verifier types the node
+     * with, so an effect declared only on the FunctionType is still seen by
+     * the VM's handler interception and capability check.
+     */
+    private fun foreignEffectRow(node: Node.ForeignNode): List<NodeId> {
+        val typeEffects = (store.getOrNull(node.foreignType) as? Node.FunctionType)?.effects.orEmpty()
+        if (typeEffects.isEmpty()) return node.effects
+        return (typeEffects + node.effects).distinct()
+    }
+
     private fun effectsConstant(ids: List<NodeId>): Constant.EffectsC =
         Constant.EffectsC(IntArray(ids.size) { category(ids[it]) })
 
@@ -235,10 +248,11 @@ class Lowerer(
             // target string + effects list in the constant pool. The VM's
             // CALL site uses the effects list for handler-intercept and
             // capability-coverage checks (Layer 3), then dispatches via
-            // the Builtins registry.
+            // the Builtins registry. The effects list is the ForeignNode's
+            // full row ([foreignEffectRow]), not `effects` alone.
             is Node.ForeignNode -> {
                 val targetIdx = chunk.constant(Constant.ForeignTargetC(node.target))
-                val effectsIdx = chunk.constant(effectsConstant(node.effects))
+                val effectsIdx = chunk.constant(effectsConstant(foreignEffectRow(node)))
                 val projectionsIdx = chunk.constant(Constant.ProjectionsC(node.effectProjections.map { p ->
                     Constant.ProjectionC(
                         category = category(p.category),

@@ -277,6 +277,47 @@ class VmForeignDispatchParityTest {
         assertValueParity(p, refined(p.id("fsWriteFx"), "/tmp/a"), Value.IntV(0))
     }
 
+    // ----- foreign effect row: foreignType effects ∪ ForeignNode.effects -----
+
+    /**
+     * A ForeignNode whose effect is declared only on its foreignType. The
+     * interpreter's row (`foreignEffectRow`) is the union of the two lists,
+     * as the verifier types it; the Lowerer used to carry `effects` only, so
+     * the VM saw an effect-free callee.
+     */
+    private val typeOnlyTick = """
+        "typeTick": { "type": "ForeignNode", "target": "strand-builtin:Test.EffectfulNoOp",
+                      "foreignType": "tickT", "effects": [] },
+        "callTypeTick": { "type": "Application", "function": "typeTick", "arguments": ["pathLit"] }
+    """
+
+    @Test
+    fun `effect declared only on the foreignType - both backends check it against the grant`() {
+        val p = load("""{
+          "version": 1, "root": "callTypeTick",
+          "nodes": { $common, $typeOnlyTick }
+        }""")
+        val err = assertDenialParity(p, CapabilitySet.EMPTY)
+        assertEquals(setOf(p.id("tickFx")), (err as InterpretError.CapabilityViolation).missing)
+        assertValueParity(p, CapabilitySet.ofCategories(setOf(p.id("tickFx"))), Value.IntV(0))
+    }
+
+    @Test
+    fun `effect declared only on the foreignType - both backends route the call to the handler`() {
+        // The handler returns the argument's length stand-in via a Lambda
+        // returning a distinct literal, so interception is observable.
+        val p = load("""{
+          "version": 1, "root": "handler",
+          "nodes": { $common, $typeOnlyTick,
+            "hP":      { "type": "ParameterDecl", "name": "s", "paramType": "strT" },
+            "seven":   { "type": "IntLit", "value": 7 },
+            "hLam":    { "type": "Lambda", "parameters": ["hP"], "body": "seven", "effects": [] },
+            "handler": { "type": "Handler", "intercept": "tickFx", "handle": "hLam", "body": "callTypeTick" }
+          }
+        }""")
+        assertValueParity(p, CapabilitySet.EMPTY, Value.IntV(7))
+    }
+
     // ----- (iii) Q-055 audit-record parity -----
 
     /**
