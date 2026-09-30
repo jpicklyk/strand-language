@@ -152,8 +152,33 @@ sealed class Constant {
     /** A projection parameter source: a call argument position or a literal. */
     sealed class ProjectionSourceC {
         data class ArgRef(val index: Int) : ProjectionSourceC()
-        data class Literal(val value: Constant) : ProjectionSourceC()
+
+        /**
+         * A Q-039 LiteralNode source. [check] is the literal node's runtime
+         * schema obligations (Q-047), present only when the Lowerer was given
+         * obligations and the literal node carries some: the interpreter
+         * evaluates the literal node at each projected dispatch, so its
+         * obligations fire there, and the VM runs [check] at the same point.
+         */
+        data class Literal(val value: Constant, val check: SchemaCheckC? = null) : ProjectionSourceC()
     }
+
+    /**
+     * Q-047: the runtime schema obligations of one expression node, consumed
+     * by `CHECK_SCHEMA` (and by a projection [ProjectionSourceC.Literal]).
+     * [site] is the node's NodeId value, the `at` of a violation. [checks]
+     * lists one entry per invariant: the verifier's recorded obligation order,
+     * then each schema's invariant declaration order, which is the order the
+     * interpreter's `checkSchemaObligations` evaluates them in.
+     */
+    data class SchemaCheckC(val site: Int, val checks: List<InvariantCheckC>) : Constant()
+
+    /**
+     * One invariant to evaluate against a value: the [schema] and [invariant]
+     * NodeId values a violation reports, and the sub-chunk that evaluates the
+     * invariant's body expression to its predicate callable ([chunkIndex]).
+     */
+    data class InvariantCheckC(val schema: Int, val invariant: Int, val chunkIndex: Int)
 }
 
 /**

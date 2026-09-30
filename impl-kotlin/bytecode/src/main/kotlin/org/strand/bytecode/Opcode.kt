@@ -80,6 +80,12 @@ enum class Opcode(val code: Byte) {
     SUM_PAYLOAD(0x82.toByte()),
     THROW_NO_MATCH(0x83.toByte()),
 
+    // Q-047 runtime schema obligations: one operand, a SchemaCheckC constant
+    // index. Evaluates each listed invariant against the value on top of the
+    // stack (left in place) and raises SchemaInvariantViolation on `false`.
+    // Emitted only when the Lowerer is given obligations.
+    CHECK_SCHEMA(0x84.toByte()),
+
     // Halt
     HALT(0x7f);
 

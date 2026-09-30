@@ -4,6 +4,7 @@ import org.strand.core.Hash
 import org.strand.core.Node
 import org.strand.core.NodeId
 import org.strand.core.NodeStore
+import org.strand.verifier.TypeExpr
 
 /**
  * Lowering pass: canonical [NodeStore] → [ChunkTable] (Q-017 step 1 § 4.1).
@@ -57,6 +58,20 @@ class Lowerer(
      * callback extends so the admitted target is visible to [lowerSubChunk].
      */
     private val resolveTarget: ((Hash) -> NodeId?)? = null,
+    /**
+     * Q-047: runtime schema obligations, as the verifier records them
+     * (`VerifyResult.Ok.schemaObligations`) and the interpreter takes them.
+     * For every lowered expression node that carries obligations, the
+     * Lowerer emits `CHECK_SCHEMA` right after the node's own code, so the
+     * VM checks the node's value each time the interpreter's `eval` of that
+     * node returns — including every evaluation of a shared node and every
+     * call of a body evaluated repeatedly. Each invariant's body expression
+     * is lowered once into its own sub-chunk.
+     *
+     * Default empty: no `CHECK_SCHEMA` is emitted and the table is exactly
+     * the one lowered without obligations.
+     */
+    private val schemaObligations: Map<NodeId, List<TypeExpr.SchemaType>> = emptyMap(),
 ) {
     private val chunks = mutableListOf<MutableChunk>()
     private val categoryNames = LinkedHashMap<Int, String>()
@@ -133,11 +148,47 @@ class Lowerer(
     }
 
     /**
+     * Q-047: the [Constant.SchemaCheckC] for [nodeId]'s runtime schema
+     * obligations, or null when it has none. Invariants are listed in the
+     * interpreter's `checkSchemaObligations` order (obligations as recorded,
+     * then each schema's invariants in declaration order), skipping an id
+     * that is not an Invariant node as the interpreter does. Each invariant
+     * body is lowered into a closed sub-chunk (the interpreter evaluates it
+     * under an empty environment) that leaves the predicate callable on the
+     * stack; the sub-chunk is shared by every site the invariant guards.
+     */
+    private fun schemaCheck(nodeId: NodeId): Constant.SchemaCheckC? {
+        val obligations = schemaObligations[nodeId]
+        if (obligations.isNullOrEmpty()) return null
+        val checks = ArrayList<Constant.InvariantCheckC>()
+        for (obligation in obligations) for (invariantId in obligation.invariants) {
+            val invariant = store.getOrNull(invariantId) as? Node.Invariant ?: continue
+            val chunkIndex = lowerSubChunk("invariant(${invariant.body})") { sub ->
+                lowerExpr(invariant.body, sub, LocalScope())
+                sub.emit(Opcode.RET)
+            }
+            checks += Constant.InvariantCheckC(obligation.schemaId.value, invariantId.value, chunkIndex)
+        }
+        return Constant.SchemaCheckC(nodeId.value, checks)
+    }
+
+    /**
      * Lower an expression-position node into [chunk]'s instruction stream.
      * The expression's value ends up on top of the operand stack when the
-     * emitted instructions finish.
+     * emitted instructions finish, followed by the node's `CHECK_SCHEMA`
+     * when it carries runtime schema obligations ([schemaCheck]).
      */
     private fun lowerExpr(
+        nodeId: NodeId,
+        chunk: MutableChunk,
+        scope: LocalScope,
+    ) {
+        lowerNode(nodeId, chunk, scope)
+        val check = schemaCheck(nodeId) ?: return
+        chunk.emit(Opcode.CHECK_SCHEMA, chunk.constant(check))
+    }
+
+    private fun lowerNode(
         nodeId: NodeId,
         chunk: MutableChunk,
         scope: LocalScope,
@@ -261,7 +312,9 @@ class Lowerer(
                                 is org.strand.core.ProjectionSource.ArgRef ->
                                     Constant.ProjectionSourceC.ArgRef(src.index)
                                 is org.strand.core.ProjectionSource.LiteralNode ->
-                                    Constant.ProjectionSourceC.Literal(literalConstant(src.target))
+                                    Constant.ProjectionSourceC.Literal(
+                                        literalConstant(src.target), schemaCheck(src.target),
+                                    )
                             }
                         },
                     )

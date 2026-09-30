@@ -105,31 +105,41 @@ class CorpusRuntimeSchemaTest {
 
     @Test
     fun `pass case agrees between interpreter-with-obligations and the bytecode VM`() {
-        // VM equivalence on the non-violating value path. The interpreter
-        // WITH obligations enforces the PositiveInt invariant (satisfied
-        // by 2) and yields IntV(2); the VM erases the schema at lowering
-        // and computes the same underlying value. Both engines agree on
-        // the pass case — the property that makes the interpreter-only
-        // enforcement safe for non-violating programs.
+        // VM equivalence on the non-violating value path. Both engines,
+        // given the obligations, enforce the PositiveInt invariant
+        // (satisfied by 2) and yield IntV(2).
         val p = load("/corpus/82-runtime-schema-dynamic-pass.json")
         val interpValue = Interpreter(p.store, p.hashToNodeId, schemaObligations = p.obligations)
             .eval(p.root, CapabilitySet.EMPTY)
-        val table = Lowerer(p.store, p.hashToNodeId).lower(p.root)
+        val table = Lowerer(p.store, p.hashToNodeId, schemaObligations = p.obligations).lower(p.root)
         val vmValue = Vm(table).run(initialCaps = emptySet())
         assertEquals(Value.IntV(2), interpValue)
         assertEquals(interpValue, vmValue, "interpreter-with-obligations and VM disagree on the pass case")
     }
 
     @Test
-    fun `the bytecode VM does not enforce runtime schema invariants (documented divergence)`() {
-        // Q-047 known limitation: the VM erases schemas pre-bytecode
-        // (Q-017), so it carries no runtime obligation. The interpreter
-        // WITH obligations raises on corpus 83 (asserted above); the VM
-        // runs the same program to the unchecked underlying value. This
-        // bounded divergence (error cases only) is why corpus 83 is kept
-        // out of VmEquivalenceTest; this test pins the behaviour so a
-        // future CHECK_SCHEMA lowering that closes the gap will fail here
-        // and prompt an update.
+    fun `the bytecode VM with obligations raises the interpreter's violation`() {
+        // Q-047: given the verifier's obligations, the Lowerer emits
+        // CHECK_SCHEMA at each obligation site and the VM evaluates the
+        // invariants there, so corpus 83 stops on the VM with the same
+        // error (site, schema, invariant, value description) the
+        // interpreter raises. VmSchemaObligationParityTest covers the node
+        // positions the lowering treats differently from `eval`.
+        val p = load("/corpus/83-runtime-schema-dynamic-violation.json")
+        val interpErr = assertThrows<InterpretException> {
+            Interpreter(p.store, p.hashToNodeId, schemaObligations = p.obligations).eval(p.root, CapabilitySet.EMPTY)
+        }.error
+        val table = Lowerer(p.store, p.hashToNodeId, schemaObligations = p.obligations).lower(p.root)
+        val vmErr = assertThrows<InterpretException> { Vm(table).run(initialCaps = emptySet()) }.error
+        assertTrue(vmErr is InterpretError.SchemaInvariantViolation, "expected SchemaInvariantViolation, got $vmErr")
+        assertEquals(interpErr, vmErr)
+    }
+
+    @Test
+    fun `the bytecode VM without obligations runs the violating program unchecked`() {
+        // The opt-in default: a Lowerer given no obligations emits no check,
+        // so the VM runs corpus 83 to the unchecked underlying value, as the
+        // interpreter without obligations does.
         val p = load("/corpus/83-runtime-schema-dynamic-violation.json")
         val table = Lowerer(p.store, p.hashToNodeId).lower(p.root)
         val vmValue = Vm(table).run(initialCaps = emptySet())

@@ -159,8 +159,9 @@ class VmEquivalenceTest {
             "62-non-empty-markdown-pass.json" to "schema-invariant program — covered by VmSchemaEquivalenceTest",
             "63-non-empty-markdown-fail.json" to "schema-invariant rejection program — verifier rejects the root",
             "83-runtime-schema-dynamic-violation.json" to
-                "schema-violation-by-design: the VM erases schemas pre-bytecode while the " +
-                    "interpreter enforces the runtime obligation, so the two diverge on purpose",
+                "schema-violation-by-design: its value is a runtime SchemaInvariantViolation once " +
+                    "obligations are installed; both backends with obligations are compared in " +
+                    "CorpusRuntimeSchemaTest and VmSchemaObligationParityTest",
 
             // --- Manifest / composition / verifier-fixture programs: no
             // single-store runnable value path here.
